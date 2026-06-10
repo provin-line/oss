@@ -7,14 +7,17 @@ Origin Source コンポーネント型。その**唯一の定義的性質**は�
 
 チェーンは厳密に線形である: Origin Source の FirstDrop は上流参照のクレデンシャルフィールドを**一切持たない**（`derived_from` / `source_root` は設計から撤去された — Paper 01 §4.8 がクレデンシャルスキーマ層での定義を禁止）。集約は上流データとの同一性を断ち切る。チェーンが証明するのは「集約地点以降にこのデータへ何が起きたか」である。どの入力を使ったかの記録が必要な場合、それは集約器のビジネスロジックとしてデータペイロードに置く — クレデンシャルには置かない。
 
-> **Note（設計協議 B1 待ち）:** 以下のバリアント分類は現行 spec draft より古く、見直し中 — 特に enrichment は Origin Source バリアントではなく、チェーンを*継続*する操作（side-fetch 付き FilterConvert）である可能性が高い。確定までこのセクションを実装の根拠にしないこと。
+## トリガー規則
 
-## バリアント（参照実装の命名、入力カーディナリティ N 別）
+境界がチェーンを保持するか開始するかは**トリガー規則**で決まる（provin wire profile の規範 — [pipeline/README.md](../README.md) 参照）: Origin Source メカニクスとは、実行が「Pipeline-conformant な前イベント 1 件」によって起動され**ない**境界のことである。
 
-| バリアント | N | 内部メカニクス | 本リポジトリでのステータス |
+## メカニクス（参照実装の命名）
+
+| メカニクス | トリガー | 内部形状 | 本リポジトリでのステータス |
 |---|---|---|---|
-| `externalsource/` | 0 | ネットワーク外からのインジェスト（HTTP プッシュ / ファイル / ポーリング） | `apipush/` 参照実装あり |
-| `enrichment/` | 1 | 1つのパイプライン準拠入力と外部ルックアップのジョイン | インターフェース + 規約のみ |
-| `aggregate/` | ≥ 1 | パイプライン準拠入力のプール + ウィンドウ / 集約 | インターフェース + 規約のみ |
+| `externalsource/` | 外部 push / ファイル / poll / 非準拠クレデンシャルの到着（boundary translation） | ステートレスなインジェスト | `apipush/` 参照実装あり |
+| `aggregate/` | プールされた Pipeline-conformant 入力に対する timer / window | プール + ウィンドウ（ステートフル） | 規約のみ |
 
-バリアントは規約であり、型コントラクトの区別ではない — プロトコルレベルでは Origin Source 型は厳密に1つ。
+Enrichment は Origin Source メカニクス**ではない**: チェーンを保持する FilterConvert の step pattern である（[../filterconvert/README.md](../filterconvert/README.md) 参照）。
+
+メカニクスは規約であり、型コントラクトの区別ではない — プロトコルレベルでは Origin Source 型は厳密に1つ。

@@ -1,8 +1,14 @@
-# externalsource — Origin Source Variant, N = 0
+# externalsource — Origin Source Mechanics: External Ingestion
 
-Ingestion from outside the pipeline network. No Pipeline-conformant input, therefore
-no `derived_from` / `source_root` commitments — the emitted FirstDrop is a pure chain
-origin.
+Ingestion from outside the pipeline network. The trigger is never a
+Pipeline-conformant predecessor event (HTTP push, file arrival, poll, or the arrival
+of a non-conformant external credential), so per the trigger rule the emitted
+credential is a FirstDrop — a pure chain origin.
+
+**Boundary translation** is a special form of this mechanics: an external-ecosystem
+credential (SCITT, GAIA-X, …) arrives, is validated by the adapter's own logic, and
+is re-signed as a dplaax FirstDrop. Any linkage to the external credential is a
+data-payload concern, never a credential field.
 
 ## Reference implementation: apipush/
 

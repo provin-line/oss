@@ -20,6 +20,22 @@ ingress VC verification (strategy: none | adjacent | full)
 Invariant: `outputHash[n] == inputHash[n+1]` across adjacent chain links — downstream
 stages prove data-flow continuity without re-reading payloads.
 
+## Step catalog (provin StepComponent, `contract.StepKind`)
+
+| Step | Role | PoC status |
+|---|---|---|
+| ConvertFlow | stateless payload transformation | implemented (`converter/`) |
+| FilterFlow | stateless conditional pass / drop | implemented (`filter/`) |
+| VerifierFlow | envelope unmarshal + signature verification + reject | implemented (runtime ingress) |
+| BatchFlow | batch API call producing fresh output, stateless | type only |
+| SinkedSourceFlow | per-event external data fetch — the **enrichment** step | type only |
+
+**Enrichment** (side-fetched external data joined onto the triggering event) is a
+FilterConvert step pattern, not an Origin Source mechanics: the run is triggered by
+the predecessor event, so the chain is preserved
+(`transformationType: "provin:enrich"`). All steps are stateless per event;
+cross-event state would make the component an Origin Source.
+
 ## Sub-packages
 
 - `filter/` — `Filter` interface (`Apply(ctx, data) (*Result, error)`); `jsonata/`

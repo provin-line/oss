@@ -14,13 +14,42 @@ four peer component types — none is privileged; there is no "core" type and no
 Stateful workloads (aggregate / join / window) belong in Origin Source — never in
 FilterConvert, whose statelessness is definitional.
 
+## Chain behaviour criterion — the trigger rule (provin wire profile, normative)
+
+A boundary's output is **chain-preserving** iff its execution was triggered by the
+arrival of exactly one Pipeline-conformant predecessor event (`previousCredential` =
+that event's credential). Any other trigger — timer, window expiry, user/external
+push, poll, arrival of a non-conformant external credential — yields a **FirstDrop**.
+
+- Decidability over cleverness: a non-event-triggered run that happens to consume a
+  single pending input is still a FirstDrop (the batch-of-1 rule).
+- Fan-out is permitted: linearity constrains each credential to one predecessor,
+  not one successor — chains may branch forward.
+
+| Term | Operation | Trigger | Chain |
+|---|---|---|---|
+| **Enrichment** | side-fetch external data joined onto the triggering event | predecessor event | preserved (`provin:enrich`) |
+| **Boundary translation** | re-sign an external-ecosystem credential (SCITT, …) as a dplaax credential | non-conformant credential arrival | FirstDrop |
+| **Aggregation** | fold N pooled inputs into one output | timer / window | FirstDrop (`aggregate`) |
+
+## ProcessPattern (deploy-layer classification)
+
+Orthogonal to the wire component types; appears in deployment config and docs,
+never in import paths:
+
+| ProcessPattern | Wire type | Role |
+|---|---|---|
+| ExternalIn | Origin Source | external → pipeline (chain start) |
+| ChainedPipeline | FilterConvert | pipeline → pipeline (chain continued; steps incl. enrichment) |
+| ExternalOut | External Sink | pipeline → external (chain end) |
+
 ## Layout
 
 ```
 contract/        Pipeline Contract — the public contract; external adapter repos
                  implement this. Custom components are expressed here (no dir).
 filterconvert/   FilterConvert runtime (filter + converter steps, VC signing)
-originsource/    Origin Source variants (externalsource / enrichment / aggregate)
+originsource/    Origin Source mechanics (externalsource / aggregate)
 externalsink/    External Sink (console reference implementation)
 provenance/      shared mechanics: VC signing/verification providers
 observer/        shared mechanics: process-event observers (log, VC store)

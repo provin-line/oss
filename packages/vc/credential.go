@@ -51,6 +51,10 @@ const (
 	// no identity relationship with any single input, so previousCredential
 	// is absent and a fresh chain begins (Paper 01 §4.8).
 	TransformationAggregate TransformationType = "aggregate"
+	// TransformationEnrich is the provin wire-profile extension for
+	// enrichment: a chain-preserving boundary that joins side-fetched
+	// external data onto the triggering predecessor event.
+	TransformationEnrich TransformationType = "provin:enrich"
 )
 
 // SchemaRef is the content-hashed reference to the registered output schema.

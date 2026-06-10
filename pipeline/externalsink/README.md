@@ -12,7 +12,19 @@ no in-network output.
 - A sink never re-publishes to pipeline subjects; doing so would make it a
   FilterConvert or Origin Source in disguise.
 
-## Reference implementation: console/
+## Sink kinds (deploy-layer attribute, `contract.SinkKind`)
+
+| Kind | invalid emit | reject | mutual allow-list | receipt |
+|---|---|---|---|---|
+| observation-only | MAY | not required | relaxed | not required |
+| production | PROHIBITED | MUST | MUST enforce | MAY |
+| archival | PROHIBITED | MUST + audit log | MUST enforce | MUST |
+
+A sink kind is a config-driven attribute of a deployed component, not a separate
+component type. Idempotency checks on re-delivered events are a sink-side
+obligation (production / archival).
+
+## Reference implementation: console/ (observation-only)
 
 Subscribes to an output subject, verifies each received VC (signature / DID
 resolution / schema axes), and writes one NDJSON record per event to stdout —

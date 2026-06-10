@@ -19,6 +19,18 @@ ingress VC verification (strategy: none | adjacent | full)
 
 不変条件：隣接するチェーンリンク間で `outputHash[n] == inputHash[n+1]` — 下流ステージはペイロードを再読みすることなくデータフローの連続性を証明できる。
 
+## ステップカタログ（provin StepComponent、`contract.StepKind`）
+
+| Step | 役割 | PoC ステータス |
+|---|---|---|
+| ConvertFlow | ステートレスなペイロード変換 | 実装あり（`converter/`） |
+| FilterFlow | ステートレスな条件付き pass / drop | 実装あり（`filter/`） |
+| VerifierFlow | envelope unmarshal + 署名検証 + reject | 実装あり（runtime ingress） |
+| BatchFlow | fresh output を生成する batch API call、ステートレス | 型のみ |
+| SinkedSourceFlow | イベントごとの外部データ fetch — **enrichment** ステップ | 型のみ |
+
+**Enrichment**（トリガーとなったイベントへの外部データの side-fetch join）は FilterConvert の step pattern であり、Origin Source メカニクスではない: 実行は前イベントによってトリガーされるため、チェーンは保持される（`transformationType: "provin:enrich"`）。すべてのステップはイベント単位でステートレス。クロスイベント状態を持てば、そのコンポーネントは Origin Source になる。
+
 ## サブパッケージ
 
 - `filter/` — `Filter` インターフェース（`Apply(ctx, data) (*Result, error)`）；`jsonata/` 実装（起動時に式をプリコンパイル；すべてが truthy であればパス）

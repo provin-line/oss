@@ -49,6 +49,46 @@ const (
 	VerificationFull
 )
 
+// StepKind names a step type composable inside a chain-preserving component
+// (the provin StepComponent catalog). Steps are stateless per event;
+// cross-event state would make the component an Origin Source. The PoC
+// implements Convert / Filter / Verifier; Batch and SinkedSource are defined
+// for contract completeness and land later.
+type StepKind int
+
+const (
+	StepUnknown StepKind = iota
+	// StepConvert — stateless payload transformation.
+	StepConvert
+	// StepFilter — stateless conditional pass / drop.
+	StepFilter
+	// StepVerifier — envelope unmarshal + signature verification + reject.
+	StepVerifier
+	// StepBatch — batch API call producing fresh output, stateless.
+	StepBatch
+	// StepSinkedSource — per-event external data fetch: the enrichment step
+	// (side-fetched data joined onto the triggering event; chain preserved).
+	StepSinkedSource
+)
+
+// SinkKind classifies an External Sink deployment by handling discipline.
+// It is a config-driven attribute of a deployed component, not a separate
+// component type. The zero value is Unknown and is never valid.
+type SinkKind int
+
+const (
+	SinkKindUnknown SinkKind = iota
+	// SinkObservationOnly — MAY emit invalid credentials (inspection
+	// tooling); relaxed allow-list; no receipt obligation.
+	SinkObservationOnly
+	// SinkProduction — invalid emit prohibited; MUST reject; MUST enforce
+	// the mutual allow-list; MAY emit receipts.
+	SinkProduction
+	// SinkArchival — invalid emit prohibited; MUST reject with an audit
+	// log; MUST enforce the mutual allow-list; MUST emit receipts.
+	SinkArchival
+)
+
 // Status is the outcome of processing one event.
 type Status int
 

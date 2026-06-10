@@ -16,7 +16,6 @@ Pure domain libraries consumed by `network/`, `pipeline/`, and `cmd/`.
 |---|---|
 | `did/` | `did:dplaax` method: parsing, DID Document model, validation, public-key extraction |
 | `canon/` | Canonicalization of signing scopes: JCS (RFC 8785), URDNA2015, strict JSON decoding |
-| `merkle/` | RFC 6962 Merkle tree commitments (`source_root`) |
 | `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, trust policy |
 | `crypto/` | Key generation / signing / verification interfaces + Ed25519 implementation |
 | `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
@@ -28,7 +27,7 @@ Pure domain libraries consumed by `network/`, `pipeline/`, and `cmd/`.
 Internal dependency DAG (within `packages/`):
 
 ```
-vc ──► did, canon, crypto, merkle
+vc ──► did, canon, crypto
 delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver

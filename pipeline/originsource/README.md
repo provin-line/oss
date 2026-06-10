@@ -15,18 +15,24 @@ to this data from the aggregation point onward". When an application needs to re
 which inputs were used, that lives in the data payload as the aggregator's business
 logic, never in the credential.
 
-> **Note (pending design discussion B1):** the variant taxonomy below predates the
-> current spec drafts and is under review — in particular whether enrichment is a
-> chain-*continuing* operation (FilterConvert with side-fetch) rather than an Origin
-> Source variant. Do not build against this section until that lands.
+## Trigger rule
 
-## Variants (reference-implementation naming, by input cardinality N)
+Whether a boundary preserves the chain or starts one is decided by the **trigger
+rule** (normative for the provin wire profile — see
+[pipeline/README.md](../README.md)): Origin Source mechanics are exactly the
+boundaries whose run is NOT triggered by a single Pipeline-conformant predecessor
+event.
 
-| Variant | N | Internal mechanics | Status in this repo |
+## Mechanics (reference-implementation naming)
+
+| Mechanics | Trigger | Internal shape | Status in this repo |
 |---|---|---|---|
-| `externalsource/` | 0 | Ingestion from outside the network (HTTP push / file / poll) | `apipush/` reference implementation |
-| `enrichment/` | 1 | One Pipeline-conformant input joined with external lookups | Interface + conventions only |
-| `aggregate/` | ≥ 1 | Pool + windowing / aggregation over Pipeline-conformant inputs | Interface + conventions only |
+| `externalsource/` | external push / file / poll / non-conformant credential arrival (boundary translation) | stateless ingestion | `apipush/` reference implementation |
+| `aggregate/` | timer / window over pooled Pipeline-conformant inputs | pool + windowing (stateful) | conventions only |
 
-Variants are conventions, not Type Contract distinctions — at the protocol level there
-is exactly one Origin Source type.
+Enrichment is **not** an Origin Source mechanics: it is a chain-preserving
+FilterConvert step pattern (see
+[../filterconvert/README.md](../filterconvert/README.md)).
+
+Mechanics are conventions, not Type Contract distinctions — at the protocol level
+there is exactly one Origin Source type.
