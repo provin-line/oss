@@ -2,6 +2,17 @@
 // previousCredential chains across registry boundaries. This file defines
 // the storage contracts; the in-memory PoC implementations and the batch
 // resolver land with the service.
+//
+// Audit-reachable deployments (origin commitments — see
+// pipeline/originsource) require a DURABLE Store implementation:
+// retrospective audits resolve claimed source credentials long after
+// issuance, which an in-memory store cannot honor. How an auditor LOCATES a
+// claimed source set is deliberately outside the wire profile — the
+// commitment carries the Merkle root and the issuer DID set, not content
+// addresses; acquisition goes through the issuers' stores and the
+// counterparties' ingress VC stores (the obligation in
+// pipeline/contract.IngressVCStore). An enumeration surface for that audit
+// query lands with the service API, not with this storage contract.
 package vcresolver
 
 import (
