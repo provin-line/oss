@@ -11,8 +11,9 @@ obligations are the strictest in the repository.
 2. **VC chain behaviour** — exactly one per output side:
    - *chain-preserving*: output VC carries `previousCredential` = hash of the input VC
      (FilterConvert)
-   - *FirstDrop issuance*: output VC has empty `previousCredential`, optionally with
-     `derived_from` + `source_root` origin commitments (Origin Source)
+   - *FirstDrop issuance*: output VC has no `previousCredential` — a fresh chain
+     origin (Origin Source: external ingestion or aggregation; upstream references
+     are a data-payload concern, never credential fields)
    - *termination*: consumes and verifies, produces nothing in-network (External Sink)
 3. **Verification obligations on ingress** — which verification strategy a component
    must run before trusting input (none / adjacent / full), and the obligation to

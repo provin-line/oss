@@ -29,19 +29,55 @@ type DataIntegrityProof struct {
 	Cryptosuite        string `json:"cryptosuite"`
 	VerificationMethod string `json:"verificationMethod"`
 	ProofPurpose       string `json:"proofPurpose"`
+	// Created is the RFC 3339 UTC signature creation time. Cryptosuite
+	// lifecycle is evaluated at this instant — not at the credential's
+	// validFrom.
+	Created string `json:"created"`
 	// ProofValue is the base58btc ("z" multibase) encoded signature.
 	ProofValue string `json:"proofValue"`
 }
 
+// TransformationType declares the kind of transformation a process boundary
+// performed (Paper 01 §4.3 vocabulary). Combinations are "+"-joined
+// ("filter+convert"); wire profiles may add namespace-prefixed extensions
+// ("provin:..."). The base vocabulary is provisional until the dPLaaX
+// Layer 5 specification stabilizes.
+type TransformationType string
+
+const (
+	TransformationFilter  TransformationType = "filter"
+	TransformationConvert TransformationType = "convert"
+	// TransformationAggregate marks a new derivation origin: the result has
+	// no identity relationship with any single input, so previousCredential
+	// is absent and a fresh chain begins (Paper 01 §4.8).
+	TransformationAggregate TransformationType = "aggregate"
+)
+
+// SchemaRef is the content-hashed reference to the registered output schema.
+// The content hash makes retroactive schema modification cryptographically
+// detectable: a verifier resolves the schema from the registry and compares
+// hashes; mismatch fails the data-integrity axis.
+type SchemaRef struct {
+	ID string
+	// Type names the schema language (e.g. "JsonSchema").
+	Type string
+	// ContentHash is "sha256:<hex>" of the schema at issuance time.
+	ContentHash string
+}
+
 // CredentialSubjectFields is the write-side input for the credential subject.
+//
+// The subject carries hashes, never the payload itself: integrity is proven
+// without embedding data in the credential (Paper 01 §4.3). How payload
+// bytes travel alongside credentials is a transport-composition concern,
+// outside this package.
 type CredentialSubjectFields struct {
-	PipelineID string
-	// Payload is the event data. Numeric values must preserve precision
-	// (json.Number) — see packages/canon.
-	Payload map[string]any
-	// Schema is the pinned schema reference "name:version" (required — no
-	// "latest").
-	Schema string
+	PipelineID         string
+	ProcessID          string
+	TransformationType TransformationType
+	// Schema is the content-hashed reference to the registered output
+	// schema.
+	Schema SchemaRef
 	// InputHash / OutputHash are sha256 hex digests of the raw input and
 	// produced output. Adjacent chain links satisfy
 	// outputHash[n] == inputHash[n+1].
@@ -56,8 +92,11 @@ type CredentialFields struct {
 	Issuer    string
 	ValidFrom time.Time
 	Subject   CredentialSubjectFields
-	// PreviousCredential is the hash of the predecessor VC; empty means this
-	// credential is a FirstDrop (chain origin).
+	// PreviousCredential references the predecessor VC (content-commitment
+	// hash baseline); empty means this credential is a chain origin
+	// (FirstDrop). On the wire this field lives inside credentialSubject.
+	// The chain is strictly linear: exactly zero or one predecessor, never
+	// multiple (Paper 01 §4.8).
 	PreviousCredential string
 }
 
@@ -74,21 +113,11 @@ func (c *PipelinePassCredential) ValidFrom() (time.Time, error) { panic("not imp
 // Subject returns the credential subject fields (defensive copy).
 func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) { panic("not implemented") }
 
-// PreviousCredential returns the predecessor hash link; empty for a
-// FirstDrop.
+// PreviousCredential returns the predecessor reference; empty for a chain
+// origin (FirstDrop). Upstream references beyond this single link are
+// deliberately not part of the credential schema — recording which inputs
+// fed an aggregation is a data-payload concern (Paper 01 §4.8).
 func (c *PipelinePassCredential) PreviousCredential() string { panic("not implemented") }
-
-// DerivedFrom returns the Origin Source's upstream Pipeline source DID set
-// (defensive copy; empty for non-origin credentials).
-func (c *PipelinePassCredential) DerivedFrom() []string { panic("not implemented") }
-
-// SourceRoot returns the Merkle commitment over source VC wire bytes (empty
-// for non-origin credentials).
-func (c *PipelinePassCredential) SourceRoot() string { panic("not implemented") }
-
-// SourceRootCanonical returns the name of the canonicalizer used for
-// source_root leaves.
-func (c *PipelinePassCredential) SourceRootCanonical() string { panic("not implemented") }
 
 // Proof returns the proof (defensive copy); nil when unsigned.
 func (c *PipelinePassCredential) Proof() *DataIntegrityProof { panic("not implemented") }

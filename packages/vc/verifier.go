@@ -23,37 +23,27 @@ func NewVerifier(r resolver.Resolver, sigVerifier crypto.Verifier, opts ...Verif
 	panic("not implemented")
 }
 
-// VerifyResult is the L1 verdict for one credential.
+// VerifyResult is the structured verdict for one credential (or one chain):
+// the three normative axes plus their weakest-link composition.
 type VerifyResult struct {
-	Confidence ConfidenceLevel
-	Axes       AxisResult
+	Overall ConfidenceState
+	Axes    AxisResult
 }
 
-// Verify performs L1 verification of a single credential: @context wire form,
-// derived_from duplicate check, source_root field coherence (both-or-neither
-// with source_root_canonical), no-op canonicalizer ban, issuer DID
-// resolution, public-key extraction, proof verification, and weakest-link
-// confidence evaluation.
+// Verify performs single-credential verification across the three normative
+// axes: wire-form checks (@context, required fields), issuer DID resolution
+// and public-key extraction, proof verification with cryptosuite lifecycle
+// evaluation at proof.created, controller-chain reconstruction to the
+// terminal Owner DID, and weakest-link composition of the axis verdicts.
 func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*VerifyResult, error) {
 	panic("not implemented")
 }
 
-// VerifyChain verifies each credential individually, then checks
-// previousCredential hash linkage (newest first) and the data-flow invariant
-// outputHash[n] == inputHash[n+1] between adjacent credentials.
+// VerifyChain verifies each credential individually, then checks the chain
+// structure: previousCredential linkage, the data-flow invariant
+// outputHash[n] == inputHash[n+1] between adjacent credentials, ordering
+// consistency (proof.created monotonicity), and that the chain origin
+// carries no previousCredential.
 func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredential) (*VerifyResult, error) {
-	panic("not implemented")
-}
-
-// VerifyL2Reachability recomputes cred's source_root from the raw wire bytes
-// of its source VCs using the canonicalizer named by source_root_canonical,
-// and requires byte equality with the committed root.
-func (v *Verifier) VerifyL2Reachability(ctx context.Context, cred *PipelinePassCredential, sourceWireBytes [][]byte) error {
-	panic("not implemented")
-}
-
-// VerifyDerivedFromIssuerSet enforces set equality between cred's
-// derived_from list and the issuer set of the presented source VCs.
-func (v *Verifier) VerifyDerivedFromIssuerSet(cred *PipelinePassCredential, sourceIssuers []string) error {
 	panic("not implemented")
 }

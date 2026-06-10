@@ -1,8 +1,9 @@
 # provin OSS
 
-Decentralized data pipeline engine implementing the **dplaax protocol** — every data
-transformation is cryptographically signed as a W3C Verifiable Credential, forming a
-provenance chain that any participant can verify independently. DB-free, YAML-driven,
+Decentralized data pipeline engine — the **`provin` wire profile** (reference
+implementation) of the **dPLaaX protocol**. Every data transformation is
+cryptographically signed as a W3C Verifiable Credential, forming a linear provenance
+chain that any participant can verify independently. DB-free, YAML-driven,
 self-hostable.
 
 > **Status: PoC skeleton.** Directory structure and per-layer conventions are in place;

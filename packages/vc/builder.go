@@ -21,35 +21,21 @@ func WithCryptosuite(name string) BuilderOption { panic("not implemented") }
 // typically fronts the registry's SignerService).
 func NewBuilder(signer crypto.Signer, opts ...BuilderOption) *Builder { panic("not implemented") }
 
-// Build constructs and signs a chain-preserving credential: previousCredential
-// is set to previous.Hash() (FilterConvert semantics). previous may be nil
-// only for first-stage pipelines consuming non-VC input.
+// Build constructs and signs a credential.
+//
+// previous non-nil → chain-preserving: previousCredential is set to
+// previous.Hash() (the boundary was triggered by, and keeps identity with,
+// the predecessor event).
+//
+// previous nil → chain origin (FirstDrop): external ingestion or
+// aggregation. For aggregation, subject.TransformationType is
+// TransformationAggregate — the result has no identity relationship with
+// any single input, so a fresh chain begins and no upstream-reference
+// fields exist at the credential layer (Paper 01 §4.8).
 func (b *Builder) Build(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,
 	previous *PipelinePassCredential,
-) (*PipelinePassCredential, error) {
-	panic("not implemented")
-}
-
-// SourceRef identifies one Pipeline-conformant source VC an Origin Source
-// derives from: the issuer DID and the exact wire bytes as received.
-type SourceRef struct {
-	IssuerDID string
-	WireBytes []byte
-}
-
-// BuildOriginSource constructs and signs a FirstDrop credential
-// (previousCredential empty) with origin commitments computed from sources:
-// derived_from is the deduplicated issuer DID set and source_root is the
-// Merkle commitment over the canonicalized wire bytes. Computing both from
-// the same input enforces the derived_from ↔ source set equality by
-// construction rather than trusting the caller. An empty sources slice
-// yields a pure chain origin (External Source variant — no origin fields).
-func (b *Builder) BuildOriginSource(
-	issuerDID, keyID, verificationMethod string,
-	subject CredentialSubjectFields,
-	sources []SourceRef,
 ) (*PipelinePassCredential, error) {
 	panic("not implemented")
 }

@@ -8,7 +8,7 @@
 1. **I/O形状** — コンポーネントがパイプライントランスポートから消費し、またはそこへ生産する方法（メッセージエンベロープ、サブジェクト規約）。
 2. **VCチェーンの振る舞い** — 出力側ごとに必ず1つ：
    - *チェーン保持*：出力 VC が `previousCredential` = 入力 VC のハッシュを持つ（FilterConvert）
-   - *FirstDrop 発行*：出力 VC の `previousCredential` が空、オプションで `derived_from` + `source_root` オリジンコミットメントを持つ（Origin Source）
+   - *FirstDrop 発行*：出力 VC は `previousCredential` を持たない — 新しいチェーン起点（Origin Source: 外部インジェストまたは集約。上流参照はデータペイロードの関心事であり、クレデンシャルフィールドにはしない）
    - *終端*：消費・検証を行い、ネットワーク内に何も生産しない（External Sink）
 3. **イングレス時の検証義務** — コンポーネントが入力を信頼する前に実行すべき検証戦略（none / adjacent / full）、および監査到達性のために検証済みイングレス VC を保存する義務。
 

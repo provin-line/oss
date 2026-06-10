@@ -25,23 +25,36 @@ Cryptosuites: `eddsa-jcs-2022` (Phase 1, MUST), `eddsa-rdfc-2022` (Phase 2, MAY)
 New suites register in the dispatch table and must pass an **init-time IRI expansion
 probe** — the binary panics at startup rather than serve broken canonicalization.
 
-## Chain & origin fields
+## Chain topology — linear invariant
 
-- `previousCredential` — hash link to the predecessor VC (empty = FirstDrop).
-- `derived_from` / `source_root` / `source_root_canonical` — Origin Source provenance
-  (Merkle commitment over source VC wire bytes). Wired into builder AND verifier from
-  the start (the predecessor left these spec-only — that gap is the first thing this
-  PoC closes).
+- `previousCredential` is **singular**: the chain is strictly linear, never a DAG.
+  Empty/absent marks a chain origin (FirstDrop): external ingestion or aggregation.
+- Aggregation starts a fresh chain because the aggregated result has no identity
+  relationship with any single input (Paper 01 §4.8). Upstream-reference fields
+  (`derived_from`, `source_root`, …) are **deliberately not part of the credential
+  schema** — recording which inputs fed an aggregation is a data-payload /
+  business-logic concern, outside the pipeline infrastructure layer.
+- The subject carries hashes, never the payload itself (Paper 01 §4.3): integrity is
+  proven without embedding data in the credential.
 
-## Trust policy
+## Trust evaluation
 
-- Verification confidence = weakest-link over axes (Signature / DID resolution / Schema).
-- Allowlists: two-tier (per-pipeline overrides registry advisory), `nil` = inherit vs
-  empty = deny-all distinction is load-bearing.
-- Lifecycle phases: Unknown → Active → Deprecated (announcement-date grace) → Sunset.
-  **Zero values fail closed.**
-- No-op identifier ban (`""`, `"none"`, `"null"`, `"identity"`) at both allowlist
-  construction and verification time (JOSE `alg:none` class defense).
+- Three-state domain per axis and overall: `failed ⊏ indeterminate ⊏ verified`,
+  composed by greatest lower bound (weakest link). `failed` = inconsistency
+  established; `indeterminate` = could not complete with current inputs (may resolve
+  later). The distinction keeps verification deterministic across verifiers given the
+  same snapshots.
+- Axes: **Data integrity** (input/output binding + schema content-hash),
+  **Signer authenticity** (signature + cryptosuite lifecycle at `proof.created`),
+  **Chain consistency** (controller chain to the terminal Owner DID + ordering).
+- Chain classification (orthogonal to confidence): `ChainOrigin` /
+  `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — who signed and how many
+  trust boundaries were crossed, not how the data was produced.
+- Lifecycle phases: Unknown → Active → Deprecated → Sunset, keyed on `proof.created`.
+  **Zero values fail closed.** The published append-only form of the lifecycle policy
+  (registry artifact vs service) is still being settled at the spec layer.
+- No-op identifier ban (`""`, `"none"`, `"null"`, `"identity"`) at registration and
+  verification time (JOSE `alg:none` class defense).
 
 ## contexts/
 

@@ -15,11 +15,12 @@ const (
 // RegisterCryptosuite registers the canonicalizer backing a proof
 // cryptosuite. Registration is init-time only; RDF-based suites must pass an
 // IRI expansion probe over a real-shape credential or the process panics at
-// startup — a binary with broken canonicalization must not serve.
+// startup — a binary with broken canonicalization must not serve. No-op
+// identifiers ("", "none", "null", "identity") are rejected here and again
+// at verification time (JOSE alg:none class defense).
+//
+// Which registered suites are acceptable at a given proof.created instant is
+// governed by the lifecycle policy (see LifecyclePhase); the published,
+// append-only form of that policy is a wire-profile obligation whose shape
+// is still being settled at the spec layer.
 func RegisterCryptosuite(name string, c canon.Canonicalizer) { panic("not implemented") }
-
-// RegisterSourceRootCanonicalizer registers a canonicalizer eligible for the
-// source_root_canonical field. No-op identifiers ("", "none", "null",
-// "identity") are rejected here and again at verification time (JOSE
-// alg:none class defense).
-func RegisterSourceRootCanonicalizer(c canon.Canonicalizer) { panic("not implemented") }

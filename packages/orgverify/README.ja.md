@@ -15,6 +15,8 @@ v=dplaax1; did=<full owner DID>; key=sha256:<64 lowercase hex>
 
 ## 判定結果
 
-`VERIFIED / LIMITED / UNVERIFIED / INVALID / N-A` — 5 段階。VC の信頼度レベルとは直交する。DNS 到達不能はLIMITED にマップされ、レコードが存在しない場合は UNVERIFIED、レコードが矛盾または不一致の場合は INVALID となる。
+5 つの endorsement 状態。wire field 名は `endorsement_level`（旧称 `level` から rename）: `EndorsementVerified / EndorsementUnreachable / EndorsementMissing / EndorsementInvalid / EndorsementNA`。DNS 到達不能は Unreachable、レコード不在は Missing、矛盾・不一致は Invalid にマップされる。
+
+Endorsement は三軸直交の信頼モデルの 1 軸であり、DID method の trust tier とも VC の confidence state とも独立。
 
 3 つのエントリーポイント: `Verify`（判定結果）・`Inspect`（判定なしのベストエフォート観察）・`Diagnose`（生成された TXT レコードを含む修正手順）。

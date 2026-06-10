@@ -1,7 +1,7 @@
 # provin OSS
 > 日本語版 — English: [README.md](README.md)
 
-**dplaax protocol** を実装した分散型データパイプラインエンジン。すべてのデータ変換は W3C Verifiable Credential として暗号署名され、任意の参加者が独立に検証できる来歴チェーンを形成する。DB 不要、YAML 駆動、セルフホスト可能。
+分散型データパイプラインエンジン — **dPLaaX protocol** の **`provin` wire profile**（参照実装）。すべてのデータ変換は W3C Verifiable Credential として暗号署名され、任意の参加者が独立に検証できる線形の来歴チェーンを形成する。DB 不要、YAML 駆動、セルフホスト可能。
 
 > **Status: PoC skeleton.** ディレクトリ構造と各レイヤーの規約は整備済み。インターフェースと実装は順次追加される。
 

@@ -5,20 +5,20 @@ FirstDrop VC (empty `previousCredential` — cuts the chain). Internal mechanics
 input cardinality, Pool/cache state, external lookups, aggregation logic — are
 protocol-invisible and free for the implementation to choose.
 
-## Origin commitments
+## Linear chain invariant — no upstream-reference fields
 
-A FirstDrop that derives from Pipeline-conformant sources commits to them:
+The chain is strictly linear: an Origin Source's FirstDrop carries **no**
+upstream-reference credential fields (`derived_from` / `source_root` were removed
+from the design — Paper 01 §4.8 forbids them at the credential schema layer).
+Aggregation severs identity with upstream data; the chain attests to "what happened
+to this data from the aggregation point onward". When an application needs to record
+which inputs were used, that lives in the data payload as the aggregator's business
+logic, never in the credential.
 
-- `derived_from` — the set of upstream Pipeline source DIDs (deduplicated; set
-  equality with actual source issuers is verified at L2 audit)
-- `source_root` — RFC 6962 Merkle root over the canonicalized wire bytes of the
-  source VCs (`packages/merkle`)
-- `source_root_canonical` — names the canonicalizer used for the leaves
-
-External (non-Pipeline-conformant) inputs — files, API pulls, DB lookups, boundary
-ecosystem VCs (SCITT / GAIA-X / …) — are **never** included in `derived_from` or
-`source_root` leaves. Cryptographic linkage to external ecosystems is a separate
-adapter-layer concern, expressed via separate metadata.
+> **Note (pending design discussion B1):** the variant taxonomy below predates the
+> current spec drafts and is under review — in particular whether enrichment is a
+> chain-*continuing* operation (FilterConvert with side-fetch) rather than an Origin
+> Source variant. Do not build against this section until that lands.
 
 ## Variants (reference-implementation naming, by input cardinality N)
 

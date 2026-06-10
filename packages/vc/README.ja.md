@@ -18,17 +18,19 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 
 暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。新しいスイートはディスパッチテーブルに登録し、**初期化時の IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するよりバイナリ起動時にパニックする。
 
-## チェーン・オリジンフィールド
+## チェーントポロジー — 線形不変
 
-- `previousCredential` — 前のVCへのハッシュリンク（空 = FirstDrop）。
-- `derived_from` / `source_root` / `source_root_canonical` — Origin Source の来歴（ソース VC ワイヤーバイトに対する Merkle コミットメント）。ビルダーと検証器の両方に最初から組み込まれている（前バージョンではこれらが仕様のみにとどまっていた — その乖離がこの PoC が最初に解消するものである）。
+- `previousCredential` は**単数**: チェーンは厳密に線形であり、DAG にはならない。空/欠落はチェーン起点（FirstDrop）を意味する: 外部インジェストまたは集約。
+- 集約が新しいチェーンを開始するのは、集約結果がどの単一入力とも同一性関係を持たないため（Paper 01 §4.8）。上流参照フィールド（`derived_from`・`source_root` 等）は**意図的にクレデンシャルスキーマに含めない** — どの入力が集約に使われたかの記録はデータペイロード / ビジネスロジックの関心事であり、パイプラインインフラ層の責務外。
+- subject はハッシュのみを運び、ペイロード自体は運ばない（Paper 01 §4.3）: データを埋め込まずに完全性を証明する。
 
-## トラストポリシー
+## 信頼評価
 
-- 検証信頼度 = 各軸（署名・DID 解決・スキーマ）の最弱リンク。
-- アローリスト: 2 層構造（パイプラインごとのオーバーライドがレジストリのアドバイザリより優先）。`nil` = 継承 と 空 = 全拒否 の区別は重要な意味を持つ。
-- ライフサイクルフェーズ: Unknown → Active → Deprecated（告知日猶予期間あり）→ Sunset。**ゼロ値はフェイルクローズ。**
-- no-op 識別子の禁止（`""`・`"none"`・`"null"`・`"identity"`）はアローリスト構築時と検証時の両方で適用される（JOSE `alg:none` クラス防御）。
+- 各軸と全体は 3 状態ドメイン: `failed ⊏ indeterminate ⊏ verified`、最大下界（最弱リンク）で合成。`failed` = 矛盾が確定、`indeterminate` = 現在の入力では完了不能（後で解決し得る）。この区別が、同じスナップショットを与えられた任意の検証器が同じ結果を出す決定論性を支える。
+- 軸: **Data integrity**（入出力バインディング + スキーマ content-hash）、**Signer authenticity**（署名 + `proof.created` 時点の暗号スイートライフサイクル）、**Chain consistency**（終端 Owner DID までの controller 連鎖 + 順序整合）。
+- チェーン分類（confidence と直交）: `ChainOrigin` / `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — 誰が署名し、いくつの信頼境界を跨いだか。データがどう作られたかではない。
+- ライフサイクルフェーズ: Unknown → Active → Deprecated → Sunset、`proof.created` をキーに評価。**ゼロ値はフェイルクローズ。** ライフサイクルポリシーの公開形（append-only な registry artifact かサービスか）は仕様層で確定待ち。
+- no-op 識別子の禁止（`""`・`"none"`・`"null"`・`"identity"`）は登録時と検証時の両方で適用（JOSE `alg:none` クラス防御）。
 
 ## contexts/
 

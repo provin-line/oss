@@ -25,8 +25,9 @@ const (
 	// ChainPreserving — output VC carries previousCredential = hash of the
 	// input VC (FilterConvert).
 	ChainPreserving
-	// ChainFirstDrop — output VC has an empty previousCredential, optionally
-	// with derived_from / source_root origin commitments (Origin Source).
+	// ChainFirstDrop — output VC has no previousCredential: a fresh chain
+	// origin (Origin Source — external ingestion or aggregation). Upstream
+	// references are a data-payload concern, never credential fields.
 	ChainFirstDrop
 	// ChainTerminating — consumes and verifies; produces nothing in-network
 	// (External Sink).
@@ -65,7 +66,7 @@ type Result struct {
 	VC *vc.PipelinePassCredential
 	// Confidence is the ingress verification verdict (when a verification
 	// strategy other than None ran).
-	Confidence vc.ConfidenceLevel
+	Confidence vc.ConfidenceState
 	// FilteredAtStep is the index of the filter step that rejected the event
 	// (StatusFiltered only).
 	FilteredAtStep int

@@ -18,9 +18,14 @@ security boundary.
 
 ## Verdicts
 
-`VERIFIED / LIMITED / UNVERIFIED / INVALID / N-A` — five levels, orthogonal to the VC
-confidence level. DNS reachability failures map to LIMITED; absent records to
-UNVERIFIED; conflicting or mismatched records to INVALID.
+Five endorsement states, carried on the wire as `endorsement_level` (renamed from
+the predecessor's `level`): `EndorsementVerified / EndorsementUnreachable /
+EndorsementMissing / EndorsementInvalid / EndorsementNA`. DNS reachability failures
+map to Unreachable; absent records to Missing; conflicting or mismatched records to
+Invalid.
+
+Endorsement is one axis of a three-axis orthogonal trust model — independent of the
+DID method trust tier and of the VC confidence state.
 
 Three entry points: `Verify` (verdict), `Inspect` (best-effort observations, no
 verdict), `Diagnose` (remediation steps incl. a generated TXT record).
