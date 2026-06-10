@@ -1,0 +1,7 @@
+# build artifacts
+dist/
+
+# OS / editor noise
+.DS_Store
+*.bak
+*.swp
