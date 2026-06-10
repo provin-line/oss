@@ -1,7 +1,8 @@
 package vc
 
 // ConfidenceState is the three-state verification domain used by every
-// confidence axis and by the overall verdict, with partial order
+// confidence axis, by the overall verdict, and by on-demand audit checks
+// outside the axes (VerifyOriginCommitment), with partial order
 // failed ⊏ indeterminate ⊏ verified. The zero value is the weakest
 // (fail-closed).
 //

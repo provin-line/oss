@@ -17,8 +17,9 @@ unchanged.
 
 What a FirstDrop MAY additionally carry is the **origin commitment**
 (`derived_from` / `source_root` / `source_root_canonical` — see
-`packages/vc.OriginCommitment`): a namespaced wire-profile audit attribute binding
-the issuer to the claimed source set at issuance time. It is a content commitment,
+`packages/vc.OriginCommitment`): a wire-profile audit attribute, declared via the
+dplaax JSON-LD context, binding the issuer to the claimed source set at issuance
+time. It is a content commitment,
 not a parent link — verifiers never traverse it on the per-event path; auditors
 resolve the claimed sources asynchronously and recompute the root on demand.
 

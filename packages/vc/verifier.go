@@ -35,6 +35,13 @@ type VerifyResult struct {
 // and public-key extraction, proof verification with cryptosuite lifecycle
 // evaluation at proof.created, controller-chain reconstruction to the
 // terminal Owner DID, and weakest-link composition of the axis verdicts.
+//
+// Wire-form checks include the previous-XOR-origin invariant: origin
+// commitment fields coexisting with a non-empty previousCredential fail the
+// data-integrity axis. Builder enforces the invariant at issuance, but only
+// for credentials built here — a non-conformant issuer can craft both, so
+// every verification re-checks it (an O(1) presence check; resolving the
+// commitment itself stays off this path — see VerifyOriginCommitment).
 func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*VerifyResult, error) {
 	panic("not implemented")
 }
@@ -42,8 +49,9 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 // VerifyChain verifies each credential individually, then checks the chain
 // structure: previousCredential linkage, the data-flow invariant
 // outputHash[n] == inputHash[n+1] between adjacent credentials, ordering
-// consistency (proof.created monotonicity), and that the chain origin
-// carries no previousCredential.
+// consistency (proof.created monotonicity), that the chain origin carries
+// no previousCredential, and that origin commitment fields appear nowhere
+// but the chain origin.
 func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredential) (*VerifyResult, error) {
 	panic("not implemented")
 }

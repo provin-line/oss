@@ -35,7 +35,10 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
   business-logic concern. The one sanctioned extension is the **origin commitment**
   (`derived_from` / `source_root` / `source_root_canonical`): an optional audit
   attribute a FirstDrop carries under the **audit-reachable conformance class**,
-  riding the open signed body as namespaced profile vocabulary. It is a content
+  riding the open signed body as profile vocabulary declared via the dplaax
+  JSON-LD context (the wire names are pinned by the dPLaaX Origin Source
+  specification — shared across profiles, so they are not renamed per profile).
+  It is a content
   commitment over the consumed source set, not a parent link — chain topology stays
   strictly linear, and Paper 01 §4.8's exclusion (no upstream links in the chain, no
   upstream fields in the base schema) is preserved.

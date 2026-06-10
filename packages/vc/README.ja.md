@@ -21,7 +21,7 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 ## チェーントポロジー — 線形不変
 
 - `previousCredential` は**単数**: チェーンは厳密に線形であり、DAG にはならない。空/欠落はチェーン起点（FirstDrop）を意味する: 外部インジェストまたは集約。
-- 集約が新しいチェーンを開始するのは、集約結果がどの単一入力とも同一性関係を持たないため（Paper 01 §4.8）。**ベースのクレデンシャルスキーマは上流参照フィールドを持たない** — 入力マニフェストはデータペイロード / ビジネスロジックの関心事。唯一公認された拡張が**オリジンコミットメント**（`derived_from` / `source_root` / `source_root_canonical`）: **audit-reachable conformance class** の下で FirstDrop が運ぶ任意の監査属性であり、open な署名ボディに namespace 付き profile 語彙として載る。これは消費した source 集合への content commitment であって親リンクではない — チェーントポロジーは厳密に線形のままで、Paper 01 §4.8 の排除（チェーンに上流リンクなし・ベーススキーマに上流フィールドなし）は維持される。
+- 集約が新しいチェーンを開始するのは、集約結果がどの単一入力とも同一性関係を持たないため（Paper 01 §4.8）。**ベースのクレデンシャルスキーマは上流参照フィールドを持たない** — 入力マニフェストはデータペイロード / ビジネスロジックの関心事。唯一公認された拡張が**オリジンコミットメント**（`derived_from` / `source_root` / `source_root_canonical`）: **audit-reachable conformance class** の下で FirstDrop が運ぶ任意の監査属性であり、open な署名ボディに dplaax JSON-LD context で宣言される profile 語彙として載る（wire 名は dPLaaX Origin Source spec が確定済み — profile 横断で共有されるため profile ごとに改名しない）。これは消費した source 集合への content commitment であって親リンクではない — チェーントポロジーは厳密に線形のままで、Paper 01 §4.8 の排除（チェーンに上流リンクなし・ベーススキーマに上流フィールドなし）は維持される。
 - subject はハッシュのみを運び、ペイロード自体は運ばない（Paper 01 §4.3）: データを埋め込まずに完全性を証明する。
 
 ## 信頼評価
