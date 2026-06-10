@@ -4,7 +4,23 @@
 // at every pipeline process boundary.
 package vc
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/provin-line/oss/packages/canon"
+	"github.com/provin-line/oss/packages/canon/jcs"
+)
+
+// JSON-LD context IRIs embedded in every credential issued by New/Builder.
+// The poc.* tier explicitly permits pre-GA byte-level context evolution;
+// post-GA immutability is a spec-layer concern.
+const (
+	ContextCredentialsV2 = "https://www.w3.org/ns/credentials/v2"
+	ContextDplaaxVCV1    = "https://poc.dplaax.io/vc/v1"
+)
 
 // PipelinePassCredential is the per-event provenance credential.
 //
@@ -117,45 +133,246 @@ type CredentialFields struct {
 	Origin *OriginCommitment
 }
 
+// Wire field names (credential body / credentialSubject). The origin
+// commitment names are pinned by the dPLaaX Origin Source specification.
+const (
+	keyContext            = "@context"
+	keyType               = "type"
+	keyIssuer             = "issuer"
+	keyValidFrom          = "validFrom"
+	keySubject            = "credentialSubject"
+	keyProof              = "proof"
+	keyPipelineID         = "pipelineId"
+	keyProcessID          = "processId"
+	keyTransformationType = "transformationType"
+	keySchema             = "schema"
+	keyInputHash          = "inputHash"
+	keyOutputHash         = "outputHash"
+	keyPreviousCredential = "previousCredential"
+	keyDerivedFrom        = "derived_from"
+	keySourceRoot         = "source_root"
+	keySourceRootCanon    = "source_root_canonical"
+)
+
 // New constructs an unsigned credential (tests / relay). It does not
 // validate; verification-grade checks live in Verifier.
-func New(fields CredentialFields) (*PipelinePassCredential, error) { panic("not implemented") }
+func New(fields CredentialFields) (*PipelinePassCredential, error) {
+	subject := map[string]any{
+		keyPipelineID:         fields.Subject.PipelineID,
+		keyProcessID:          fields.Subject.ProcessID,
+		keyTransformationType: string(fields.Subject.TransformationType),
+	}
+	if fields.Subject.Schema != (SchemaRef{}) {
+		subject[keySchema] = map[string]any{
+			"id":          fields.Subject.Schema.ID,
+			"type":        fields.Subject.Schema.Type,
+			"contentHash": fields.Subject.Schema.ContentHash,
+		}
+	}
+	if fields.Subject.InputHash != "" {
+		subject[keyInputHash] = fields.Subject.InputHash
+	}
+	if fields.Subject.OutputHash != "" {
+		subject[keyOutputHash] = fields.Subject.OutputHash
+	}
+	if fields.PreviousCredential != "" {
+		subject[keyPreviousCredential] = fields.PreviousCredential
+	}
+	if fields.Origin != nil {
+		derived := make([]string, len(fields.Origin.DerivedFrom))
+		copy(derived, fields.Origin.DerivedFrom)
+		sort.Strings(derived) // wire order is pinned lexicographic ascending
+		wire := make([]any, len(derived))
+		for i, d := range derived {
+			wire[i] = d
+		}
+		subject[keyDerivedFrom] = wire
+		subject[keySourceRoot] = fields.Origin.SourceRoot
+		subject[keySourceRootCanon] = fields.Origin.SourceRootCanonical
+	}
+	body := map[string]any{
+		keyContext:   []any{ContextCredentialsV2, ContextDplaaxVCV1},
+		keyType:      []any{"VerifiableCredential", "PipelinePassCredential"},
+		keyIssuer:    fields.Issuer,
+		keyValidFrom: fields.ValidFrom.UTC().Format(time.RFC3339),
+		keySubject:   subject,
+	}
+	return &PipelinePassCredential{body: body}, nil
+}
 
 // Issuer returns the issuer DID (a Process DID).
-func (c *PipelinePassCredential) Issuer() string { panic("not implemented") }
+func (c *PipelinePassCredential) Issuer() string {
+	s, _ := c.body[keyIssuer].(string)
+	return s
+}
 
 // ValidFrom returns the issuance instant.
-func (c *PipelinePassCredential) ValidFrom() (time.Time, error) { panic("not implemented") }
+func (c *PipelinePassCredential) ValidFrom() (time.Time, error) {
+	s, ok := c.body[keyValidFrom].(string)
+	if !ok {
+		return time.Time{}, errors.New("vc: validFrom missing or not a string")
+	}
+	return time.Parse(time.RFC3339, s)
+}
 
 // Subject returns the credential subject fields (defensive copy).
-func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) { panic("not implemented") }
+func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) {
+	m, ok := c.body[keySubject].(map[string]any)
+	if !ok {
+		return CredentialSubjectFields{}, errors.New("vc: credentialSubject missing or not an object")
+	}
+	subj := CredentialSubjectFields{
+		PipelineID:         getString(m, keyPipelineID),
+		ProcessID:          getString(m, keyProcessID),
+		TransformationType: TransformationType(getString(m, keyTransformationType)),
+		InputHash:          getString(m, keyInputHash),
+		OutputHash:         getString(m, keyOutputHash),
+	}
+	if sm, ok := m[keySchema].(map[string]any); ok {
+		subj.Schema = SchemaRef{
+			ID:          getString(sm, "id"),
+			Type:        getString(sm, "type"),
+			ContentHash: getString(sm, "contentHash"),
+		}
+	}
+	return subj, nil
+}
 
 // PreviousCredential returns the predecessor reference; empty for a chain
 // origin (FirstDrop). The base credential schema carries no upstream
 // references beyond this single link (Paper 01 §4.8 — chain topology stays
 // linear); the only sanctioned exception is the optional, non-linking
 // OriginCommitment audit attribute (see Origin).
-func (c *PipelinePassCredential) PreviousCredential() string { panic("not implemented") }
+func (c *PipelinePassCredential) PreviousCredential() string {
+	m, ok := c.body[keySubject].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return getString(m, keyPreviousCredential)
+}
 
 // Origin returns the origin audit commitment (defensive copy); nil when the
 // credential carries none — which is every chain-preserving credential and
 // any FirstDrop issued outside the audit-reachable class.
-func (c *PipelinePassCredential) Origin() *OriginCommitment { panic("not implemented") }
+func (c *PipelinePassCredential) Origin() *OriginCommitment {
+	m, ok := c.body[keySubject].(map[string]any)
+	if !ok {
+		return nil
+	}
+	_, hasDerived := m[keyDerivedFrom]
+	_, hasRoot := m[keySourceRoot]
+	_, hasCanon := m[keySourceRootCanon]
+	if !hasDerived && !hasRoot && !hasCanon {
+		return nil
+	}
+	oc := &OriginCommitment{
+		SourceRoot:          getString(m, keySourceRoot),
+		SourceRootCanonical: getString(m, keySourceRootCanon),
+	}
+	if list, ok := m[keyDerivedFrom].([]any); ok {
+		oc.DerivedFrom = make([]string, 0, len(list))
+		for _, e := range list {
+			if s, ok := e.(string); ok {
+				oc.DerivedFrom = append(oc.DerivedFrom, s)
+			}
+		}
+	}
+	return oc
+}
 
 // Proof returns the proof (defensive copy); nil when unsigned.
-func (c *PipelinePassCredential) Proof() *DataIntegrityProof { panic("not implemented") }
+func (c *PipelinePassCredential) Proof() *DataIntegrityProof {
+	if c.proof == nil {
+		return nil
+	}
+	p := *c.proof
+	return &p
+}
 
 // Body returns a defensive copy of the canonical body map (the signing
 // scope, proof excluded).
-func (c *PipelinePassCredential) Body() map[string]any { panic("not implemented") }
+func (c *PipelinePassCredential) Body() map[string]any {
+	return deepCopyMap(c.body)
+}
 
 // Hash returns "sha256:<hex>" over the JCS-canonical body — the credential's
 // content address used by previousCredential links and the VC resolver.
-func (c *PipelinePassCredential) Hash() (string, error) { panic("not implemented") }
+func (c *PipelinePassCredential) Hash() (string, error) {
+	return jcs.Hash(c.body)
+}
 
-// MarshalJSON emits the wire form (body fields + proof).
-func (c *PipelinePassCredential) MarshalJSON() ([]byte, error) { panic("not implemented") }
+// MarshalJSON emits the wire form (body fields + proof). The bytes are
+// JCS-canonical — deterministic output keeps wire comparisons trivial.
+func (c *PipelinePassCredential) MarshalJSON() ([]byte, error) {
+	return jcs.Canonicalize(c.wireDocument())
+}
 
 // UnmarshalJSON parses the wire form under strict-decoder rules, preserving
 // unknown signed-scope fields in the body.
-func (c *PipelinePassCredential) UnmarshalJSON(data []byte) error { panic("not implemented") }
+func (c *PipelinePassCredential) UnmarshalJSON(data []byte) error {
+	var doc map[string]any
+	if err := canon.NewStrictDecoder(data).Decode(&doc); err != nil {
+		return fmt.Errorf("vc: %w", err)
+	}
+	var proof *DataIntegrityProof
+	if pm, ok := doc[keyProof].(map[string]any); ok {
+		proof = &DataIntegrityProof{
+			Type:               getString(pm, "type"),
+			Cryptosuite:        getString(pm, "cryptosuite"),
+			VerificationMethod: getString(pm, "verificationMethod"),
+			ProofPurpose:       getString(pm, "proofPurpose"),
+			Created:            getString(pm, "created"),
+			ProofValue:         getString(pm, "proofValue"),
+		}
+	}
+	delete(doc, keyProof)
+	c.body = doc
+	c.proof = proof
+	return nil
+}
+
+// wireDocument assembles the full wire-form map: body plus proof. This is
+// the value source-root leaves are computed over (the VC as received).
+func (c *PipelinePassCredential) wireDocument() map[string]any {
+	doc := deepCopyMap(c.body)
+	if c.proof != nil {
+		doc[keyProof] = map[string]any{
+			"type":               c.proof.Type,
+			"cryptosuite":        c.proof.Cryptosuite,
+			"verificationMethod": c.proof.VerificationMethod,
+			"proofPurpose":       c.proof.ProofPurpose,
+			"created":            c.proof.Created,
+			"proofValue":         c.proof.ProofValue,
+		}
+	}
+	return doc
+}
+
+func getString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+func deepCopyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyValue(v)
+	}
+	return out
+}
+
+func deepCopyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return deepCopyMap(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = deepCopyValue(e)
+		}
+		return out
+	default:
+		// Scalars (string, json.Number, bool, nil) are immutable.
+		return v
+	}
+}

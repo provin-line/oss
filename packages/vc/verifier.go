@@ -20,7 +20,11 @@ type VerifierOption func(*Verifier)
 // NewVerifier returns a Verifier resolving issuer DIDs through r and
 // verifying signatures through sigVerifier.
 func NewVerifier(r resolver.Resolver, sigVerifier crypto.Verifier, opts ...VerifierOption) *Verifier {
-	panic("not implemented")
+	v := &Verifier{resolver: r, sigVerifier: sigVerifier}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
 }
 
 // VerifyResult is the structured verdict for one credential (or one chain):

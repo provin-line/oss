@@ -1,6 +1,14 @@
 package vc
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sort"
+)
 
 // SourceRootCanonical identifiers name the canonical JSON specification used
 // to compute source-root leaves. They are the dPLaaX specification's
@@ -68,7 +76,15 @@ type OriginCommitment struct {
 // from diverging. Errors on an unknown canonical or duplicate sources
 // (emit-time misuse fails loud, before signing).
 func NewOriginCommitment(sources []*PipelinePassCredential, canonical string) (*OriginCommitment, error) {
-	panic("not implemented")
+	root, err := ComputeSourceRoot(sources, canonical)
+	if err != nil {
+		return nil, err
+	}
+	return &OriginCommitment{
+		DerivedFrom:         uniqueIssuers(sources),
+		SourceRoot:          root,
+		SourceRootCanonical: canonical,
+	}, nil
 }
 
 // ComputeSourceRoot computes the source-root commitment over the consumed
@@ -77,7 +93,61 @@ func NewOriginCommitment(sources []*PipelinePassCredential, canonical string) (*
 // against a credential's claimed commitment. Errors on an unknown canonical
 // or duplicate source credentials.
 func ComputeSourceRoot(sources []*PipelinePassCredential, canonical string) (string, error) {
-	panic("not implemented")
+	if canonical != SourceRootCanonicalJCS {
+		return "", fmt.Errorf("vc: unknown source_root_canonical %q", canonical)
+	}
+	type leaf struct {
+		content [sha256.Size]byte // SHA-256(canon(VC)) — the sort key
+		hash    [sha256.Size]byte // SHA-256(0x00 || canon(VC)) — the tree leaf
+	}
+	leaves := make([]leaf, len(sources))
+	seen := make(map[[sha256.Size]byte]bool, len(sources))
+	for i, s := range sources {
+		wire, err := s.MarshalJSON()
+		if err != nil {
+			return "", fmt.Errorf("vc: canonicalizing source %d: %w", i, err)
+		}
+		content := sha256.Sum256(wire)
+		if seen[content] {
+			return "", fmt.Errorf("vc: duplicate source credential (content hash %x)", content[:8])
+		}
+		seen[content] = true
+		leaves[i] = leaf{content: content, hash: sha256.Sum256(append([]byte{0x00}, wire...))}
+	}
+	sort.Slice(leaves, func(i, j int) bool {
+		return bytes.Compare(leaves[i].content[:], leaves[j].content[:]) < 0
+	})
+	hashes := make([][sha256.Size]byte, len(leaves))
+	for i, l := range leaves {
+		hashes[i] = l.hash
+	}
+	root := merkleTreeHash(hashes)
+	// Multihash sha2-256 (0x12, length 0x20), multibase lowercase hex ("f").
+	return "f1220" + hex.EncodeToString(root[:]), nil
+}
+
+// merkleTreeHash is RFC 6962 §2.1 MTH over pre-hashed leaves: the left
+// subtree spans the largest power of two smaller than n, so odd leaves are
+// promoted, never duplicated. MTH of the empty list is SHA-256 of the empty
+// string.
+func merkleTreeHash(leaves [][sha256.Size]byte) [sha256.Size]byte {
+	switch len(leaves) {
+	case 0:
+		return sha256.Sum256(nil)
+	case 1:
+		return leaves[0]
+	}
+	k := 1
+	for k*2 < len(leaves) {
+		k *= 2
+	}
+	left := merkleTreeHash(leaves[:k])
+	right := merkleTreeHash(leaves[k:])
+	buf := make([]byte, 0, 1+2*sha256.Size)
+	buf = append(buf, 0x01)
+	buf = append(buf, left[:]...)
+	buf = append(buf, right[:]...)
+	return sha256.Sum256(buf)
 }
 
 // VerifyOriginCommitment is the on-demand audit check for the
@@ -95,6 +165,61 @@ func ComputeSourceRoot(sources []*PipelinePassCredential, canonical string) (str
 //   - unknown SourceRootCanonical → failed (fail closed)
 //   - cred carries no origin commitment, or is chain-preserving → error
 //     (misuse: there is nothing to verify)
+//
+// Incompleteness is detectable at issuer granularity only (DerivedFrom is
+// an issuer set): a missing credential whose issuer is already covered by
+// another provided source surfaces as failed, not indeterminate — the
+// commitment grammar cannot distinguish the two.
 func (v *Verifier) VerifyOriginCommitment(ctx context.Context, cred *PipelinePassCredential, sources []*PipelinePassCredential) (ConfidenceState, error) {
-	panic("not implemented")
+	claimed := cred.Origin()
+	if claimed == nil {
+		return ConfidenceFailed, errors.New("vc: credential carries no origin commitment")
+	}
+	if cred.PreviousCredential() != "" {
+		return ConfidenceFailed, errors.New("vc: chain-preserving credential cannot carry an origin commitment")
+	}
+	if claimed.SourceRootCanonical != SourceRootCanonicalJCS {
+		return ConfidenceFailed, nil // unknown canonicalization fails closed
+	}
+
+	claimedIssuers := append([]string(nil), claimed.DerivedFrom...)
+	sort.Strings(claimedIssuers)
+	providedIssuers := uniqueIssuers(sources)
+
+	claimedSet := make(map[string]bool, len(claimedIssuers))
+	for _, d := range claimedIssuers {
+		claimedSet[d] = true
+	}
+	for _, p := range providedIssuers {
+		if !claimedSet[p] {
+			return ConfidenceFailed, nil // source outside the claimed set
+		}
+	}
+	if len(providedIssuers) < len(claimedIssuers) {
+		return ConfidenceIndeterminate, nil // claimed issuers not yet resolved
+	}
+
+	recomputed, err := ComputeSourceRoot(sources, claimed.SourceRootCanonical)
+	if err != nil {
+		return ConfidenceFailed, err // duplicates in the gathered set: caller data problem
+	}
+	if recomputed != claimed.SourceRoot {
+		return ConfidenceFailed, nil
+	}
+	return ConfidenceVerified, nil
+}
+
+// uniqueIssuers returns the deduplicated, lexicographically sorted issuer
+// DIDs of the given credentials — the DerivedFrom grammar.
+func uniqueIssuers(sources []*PipelinePassCredential) []string {
+	set := make(map[string]bool, len(sources))
+	for _, s := range sources {
+		set[s.Issuer()] = true
+	}
+	out := make([]string, 0, len(set))
+	for issuer := range set {
+		out = append(out, issuer)
+	}
+	sort.Strings(out)
+	return out
 }
