@@ -33,8 +33,12 @@ const (
 // Construction has exactly three paths: Builder (signed), New (unsigned;
 // tests/relay), and UnmarshalJSON (verifier path).
 type PipelinePassCredential struct {
-	body  map[string]any
-	proof *DataIntegrityProof
+	body map[string]any
+	// proof is stored as the raw wire map so unknown proof members survive
+	// round-trips byte-faithfully — source-root leaves hash the VC as
+	// received, so a lossy proof projection would corrupt audit
+	// recomputation. The typed DataIntegrityProof is a read view (Proof()).
+	proof map[string]any
 }
 
 // DataIntegrityProof is the W3C Data Integrity proof. Proof fields are
@@ -179,9 +183,16 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 		subject[keyPreviousCredential] = fields.PreviousCredential
 	}
 	if fields.Origin != nil {
-		derived := make([]string, len(fields.Origin.DerivedFrom))
-		copy(derived, fields.Origin.DerivedFrom)
-		sort.Strings(derived) // wire order is pinned lexicographic ascending
+		// Normalize to the wire grammar: unique set, lexicographic ascending.
+		set := make(map[string]bool, len(fields.Origin.DerivedFrom))
+		for _, d := range fields.Origin.DerivedFrom {
+			set[d] = true
+		}
+		derived := make([]string, 0, len(set))
+		for d := range set {
+			derived = append(derived, d)
+		}
+		sort.Strings(derived)
 		wire := make([]any, len(derived))
 		for i, d := range derived {
 			wire[i] = d
@@ -191,9 +202,12 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 		subject[keySourceRootCanon] = fields.Origin.SourceRootCanonical
 	}
 	body := map[string]any{
-		keyContext:   []any{ContextCredentialsV2, ContextDplaaxVCV1},
-		keyType:      []any{"VerifiableCredential", "PipelinePassCredential"},
-		keyIssuer:    fields.Issuer,
+		keyContext: []any{ContextCredentialsV2, ContextDplaaxVCV1},
+		keyType:    []any{"VerifiableCredential", "PipelinePassCredential"},
+		keyIssuer:  fields.Issuer,
+		// Wire granularity is whole seconds (RFC 3339): sub-second
+		// precision is truncated at issuance, deliberately — proof.created
+		// and validFrom comparisons must not depend on clock resolution.
 		keyValidFrom: fields.ValidFrom.UTC().Format(time.RFC3339),
 		keySubject:   subject,
 	}
@@ -280,13 +294,22 @@ func (c *PipelinePassCredential) Origin() *OriginCommitment {
 	return oc
 }
 
-// Proof returns the proof (defensive copy); nil when unsigned.
+// Proof returns the typed proof view (defensive copy); nil when unsigned.
+// The view extracts the six Data Integrity members; unknown or non-string
+// proof members are not visible here but survive round-trips in the raw
+// proof map (see MarshalJSON).
 func (c *PipelinePassCredential) Proof() *DataIntegrityProof {
 	if c.proof == nil {
 		return nil
 	}
-	p := *c.proof
-	return &p
+	return &DataIntegrityProof{
+		Type:               getString(c.proof, "type"),
+		Cryptosuite:        getString(c.proof, "cryptosuite"),
+		VerificationMethod: getString(c.proof, "verificationMethod"),
+		ProofPurpose:       getString(c.proof, "proofPurpose"),
+		Created:            getString(c.proof, "created"),
+		ProofValue:         getString(c.proof, "proofValue"),
+	}
 }
 
 // Body returns a defensive copy of the canonical body map (the signing
@@ -314,36 +337,30 @@ func (c *PipelinePassCredential) UnmarshalJSON(data []byte) error {
 	if err := canon.NewStrictDecoder(data).Decode(&doc); err != nil {
 		return fmt.Errorf("vc: %w", err)
 	}
-	var proof *DataIntegrityProof
-	if pm, ok := doc[keyProof].(map[string]any); ok {
-		proof = &DataIntegrityProof{
-			Type:               getString(pm, "type"),
-			Cryptosuite:        getString(pm, "cryptosuite"),
-			VerificationMethod: getString(pm, "verificationMethod"),
-			ProofPurpose:       getString(pm, "proofPurpose"),
-			Created:            getString(pm, "created"),
-			ProofValue:         getString(pm, "proofValue"),
+	var proof map[string]any
+	if raw, present := doc[keyProof]; present {
+		pm, ok := raw.(map[string]any)
+		if !ok {
+			// Proof sets (arrays) and scalar proofs are not supported yet:
+			// reject loudly rather than present a signed credential as
+			// unsigned.
+			return fmt.Errorf("vc: proof must be a JSON object, got %T", raw)
 		}
+		proof = pm
+		delete(doc, keyProof)
 	}
-	delete(doc, keyProof)
 	c.body = doc
 	c.proof = proof
 	return nil
 }
 
-// wireDocument assembles the full wire-form map: body plus proof. This is
-// the value source-root leaves are computed over (the VC as received).
+// wireDocument assembles the full wire-form map: body plus the raw proof.
+// This is the value source-root leaves are computed over (the VC as
+// received) — which is why the proof must round-trip byte-faithfully.
 func (c *PipelinePassCredential) wireDocument() map[string]any {
 	doc := deepCopyMap(c.body)
 	if c.proof != nil {
-		doc[keyProof] = map[string]any{
-			"type":               c.proof.Type,
-			"cryptosuite":        c.proof.Cryptosuite,
-			"verificationMethod": c.proof.VerificationMethod,
-			"proofPurpose":       c.proof.ProofPurpose,
-			"created":            c.proof.Created,
-			"proofValue":         c.proof.ProofValue,
-		}
+		doc[keyProof] = deepCopyMap(c.proof)
 	}
 	return doc
 }

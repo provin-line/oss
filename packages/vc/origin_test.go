@@ -285,3 +285,28 @@ func TestVerifyOriginCommitmentEmptyClaim(t *testing.T) {
 		t.Errorf("verdict = %v, want verified (signed claim of zero sources)", got)
 	}
 }
+
+func TestVerifyOriginCommitmentDuplicateClaimFailsClosed(t *testing.T) {
+	s := threeSources(t)
+	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	cred := aggregateCred(t, oc)
+	// Inject a duplicated derived_from entry at the wire level (New
+	// normalizes to a unique set, so craft the wire form directly).
+	wire, _ := cred.MarshalJSON()
+	dup := strings.Replace(string(wire), `"derived_from":["`,
+		`"derived_from":["`+oc.DerivedFrom[0]+`","`, 1)
+	var tampered vc.PipelinePassCredential
+	if err := tampered.UnmarshalJSON([]byte(dup)); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if len(tampered.Origin().DerivedFrom) != len(oc.DerivedFrom)+1 {
+		t.Fatalf("test setup: duplicate not injected: %v", tampered.Origin().DerivedFrom)
+	}
+	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), &tampered, s)
+	if err != nil {
+		t.Fatalf("VerifyOriginCommitment: %v", err)
+	}
+	if got != vc.ConfidenceFailed {
+		t.Errorf("verdict = %v, want failed (duplicate-carrying claim is malformed)", got)
+	}
+}

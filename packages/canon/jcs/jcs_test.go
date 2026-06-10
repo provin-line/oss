@@ -156,3 +156,12 @@ func TestHash(t *testing.T) {
 		t.Errorf("Hash({}) = %s, want %s", got, want)
 	}
 }
+
+func TestCanonicalizeRejectsInvalidUTF8(t *testing.T) {
+	if _, err := jcs.Canonicalize("a\xffb"); err == nil {
+		t.Error("invalid UTF-8 string value: want error, got nil")
+	}
+	if _, err := jcs.Canonicalize(map[string]any{"k\xff": 1}); err == nil {
+		t.Error("invalid UTF-8 object key: want error, got nil")
+	}
+}

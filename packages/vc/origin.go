@@ -75,6 +75,11 @@ type OriginCommitment struct {
 // ComputeSourceRoot. The single construction path keeps emit and verify
 // from diverging. Errors on an unknown canonical or duplicate sources
 // (emit-time misuse fails loud, before signing).
+//
+// sources must be the credentials AS RECEIVED (signed wire form): leaves
+// hash the full wire document including proof, so a commitment computed
+// over pre-signing in-memory credentials will never verify against the
+// counterparties' stores.
 func NewOriginCommitment(sources []*PipelinePassCredential, canonical string) (*OriginCommitment, error) {
 	root, err := ComputeSourceRoot(sources, canonical)
 	if err != nil {
@@ -182,20 +187,22 @@ func (v *Verifier) VerifyOriginCommitment(ctx context.Context, cred *PipelinePas
 		return ConfidenceFailed, nil // unknown canonicalization fails closed
 	}
 
-	claimedIssuers := append([]string(nil), claimed.DerivedFrom...)
-	sort.Strings(claimedIssuers)
-	providedIssuers := uniqueIssuers(sources)
-
-	claimedSet := make(map[string]bool, len(claimedIssuers))
-	for _, d := range claimedIssuers {
+	claimedSet := make(map[string]bool, len(claimed.DerivedFrom))
+	for _, d := range claimed.DerivedFrom {
 		claimedSet[d] = true
 	}
+	if len(claimedSet) != len(claimed.DerivedFrom) {
+		// DerivedFrom is defined as a unique set: a duplicate-carrying claim
+		// is malformed and fails closed (never "resolves later").
+		return ConfidenceFailed, nil
+	}
+	providedIssuers := uniqueIssuers(sources)
 	for _, p := range providedIssuers {
 		if !claimedSet[p] {
 			return ConfidenceFailed, nil // source outside the claimed set
 		}
 	}
-	if len(providedIssuers) < len(claimedIssuers) {
+	if len(providedIssuers) < len(claimedSet) {
 		return ConfidenceIndeterminate, nil // claimed issuers not yet resolved
 	}
 

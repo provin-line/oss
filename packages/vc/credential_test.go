@@ -233,3 +233,55 @@ func TestUnmarshalRejectsDuplicateKeys(t *testing.T) {
 		t.Error("want duplicate-key rejection, got nil")
 	}
 }
+
+func TestUnmarshalProofUnknownMembersSurvive(t *testing.T) {
+	c := newCred(t, vc.CredentialFields{
+		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		ValidFrom: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
+		Subject:   subjectFields(),
+	})
+	wire, _ := c.MarshalJSON()
+	withProof := strings.Replace(string(wire), "{",
+		`{"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","proofValue":"zX","domain":"example.com","challenge":"abc123","created":"2026-06-10T12:00:00Z","verificationMethod":"did:x#k","proofPurpose":"assertionMethod"},`, 1)
+
+	var rt vc.PipelinePassCredential
+	if err := rt.UnmarshalJSON([]byte(withProof)); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	rewire, err := rt.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	for _, member := range []string{`"domain":"example.com"`, `"challenge":"abc123"`} {
+		if !strings.Contains(string(rewire), member) {
+			t.Errorf("proof member lost on round-trip: %s missing from %s", member, rewire)
+		}
+	}
+	// Round-trip stability: a second unmarshal/marshal is byte-identical.
+	var rt2 vc.PipelinePassCredential
+	if err := rt2.UnmarshalJSON(rewire); err != nil {
+		t.Fatalf("second UnmarshalJSON: %v", err)
+	}
+	rewire2, _ := rt2.MarshalJSON()
+	if string(rewire) != string(rewire2) {
+		t.Error("wire form not stable across round-trips")
+	}
+}
+
+func TestUnmarshalProofSetRejected(t *testing.T) {
+	var rt vc.PipelinePassCredential
+	err := rt.UnmarshalJSON([]byte(`{"issuer":"did:x","proof":[{"type":"DataIntegrityProof"}]}`))
+	if err == nil {
+		t.Error("proof set (array): want loud rejection, got nil")
+	}
+}
+
+func TestUnmarshalEmptyObject(t *testing.T) {
+	var rt vc.PipelinePassCredential
+	if err := rt.UnmarshalJSON([]byte(`{}`)); err != nil {
+		t.Fatalf("UnmarshalJSON({}): %v", err)
+	}
+	if rt.Issuer() != "" || rt.Origin() != nil || rt.Proof() != nil {
+		t.Error("empty credential should read as zero values")
+	}
+}

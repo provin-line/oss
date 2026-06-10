@@ -81,3 +81,27 @@ func TestStrictDecoderRejectsGarbage(t *testing.T) {
 		}
 	}
 }
+
+func TestStrictDecoderRejectsInvalidUnicode(t *testing.T) {
+	cases := []string{
+		"{\"issuer\":\"\\uDEAD\"}",  // lone low surrogate escape
+		"{\"issuer\":\"\\uD83D\"}",  // unpaired high surrogate escape
+		"{\"issuer\":\"\\uD83Dx\"}", // high surrogate followed by non-escape
+		"{\"k\":\"a\xff\"}",         // raw invalid UTF-8 byte
+	}
+	for _, doc := range cases {
+		var v any
+		if err := canon.NewStrictDecoder([]byte(doc)).Decode(&v); err == nil {
+			t.Errorf("Decode(%q): want invalid-unicode error, got nil", doc)
+		}
+	}
+	// A correctly paired surrogate escape is fine.
+	var v any
+	if err := canon.NewStrictDecoder([]byte("{\"k\":\"\\uD83D\\uDE00\"}")).Decode(&v); err != nil {
+		t.Errorf("paired surrogate escape rejected: %v", err)
+	}
+	// A literal U+FFFD in the input is legal Unicode, not an error.
+	if err := canon.NewStrictDecoder([]byte("{\"k\":\"�\"}")).Decode(&v); err != nil {
+		t.Errorf("literal U+FFFD rejected: %v", err)
+	}
+}

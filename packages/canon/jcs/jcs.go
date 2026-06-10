@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // Name is the wire identifier of this canonicalization.
@@ -71,6 +72,9 @@ func serialize(sb *strings.Builder, v any) error {
 			sb.WriteString("false")
 		}
 	case string:
+		if !utf8.ValidString(t) {
+			return fmt.Errorf("jcs: string value is not valid UTF-8: %q", t)
+		}
 		writeString(sb, t)
 	case json.Number:
 		s, err := numberFromLiteral(t)
@@ -85,6 +89,8 @@ func serialize(sb *strings.Builder, v any) error {
 		}
 		sb.WriteString(s)
 	case float32:
+		// Widening is exact but can look surprising: float32(0.1) becomes
+		// 0.10000000149011612 — the float64 nearest to the float32 value.
 		s, err := es6Number(float64(t))
 		if err != nil {
 			return err
@@ -124,6 +130,9 @@ func serialize(sb *strings.Builder, v any) error {
 	case map[string]any:
 		keys := make([]string, 0, len(t))
 		for k := range t {
+			if !utf8.ValidString(k) {
+				return fmt.Errorf("jcs: object key is not valid UTF-8: %q", k)
+			}
 			keys = append(keys, k)
 		}
 		sort.Slice(keys, func(i, j int) bool { return lessUTF16(keys[i], keys[j]) })
@@ -148,7 +157,10 @@ func serialize(sb *strings.Builder, v any) error {
 // writeString emits s per ES6 JSON.stringify (RFC 8785 §3.2.2.2): the short
 // escapes for ", \, and the named controls; \u00xx (lowercase hex) for the
 // remaining controls; everything else — including U+2028/U+2029 — as raw
-// UTF-8 bytes.
+// UTF-8 bytes. Invalid UTF-8 is rejected before this is called: emitting it
+// raw would sign non-Unicode bytes, and []rune-based UTF-16 key comparison
+// would collapse distinct invalid keys into U+FFFD — a nondeterministic
+// canonical form.
 func writeString(sb *strings.Builder, s string) {
 	sb.WriteByte('"')
 	for i := 0; i < len(s); i++ {
