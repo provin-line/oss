@@ -132,6 +132,35 @@ type Component interface {
 	ChainBehavior() ChainBehavior
 }
 
+// Envelope is the unit carried between components on the transport.
+//
+// Normative chain semantics (previousCredential links, inputHash/outputHash,
+// verification) depend ONLY on the credential and its content hashes — never
+// on how the payload travelled. Whether Payload rides inline is a
+// per-subscription transport choice: inline suits low-latency small-message
+// exchange (A2A); by-reference suits large or confidential payloads (AI
+// corpora, supply-chain records), where consumers locate data via the
+// credential's hashes (VC resolver / object store). Verifier code is
+// identical for both forms.
+type Envelope struct {
+	Credential *vc.PipelinePassCredential
+	// Payload optionally carries the data bytes inline; nil means
+	// by-reference delivery.
+	Payload []byte
+	// SequenceNo is the publisher-assigned, strictly increasing sequence
+	// number. It makes append-only emission wire-verifiable: a gap or
+	// reordering in a subscriber's view is evidence, not a glitch.
+	SequenceNo uint64
+}
+
+// EnvelopeCodec marshals envelopes to and from their wire form. The concrete
+// wire encoding is pinned at the proto layer; components and external
+// adapters depend only on this interface.
+type EnvelopeCodec interface {
+	MarshalEnvelope(e *Envelope) ([]byte, error)
+	UnmarshalEnvelope(data []byte) (*Envelope, error)
+}
+
 // ProcessEvent is the post-processing notification delivered to observers.
 type ProcessEvent struct {
 	Result *Result

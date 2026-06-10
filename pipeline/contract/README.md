@@ -7,7 +7,10 @@ obligations are the strictest in the repository.
 ## What the contract covers
 
 1. **I/O shape** — how a component consumes from and/or produces to the pipeline
-   transport (message envelope, subject conventions).
+   transport: the `Envelope` (credential + optional inline payload + sequence
+   number) and subject conventions. **Normative semantics are hash-based**;
+   whether the payload rides inline or by reference is a per-subscription
+   transport choice — verification never depends on the delivery form.
 2. **VC chain behaviour** — exactly one per output side:
    - *chain-preserving*: output VC carries `previousCredential` = hash of the input VC
      (FilterConvert)

@@ -84,7 +84,9 @@ type CredentialSubjectFields struct {
 	Schema SchemaRef
 	// InputHash / OutputHash are sha256 hex digests of the raw input and
 	// produced output. Adjacent chain links satisfy
-	// outputHash[n] == inputHash[n+1].
+	// outputHash[n] == inputHash[n+1]. InputHash is absent for aggregation
+	// FirstDrops — no single input exists; input manifests are a payload
+	// concern.
 	InputHash  string
 	OutputHash string
 }
@@ -96,11 +98,14 @@ type CredentialFields struct {
 	Issuer    string
 	ValidFrom time.Time
 	Subject   CredentialSubjectFields
-	// PreviousCredential references the predecessor VC (content-commitment
-	// hash baseline); empty means this credential is a chain origin
-	// (FirstDrop). On the wire this field lives inside credentialSubject.
-	// The chain is strictly linear: exactly zero or one predecessor, never
-	// multiple (Paper 01 §4.8).
+	// PreviousCredential references the predecessor VC. The provin wire
+	// profile adopts the content-commitment form exclusively
+	// ("sha256:<hex>" over the predecessor's canonical body): long-horizon
+	// audits and reproducibility need a byte-exact commitment, not a name
+	// whose registry may be gone. Empty means this credential is a chain
+	// origin (FirstDrop). On the wire this field lives inside
+	// credentialSubject. The chain is strictly linear: exactly zero or one
+	// predecessor, never multiple (Paper 01 §4.8).
 	PreviousCredential string
 }
 
