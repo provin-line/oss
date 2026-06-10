@@ -25,17 +25,22 @@ func NewBuilder(signer crypto.Signer, opts ...BuilderOption) *Builder { panic("n
 //
 // previous non-nil → chain-preserving: previousCredential is set to
 // previous.Hash() (the boundary was triggered by, and keeps identity with,
-// the predecessor event).
+// the predecessor event). origin must be nil — a chain-preserving
+// credential never carries an origin commitment; violating this is an
+// error, not a silent drop.
 //
 // previous nil → chain origin (FirstDrop): external ingestion or
 // aggregation. For aggregation, subject.TransformationType is
 // TransformationAggregate — the result has no identity relationship with
-// any single input, so a fresh chain begins and no upstream-reference
-// fields exist at the credential layer (Paper 01 §4.8).
+// any single input, so a fresh chain begins; the chain itself carries no
+// upstream link (Paper 01 §4.8). origin, when non-nil, attaches the
+// audit-reachable commitment over the consumed source set (an audit
+// attribute, not a parent link — see OriginCommitment).
 func (b *Builder) Build(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,
 	previous *PipelinePassCredential,
+	origin *OriginCommitment,
 ) (*PipelinePassCredential, error) {
 	panic("not implemented")
 }

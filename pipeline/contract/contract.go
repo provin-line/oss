@@ -26,8 +26,11 @@ const (
 	// input VC (FilterConvert).
 	ChainPreserving
 	// ChainFirstDrop — output VC has no previousCredential: a fresh chain
-	// origin (Origin Source — external ingestion or aggregation). Upstream
-	// references are a data-payload concern, never credential fields.
+	// origin (Origin Source — external ingestion or aggregation). The chain
+	// carries no upstream link; input manifests are a data-payload concern.
+	// Deployments in the audit-reachable conformance class additionally
+	// attach a vc.OriginCommitment (an audit attribute over the consumed
+	// source set, not a parent link — linearity is unaffected).
 	ChainFirstDrop
 	// ChainTerminating — consumes and verifies; produces nothing in-network
 	// (External Sink).

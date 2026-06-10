@@ -30,10 +30,15 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 - `previousCredential` is **singular**: the chain is strictly linear, never a DAG.
   Empty/absent marks a chain origin (FirstDrop): external ingestion or aggregation.
 - Aggregation starts a fresh chain because the aggregated result has no identity
-  relationship with any single input (Paper 01 §4.8). Upstream-reference fields
-  (`derived_from`, `source_root`, …) are **deliberately not part of the credential
-  schema** — recording which inputs fed an aggregation is a data-payload /
-  business-logic concern, outside the pipeline infrastructure layer.
+  relationship with any single input (Paper 01 §4.8). The **base credential schema
+  carries no upstream-reference fields** — input manifests are a data-payload /
+  business-logic concern. The one sanctioned extension is the **origin commitment**
+  (`derived_from` / `source_root` / `source_root_canonical`): an optional audit
+  attribute a FirstDrop carries under the **audit-reachable conformance class**,
+  riding the open signed body as namespaced profile vocabulary. It is a content
+  commitment over the consumed source set, not a parent link — chain topology stays
+  strictly linear, and Paper 01 §4.8's exclusion (no upstream links in the chain, no
+  upstream fields in the base schema) is preserved.
 - The subject carries hashes, never the payload itself (Paper 01 §4.3): integrity is
   proven without embedding data in the credential.
 
@@ -55,6 +60,13 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
   (registry artifact vs service) is still being settled at the spec layer.
 - No-op identifier ban (`""`, `"none"`, `"null"`, `"identity"`) at registration and
   verification time (JOSE `alg:none` class defense).
+- Origin-commitment checking (`VerifyOriginCommitment`) is deliberately **outside the
+  three normative axes** and the per-event path: it is an on-demand audit operation.
+  Source credentials are gathered asynchronously (VC resolver, counterparties'
+  stores); the verdict is `indeterminate` until the claimed set is fully resolved, so
+  the hot path stays O(1) per boundary. The commitment proves claim integrity
+  (tamper-evidence after issuance), never claim completeness — omission detection is
+  an audit-layer reconciliation against ingress VC stores.
 
 ## contexts/
 

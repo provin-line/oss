@@ -18,6 +18,7 @@
 
 - 賢さより判定可能性: 非イベントトリガーの実行がたまたま pending 1 件だけを処理しても FirstDrop（batch-of-1 規則）。
 - fan-out は許容: 線形性が制約するのは各クレデンシャルの親が単数であることのみで、子は複数あってよい — チェーンは前方向に分岐し得る。
+- FirstDrop はオリジンコミットメントを運んで**よい**（audit-reachable conformance class — [originsource/README.md](originsource/README.md) 参照）: 消費した source 集合への監査属性であり、親リンクではない。トリガー意味論と線形性には影響しない。
 
 | 用語 | 操作 | トリガー | chain |
 |---|---|---|---|

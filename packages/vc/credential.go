@@ -86,7 +86,8 @@ type CredentialSubjectFields struct {
 	// produced output. Adjacent chain links satisfy
 	// outputHash[n] == inputHash[n+1]. InputHash is absent for aggregation
 	// FirstDrops — no single input exists; input manifests are a payload
-	// concern.
+	// concern, and the cryptographic claim over the consumed source set,
+	// when emitted, is the OriginCommitment.
 	InputHash  string
 	OutputHash string
 }
@@ -107,6 +108,13 @@ type CredentialFields struct {
 	// credentialSubject. The chain is strictly linear: exactly zero or one
 	// predecessor, never multiple (Paper 01 §4.8).
 	PreviousCredential string
+	// Origin is the optional audit commitment of a chain origin
+	// (audit-reachable conformance class). Nil means no commitment. Only
+	// valid when PreviousCredential is empty — a chain-preserving credential
+	// never carries one. On the wire its fields (derived_from, source_root,
+	// source_root_canonical) ride alongside previousCredential inside
+	// credentialSubject, within the signing scope.
+	Origin *OriginCommitment
 }
 
 // New constructs an unsigned credential (tests / relay). It does not
@@ -123,10 +131,16 @@ func (c *PipelinePassCredential) ValidFrom() (time.Time, error) { panic("not imp
 func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) { panic("not implemented") }
 
 // PreviousCredential returns the predecessor reference; empty for a chain
-// origin (FirstDrop). Upstream references beyond this single link are
-// deliberately not part of the credential schema — recording which inputs
-// fed an aggregation is a data-payload concern (Paper 01 §4.8).
+// origin (FirstDrop). The base credential schema carries no upstream
+// references beyond this single link (Paper 01 §4.8 — chain topology stays
+// linear); the only sanctioned exception is the optional, non-linking
+// OriginCommitment audit attribute (see Origin).
 func (c *PipelinePassCredential) PreviousCredential() string { panic("not implemented") }
+
+// Origin returns the origin audit commitment (defensive copy); nil when the
+// credential carries none — which is every chain-preserving credential and
+// any FirstDrop issued outside the audit-reachable class.
+func (c *PipelinePassCredential) Origin() *OriginCommitment { panic("not implemented") }
 
 // Proof returns the proof (defensive copy); nil when unsigned.
 func (c *PipelinePassCredential) Proof() *DataIntegrityProof { panic("not implemented") }

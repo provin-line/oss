@@ -4,7 +4,9 @@ Component-facing interfaces over the VC machinery in `packages/vc`:
 
 - `Provider` — `Sign(ctx, payload, inputHash, outputHash) (*Credential, error)`;
   owns the per-process chain state (`previousCredential` linking) and, for Origin
-  Sources, the origin commitments (`derived_from` / `source_root`).
+  Sources deployed in the audit-reachable conformance class (config-driven), the
+  origin commitment (`vc.OriginCommitment` — see
+  [../originsource/README.md](../originsource/README.md)).
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`; returns the
   confidence verdict (weakest-link over axes).
 

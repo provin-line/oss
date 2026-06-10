@@ -8,7 +8,7 @@
 1. **I/O形状** — コンポーネントがパイプライントランスポートから消費し、またはそこへ生産する方法: `Envelope`（credential + 任意の inline payload + sequence number）とサブジェクト規約。**規範的意味論は hash ベース**であり、payload を inline で運ぶか参照で運ぶかは購読ごとの transport 選択 — 検証は配送形態に依存しない。
 2. **VCチェーンの振る舞い** — 出力側ごとに必ず1つ：
    - *チェーン保持*：出力 VC が `previousCredential` = 入力 VC のハッシュを持つ（FilterConvert）
-   - *FirstDrop 発行*：出力 VC は `previousCredential` を持たない — 新しいチェーン起点（Origin Source: 外部インジェストまたは集約。上流参照はデータペイロードの関心事であり、クレデンシャルフィールドにはしない）
+   - *FirstDrop 発行*：出力 VC は `previousCredential` を持たない — 新しいチェーン起点（Origin Source: 外部インジェストまたは集約。入力マニフェストはデータペイロードの関心事。audit-reachable な deployment は加えてオリジンコミットメントを付与する — 監査属性であり、親リンクではない）
    - *終端*：消費・検証を行い、ネットワーク内に何も生産しない（External Sink）
 3. **イングレス時の検証義務** — コンポーネントが入力を信頼する前に実行すべき検証戦略（none / adjacent / full）、および監査到達性のために検証済みイングレス VC を保存する義務。
 
