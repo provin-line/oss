@@ -21,6 +21,7 @@ Pure domain libraries consumed by `network/`, `pipeline/`, and `cmd/`.
 | `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
 | `resolver/` | DID Document resolution interface + local / grpc / multi implementations |
 | `keystore/` | Private-key storage contract (KMS-model boundary) |
+| `tlog/` | Per-organization transparency log: append-only, tamper-evident record sequences (audit substrate) |
 | `hoconconfig/` | Three-layer HOCON configuration loader |
 | `orgverify/` | DNS-based organization identity verification |
 
@@ -32,4 +33,5 @@ delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
+tlog ──► crypto
 ```

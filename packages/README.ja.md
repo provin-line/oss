@@ -20,6 +20,7 @@
 | `delegation/` | Pipeline/Process DID 向けのオーナー署名付き委任クレデンシャル |
 | `resolver/` | DID Document 解決インターフェース + ローカル・grpc・マルチ実装 |
 | `keystore/` | 秘密鍵ストレージコントラクト（KMS モデル境界） |
+| `tlog/` | 組織ごとの transparency log: append-only・改竄検出可能なレコード列（監査基盤） |
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
 
@@ -31,4 +32,5 @@ delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
+tlog ──► crypto
 ```

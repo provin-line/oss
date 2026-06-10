@@ -20,7 +20,7 @@ const (
 // at verification time (JOSE alg:none class defense).
 //
 // Which registered suites are acceptable at a given proof.created instant is
-// governed by the lifecycle policy (see LifecyclePhase); the published,
-// append-only form of that policy is a wire-profile obligation whose shape
-// is still being settled at the spec layer.
+// governed by the lifecycle policy: the Verifier consults its
+// LifecycleRegistry (see lifecycle.go), whose published append-only form is
+// backed by packages/tlog.
 func RegisterCryptosuite(name string, c canon.Canonicalizer) { panic("not implemented") }
