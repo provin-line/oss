@@ -35,6 +35,8 @@ func TestTransformationClaimValidateGrammar(t *testing.T) {
 		{":filter", "empty namespace"},
 		{"provin:fil ter", "whitespace in label"},
 		{"provin:fil\tter", "control byte in label"},
+		{"provin:fil\u00a0ter", "non-ASCII whitespace (NBSP) in label"},
+		{"provin:fil\u200eter", "format character (bidi control) in label"},
 	}
 	for _, tt := range invalid {
 		if err := tt.claim.Validate(); err == nil {
@@ -77,10 +79,10 @@ func TestNewEnforcesClaimGrammarAndGrounding(t *testing.T) {
 	}
 
 	rejected := []vc.TransformationClaim{
-		"",                  // absent (credential.subject.transformation-claim)
-		"filter",            // bare (cred-024)
+		"",                             // absent (credential.subject.transformation-claim)
+		"filter",                       // bare (cred-024)
 		"provin:filter+provin:convert", // join (cred-023)
-		"acme:distill",      // no context grounds "acme" and New emits only known contexts (cred-026 analogue)
+		"acme:distill",                 // no context grounds "acme" and New emits only known contexts (cred-026 analogue)
 	}
 	for _, claim := range rejected {
 		_, err := vc.New(vc.CredentialFields{
@@ -129,6 +131,12 @@ func TestValidateTransformationClaimOnWireDocuments(t *testing.T) {
 		{"cred-026 provin claim without grounding context", wire(known, "provin:filter"), true},
 		{"cred-025 unknown namespace with unknown context", wire(withForeign, "acme:distill"), false},
 		{"unknown namespace with only known contexts", wire(withProvin, "acme:distill"), true},
+		// Deliberate, and the most counterintuitive verdict in the matrix: a
+		// KNOWN prefix whose grounding document is absent still rides through
+		// on any unknown context IRI — the spec pins this (接地先 URL が未知
+		// の場合は open-world-accept 適用); identity is settled later by the
+		// (grounding URL, label) pair, not by the prefix string.
+		{"known prefix with unknown context (open-world)", wire(known+`, "https://other.example/vc/v1"`, "provin:filter"), false},
 	}
 	for _, tt := range cases {
 		var cred vc.PipelinePassCredential
@@ -145,27 +153,46 @@ func TestValidateTransformationClaimOnWireDocuments(t *testing.T) {
 	}
 }
 
-// An inline @context object (instead of an IRI string) can define arbitrary
-// prefix mappings the implementation cannot enumerate — it is an unknown
-// grounding source, so the open-world default applies.
-func TestValidateTransformationClaimInlineContextIsOpenWorld(t *testing.T) {
-	document := `{
-	  "@context": ["https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.io/vc/v1", {"acme": "https://acme.example/vocab#"}],
-	  "type": ["VerifiableCredential", "PipelinePassCredential"],
-	  "issuer": "did:dplaax:poc.dplaax.io:org:acme:process:p1",
-	  "validFrom": "2026-06-11T00:00:00Z",
-	  "credentialSubject": {
-	    "pipelineId": "pipe-1",
-	    "processId": "proc-1",
-	    "transformationClaim": "acme:distill"
-	  }
-	}`
-	var cred vc.PipelinePassCredential
-	if err := cred.UnmarshalJSON([]byte(document)); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+// An inline @context object is NOT an unknown grounding source: unlike a
+// remote context IRI, its full content is right there in the document, so
+// its prefix mappings are enumerated with the same gen-delim rule. An
+// inline object that grounds the claim's prefix passes; an inline object
+// that does not cannot smuggle an ungrounded claim past the check.
+func TestValidateTransformationClaimInlineContextIsEnumerated(t *testing.T) {
+	wire := func(inline, claim string) string {
+		return `{
+		  "@context": ["https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.io/vc/v1", ` + inline + `],
+		  "type": ["VerifiableCredential", "PipelinePassCredential"],
+		  "issuer": "did:dplaax:poc.dplaax.io:org:acme:process:p1",
+		  "validFrom": "2026-06-11T00:00:00Z",
+		  "credentialSubject": {
+		    "pipelineId": "pipe-1",
+		    "processId": "proc-1",
+		    "transformationClaim": "` + claim + `"
+		  }
+		}`
 	}
-	if err := cred.ValidateTransformationClaim(); err != nil {
-		t.Errorf("inline context must be treated as an unknown grounding source (open-world), got %v", err)
+	cases := []struct {
+		name     string
+		document string
+		wantErr  bool
+	}{
+		{"inline object grounding the prefix", wire(`{"acme": "https://acme.example/vocab#"}`, "acme:distill"), false},
+		{"inline object not grounding the prefix", wire(`{"foo": "https://example.org/vocab#"}`, "acme:distill"), true},
+		{"inline term without gen-delim is not a prefix", wire(`{"acme": "https://acme.example/vocab"}`, "acme:distill"), true},
+	}
+	for _, tt := range cases {
+		var cred vc.PipelinePassCredential
+		if err := cred.UnmarshalJSON([]byte(tt.document)); err != nil {
+			t.Fatalf("%s: unmarshal: %v", tt.name, err)
+		}
+		err := cred.ValidateTransformationClaim()
+		if tt.wantErr && err == nil {
+			t.Errorf("%s: want rejection, got nil", tt.name)
+		}
+		if !tt.wantErr && err != nil {
+			t.Errorf("%s: want accept, got %v", tt.name, err)
+		}
 	}
 }
 

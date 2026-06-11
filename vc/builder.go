@@ -40,6 +40,10 @@ func NewBuilder(signer crypto.Signer, opts ...BuilderOption) *Builder { panic("n
 // predecessor's issuer is an emit-time misuse and an error. nil issues a
 // plain chain-preserving credential, fully conformant outside the
 // audit-reachable class.
+//
+// Like every issue path, the build enforces the claim MUSTs — presence,
+// token grammar, and namespace grounding (ValidateTransformationClaim) —
+// before signing.
 func (b *Builder) BuildChainPreserving(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,
@@ -60,6 +64,10 @@ func (b *Builder) BuildChainPreserving(
 // the consumed source set (an audit attribute, not a parent link — see
 // SourceCommitment). nil issues a plain FirstDrop, which is fully
 // conformant outside the audit-reachable class.
+//
+// Like every issue path, the build enforces the claim MUSTs — presence,
+// token grammar, and namespace grounding (ValidateTransformationClaim) —
+// before signing.
 func (b *Builder) BuildFirstDrop(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,

@@ -4,18 +4,23 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/provin-line/oss/canon"
 )
 
 // Validate checks the claim against the protocol's claim grammar
 // (credential.claim.grammar, credential.claim.bare-rejected): a single
-// <namespace>:<label> token with both parts nonempty. Whitespace and
-// control bytes never appear in a token; "+" is excluded everywhere
-// because the protocol deleted the join operator — a label containing
-// "+" would resurrect its surface form, so it fails closed. Grammar says
-// nothing about claim meaning; semantics are pinned per claim by the
-// profile that owns the namespace.
+// <namespace>:<label> token with both parts nonempty. Space, control,
+// and format characters (Unicode White_Space, Cc, Cf — including
+// zero-width and bidi controls, which are display-spoofing vectors)
+// never appear in a token; "+" is excluded everywhere because the
+// protocol deleted the join operator — a label containing "+" would
+// resurrect its surface form, so it fails closed. The exact label
+// character set is not yet pinned upstream (ledgered in the spec repo);
+// until it is, this implementation rejects only the classes above.
+// Grammar says nothing about claim meaning; semantics are pinned per
+// claim by the profile that owns the namespace.
 func (tc TransformationClaim) Validate() error {
 	s := string(tc)
 	if s == "" {
@@ -30,8 +35,8 @@ func (tc TransformationClaim) Validate() error {
 	}
 	for _, part := range []string{prefix, label} {
 		for _, r := range part {
-			if r <= ' ' || r == 0x7f || r == '+' {
-				return fmt.Errorf("transformationClaim %q contains a byte outside the token grammar (credential.claim.grammar)", s)
+			if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '+' {
+				return fmt.Errorf("transformationClaim %q contains a character outside the token grammar (credential.claim.grammar)", s)
 			}
 		}
 	}
@@ -48,23 +53,34 @@ func (tc TransformationClaim) Validate() error {
 var knownContextGroundings = sync.OnceValue(func() map[string]map[string]string {
 	return map[string]map[string]string{
 		ContextCredentialsV2: {},
-		ContextDplaaxVCV1:    groundedPrefixes(contextDplaaxVCV1Document),
-		ContextProvinVCV1:    groundedPrefixes(contextProvinVCV1Document),
+		ContextDplaaxVCV1:    embeddedGroundings(contextDplaaxVCV1Document),
+		ContextProvinVCV1:    embeddedGroundings(contextProvinVCV1Document),
 	}
 })
 
-// groundedPrefixes extracts prefix → vocabulary-URL mappings from an
-// embedded context document. The documents are compile-time constants, so
-// a parse failure is a build defect, not input — it panics.
-func groundedPrefixes(document []byte) map[string]string {
+// embeddedGroundings extracts the prefix mappings of an embedded context
+// document. The documents are compile-time constants, so a parse failure
+// is a build defect, not input — it panics.
+func embeddedGroundings(document []byte) map[string]string {
 	var parsed struct {
 		Context map[string]any `json:"@context"`
 	}
 	if err := canon.NewStrictDecoder(document).Decode(&parsed); err != nil {
 		panic(fmt.Sprintf("embedded context document is not valid JSON: %v", err))
 	}
+	return groundedPrefixes(parsed.Context)
+}
+
+// groundedPrefixes extracts prefix → vocabulary-URL mappings from a
+// context object (the value of "@context", embedded or inline): simple
+// string terms whose value ends in a JSON-LD gen-delim character — the
+// JSON-LD 1.1 condition for a term to be usable as a compact-IRI prefix.
+// Expanded term definitions ({"@id": …, "@prefix": true}) are not
+// handled; the embedded documents do not use them, and the conformance
+// context ledger pins their shape.
+func groundedPrefixes(contextObject map[string]any) map[string]string {
 	out := make(map[string]string)
-	for term, def := range parsed.Context {
+	for term, def := range contextObject {
 		if strings.HasPrefix(term, "@") {
 			continue
 		}
@@ -84,16 +100,26 @@ func groundedPrefixes(document []byte) map[string]string {
 // the token grammar (credential.claim.grammar), and namespace grounding —
 // some context document in @context must map the claim's prefix to a URL
 // (credential.claim.grounding). Grounding is a structural check requiring
-// no profile knowledge: a prefix grounded by a known context document
-// passes; when @context carries an entry this implementation cannot
-// enumerate (an unknown IRI or an inline context object), the grounding
-// cannot be disproven and the open-world default applies
-// (credential.claim.open-world-accept); a prefix that no known document
-// grounds, with no unknown entry left to ground it, fails closed.
+// no profile knowledge: a prefix grounded by a known context document or
+// by an inline context object (whose mappings are right there in the
+// document) passes; only an unknown context IRI is a grounding source
+// this implementation cannot enumerate — there the grounding cannot be
+// disproven and the open-world default applies
+// (credential.claim.open-world-accept); a prefix that nothing grounds,
+// with no unknown IRI left to ground it, fails closed.
 func (c *PipelinePassCredential) ValidateTransformationClaim() error {
 	subject, err := c.Subject()
 	if err != nil {
 		return err
+	}
+	// Diagnose a non-string wire value before the typed view collapses it
+	// to "" and the failure reads as absence.
+	if rawSubject, ok := c.body[keySubject].(map[string]any); ok {
+		if raw, present := rawSubject[keyTransformationClaim]; present {
+			if _, isString := raw.(string); !isString {
+				return fmt.Errorf("transformationClaim is not a string (credential.claim.grammar)")
+			}
+		}
 	}
 	claim := subject.TransformationClaim
 	if err := claim.Validate(); err != nil {
@@ -103,17 +129,23 @@ func (c *PipelinePassCredential) ValidateTransformationClaim() error {
 
 	known := knownContextGroundings()
 	sawUnknown := false
-	contexts, _ := c.body[keyContext].([]any)
+	contexts, ok := c.body[keyContext].([]any)
+	if !ok {
+		return fmt.Errorf("transformationClaim %q: @context is not an array, so nothing can ground namespace %q (credential.field.context)", claim, prefix)
+	}
 	for _, entry := range contexts {
-		iri, ok := entry.(string)
-		if !ok {
-			sawUnknown = true // inline context object: unknown grounding source
-			continue
-		}
-		groundings, ok := known[iri]
-		if !ok {
-			sawUnknown = true
-			continue
+		var groundings map[string]string
+		switch e := entry.(type) {
+		case string:
+			groundings, ok = known[e]
+			if !ok {
+				sawUnknown = true // unknown IRI: unenumerable grounding source
+				continue
+			}
+		case map[string]any:
+			groundings = groundedPrefixes(e) // inline context: enumerable in place
+		default:
+			continue // scalar non-context entry grounds nothing
 		}
 		if _, grounded := groundings[prefix]; grounded {
 			return nil

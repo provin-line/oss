@@ -6,6 +6,7 @@
 package conformance_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,9 +20,10 @@ import (
 )
 
 type claimVector struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	Input       struct {
+	ID           string   `json:"id"`
+	Instantiates []string `json:"instantiates"`
+	Description  string   `json:"description"`
+	Input        struct {
 		Claim   string   `json:"claim"`
 		Context []string `json:"context"`
 	} `json:"input"`
@@ -32,8 +34,10 @@ type claimVector struct {
 }
 
 type contextVector struct {
-	ID    string `json:"id"`
-	Input struct {
+	ID           string   `json:"id"`
+	Instantiates []string `json:"instantiates"`
+	Description  string   `json:"description"`
+	Input        struct {
 		ContextURI string `json:"context_uri"`
 	} `json:"input"`
 	Expect struct {
@@ -49,7 +53,11 @@ func loadVector(t *testing.T, path string, v any) {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if err := json.Unmarshal(data, v); err != nil {
+	// Unknown-field rejection so a typo'd vector key fails loudly instead
+	// of silently defaulting the expectation.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 }

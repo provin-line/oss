@@ -204,8 +204,10 @@ const (
 	keySourceRootCanon     = "source_root_canonical"
 )
 
-// New constructs an unsigned credential (tests / relay). It does not
-// validate; verification-grade checks live in Verifier.
+// New constructs an unsigned credential (tests / relay) and enforces the
+// issue-path claim MUSTs: transformationClaim presence, token grammar,
+// and namespace grounding (see ValidateTransformationClaim). Other
+// verification-grade checks live in Verifier.
 func New(fields CredentialFields) (*PipelinePassCredential, error) {
 	subject := map[string]any{
 		keyPipelineID:          fields.Subject.PipelineID,

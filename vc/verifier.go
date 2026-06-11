@@ -35,7 +35,10 @@ type VerifyResult struct {
 }
 
 // Verify performs single-credential verification across the three normative
-// axes: wire-form checks (@context, required fields), issuer DID resolution
+// axes: wire-form checks (@context, required fields, and the claim rules —
+// ValidateTransformationClaim composes into this axis: grammar,
+// bare-rejection, and grounding fail it, while unrecognized grounded
+// claims pass open-world), issuer DID resolution
 // and public-key extraction, proof verification with cryptosuite lifecycle
 // evaluation at proof.created, controller-chain reconstruction to the
 // terminal Owner DID, and weakest-link composition of the axis verdicts.
