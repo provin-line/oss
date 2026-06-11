@@ -51,9 +51,10 @@ func (b *Builder) BuildChainPreserving(
 
 // BuildFirstDrop constructs and signs a chain-origin credential (no
 // previousCredential): external ingestion or aggregation. For aggregation,
-// subject.TransformationType is TransformationAggregate — the result has no
-// identity relationship with any single input, so a fresh chain begins; the
-// chain itself carries no upstream link (Paper 01 §4.8).
+// subject.TransformationClaim is typically ClaimAggregate — the result has
+// no identity relationship with any single input, so a fresh chain begins;
+// the chain itself carries no upstream link (Paper 01 §4.8). The topology
+// is decided by the trigger rules, not by the claim.
 //
 // commitment, when non-nil, attaches the audit-reachable commitment over
 // the consumed source set (an audit attribute, not a parent link — see

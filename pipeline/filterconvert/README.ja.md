@@ -29,7 +29,7 @@ ingress VC verification (strategy: none | adjacent | full)
 | BatchFlow | fresh output を生成する batch API call、ステートレス | 型のみ |
 | SinkedSourceFlow | イベントごとの外部データ fetch — **enrichment** ステップ | 型のみ |
 
-**Enrichment**（トリガーとなったイベントへの外部データの side-fetch join）は FilterConvert の step pattern であり、Origin Source メカニクスではない: 実行は前イベントによってトリガーされるため、チェーンは保持される（`transformationType: "provin:enrich"`）。すべてのステップはイベント単位でステートレス。クロスイベント状態を持てば、そのコンポーネントは Origin Source になる。
+**Enrichment**（トリガーとなったイベントへの外部データの side-fetch join）は FilterConvert の step pattern であり、Origin Source メカニクスではない: 実行は前イベントによってトリガーされるため、チェーンは保持される（`transformationClaim: "provin:enrich"`）。すべてのステップはイベント単位でステートレス。クロスイベント状態を持てば、そのコンポーネントは Origin Source になる。
 
 ## サブパッケージ
 

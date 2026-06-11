@@ -57,24 +57,58 @@ type DataIntegrityProof struct {
 	ProofValue string `json:"proofValue"`
 }
 
-// TransformationType declares the kind of transformation a process boundary
-// performed (Paper 01 §4.3 vocabulary). Combinations are "+"-joined
-// ("filter+convert"); wire profiles may add namespace-prefixed extensions
-// ("provin:..."). The base vocabulary is provisional until the dPLaaX
-// Layer 5 specification stabilizes.
-type TransformationType string
+// TransformationClaim is the boundary's claim about the output's
+// information source — the value of the wire field transformationClaim.
+// The dPLaaX protocol pins only the grammar (a single <namespace>:<label>
+// token; no bare values, no "+" joins) and the open-world default:
+// verifiers MUST NOT draw closed-world inferences from claims they do not
+// recognize. Claim semantics live with the profile.
+//
+// The constants below are the provin wire profile's claim registry. Each
+// pins whether the claim is closed-world — the declared conformant inputs
+// are the output's complete information source, so absence from the
+// declared set licenses an exclusion inference — or acknowledges
+// information beyond them. Claims do not bind chain topology:
+// previousCredential presence follows the trigger rules alone, and the
+// source commitment is orthogonal to both. (Deliberate divergence from
+// Paper 01 §4.3's protocol-owned base vocabulary and "+" joins —
+// composites are single profile labels.)
+type TransformationClaim string
 
 const (
-	TransformationFilter  TransformationType = "filter"
-	TransformationConvert TransformationType = "convert"
-	// TransformationAggregate marks a new derivation origin: the result has
-	// no identity relationship with any single input, so previousCredential
-	// is absent and a fresh chain begins (Paper 01 §4.8).
-	TransformationAggregate TransformationType = "aggregate"
-	// TransformationEnrich is the provin wire-profile extension for
-	// enrichment: a chain-preserving boundary that joins side-fetched
-	// external data onto the triggering predecessor event.
-	TransformationEnrich TransformationType = "provin:enrich"
+	// ClaimFilter — closed: content-preserving selection of the input;
+	// nothing was added or re-encoded.
+	ClaimFilter TransformationClaim = "provin:filter"
+	// ClaimConvert — closed: re-encoding of the input; the output's
+	// information derives entirely from it.
+	ClaimConvert TransformationClaim = "provin:convert"
+	// ClaimFilterConvert — closed: selection and re-encoding composed (the
+	// grammar has no "+" join; composites are single labels).
+	ClaimFilterConvert TransformationClaim = "provin:filter-convert"
+	// ClaimAggregate — closed fold: the output derives entirely from the
+	// consumed conformant source set (committed via SourceCommitment under
+	// the audit-reachable class).
+	ClaimAggregate TransformationClaim = "provin:aggregate"
+	// ClaimEnrich — conformant-closed: the output derives from the consumed
+	// conformant inputs (committed when a SourceCommitment is emitted —
+	// audit-reachable class) plus side-fetched external (non-conformant)
+	// data joined in, so the output's information is NOT closed over the
+	// conformant set; exclusion inferences hold for conformant flows only,
+	// and accountability for the external data concentrates on the issuer.
+	ClaimEnrich TransformationClaim = "provin:enrich"
+	// ClaimGenerate — open: the dominant information source is the model's
+	// weights (hence its training corpus); consumed materials are
+	// conditioning only, so the output's information is NOT closed over the
+	// declared set and no exclusion inference is licensed. Declaring a
+	// synthesis as ClaimAggregate would falsely license the closed-world
+	// reading — the N:1 shape is the same, the claim is not. When a
+	// SourceCommitment is emitted it covers the full consumed conformant
+	// set: the materials, plus the triggering predecessor when
+	// chain-preserving; empty only when no conformant source was consumed
+	// (text2img — RFC 6962 empty-string hash). Model identifier, weights
+	// digest, prompt, and per-material roles are payload concerns pinned
+	// via SchemaRef.
+	ClaimGenerate TransformationClaim = "provin:generate"
 )
 
 // SchemaRef is the content-hashed reference to the registered output schema.
@@ -96,9 +130,9 @@ type SchemaRef struct {
 // bytes travel alongside credentials is a transport-composition concern,
 // outside this package.
 type CredentialSubjectFields struct {
-	PipelineID         string
-	ProcessID          string
-	TransformationType TransformationType
+	PipelineID          string
+	ProcessID           string
+	TransformationClaim TransformationClaim
 	// Schema is the content-hashed reference to the registered output
 	// schema.
 	Schema SchemaRef
@@ -143,31 +177,31 @@ type CredentialFields struct {
 // Wire field names (credential body / credentialSubject). The
 // source-commitment names are pinned by the dPLaaX specification.
 const (
-	keyContext            = "@context"
-	keyType               = "type"
-	keyIssuer             = "issuer"
-	keyValidFrom          = "validFrom"
-	keySubject            = "credentialSubject"
-	keyProof              = "proof"
-	keyPipelineID         = "pipelineId"
-	keyProcessID          = "processId"
-	keyTransformationType = "transformationType"
-	keySchema             = "schema"
-	keyInputHash          = "inputHash"
-	keyOutputHash         = "outputHash"
-	keyPreviousCredential = "previousCredential"
-	keyDerivedFrom        = "derived_from"
-	keySourceRoot         = "source_root"
-	keySourceRootCanon    = "source_root_canonical"
+	keyContext             = "@context"
+	keyType                = "type"
+	keyIssuer              = "issuer"
+	keyValidFrom           = "validFrom"
+	keySubject             = "credentialSubject"
+	keyProof               = "proof"
+	keyPipelineID          = "pipelineId"
+	keyProcessID           = "processId"
+	keyTransformationClaim = "transformationClaim"
+	keySchema              = "schema"
+	keyInputHash           = "inputHash"
+	keyOutputHash          = "outputHash"
+	keyPreviousCredential  = "previousCredential"
+	keyDerivedFrom         = "derived_from"
+	keySourceRoot          = "source_root"
+	keySourceRootCanon     = "source_root_canonical"
 )
 
 // New constructs an unsigned credential (tests / relay). It does not
 // validate; verification-grade checks live in Verifier.
 func New(fields CredentialFields) (*PipelinePassCredential, error) {
 	subject := map[string]any{
-		keyPipelineID:         fields.Subject.PipelineID,
-		keyProcessID:          fields.Subject.ProcessID,
-		keyTransformationType: string(fields.Subject.TransformationType),
+		keyPipelineID:          fields.Subject.PipelineID,
+		keyProcessID:           fields.Subject.ProcessID,
+		keyTransformationClaim: string(fields.Subject.TransformationClaim),
 	}
 	if fields.Subject.Schema != (SchemaRef{}) {
 		subject[keySchema] = map[string]any{
@@ -239,11 +273,11 @@ func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) {
 		return CredentialSubjectFields{}, errors.New("vc: credentialSubject missing or not an object")
 	}
 	subj := CredentialSubjectFields{
-		PipelineID:         getString(m, keyPipelineID),
-		ProcessID:          getString(m, keyProcessID),
-		TransformationType: TransformationType(getString(m, keyTransformationType)),
-		InputHash:          getString(m, keyInputHash),
-		OutputHash:         getString(m, keyOutputHash),
+		PipelineID:          getString(m, keyPipelineID),
+		ProcessID:           getString(m, keyProcessID),
+		TransformationClaim: TransformationClaim(getString(m, keyTransformationClaim)),
+		InputHash:           getString(m, keyInputHash),
+		OutputHash:          getString(m, keyOutputHash),
 	}
 	if sm, ok := m[keySchema].(map[string]any); ok {
 		subj.Schema = SchemaRef{

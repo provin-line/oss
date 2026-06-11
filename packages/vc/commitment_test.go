@@ -15,7 +15,7 @@ import (
 func sourceCred(t *testing.T, issuer, outputHash string) *vc.PipelinePassCredential {
 	t.Helper()
 	subj := subjectFields()
-	subj.TransformationType = vc.TransformationConvert
+	subj.TransformationClaim = vc.ClaimConvert
 	subj.OutputHash = outputHash
 	return newCred(t, vc.CredentialFields{
 		Issuer:    issuer,
@@ -162,7 +162,7 @@ func TestNewSourceCommitment(t *testing.T) {
 func aggregateCred(t *testing.T, commitment *vc.SourceCommitment) *vc.PipelinePassCredential {
 	t.Helper()
 	subj := subjectFields()
-	subj.TransformationType = vc.TransformationAggregate
+	subj.TransformationClaim = vc.ClaimAggregate
 	subj.InputHash = ""
 	return newCred(t, vc.CredentialFields{
 		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:a1",

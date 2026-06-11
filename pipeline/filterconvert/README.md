@@ -33,7 +33,7 @@ stages prove data-flow continuity without re-reading payloads.
 **Enrichment** (side-fetched external data joined onto the triggering event) is a
 FilterConvert step pattern, not an Origin Source mechanics: the run is triggered by
 the predecessor event, so the chain is preserved
-(`transformationType: "provin:enrich"`). All steps are stateless per event;
+(`transformationClaim: "provin:enrich"`). All steps are stateless per event;
 cross-event state would make the component an Origin Source.
 
 ## Sub-packages

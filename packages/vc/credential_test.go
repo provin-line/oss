@@ -10,9 +10,9 @@ import (
 
 func subjectFields() vc.CredentialSubjectFields {
 	return vc.CredentialSubjectFields{
-		PipelineID:         "urn:pipeline:analytics:price-report",
-		ProcessID:          "urn:process:filter-01",
-		TransformationType: vc.TransformationFilter,
+		PipelineID:          "urn:pipeline:analytics:price-report",
+		ProcessID:           "urn:process:filter-01",
+		TransformationClaim: vc.ClaimFilter,
 		Schema: vc.SchemaRef{
 			ID:          "urn:schema:price:1",
 			Type:        "JsonSchema",
@@ -79,7 +79,7 @@ func TestNewWithSourceCommitment(t *testing.T) {
 		SourceRootCanonical: vc.SourceRootCanonicalJCS,
 	}
 	subj := subjectFields()
-	subj.TransformationType = vc.TransformationAggregate
+	subj.TransformationClaim = vc.ClaimAggregate
 	subj.InputHash = "" // absent for aggregation FirstDrops
 	c := newCred(t, vc.CredentialFields{
 		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:agg-01",
@@ -144,6 +144,11 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	wire, err := c.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
+	}
+	// The wire key and namespaced value are the contract — pin the literals
+	// so a typo in the wire constants cannot round-trip invisibly.
+	if !strings.Contains(string(wire), `"transformationClaim":"provin:filter"`) {
+		t.Errorf("wire form missing transformationClaim literal: %s", wire)
 	}
 	var rt vc.PipelinePassCredential
 	if err := rt.UnmarshalJSON(wire); err != nil {

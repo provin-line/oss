@@ -18,8 +18,9 @@ profile's extension namespace, never in the protocol's wire namespace.
 
 **wire profile** — The declaration layer between the dPLaaX wire spec and a concrete
 implementation. A profile declares which protocol catalogs it adopts, may narrow or
-tighten protocol defaults, and may add namespace-prefixed extensions; it must not
-contradict protocol-normative rules.
+tighten protocol defaults, and may add namespace-prefixed extensions; where the
+protocol pins only grammar (transformationClaim), the profile owns the semantics
+outright. It must not contradict protocol-normative rules.
 
 ## Credential & chain
 
@@ -56,11 +57,14 @@ chain without re-reading payloads.
 credentials by hash and are integrity-protected, but never embedded in, recoverable
 from, or interpreted by the credential layer.
 
-**transformationType** — The declared derivation semantics of a boundary: what kind
-of relationship the output claims to have with the input(s). The vocabulary is
-two-tier: protocol-owned base values, and profile extensions prefixed with the
-profile's namespace. It is a declaration by the signer, not a machine-verified
-property.
+**transformationClaim** — The boundary's claim about the output's information
+source: whether the declared inputs are the output's complete information source
+(closed-world — absence from the declared set licenses an exclusion inference) or
+not. The protocol pins only the grammar (a single namespace-prefixed token) and the
+open-world default (no closed-world inference from unrecognized claims); the
+semantics are pinned per claim by the profile (`vc.TransformationClaim` registry).
+It is a declaration by the signer, not a machine-verified property — its audit
+value is accountability for the claim. Claims do not bind chain topology.
 
 **SchemaRef** — A content-committed reference to the registered schema of the output,
 making retroactive schema modification cryptographically detectable.
@@ -86,8 +90,10 @@ verification is attested at ingestion; it does not extend the chain backwards.
 **enrichment** — A chain-preserving boundary that joins side-fetched external data
 onto the event that triggered it.
 
-**aggregation** — Folding a pooled set of inputs into one output. The result has no
-identity relationship with any single input, so it starts a new chain as a FirstDrop.
+**aggregation** — Folding a pooled set of inputs into one output. The output is a
+FirstDrop because the run is not triggered by a single conformant event (trigger
+rule); that the result has no identity relationship with any single input is the
+rationale, not the criterion.
 
 ## Components
 

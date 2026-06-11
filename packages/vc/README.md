@@ -29,8 +29,9 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 
 - `previousCredential` is **singular**: the chain is strictly linear, never a DAG.
   Empty/absent marks a chain origin (FirstDrop): external ingestion or aggregation.
-- Aggregation starts a fresh chain because the aggregated result has no identity
-  relationship with any single input (Paper 01 §4.8). The **base credential schema
+- Aggregation starts a fresh chain — normatively because the run is not triggered
+  by a single conformant event (trigger rule); the rationale is that the result has
+  no identity relationship with any single input (Paper 01 §4.8). The **base credential schema
   carries no upstream-reference fields** — input manifests are a data-payload /
   business-logic concern. The one sanctioned extension is the **source commitment**
   (`derived_from` / `source_root` / `source_root_canonical`): an optional audit

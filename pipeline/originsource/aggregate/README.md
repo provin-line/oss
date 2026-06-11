@@ -9,7 +9,7 @@ Pool + windowing / aggregation logic over one or more Pipeline-conformant inputs
   FilterConvert's statelessness is definitional, so aggregation can never migrate
   there.
 - The run is triggered by a timer / window expiry — never by a single predecessor
-  event — so the output is a FirstDrop with `transformationType: "aggregate"`
+  event — so the output is a FirstDrop with `transformationClaim: "provin:aggregate"`
   (trigger rule). A run that happens to fold exactly one pending input is still a
   FirstDrop (batch-of-1 rule).
 - Recording which inputs were used is optional and lives in the output payload as

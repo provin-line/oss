@@ -4,7 +4,8 @@ import "context"
 
 // ChainClass categorizes a verified credential chain by its signature-chain
 // structure — who signed and how many trust boundaries were crossed, not how
-// the data was produced. Because aggregation starts a fresh chain, an
+// the data was produced. Because aggregation starts a fresh chain (trigger
+// rule), an
 // aggregated result distributed from its origin classifies as ChainOrigin
 // regardless of how many upstream sources contributed; that is a deliberate
 // consequence of the linear-chain design, not a limitation. The zero value
