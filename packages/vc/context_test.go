@@ -45,6 +45,24 @@ func TestContextDocumentMatchesSpec(t *testing.T) {
 	}
 }
 
+func TestProvinContextGroundsClaimNamespace(t *testing.T) {
+	doc := vc.ContextProvinVCV1Document()
+	var parsed struct {
+		Context map[string]any `json:"@context"`
+	}
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		t.Fatalf("provin context document is not valid JSON: %v", err)
+	}
+	// The profile context's job is grounding: every namespace prefix the
+	// provin claim registry emits must be mapped to a vocabulary URL.
+	if got, _ := parsed.Context["provin"].(string); got != "https://provin.io/vocab#" {
+		t.Errorf("provin prefix grounding = %q, want https://provin.io/vocab#", got)
+	}
+	if protected, _ := parsed.Context["@protected"].(bool); !protected {
+		t.Error("provin context must set @protected: true")
+	}
+}
+
 func TestContextDocumentDefensiveCopy(t *testing.T) {
 	a := vc.ContextDplaaxVCV1Document()
 	a[0] = '!'

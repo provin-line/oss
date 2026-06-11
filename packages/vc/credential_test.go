@@ -150,6 +150,12 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	if !strings.Contains(string(wire), `"transformationClaim":"provin:filter"`) {
 		t.Errorf("wire form missing transformationClaim literal: %s", wire)
 	}
+	// The @context array is the signing-scope contract: protocol context
+	// plus the provin profile context that grounds the claim namespace.
+	if !strings.Contains(string(wire),
+		`"@context":["https://www.w3.org/ns/credentials/v2","https://poc.dplaax.io/vc/v1","https://poc.provin.io/vc/v1"]`) {
+		t.Errorf("wire form missing expected @context array: %s", wire)
+	}
 	var rt vc.PipelinePassCredential
 	if err := rt.UnmarshalJSON(wire); err != nil {
 		t.Fatalf("UnmarshalJSON: %v", err)

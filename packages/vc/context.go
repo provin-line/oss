@@ -25,3 +25,24 @@ func ContextDplaaxVCV1Document() []byte {
 	copy(out, contextDplaaxVCV1Document)
 	return out
 }
+
+// contextProvinVCV1Document is the provin profile context. Unlike the
+// protocol context (vendored from the spec), THIS file is the canonical
+// document — the profile context's source of truth lives with the profile.
+// Its job is grounding: it maps the "provin" claim namespace prefix to its
+// vocabulary URL, making claim identity the (grounding URL, label) pair
+// rather than the bare prefix string (spec rule credential.claim.grounding
+// — a bare prefix has no owner; the grounding rides the signing scope, so
+// an impostor "provin:" with different grounding is byte-distinguishable).
+// It also hosts any future provin-owned custom subject field terms.
+//
+//go:embed contexts/provin-v1.jsonld
+var contextProvinVCV1Document []byte
+
+// ContextProvinVCV1Document returns the provin profile context document
+// (defensive copy) served at ContextProvinVCV1.
+func ContextProvinVCV1Document() []byte {
+	out := make([]byte, len(contextProvinVCV1Document))
+	copy(out, contextProvinVCV1Document)
+	return out
+}

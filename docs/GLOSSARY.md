@@ -63,8 +63,11 @@ source: whether the declared inputs are the output's complete information source
 not. The protocol pins only the grammar (a single namespace-prefixed token) and the
 open-world default (no closed-world inference from unrecognized claims); the
 semantics are pinned per claim by the profile (`vc.TransformationClaim` registry).
-It is a declaration by the signer, not a machine-verified property — its audit
-value is accountability for the claim. Claims do not bind chain topology.
+Claim identity is the (grounding URL, label) pair: the namespace prefix must be
+grounded by a context in @context, so an impostor prefix is byte-distinguishable
+inside the signing scope. It is a declaration by the signer, not a machine-verified
+property — its audit value is accountability for the claim. Claims do not bind
+chain topology.
 
 **SchemaRef** — A content-committed reference to the registered schema of the output,
 making retroactive schema modification cryptographically detectable.

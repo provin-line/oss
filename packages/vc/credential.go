@@ -24,6 +24,11 @@ import (
 const (
 	ContextCredentialsV2 = "https://www.w3.org/ns/credentials/v2"
 	ContextDplaaxVCV1    = "https://poc.dplaax.io/vc/v1"
+	// ContextProvinVCV1 is the provin profile context: grounds the "provin"
+	// claim namespace prefix (credential.claim.grounding) and hosts
+	// profile-owned custom subject field terms. poc tier — the provin.io
+	// domain acquisition must be confirmed before external deployment.
+	ContextProvinVCV1 = "https://poc.provin.io/vc/v1"
 )
 
 // PipelinePassCredential is the per-event provenance credential.
@@ -243,7 +248,7 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 		subject[keySourceRootCanon] = fields.SourceCommitment.SourceRootCanonical
 	}
 	body := map[string]any{
-		keyContext: []any{ContextCredentialsV2, ContextDplaaxVCV1},
+		keyContext: []any{ContextCredentialsV2, ContextDplaaxVCV1, ContextProvinVCV1},
 		keyType:    []any{"VerifiableCredential", "PipelinePassCredential"},
 		keyIssuer:  fields.Issuer,
 		// Wire granularity is whole seconds (RFC 3339): sub-second
