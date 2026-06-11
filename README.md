@@ -26,7 +26,7 @@ survive the PoC → production transition.
 api/protobuf/   protocol definitions (buf; namespace dplaax.*.v1)
 gen/            generated code (committed — buf not required to build)
 network/        registry & coordination server (single binary)
-pipeline/       Pipeline Component peer catalog + shared mechanics
+pipeline/       Pipeline Process peer catalog + shared mechanics
 cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did
@@ -84,16 +84,16 @@ keystore ──► crypto
 tlog ──► crypto
 ```
 
-## Pipeline Component model
+## Pipeline Process model
 
-A pipeline is a graph composition of four **peer** component types — none is privileged:
+A pipeline is a graph composition of four **peer** process types — none is privileged:
 
 | Type | Definitional property |
 |---|---|
-| FilterConvert | Stateless 1:1 transformation; preserves the VC chain |
-| Origin Source | Emits a new FirstDrop VC (cuts the chain) |
-| External Sink | Terminates the chain; writes to the outside world |
-| Custom | Conforms to the Pipeline Contract on at least one I/O side |
+| Chained Process | Stateless 1:1 transformation; preserves the VC chain |
+| Source Process | Emits a new FirstDrop VC (cuts the chain) |
+| Sink Process | Terminates the chain; writes to the outside world |
+| Custom Process | Conforms to the Pipeline Contract on at least one I/O side |
 
 See [pipeline/README.md](pipeline/README.md). Extension adapters live in **separate
 repositories** and implement [pipeline/contract](pipeline/contract/).

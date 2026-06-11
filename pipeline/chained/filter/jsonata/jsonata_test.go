@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/provin-line/oss/pipeline/filterconvert/filter"
-	"github.com/provin-line/oss/pipeline/filterconvert/filter/jsonata"
+	"github.com/provin-line/oss/pipeline/chained/filter"
+	"github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 )
 
 // Compile-time interface compliance check.

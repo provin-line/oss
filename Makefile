@@ -15,9 +15,9 @@ help:
 
 # Binaries land here as their packages materialize:
 #   network/cmd/standalone        → $(DIST)/standalone
-#   pipeline/filterconvert/cmd    → $(DIST)/filterconvert
-#   pipeline/originsource/externalsource/apipush → $(DIST)/apipush-source
-#   pipeline/externalsink/console → $(DIST)/console-sink
+#   pipeline/chained/cmd          → $(DIST)/chained
+#   pipeline/source/ingest/apipush → $(DIST)/apipush-source
+#   pipeline/sink/console         → $(DIST)/console-sink
 #   cmd/provin                    → $(DIST)/provin
 build:
 	@echo "no binaries yet — skeleton phase"

@@ -27,7 +27,7 @@ var (
 	ErrMissingCredential = errors.New("envelopecodec: envelope carries no credential")
 	// ErrEmptyPayload — an inline payload is never empty (profile norm):
 	// empty and absent are indistinguishable on the proto3 wire, so an
-	// empty produced payload is a component bug, rejected at marshal time.
+	// empty produced payload is a process bug, rejected at marshal time.
 	ErrEmptyPayload = errors.New("envelopecodec: empty inline payload")
 	// ErrZeroSequenceNo — sequence numbers are publisher-assigned and
 	// 1-based; zero is indistinguishable from unset on the proto3 wire and

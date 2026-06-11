@@ -39,7 +39,7 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
   (orthogonal to `previousCredential`; chain-preserving credentials commit to their
   full consumed set, predecessor included),
   riding the open signed body as profile vocabulary declared via the dplaax
-  JSON-LD context (the wire names are pinned by the dPLaaX Origin Source
+  JSON-LD context (the wire names are pinned by the dPLaaX Source Process
   specification — shared across profiles, so they are not renamed per profile).
   It is a content
   commitment over the consumed source set, not a parent link — chain topology stays

@@ -4,7 +4,7 @@ package converter_test
 import (
 	"testing"
 
-	"github.com/provin-line/oss/pipeline/filterconvert/converter"
+	"github.com/provin-line/oss/pipeline/chained/converter"
 )
 
 // TestValidateSubset_AllPresent verifies that all listed fields being present

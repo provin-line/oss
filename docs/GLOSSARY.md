@@ -122,30 +122,33 @@ FirstDrop because the run is not triggered by a single conformant event (trigger
 rule); that the result has no identity relationship with any single input is the
 rationale, not the criterion.
 
-## Components
+## Pipeline Processes
 
-**Pipeline Component** — A peer participating in a pipeline. Component types form a
+**Pipeline Process** — A peer participating in a pipeline. Process types form a
 catalog of *definitional properties*; no type is privileged and pipelines are free
 graph compositions of them.
 
-**FilterConvert** — The component type defined by stateless per-event transformation:
+**Chained Process** — The process type defined by stateless per-event transformation:
 one conformant input event in, one output out, chain preserved.
+(formerly FilterConvert — note kept through 0.x, removed at GA)
 
-**Origin Source** — The component type defined by emitting FirstDrops: it is where
+**Source Process** — The process type defined by emitting FirstDrops: it is where
 data enters the provenance model, whether by external ingestion, aggregation, or
 generation-like derivations.
+(formerly Origin Source — note kept through 0.x, removed at GA)
 
-**External Sink** — The component type defined by terminating the chain: it consumes
+**Sink Process** — The process type defined by terminating the chain: it consumes
 verified data and surfaces it (with its verification verdict) to the outside world.
+(formerly External Sink — note kept through 0.x, removed at GA)
 
-**Custom** — The component type defined by conforming to the Pipeline Contract on at
-least one I/O side while not fitting the other catalog definitions.
+**Custom Process** — The process type defined by conforming to the Pipeline Contract
+on at least one I/O side while not fitting the other catalog definitions.
 
-**Pipeline Contract** — The interface obligations a component must satisfy to
+**Pipeline Contract** — The interface obligations a process must satisfy to
 participate: how it verifies ingress, what it must attest on egress, and what it must
 retain for audit.
 
-**IngressVCStore** — The retention obligation attached to verification: a component
+**IngressVCStore** — The retention obligation attached to verification: a process
 that verifies ingress credentials must persist them, because verifying without
 storing breaks chain audits.
 

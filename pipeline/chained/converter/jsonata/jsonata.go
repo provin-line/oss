@@ -53,7 +53,7 @@ import (
 
 	libjsonata "github.com/blues/jsonata-go"
 	"github.com/provin-line/oss/canon"
-	"github.com/provin-line/oss/pipeline/filterconvert/converter"
+	"github.com/provin-line/oss/pipeline/chained/converter"
 )
 
 // FieldStep describes a single per-field transformation step.

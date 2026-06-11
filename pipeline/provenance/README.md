@@ -1,12 +1,12 @@
 # provenance — Shared VC Signing / Verification Mechanics
 
-Component-facing interfaces over the VC machinery in `vc`:
+Process-facing interfaces over the VC machinery in `vc`:
 
 - `Provider` — `Sign(ctx, payload, inputHash, outputHash) (*Credential, error)`;
   owns the per-process chain state (`previousCredential` linking) and, for any
   boundary deployed in the audit-reachable conformance class (config-driven), the
   source commitment (`vc.SourceCommitment` — see
-  [../originsource/README.md](../originsource/README.md); chain-preserving
+  [../source/README.md](../source/README.md); chain-preserving
   boundaries commit to their full consumed set, predecessor included).
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`; returns the
   confidence verdict (weakest-link over axes).
@@ -19,5 +19,5 @@ Component-facing interfaces over the VC machinery in `vc`:
 - Verification resolves issuer DIDs via `resolver` and pre-hashes with
   SHA-256 to match the remote-signer convention.
 
-These packages carry **no component semantics** — every component type that signs or
+These packages carry **no process semantics** — every process type that signs or
 verifies uses them.

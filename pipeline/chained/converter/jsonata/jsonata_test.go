@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/provin-line/oss/pipeline/filterconvert/converter"
-	"github.com/provin-line/oss/pipeline/filterconvert/converter/jsonata"
+	"github.com/provin-line/oss/pipeline/chained/converter"
+	"github.com/provin-line/oss/pipeline/chained/converter/jsonata"
 )
 
 // interfaceCheck ensures *Converter satisfies converter.Converter at compile

@@ -50,7 +50,7 @@ import (
 	libjsonata "github.com/blues/jsonata-go"
 	"github.com/blues/jsonata-go/jlib"
 	"github.com/provin-line/oss/canon"
-	"github.com/provin-line/oss/pipeline/filterconvert/filter"
+	"github.com/provin-line/oss/pipeline/chained/filter"
 )
 
 // Filter evaluates a fixed list of pre-compiled JSONata expressions against

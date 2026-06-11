@@ -13,7 +13,7 @@ package dplaax.pipeline.v1;
 
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1";
 
-// Envelope is the unit carried between Pipeline Components on the pipeline
+// Envelope is the unit carried between Pipeline Processes on the pipeline
 // transport.
 message Envelope {
   // The PipelinePassCredential as a JSON document (body + proof).

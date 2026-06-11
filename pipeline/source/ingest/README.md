@@ -1,4 +1,4 @@
-# externalsource — Origin Source Mechanics: External Ingestion
+# ingest — Source Process Mechanics: External Ingestion
 
 Ingestion from outside the pipeline network. The trigger is never a
 Pipeline-conformant predecessor event (HTTP push, file arrival, poll, or the arrival
@@ -40,8 +40,8 @@ accountability (see DID method tiers in the glossary).
 ## Reference implementation: apipush/
 
 HTTP push endpoint (`POST /push`, JSON only, bounded body size) publishing to the
-component's input queue, plus `GET /health`. Signing-path note: the PoC reference
-implementation publishes raw payloads for a downstream FilterConvert chain head
+process's input queue, plus `GET /health`. Signing-path note: the PoC reference
+implementation publishes raw payloads for a downstream Chained Process head
 configured with verification strategy `none`; a self-contained signing variant
 (emitting the FirstDrop itself) conforms to `pipeline/contract` the same way.
 

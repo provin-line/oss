@@ -1,13 +1,13 @@
 # transport — Pub-Sub Abstraction
 
-The messaging boundary between Pipeline Components: `Publisher` / `Subscriber`
-interfaces and the consume-process-publish runtime loop driving a component's
-processor.
+The messaging boundary between Pipeline Processes: `Publisher` / `Subscriber`
+interfaces and the consume-process-publish runtime loop driving a process's
+event processor.
 
 ## Conventions
 
 - This is the **Hub swap point** for the pub-sub backend: `nats/` (JetStream) is the
-  OSS default; SQS/SNS and others replace it without touching component logic.
+  OSS default; SQS/SNS and others replace it without touching process logic.
 - `envelopecodec/` is the wire codec for pipeline envelopes (the reference
   implementation of `contract.EnvelopeCodec`, over `dplaax.pipeline.v1`). It is
   stateless and subscription-agnostic: wire absence of the payload maps to nil
@@ -18,15 +18,15 @@ processor.
   reveals no single layer knows the delivery mode, add a mode-aware wrapper as a
   pure addition — never push the check into this codec.
 - Subject naming, credentials, and connection lifecycle (drain on shutdown,
-  flush-after-subscribe) live here — components never import a broker client
+  flush-after-subscribe) live here — processes never import a broker client
   directly.
 - The runtime loop is intentionally minimal: synchronous per-message processing,
-  publish on "passed" (producing components only — a terminating component writes
+  publish on "passed" (producing processes only — a terminating process writes
   externally and publishes nothing), drop-with-log on "filtered"/"error".
-  Retry / dead-letter policies plug in at this seam, not inside components.
+  Retry / dead-letter policies plug in at this seam, not inside processes.
 - Cross-organization wiring (imports/exports between accounts) is **not** this
   package's job — that belongs to the network chainmanager's `InfraOperator`.
-- **Payload delivery modes**: inside their own organization, components always
+- **Payload delivery modes**: inside their own organization, processes always
   produce the full (inline) envelope. The per-subscription agreed mode
   (`inline` / `by-reference` — see the `Envelope` contract and the chainmanager
   `Subscription` record) is applied at the cross-organization export seam,

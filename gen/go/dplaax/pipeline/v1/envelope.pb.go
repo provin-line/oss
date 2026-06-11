@@ -31,7 +31,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Envelope is the unit carried between Pipeline Components on the pipeline
+// Envelope is the unit carried between Pipeline Processes on the pipeline
 // transport.
 type Envelope struct {
 	state protoimpl.MessageState `protogen:"open.v1"`

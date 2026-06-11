@@ -1,7 +1,7 @@
-# filterconvert — ステートレスな1:1変換コンポーネント
+# chained — Chained Process: ステートレスな1:1変換
 > 日本語版 — English: [README.md](README.md)
 
-FilterConvert コンポーネント型。**ステートレス性は定義的性質**であり、データベース、プール、キャッシュ、クロスイベント状態を持たない。ステートフルな振る舞いは Origin Source に属する。
+Chained Process 型。**ステートレス性は定義的性質**であり、データベース、プール、キャッシュ、クロスイベント状態を持たない。ステートフルな振る舞いは Source Process に属する。
 
 ## 処理ライフサイクル（1イベント）
 
@@ -19,7 +19,7 @@ ingress VC verification (strategy: none | adjacent | full)
 
 不変条件：隣接するチェーンリンク間で `outputHash[n] == inputHash[n+1]` — 下流ステージはペイロードを再読みすることなくデータフローの連続性を証明できる。
 
-## ステップカタログ（provin StepComponent、`contract.StepKind`）
+## ステップカタログ（provin step catalog、`contract.StepKind`）
 
 | Step | 役割 | PoC ステータス |
 |---|---|---|
@@ -29,7 +29,7 @@ ingress VC verification (strategy: none | adjacent | full)
 | BatchFlow | fresh output を生成する batch API call、ステートレス | 型のみ |
 | SinkedSourceFlow | イベントごとの外部データ fetch — **enrichment** ステップ | 型のみ |
 
-**Enrichment**（トリガーとなったイベントへの外部データの side-fetch join）は FilterConvert の step pattern であり、Origin Source メカニクスではない: 実行は前イベントによってトリガーされるため、チェーンは保持される（`transformationClaim: "provin:enrich"`）。すべてのステップはイベント単位でステートレス。クロスイベント状態を持てば、そのコンポーネントは Origin Source になる。
+**Enrichment**（トリガーとなったイベントへの外部データの side-fetch join）は Chained Process の step pattern であり、Source Process メカニクスではない: 実行は前イベントによってトリガーされるため、チェーンは保持される（`transformationClaim: "provin:enrich"`）。すべてのステップはイベント単位でステートレス。クロスイベント状態を持てば、そのプロセスは Source Process になる。
 
 ## サブパッケージ
 

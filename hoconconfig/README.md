@@ -8,7 +8,7 @@ Layered configuration loader used by every binary in this repository.
    `reference.conf` files (`go:embed` + `RegisterPackageReference`).
 2. **Application** — operator-shipped `config/application.conf` (optional).
 3. **Overlay** — file pointed to by an environment variable (optional;
-   `CONFIG_OVERLAY` for network, `CONFIG_FILE` for component binaries).
+   `CONFIG_OVERLAY` for network, `CONFIG_FILE` for process binaries).
 
 Substitutions (`${...}`) resolve once after all layers merge, so any layer may
 reference keys defined in a lower one.

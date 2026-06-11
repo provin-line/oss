@@ -1,4 +1,4 @@
-# aggregate — Origin Source Mechanics: Pool + Window
+# aggregate — Source Process Mechanics: Pool + Window
 
 Pool + windowing / aggregation logic over one or more Pipeline-conformant inputs
 (possibly with different schemas), emitting a new FirstDrop with a new schema.
@@ -6,7 +6,7 @@ Pool + windowing / aggregation logic over one or more Pipeline-conformant inputs
 ## Conventions
 
 - This is where **stateful** pipeline workloads live (pool, window, join) —
-  FilterConvert's statelessness is definitional, so aggregation can never migrate
+  Chained Process's statelessness is definitional, so aggregation can never migrate
   there.
 - The run is triggered by a timer / window expiry — never by a single predecessor
   event — so the output is a FirstDrop with `transformationClaim: "provin:aggregate"`

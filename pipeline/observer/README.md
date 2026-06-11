@@ -13,5 +13,5 @@
   guarded by a canonical-hash round-trip comparison: silent precision loss in the
   payload (`structpb` collapsing large integers) must fail loudly rather than ship a
   VC whose receiver-side canonicalization diverges from the issuer's.
-- The ingress-VC store obligation (components that verify must store what they
+- The ingress-VC store obligation (processes that verify must store what they
   verified) is satisfied by `vcobserver`'s ingress store.

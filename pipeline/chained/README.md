@@ -1,7 +1,7 @@
-# filterconvert — Stateless 1:1 Transformation Component
+# chained — Chained Process: Stateless 1:1 Transformation
 
-The FilterConvert component type. **Statelessness is definitional**: no database, no
-pool, no cache, no cross-event state. Stateful behaviour belongs to Origin Source.
+The Chained Process type. **Statelessness is definitional**: no database, no
+pool, no cache, no cross-event state. Stateful behaviour belongs to Source Process.
 
 ## Processing lifecycle (one event)
 
@@ -20,7 +20,7 @@ ingress VC verification (strategy: none | adjacent | full)
 Invariant: `outputHash[n] == inputHash[n+1]` across adjacent chain links — downstream
 stages prove data-flow continuity without re-reading payloads.
 
-## Step catalog (provin StepComponent, `contract.StepKind`)
+## Step catalog (provin step catalog, `contract.StepKind`)
 
 | Step | Role | PoC status |
 |---|---|---|
@@ -31,10 +31,10 @@ stages prove data-flow continuity without re-reading payloads.
 | SinkedSourceFlow | per-event external data fetch — the **enrichment** step | type only |
 
 **Enrichment** (side-fetched external data joined onto the triggering event) is a
-FilterConvert step pattern, not an Origin Source mechanics: the run is triggered by
+Chained Process step pattern, not a Source Process mechanics: the run is triggered by
 the predecessor event, so the chain is preserved
 (`transformationClaim: "provin:enrich"`). All steps are stateless per event;
-cross-event state would make the component an Origin Source.
+cross-event state would make the process a Source Process.
 
 ## Sub-packages
 

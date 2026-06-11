@@ -1,6 +1,6 @@
-// Package provenance defines the component-facing interfaces over the VC
+// Package provenance defines the process-facing interfaces over the VC
 // machinery in vc — shared signing/verification mechanics carrying no
-// component semantics. Every component type that signs or verifies uses
+// process semantics. Every process type that signs or verifies uses
 // these; the DID/VC-backed implementation lives in vcdid/.
 package provenance
 

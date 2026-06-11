@@ -1,5 +1,5 @@
 // Package contract defines the Pipeline Contract — the public contract every
-// Pipeline Component conforms to on at least one I/O side. External adapter
+// Pipeline Process conforms to on at least one I/O side. External adapter
 // repositories import this package; its stability obligations are the
 // strictest in the repository.
 //
@@ -15,38 +15,38 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// ChainBehavior declares a component's VC chain behaviour on its output
+// ChainBehavior declares a process's VC chain behaviour on its output
 // side. Exactly one applies per output. The zero value is Unknown and is
-// never valid — a component that cannot declare its behaviour must not run.
+// never valid — a process that cannot declare its behaviour must not run.
 type ChainBehavior int
 
 const (
 	ChainBehaviorUnknown ChainBehavior = iota
 	// ChainPreserving — output VC carries previousCredential = hash of the
-	// input VC (FilterConvert). Deployments in the audit-reachable
+	// input VC (Chained Process). Deployments in the audit-reachable
 	// conformance class additionally attach a vc.SourceCommitment over the
 	// full consumed conformant source set, the triggering predecessor
 	// included (all-consumed semantics; orthogonal to the chain link).
 	ChainPreserving
 	// ChainFirstDrop — output VC has no previousCredential: a fresh chain
-	// origin (Origin Source — external ingestion or aggregation). The chain
+	// origin (Source Process — external ingestion or aggregation). The chain
 	// carries no upstream link; input manifests are a data-payload concern.
 	// Deployments in the audit-reachable conformance class additionally
 	// attach a vc.SourceCommitment (an audit attribute over the consumed
 	// source set, not a parent link — linearity is unaffected).
 	ChainFirstDrop
 	// ChainTerminating — consumes and verifies; produces nothing in-network
-	// (External Sink).
+	// (Sink Process).
 	ChainTerminating
 )
 
-// VerificationStrategy names the ingress verification a component runs
+// VerificationStrategy names the ingress verification a process runs
 // before trusting input. The zero value is Unknown and fails closed.
 type VerificationStrategy int
 
 const (
 	VerificationUnknown VerificationStrategy = iota
-	// VerificationNone — components with no Pipeline-conformant ingress
+	// VerificationNone — processes with no Pipeline-conformant ingress
 	// (consuming raw external input only).
 	VerificationNone
 	// VerificationAdjacent — verify the immediately preceding VC (mandatory
@@ -56,11 +56,11 @@ const (
 	VerificationFull
 )
 
-// StepKind names a step type composable inside a chain-preserving component
-// (the provin StepComponent catalog). Steps are stateless per event;
-// cross-event state would make the component an Origin Source. The PoC
-// implements Convert / Filter / Verifier; Batch and SinkedSource are defined
-// for contract completeness and land later.
+// StepKind names a step type composable inside a Chained Process (the
+// provin step catalog). Steps are stateless per event; cross-event state
+// would make the process a Source Process. The PoC implements Convert /
+// Filter / Verifier; Batch and SinkedSource are defined for contract
+// completeness and land later.
 type StepKind int
 
 const (
@@ -78,9 +78,9 @@ const (
 	StepSinkedSource
 )
 
-// SinkKind classifies an External Sink deployment by handling discipline.
-// It is a config-driven attribute of a deployed component, not a separate
-// component type. The zero value is Unknown and is never valid.
+// SinkKind classifies a Sink Process deployment by handling discipline.
+// It is a config-driven attribute of a deployed process, not a separate
+// process type. The zero value is Unknown and is never valid.
 type SinkKind int
 
 const (
@@ -108,26 +108,26 @@ const (
 
 // Result is the outcome of one Process call.
 //
-// For a ChainTerminating component (External Sink), StatusPassed means the
+// For a ChainTerminating process (Sink Process), StatusPassed means the
 // ingress verification ran and the external write completed — it does NOT
 // require ConfidenceVerified (an observation-only sink may emit invalid
 // credentials); the verdict itself rides Confidence. VC and Payload are nil:
 // a sink produces nothing in-network.
 type Result struct {
 	Status Status
-	// VC is the issued credential (StatusPassed on a producing component
+	// VC is the issued credential (StatusPassed on a producing process
 	// only).
 	VC *vc.PipelinePassCredential
 	// Payload is the produced data bytes (StatusPassed on a producing
-	// component only): the exact byte string whose sha256 is the VC's
+	// process only): the exact byte string whose sha256 is the VC's
 	// outputHash, and it is never empty (profile norm — see Envelope).
-	// Components always produce the full inline form; by-reference
+	// Processes always produce the full inline form; by-reference
 	// stripping happens at the cross-organization export seam, never
 	// here. The runtime loop may re-verify the hash identity before
-	// publishing; a mismatch is a component bug and fails loudly.
+	// publishing; a mismatch is a process bug and fails loudly.
 	Payload []byte
 	// Confidence is the ingress verification verdict; nil means no
-	// verification ran. A component declaring VerificationNone always
+	// verification ran. A process declaring VerificationNone always
 	// leaves it nil; under any other strategy it MUST be set for every
 	// event arriving on a Pipeline-conformant ingress side, and stays nil
 	// only for events arriving on non-conformant input — which is outside
@@ -143,48 +143,48 @@ type Result struct {
 	Error string
 }
 
-// Processor turns one input event into one Result. Implementations carry the
-// component's full per-event lifecycle (ingress verification, transformation,
+// EventProcessor turns one input event into one Result. Implementations carry the
+// process's full per-event lifecycle (ingress verification, transformation,
 // signing, observation).
 //
-// Processor is the contract for event-triggered processing — the unit a
+// EventProcessor is the contract for event-triggered processing — the unit a
 // transport runtime loop drives (one input event in, one Result out).
 // Implementing it is optional: mechanics that own their trigger (timer /
-// window aggregation) implement Component directly and never pass through a
-// Processor. First-stage push ingestion is event-triggered in this sense —
+// window aggregation) implement Process directly and never pass through an
+// EventProcessor. First-stage push ingestion is event-triggered in this sense —
 // the external push is the event.
-type Processor interface {
+type EventProcessor interface {
 	Process(ctx context.Context, input []byte) (*Result, error)
 }
 
-// Component is a runnable pipeline component bound to its transport. It is
+// Process is a runnable pipeline process bound to its transport. It is
 // the only mandatory contract: a conformant implementation exposes Run plus
 // the declaration methods.
 //
-// One Component value represents exactly one pipeline output side (or a
-// terminating consumer). A Custom component with several output sides
-// composes one Component per side — which components a binary hosts is
+// One Process value represents exactly one pipeline output side (or a
+// terminating consumer). A Custom Process with several output sides
+// composes one Process per side — which processes a binary hosts is
 // decided by their signing paths, never by packaging.
-type Component interface {
+type Process interface {
 	// Run consumes and processes events until ctx is cancelled, then drains
 	// gracefully.
 	Run(ctx context.Context) error
-	// ChainBehavior declares the component's output-side chain behaviour.
-	// Must return the same non-Unknown value for the component's lifetime.
+	// ChainBehavior declares the process's output-side chain behaviour.
+	// Must return the same non-Unknown value for the process's lifetime.
 	ChainBehavior() ChainBehavior
 	// VerificationStrategy declares the verification run on every
-	// Pipeline-conformant ingress side of this component — a floor
+	// Pipeline-conformant ingress side of this process — a floor
 	// obligation applied uniformly, not a per-side enumeration.
 	// Non-conformant input (raw external bytes, foreign credentials) is
 	// outside this declaration: it is unverifiable by definition; a
-	// component with no conformant ingress declares VerificationNone.
+	// process with no conformant ingress declares VerificationNone.
 	//
 	// The value is an instance declaration fixed at construction, not a
-	// property of the component type — the same component code may run as
+	// property of the process type — the same process code may run as
 	// a chain head with None and mid-chain with Adjacent. It must return
-	// the same non-Unknown value for the component's lifetime.
+	// the same non-Unknown value for the process's lifetime.
 	//
-	// Startup enforcement splits in two: a component declaring a strategy
+	// Startup enforcement splits in two: a process declaring a strategy
 	// other than None must be configured with an IngressVCStore (a
 	// self-contained check), while the legitimacy of a None declaration is
 	// checked against deploy wiring metadata at construction time — the
@@ -192,7 +192,7 @@ type Component interface {
 	VerificationStrategy() VerificationStrategy
 }
 
-// Envelope is the unit carried between components on the transport.
+// Envelope is the unit carried between processes on the transport.
 //
 // Normative chain semantics (previousCredential links, inputHash/outputHash,
 // verification) depend ONLY on the credential and its content hashes — never
@@ -210,7 +210,7 @@ type Component interface {
 // is negotiated at registration (the requested mode rides the L2-signed
 // RegisterSubscription view; a mode the publisher does not offer is a typed
 // wiring-time rejection, never a silent runtime fallback) and is immutable
-// for the subscription's lifetime. Inside an organization, components always
+// for the subscription's lifetime. Inside an organization, processes always
 // produce the full (inline) envelope; the agreed mode is applied at the
 // cross-organization export seam — stripping the payload is one-way cheap.
 // Choosing inline does not lift the publisher's audit-side resolver
@@ -220,7 +220,7 @@ type Envelope struct {
 	// Payload optionally carries the data bytes inline; nil means
 	// by-reference delivery.
 	//
-	// An inline payload is never empty — a producing component MUST emit
+	// An inline payload is never empty — a producing process MUST emit
 	// non-empty payload bytes (profile norm). Empty and absent bytes are
 	// indistinguishable on a proto3 wire, so admitting an empty inline
 	// payload would make "publisher sent empty" and "payload stripped in
@@ -236,7 +236,7 @@ type Envelope struct {
 }
 
 // EnvelopeCodec marshals envelopes to and from their wire form. The concrete
-// wire encoding is pinned at the proto layer; components and external
+// wire encoding is pinned at the proto layer; processes and external
 // adapters depend only on this interface.
 type EnvelopeCodec interface {
 	MarshalEnvelope(e *Envelope) ([]byte, error)
@@ -262,7 +262,7 @@ type ProcessObserver interface {
 }
 
 // IngressVCStore persists verified ingress VCs for audit reachability.
-// Components running a verification strategy other than None MUST be
+// Processes running a verification strategy other than None MUST be
 // configured with one — verifying without storing breaks chain audits.
 type IngressVCStore interface {
 	StoreIngressVC(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) error
