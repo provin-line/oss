@@ -37,6 +37,12 @@ the chain.
 **content commitment** — Referencing an artifact by a cryptographic hash of its
 canonical byte form rather than by a name or locator. Chain links use content
 commitments so that long-horizon audits do not depend on any registry surviving.
+A commitment proves integrity, not confidentiality: a digest over a low-entropy
+value space (a boolean verdict, a small enum) is dictionary-recoverable by an
+observer who can enumerate the space, so payloads whose contents must stay
+unguessable carry issuer-chosen salt inside the payload bytes — a payload-schema
+concern; the wire shape is unchanged (see credential.subject.output-hash notes
+in the spec).
 
 **previousCredential** — The chain link field of a PPC: a content commitment to the
 predecessor credential. Its absence marks the credential as a FirstDrop.

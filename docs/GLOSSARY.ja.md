@@ -18,7 +18,7 @@
 
 **来歴チェーン (provenance chain)** — `previousCredential` で連結された PPC の厳密に線形な列。各リンクの先行はちょうど 0 または 1。線形チェーンで表現できない系譜は、チェーンを分岐させるのではなく origin 境界で扱う。
 
-**content commitment** — 成果物を名前やロケータではなく、canonical なバイト形のハッシュで参照すること。チェーンリンクが content commitment を使うのは、長期監査がレジストリの生存に依存しないようにするため。
+**content commitment** — 成果物を名前やロケータではなく、canonical なバイト形のハッシュで参照すること。チェーンリンクが content commitment を使うのは、長期監査がレジストリの生存に依存しないようにするため。commitment が証明するのは完全性であって機密性ではない: 低エントロピーな値空間（boolean の判定、小さな enum）の digest は、空間を列挙できる観察者には辞書攻撃で復元可能。よって内容を推測不能に保つ必要がある payload は、issuer が選んだ salt を payload バイト内に含める — これは payload schema の関心事であり、wire 形状は変わらない（spec の credential.subject.output-hash notes 参照）。
 
 **previousCredential** — PPC のチェーンリンクフィールド。先行クレデンシャルへの content commitment。不在はその credential が FirstDrop であることを示す。
 

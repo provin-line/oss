@@ -10,17 +10,15 @@ import (
 )
 
 // Validate checks the claim against the protocol's claim grammar
-// (credential.claim.grammar, credential.claim.bare-rejected): a single
-// <namespace>:<label> token with both parts nonempty. Space, control,
-// and format characters (Unicode White_Space, Cc, Cf — including
-// zero-width and bidi controls, which are display-spoofing vectors)
-// never appear in a token; "+" is excluded everywhere because the
-// protocol deleted the join operator — a label containing "+" would
-// resurrect its surface form, so it fails closed. The exact label
-// character set is not yet pinned upstream (ledgered in the spec repo);
-// until it is, this implementation rejects only the classes above.
-// Grammar says nothing about claim meaning; semantics are pinned per
-// claim by the profile that owns the namespace.
+// (credential.claim.grammar, credential.claim.bare-rejected,
+// credential.claim.charset): a single <namespace>:<label> token with
+// both parts nonempty. Space, control, and format characters (Unicode
+// White_Space, Cc, Cf — including zero-width and bidi controls, which
+// are display-spoofing vectors) and "+" (the deleted join operator's
+// surface form) are rejected per credential.claim.charset; character
+// classes beyond those — case, non-ASCII letters — are deliberately the
+// profile's call. Grammar says nothing about claim meaning; semantics
+// are pinned per claim by the profile that owns the namespace.
 func (tc TransformationClaim) Validate() error {
 	s := string(tc)
 	if s == "" {
@@ -36,7 +34,7 @@ func (tc TransformationClaim) Validate() error {
 	for _, part := range []string{prefix, label} {
 		for _, r := range part {
 			if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '+' {
-				return fmt.Errorf("transformationClaim %q contains a character outside the token grammar (credential.claim.grammar)", s)
+				return fmt.Errorf("transformationClaim %q contains a character outside the token charset (credential.claim.charset)", s)
 			}
 		}
 	}
