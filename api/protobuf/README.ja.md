@@ -18,3 +18,5 @@ dplaax.pipeline.v1  トランスポートメッセージのみ（PipelinePassCre
 - 生成コードは `gen/` 配下に**コミット済み** — コントリビューターは `buf` なしでビルドできる。再生成は `make proto`。
 - 認可ポリシーはメソッドオプション（リソース + アクション）で RPC に宣言され、サーバーサイドのインターセプターが強制する（L1）。`ChainPeerService` の RPC には L1 ポリシーを持たせず、埋め込みの `AuthProof` メッセージ（L2 ワイヤー署名）のみで認証する。
 - VC ボディのワイヤーメッセージは、精度を失わずに正規化を往復できなければならない。変換は正規ハッシュの比較でガードされる（`canon` 参照）。
+- `dplaax.pipeline.v1` の `syntax = "proto3"` は意図的・規範的な選択である：provin profile の「空 / 不在 payload」の論証は proto3 の implicit field presence に依拠する。editions への移行は presence 意味論を変えるため、tooling の更新ではなく profile の議論である。
+- pipeline envelope は credential を構造化メッセージではなく JSON 文書（bytes）として運ぶ：unknown signed-scope member は canonical レベルで byte 忠実に transport を生き残らなければならず、field projection ではこれを守れない。

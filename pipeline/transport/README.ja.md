@@ -6,6 +6,7 @@ Pipeline コンポーネント間のメッセージング境界：`Publisher` / 
 ## 規約
 
 - ここは pub-sub バックエンドの**Hub スワップポイント**である：`nats/`（JetStream）が OSS デフォルト；SQS/SNS その他はコンポーネントロジックに触れることなくここで置き換える。
+- `envelopecodec/` はパイプライン envelope の wire codec（`contract.EnvelopeCodec` の参照実装、`dplaax.pipeline.v1` 上）。stateless かつ購読非依存：wire 上の payload 不在は nil（by-reference）に写像し、不在が正当かどうかは購読の合意配送モードを知る層が判定する — codec は決して判定しない。空 inline payload（marshal 側）と sequence number ゼロ（両方向）は fail-closed に拒否する。codec 外モード検査の覆す条件：runtime loop の実装で「配送モードを知る単一の層が存在しない」と判明した場合は mode-aware なラッパーを純追加する — 検査をこの codec に押し込むことは決してしない。
 - サブジェクト命名、クレデンシャル、接続ライフサイクル（シャットダウン時のドレイン、サブスクライブ後のフラッシュ）はここで管理 — コンポーネントはブローカークライアントを直接インポートしない。
 - ランタイムループは意図的に最小限：メッセージごとの同期処理、「passed」でパブリッシュ（生産コンポーネントのみ — 終端コンポーネントは外部に書き出し、何もパブリッシュしない）、「filtered」/「error」でログ付きドロップ。リトライ / デッドレターポリシーはコンポーネント内部ではなく、このセームでプラグインされる。
 - 組織間の配線（アカウント間のインポート / エクスポート）はこのパッケージの責務**ではない** — それはネットワーク chainmanager の `InfraOperator` に属する。

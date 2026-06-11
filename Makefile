@@ -29,6 +29,7 @@ vet:
 	go vet ./...
 
 lint: vet
+	cd api/protobuf && buf lint
 	@for s in scripts/check-*.sh; do [ -x "$$s" ] && "$$s" || true; done
 
 proto:

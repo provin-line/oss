@@ -1,0 +1,39 @@
+// dplaax.pipeline.v1 carries transport messages only — no services. The
+// wire counterpart of the Go pipeline contract (pipeline/contract); all
+// semantics are pinned by the contract doc comments (provin profile), this
+// file pins only the encoding.
+//
+// syntax = "proto3" is a deliberate, normative choice: the profile's
+// empty/absent payload reasoning relies on proto3 implicit field presence.
+// Migrating to editions would change presence semantics and is therefore a
+// profile discussion, not a tooling upgrade.
+syntax = "proto3";
+
+package dplaax.pipeline.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1";
+
+// Envelope is the unit carried between Pipeline Components on the pipeline
+// transport.
+message Envelope {
+  // The PipelinePassCredential as a JSON document (body + proof).
+  // Producers emit the JCS-canonical form; receivers decode through the
+  // strict decoder only. The codec round-trip invariant is canonical-form
+  // equality — identity is sha256 over the JCS-canonical body
+  // ("sha256:<hex>"), never lexical byte preservation (unknown members
+  // survive the domain round-trip, so the hash is stable).
+  bytes credential = 1;
+
+  // Inline payload bytes; absent means by-reference delivery. An inline
+  // payload is never empty (profile norm): empty and absent are
+  // indistinguishable in proto3, and the norm makes that harmless.
+  // Whether absence is legitimate is decided by the subscription's agreed
+  // delivery mode — a concern of the layer that knows the subscription,
+  // never of the wire codec.
+  bytes payload = 2;
+
+  // Publisher-assigned, strictly increasing, 1-based — zero is invalid
+  // (fail-closed: proto3 cannot distinguish zero from unset). A gap or
+  // reordering in a subscriber's view is evidence, not a glitch.
+  uint64 sequence_no = 3;
+}

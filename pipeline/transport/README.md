@@ -8,6 +8,15 @@ processor.
 
 - This is the **Hub swap point** for the pub-sub backend: `nats/` (JetStream) is the
   OSS default; SQS/SNS and others replace it without touching component logic.
+- `envelopecodec/` is the wire codec for pipeline envelopes (the reference
+  implementation of `contract.EnvelopeCodec`, over `dplaax.pipeline.v1`). It is
+  stateless and subscription-agnostic: wire absence of the payload maps to nil
+  (by-reference); whether absence is legitimate is decided by the layer that knows
+  the subscription's agreed delivery mode, never by the codec. Fail-closed on empty
+  inline payloads (marshal side) and on zero sequence numbers (both directions).
+  Reversal condition for the codec-external mode check: if the runtime-loop work
+  reveals no single layer knows the delivery mode, add a mode-aware wrapper as a
+  pure addition — never push the check into this codec.
 - Subject naming, credentials, and connection lifecycle (drain on shutdown,
   flush-after-subscribe) live here — components never import a broker client
   directly.

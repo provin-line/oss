@@ -23,3 +23,10 @@ dplaax.pipeline.v1  transport messages only (PipelinePassCredential wire form, c
 - Wire messages for VC bodies must round-trip through canonicalization without
   precision loss; conversions are guarded by canonical-hash comparison (see
   `canon`).
+- `syntax = "proto3"` is a deliberate, normative choice in `dplaax.pipeline.v1`:
+  the provin profile's empty/absent payload reasoning relies on proto3 implicit
+  field presence. Migrating to editions changes presence semantics and is a
+  profile discussion, not a tooling upgrade.
+- The pipeline envelope carries the credential as its JSON document (bytes), not
+  as a structured message: unknown signed-scope members must survive transport
+  byte-faithfully at the canonical level, which field projection cannot honor.
