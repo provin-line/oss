@@ -16,6 +16,9 @@ func TestMethodOf(t *testing.T) {
 		{"did:web:example.com", "web"},
 		{"did:webvh:QmHash:example.com", "webvh"},
 		{"did:key:z6Mk", "key"},
+		{"did:1abc:x", "1abc"},            // digit-first method name is legal (1*method-char)
+		{"did:example:abc%41", "example"}, // pct-encoded idchar in msid is legal
+		{"did:example::abc", "example"},   // internal empty segment is legal (*( *idchar ":" ) 1*idchar)
 	}
 	for _, tt := range valid {
 		got, err := did.MethodOf(tt.in)
@@ -39,6 +42,8 @@ func TestMethodOf(t *testing.T) {
 		{"DID:dplaax:x", "uppercase scheme"},
 		{"urn:dplaax:x", "not a did scheme"},
 		{"did::x", "empty method name"},
+		{"did:dplaax:x:", "trailing colon (method-specific-id must end with an idchar)"},
+		{"did:dplaax::", "msid of a lone colon"},
 	}
 	for _, tt := range invalid {
 		if _, err := did.MethodOf(tt.in); err == nil {

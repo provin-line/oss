@@ -13,10 +13,14 @@ import (
 	"strings"
 )
 
-// MethodOf extracts the DID method name from a DID string, per W3C DID
-// Core syntax: "did:" method ":" method-specific-id, where the method
-// name is 1*(%x61-7A / DIGIT) — lowercase letters and digits only.
-// Anything else fails closed. This is the dispatch primitive: callers
+// MethodOf extracts the DID method name from a DID string, per the W3C
+// DID Core syntax (v1.0 Recommendation §3.1; the ABNF is unchanged in
+// the v1.1 Candidate Recommendation): "did:" method-name ":"
+// method-specific-id, where method-name is 1*(%x61-7A / DIGIT) —
+// lowercase letters and digits, a digit may lead — and the
+// method-specific-id is non-empty and ends with an idchar (no trailing
+// colon). Anything else fails closed. Finer method-specific-id grammar
+// is the method package's job. This is the dispatch primitive: callers
 // route to a method package (or reject) on the returned name without
 // understanding any method's identifier grammar.
 func MethodOf(s string) (string, error) {
@@ -25,8 +29,11 @@ func MethodOf(s string) (string, error) {
 		return "", fmt.Errorf("not a DID: missing %q scheme prefix", "did:")
 	}
 	method, msid, found := strings.Cut(rest, ":")
-	if !found || msid == "" {
-		return "", fmt.Errorf("not a DID: missing method-specific id")
+	if !found {
+		return "", fmt.Errorf("not a DID: expected \"did:\" method-name \":\" method-specific-id")
+	}
+	if msid == "" || strings.HasSuffix(msid, ":") {
+		return "", fmt.Errorf("not a DID: method-specific id must be non-empty and end with an idchar")
 	}
 	if method == "" {
 		return "", fmt.Errorf("not a DID: empty method name")

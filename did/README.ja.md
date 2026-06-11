@@ -10,7 +10,7 @@ method 非依存の DID 層: 全 consumer が共有する W3C DID Document モ�
 | 本 package | `DIDDocument` / `VerificationMethod` / `ServiceEndpoint` モデル、`ExtractPublicKey`、`MethodOf`（W3C DID Core 構文の dispatch） |
 | `dplaax/` | `did:dplaax` method — profile の T1 native method であり、**credential 発行面に許される唯一の method** |
 
-method は subpackage に住む。web アンカー系（`did:webvh`、`did:web`）は、認証面または external-DID-source ingestion pattern が必要とした時点で `dplaax/` の隣に置かれる。各 method がどの面に許されるかは deployment policy であり（GLOSSARY の DID method tiers 参照）、型レベルの契約ではない。
+method は subpackage に住む。web アンカー系（`did:webvh`、`did:web`）は、認証面または external-DID-source ingestion pattern が必要とした時点で `dplaax/` の隣に置かれる。**非発行面**（認証、external-DID-source ingestion）にどの method を許すかは deployment policy であり（GLOSSARY の DID method tiers 参照）、型レベルの契約ではない。credential 発行面は profile によって `did:dplaax` に固定される。
 
 ## 規約
 

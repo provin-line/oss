@@ -13,9 +13,11 @@ shares, public-key extraction, and the method-dispatch primitive
 
 Methods live in subpackages. Web-anchored methods (`did:webvh`, `did:web`)
 land beside `dplaax/` when the authentication plane or the
-external-DID-source ingestion pattern needs them; the surfaces each method
-is admitted on are a deployment policy documented in the glossary (DID
-method tiers), not a type-level contract.
+external-DID-source ingestion pattern needs them. Which **non-issuance**
+surfaces (authentication, external-DID-source ingestion) admit which
+methods is a deployment policy documented in the glossary (DID method
+tiers), not a type-level contract; the credential-issuance plane is fixed
+to `did:dplaax` by the profile.
 
 ## Conventions
 
