@@ -1,7 +1,7 @@
 # vc — Verifiable Credentials（W3C Data Integrity）
 > 日本語版 — English: [README.md](README.md)
 
-`PipelinePassCredential`（パイプラインのすべてのプロセス境界で発行される VC）のクレデンシャルモデル・証明の作成と検証・暗号スイートレジストリ・トラストポリシー。
+`PipelinePassCredential`（パイプラインのすべてのプロセス境界で発行される VC）のクレデンシャルモデル・証明の作成と検証・暗号スイートレジストリ・confidence 評価（3 軸）。
 
 ## コア設計: ボディを真実の単一ソースとする
 

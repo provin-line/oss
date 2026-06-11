@@ -11,6 +11,7 @@ import (
 
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/did/dplaax"
 )
 
 // ErrNotFound is returned for misses. Handlers map it with errors.Is —
@@ -34,16 +35,16 @@ type DIDSummary struct {
 // DIDStore persists DID Documents and their delegations across the
 // owner → pipeline → process hierarchy.
 type DIDStore interface {
-	SaveOwner(d *did.DID, doc *did.DIDDocument) error
-	SavePipeline(d *did.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
-	SaveProcess(d *did.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
+	SaveOwner(d *dplaax.DID, doc *did.DIDDocument) error
+	SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
+	SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 
-	Resolve(d *did.DID) (*did.DIDDocument, error)
-	ResolveDelegation(d *did.DID) (*delegation.DelegationCredential, error)
+	Resolve(d *dplaax.DID) (*did.DIDDocument, error)
+	ResolveDelegation(d *dplaax.DID) (*delegation.DelegationCredential, error)
 
-	UpdateStatus(d *did.DID, status DIDStatus) error
-	GetStatus(d *did.DID) (DIDStatus, error)
+	UpdateStatus(d *dplaax.DID, status DIDStatus) error
+	GetStatus(d *dplaax.DID) (DIDStatus, error)
 
-	ListPipelines(owner *did.DID) ([]DIDSummary, error)
-	ListProcesses(pipeline *did.DID) ([]DIDSummary, error)
+	ListPipelines(owner *dplaax.DID) ([]DIDSummary, error)
+	ListProcesses(pipeline *dplaax.DID) ([]DIDSummary, error)
 }

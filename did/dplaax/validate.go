@@ -1,4 +1,4 @@
-package did
+package dplaax
 
 // ValidateDID performs semantic validation beyond syntax: account type
 // against the supported set (currently "org"), registry shape, and the

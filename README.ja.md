@@ -51,9 +51,9 @@ cmd/  network/  pipeline/          (コンシューマー)
 
 | パッケージ | 責務 |
 |---|---|
-| `did/` | `did:dplaax` メソッド: パース・DID Document モデル・バリデーション・公開鍵抽出 |
+| `did/` | DID ドメイン: W3C 文書モデル・method dispatch（`MethodOf`）。`did:dplaax` method（T1）は `did/dplaax` |
 | `canon/` | 署名スコープの正規化: JCS (RFC 8785)・URDNA2015・厳格な JSON デコード |
-| `vc/` | W3C VC Data Integrity: クレデンシャルモデル・ビルダー・検証器・暗号スイート・トラストポリシー |
+| `vc/` | W3C VC Data Integrity: クレデンシャルモデル・ビルダー・検証器・暗号スイート・confidence 軸 |
 | `crypto/` | 鍵生成・署名・検証インターフェース + Ed25519 実装 |
 | `delegation/` | Pipeline/Process DID 向けのオーナー署名付き委任クレデンシャル |
 | `resolver/` | DID Document 解決インターフェース + ローカル・grpc・マルチ実装 |

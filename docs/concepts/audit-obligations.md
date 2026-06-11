@@ -21,6 +21,11 @@ emission gaps evidence rather than glitches; the emission identity is
 delivery-form-independent (the same event yields the same record whether
 delivered inline or by reference).
 
+When a deployment admits web-anchored DID methods for L2 parties, the
+subscription record includes a registration-time snapshot of the resolved DID
+document — without it, a no-history method hands the signer a repudiation
+avenue at audit time (see the chainmanager contract).
+
 **Retention** for the audit horizon is a deployment obligation — the profile
 pins what must be recorded and its tamper-evidence, not how long a given
 deployment's regulators require it kept.

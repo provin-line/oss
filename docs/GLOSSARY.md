@@ -98,6 +98,16 @@ audited after the fact.
 re-signing its content as a dPLaaX FirstDrop. The external credential's own
 verification is attested at ingestion; it does not extend the chain backwards.
 
+**DID method tiers (T1/T2/T3)** — Documentation vocabulary for what a DID
+method's resolution can prove over time. T1 = `did:dplaax` (federation-governed
+registry, append-only lifecycle records, organization verification) — the only
+method admitted on the credential-issuance plane. T2 = `did:webvh` / `did:tdw`
+(self-hosted, tamper-evident key history) — retrospectively verifiable.
+T3 = `did:web` (current-state document, no history) — sufficient only
+point-in-time. The tiers inform deployment policy on the authentication plane
+and qualify the evidence strength of external-DID-source ingestion; they are
+a vocabulary, not a type-level contract.
+
 **enrichment** — A chain-preserving boundary that joins side-fetched external data
 onto the event that triggered it.
 

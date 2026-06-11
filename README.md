@@ -62,9 +62,9 @@ other — they interact exclusively over the wire (ConnectRPC / NATS).
 
 | Package | Responsibility |
 |---|---|
-| `did/` | `did:dplaax` method: parsing, DID Document model, validation, public-key extraction |
+| `did/` | DID domain: W3C document model, method dispatch (`MethodOf`); the `did:dplaax` method (T1) in `did/dplaax` |
 | `canon/` | Canonicalization of signing scopes: JCS (RFC 8785), URDNA2015, strict JSON decoding |
-| `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, trust policy |
+| `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, confidence axes |
 | `crypto/` | Key generation / signing / verification interfaces + Ed25519 implementation |
 | `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
 | `resolver/` | DID Document resolution interface + local / grpc / multi implementations |

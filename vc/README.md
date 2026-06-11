@@ -1,7 +1,7 @@
 # vc — Verifiable Credentials (W3C Data Integrity)
 
-The credential model, proof creation/verification, cryptosuite registry, and trust
-policy for `PipelinePassCredential` — the VC issued at every pipeline process boundary.
+The credential model, proof creation/verification, cryptosuite registry, and
+confidence evaluation (the three axes) for `PipelinePassCredential` — the VC issued at every pipeline process boundary.
 
 ## Core design: body-as-source-of-truth
 

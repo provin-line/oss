@@ -1,25 +1,18 @@
-# did — did:dplaax メソッド
+# did — DID ドメイン（method 非依存）
 > 日本語版 — English: [README.md](README.md)
 
-`did:dplaax` メソッドにおける DID のパース・DID Document モデル・意味論的バリデーション・公開鍵抽出。
+method 非依存の DID 層: 全 consumer が共有する W3C DID Document モデル、公開鍵抽出、method dispatch プリミティブ（`MethodOf`）。ここはいかなる method の識別子文法も知らない。
 
-## 構文
+## 構成
 
-```
-did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
-```
+| 場所 | 責務 |
+|---|---|
+| 本 package | `DIDDocument` / `VerificationMethod` / `ServiceEndpoint` モデル、`ExtractPublicKey`、`MethodOf`（W3C DID Core 構文の dispatch） |
+| `dplaax/` | `did:dplaax` method — profile の T1 native method であり、**credential 発行面に許される唯一の method** |
 
-- `registry` は**ドメイン名**（例: `poc.dplaax.io`）であり、解決 URL はここから導出される（`https://{registry}/did/...`）。環境（PoC・本番）はここで表現し、メソッド名には含めない — W3C DID Core §3.1 はメソッド名を `[a-z0-9]` に制限している。
-- 階層: Owner DID（リソースパスなし）→ Pipeline DID（`:pipeline:{id}`）→ Process DID（`:pipeline:{id}:process:{id}`）。
+method は subpackage に住む。web アンカー系（`did:webvh`、`did:web`）は、認証面または external-DID-source ingestion pattern が必要とした時点で `dplaax/` の隣に置かれる。各 method がどの面に許されるかは deployment policy であり（GLOSSARY の DID method tiers 参照）、型レベルの契約ではない。
 
 ## 規約
 
-- **パーサーは構文のみを担う。** 意味的な分類は `IsOwner`・`IsPipeline`・`IsProcess` メソッドが担う。新しいリソース型を追加する際は分類メソッドと既知パターンバリデータのケースを追加すればよく、パーサー自体は変更しない。
-- すべてのセグメントは安全セグメントルール（`[a-zA-Z0-9._-]+`、ドットのみのセグメントは不可）に対してバリデーションされる。これにより DID セグメントをストレージパスの構築に使用してもパストラバーサルのリスクがない。コンシューマはパスを組み立てる前に exported された安全性チェックを必ず呼び出すこと。
-- **DID Document からの公開鍵抽出はここで一元管理する。** コンシューマが独自にコピーを持つことはない（前バージョンのコードベースで知られていたドリフトの発生源）。
-
-## 実装予定の内容
-
-- `DID` 型 + `Parse` / 分類メソッド / バリデーション
-- `DIDDocument`・`VerificationMethod`・`ServiceEndpoint` モデル
-- `ExtractPublicKey(doc, keyID)` — 検証リレーションシップチェックを含む JWK（OKP/Ed25519）抽出
+- **DID Document からの公開鍵抽出はここで一元管理する。** consumer が独自コピーを持つことはない（前身コードベースで知られた drift 源）。
+- **dispatch は fail-closed。** `MethodOf` は `did:` + 小文字 `[a-z0-9]` の method 名 + 非空 method-specific id 以外をすべて拒否する。未検証の method 名で routing するのはバグである。

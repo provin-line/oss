@@ -44,6 +44,8 @@
 
 **boundary translation** — 外部エコシステムのクレデンシャルを、その内容を dPLaaX FirstDrop として再署名して取り込むこと。外部クレデンシャル自体の検証は取り込み時点で attest される。チェーンを過去方向に延長するものではない。
 
+**DID method tiers (T1/T2/T3)** — DID method の解決が*時間を超えて*何を証明できるかの文書語彙。T1 = `did:dplaax`（federation 統治 registry・append-only lifecycle 記録・組織検証）— credential 発行面に許される唯一の method。T2 = `did:webvh` / `did:tdw`（自己ホスト・改竄検出可能な鍵履歴）— 遡及検証可能。T3 = `did:web`（現在状態のみ・履歴なし）— point-in-time でのみ十分。tier は認証面の deployment policy の判断材料であり、external-DID-source ingestion の証拠強度を修飾する。語彙であって型レベルの契約ではない。
+
 **enrichment** — トリガーとなったイベントに side-fetch した外部データを join する chain-preserving な境界。
 
 **aggregation** — プールされた入力集合を 1 出力にたたみ込むこと。出力が FirstDrop になるのは実行が単一の適合イベントにトリガーされないため（トリガー規則が規範）。どの単一入力とも同一性関係を持たないことは根拠であって判定基準ではない。

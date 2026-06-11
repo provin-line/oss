@@ -50,6 +50,17 @@ forgery must not burn a legitimate signer's nonce):
 (`#auth-key`, authentication relationship + controller match) → 6. signer-to-actor
 authorization → 7. canonical-bytes rebuild → 8. Ed25519 verify → 9. nonce record.
 
+**L2 identities and the audit horizon.** The signed view is access control at
+the moment of the call, but the stored record doubles as audit evidence for the
+audit horizon. When a deployment admits web-anchored DID methods for L2 parties
+(e.g. did:web consumers), the CM records a snapshot of the resolved DID
+document (the key binding) alongside the signed view in its tlog — the
+signature stays re-verifiable against the snapshotted key forever, and the only
+residual claim is that the binding was authentically served at registration
+time. Methods with verifiable key history close that residue; audit-sensitive
+deployments restrict L2 parties to T1/T2 (see DID method tiers in the
+glossary).
+
 In-memory nonce store + restart epoch barrier is the accepted PoC posture (persistent
 nonce store is a documented follow-up). All wireauth failures are typed sentinel
 errors; handlers map them with `errors.Is`.

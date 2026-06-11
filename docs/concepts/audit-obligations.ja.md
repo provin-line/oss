@@ -13,6 +13,8 @@
 
 各記録は「その記録が*不利に働く側*が保持する」か append-only である — 「購読していない」「送っていない」「受け取っていない」のいずれの否認も、否認者が書き換えられない記録と突合できる。sequence number により emission の歯抜けは不具合ではなく証拠になる。emission の同一性は配送形態に依存しない（同じイベントは inline でも by-reference でも同じ記録になる）。
 
+deployment が L2 当事者に web アンカー系 DID method を許す場合、購読記録には「登録時に解決した DID document のスナップショット」を含める — これがないと、履歴なし method は署名者に監査時の否認経路を与える（chainmanager の契約参照）。
+
 **保持期間**（監査期間）は deployment 義務 — profile が釘付けするのは「何を記録し、どう改竄検出可能にするか」であり、規制当局がどれだけの保持を求めるかは deployment の関心事。
 
 ## protocol の床と本義務の境界
