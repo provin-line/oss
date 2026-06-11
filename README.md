@@ -28,6 +28,7 @@ gen/            generated code (committed — buf not required to build)
 network/        registry & coordination server (single binary)
 pipeline/       Pipeline Component peer catalog + shared mechanics
 cmd/provin/     operator CLI
+conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did
 scripts/        CI hygiene checks
 ```

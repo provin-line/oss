@@ -257,7 +257,14 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 		keyValidFrom: fields.ValidFrom.UTC().Format(time.RFC3339),
 		keySubject:   subject,
 	}
-	return &PipelinePassCredential{body: body}, nil
+	cred := &PipelinePassCredential{body: body}
+	// Issue-path enforcement: the issuer MUST emit a present, grammar-valid,
+	// grounded claim (credential.subject.transformation-claim,
+	// credential.claim.grammar, credential.claim.grounding).
+	if err := cred.ValidateTransformationClaim(); err != nil {
+		return nil, err
+	}
+	return cred, nil
 }
 
 // Issuer returns the issuer DID (a Process DID).

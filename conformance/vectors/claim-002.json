@@ -1,0 +1,20 @@
+{
+  "id": "claim-002",
+  "instantiates": [
+    "credential.claim.grammar",
+    "credential.claim.grounding"
+  ],
+  "description": "provin:convert — registry claim is grammar-valid, grounded by the provin profile context, and expands to its vocabulary IRI",
+  "input": {
+    "claim": "provin:convert",
+    "context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://poc.dplaax.io/vc/v1",
+      "https://poc.provin.io/vc/v1"
+    ]
+  },
+  "expect": {
+    "valid": true,
+    "iri": "https://provin.io/vocab#convert"
+  }
+}

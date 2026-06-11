@@ -1,0 +1,18 @@
+{
+  "id": "context-001",
+  "instantiates": [
+    "credential.claim.grounding",
+    "credential.field.context"
+  ],
+  "description": "provin profile context document — byte ledger (sha256) and the prefix grounding it carries",
+  "input": {
+    "context_uri": "https://poc.provin.io/vc/v1"
+  },
+  "expect": {
+    "sha256": "adf02875d5eaebd32a22dd47f7a038e8fd88df6c2485ceb9a4eb5b7ab294162c",
+    "grounds": {
+      "provin": "https://provin.io/vocab#"
+    },
+    "protected": true
+  }
+}

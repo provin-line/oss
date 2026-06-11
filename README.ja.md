@@ -22,6 +22,7 @@ gen/            生成コード（コミット済み — ビルドに buf は不
 network/        レジストリ & コーディネーションサーバー（単一バイナリ）
 pipeline/       Pipeline Component ピアカタログ + 共有メカニクス
 cmd/provin/     オペレーター CLI
+conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID
 scripts/        CI 衛生チェック
 ```
