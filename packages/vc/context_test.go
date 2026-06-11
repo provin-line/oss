@@ -12,8 +12,10 @@ import (
 // The sha256 pinned in the spec's contexts/README.md (dplaax.spec_draft).
 // The @context array is inside the signing scope, so a byte divergence from
 // the canonical document is a cross-implementation hash partition — this
-// test fails on any drift of the vendored copy.
-const contextDplaaxVCV1SHA256 = "617e644219e06d1ca2f8f5bffb942e0e390bba8303903e6e4f7f386ebadeaefd"
+// test fails on any local drift of the vendored copy. Upstream divergence
+// (the spec updating its canonical file and pin) is NOT detected here; the
+// sync is push-based per the spec's contexts/README.md.
+const contextDplaaxVCV1SHA256 = "4f79e1f18e257de0a822668b63b625831c37788e1e45441a01b48c53f4c5e6b2"
 
 func TestContextDocumentMatchesSpec(t *testing.T) {
 	doc := vc.ContextDplaaxVCV1Document()
@@ -64,9 +66,14 @@ func TestProvinContextGroundsClaimNamespace(t *testing.T) {
 }
 
 func TestContextDocumentDefensiveCopy(t *testing.T) {
-	a := vc.ContextDplaaxVCV1Document()
-	a[0] = '!'
-	if b := vc.ContextDplaaxVCV1Document(); b[0] == '!' {
-		t.Error("ContextDplaaxVCV1Document returned a live reference, want defensive copy")
+	for name, accessor := range map[string]func() []byte{
+		"ContextDplaaxVCV1Document": vc.ContextDplaaxVCV1Document,
+		"ContextProvinVCV1Document": vc.ContextProvinVCV1Document,
+	} {
+		a := accessor()
+		a[0] = '!'
+		if b := accessor(); b[0] == '!' {
+			t.Errorf("%s returned a live reference, want defensive copy", name)
+		}
 	}
 }

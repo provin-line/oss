@@ -9,7 +9,7 @@ dPLaaX spec — they are the source of truth and this file must not drift with t
 
 **dPLaaX** — The protocol this repository implements: every data transformation is
 attested as a signed credential, forming a verifiable provenance chain. The protocol
-owns the wire namespace (proto packages, DID method, JSON-LD contexts); it is
+owns the wire namespace (proto packages, DID method, the protocol JSON-LD context); it is
 implementation-independent.
 
 **provin** — The product: the reference *wire profile* of dPLaaX maintained in this

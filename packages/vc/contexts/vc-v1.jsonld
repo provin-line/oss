@@ -6,7 +6,10 @@
     "PipelinePassCredential": "dplaax:PipelinePassCredential",
     "pipelineId": "dplaax:pipelineId",
     "processId": "dplaax:processId",
-    "transformationClaim": "dplaax:transformationClaim",
+    "transformationClaim": {
+      "@id": "dplaax:transformationClaim",
+      "@type": "@vocab"
+    },
     "schema": "dplaax:schema",
     "contentHash": "dplaax:contentHash",
     "inputHash": "dplaax:inputHash",
