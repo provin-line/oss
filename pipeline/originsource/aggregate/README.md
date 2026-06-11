@@ -27,10 +27,15 @@ accountability on the cutter, and post-hoc audits can still attribute upstream
 responsibility:
 
 1. **Liability default**: the FirstDrop is signed by the aggregator's Process DID
-   and controller-chains to its Owner DID. An aggregator that records no source
-   manifest owns the output's responsibility entirely; recording sources is how
-   responsibility is shared, and a recorded manifest is tamper-evident
-   (outputHash + signature).
+   and controller-chains to its Owner DID, and responsibility for everything
+   preceding the cut defaults to that Owner — unconditionally (spec rule
+   audit.attribution.origin-default). Recording sources never moves this
+   default: a commitment proves what the cutter claims to have consumed, never
+   that the claim is complete, so it cannot shed liability (an under-declared
+   source set would otherwise launder it). What a recorded manifest
+   (tamper-evident via outputHash + signature) buys is the means to continue an
+   investigation upstream, where source issuers' own credentials make their
+   transformations attributable in their own right.
 2. **Fabrication is detectable**: manifest entries resolve to source VCs signed by
    their issuers; a fabricated source fails resolution or signature checks.
 3. **Omission is detectable by reconciliation against adversarial records** the

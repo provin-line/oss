@@ -15,7 +15,7 @@
 
 チェーンの切断は責任の空白を作らない — 切断者に責任を集中させ、事後監査は上流への責任帰属も可能なまま保つ:
 
-1. **責任のデフォルト規則**: FirstDrop は集約器の Process DID で署名され、controller 連鎖で Owner DID に到達する。source manifest を記録しない集約器は出力の責任を単独で総取りする。責任を分担する手段が manifest の記録であり、記録された manifest は改竄不能（outputHash + 署名）。
+1. **責任のデフォルト規則**: FirstDrop は集約器の Process DID で署名され、controller 連鎖で Owner DID に到達し、**切断より前の全来歴の責任はその Owner にデフォルトで帰属する — 無条件に**（spec rule audit.attribution.origin-default）。source の記録はこのデフォルトを動かさない: commitment が証明するのは「消費したと申告した集合」であって申告の完全性ではないため、責任を逃がす根拠にはなり得ない（過少申告が liability laundering になる）。記録された manifest（outputHash + 署名で改竄検出可能）が買うのは調査を上流へ継続する手段であり、source 発行者自身の credential がそれぞれの変換を独立に帰責可能にする。
 2. **捏造は検出可能**: manifest の各エントリは発行者署名済みの source VC に解決される。捏造 source は解決失敗または署名検証失敗で露見する。
 3. **省略は「敵対側の記録」との突合で検出可能**: 集約器が編集も削除もできない記録 — *publisher 側* ChainManager が保持する集約器自身の L2 署名付き RegisterSubscription 記録（否認不能）、publisher の append-only emission stream（sequence number 付き・署名済み）、集約器の ingress VC ストア義務。「B を購読し、B のイベントを受領し、manifest には A だけ」は集約器に固定される監査可能な不整合である。
 
