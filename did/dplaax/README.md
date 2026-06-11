@@ -18,6 +18,28 @@ did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
 - Hierarchy: Owner DID (no resource path) → Pipeline DID (`:pipeline:{id}`) →
   Process DID (`:pipeline:{id}:process:{id}`).
 
+## Registration & identity binding
+
+Owner DIDs are issued by the federation registry named in the identifier
+(`poc.dplaax.io` in the PoC). The verification bar for registration —
+organization verification, the T1 property — is federation governance, not
+protocol: presenting control of an outward identity such as `did:web` is a
+natural input, but domain control alone is T3-grade evidence and does not
+substitute for it.
+
+When the applicant presents an outward DID at registration, the registry
+records the binding and a snapshot of the resolved outward DID document in
+its append-only lifecycle log. The Owner identity binding (see the glossary)
+is then **registry-witnessed from birth** rather than self-asserted, and that
+snapshot is the baseline auditors compare against to detect later domain
+takeover. Rotation and loss of the outward domain are lifecycle events
+recorded in the same log; they never touch attribution.
+
+The registry domain itself is the discovery mechanism, not the trust anchor:
+verifiers ultimately rely on the registry's append-only log (signed
+checkpoints), and chain verification never depends on a registry surviving —
+chain links are content commitments.
+
 ## Conventions
 
 - **Parser is syntax-only.** Semantic classification lives in methods

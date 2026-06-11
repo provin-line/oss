@@ -12,6 +12,8 @@ method 非依存の DID 層: 全 consumer が共有する W3C DID Document モ�
 
 method は subpackage に住む。web アンカー系（`did:webvh`、`did:web`）は、認証面または external-DID-source ingestion pattern が必要とした時点で `dplaax/` の隣に置かれる。**非発行面**（認証、external-DID-source ingestion）にどの method を許すかは deployment policy であり（GLOSSARY の DID method tiers 参照）、型レベルの契約ではない。credential 発行面は profile によって `did:dplaax` に固定される。
 
+method 横断の identity — did:dplaax の Owner と `did:web` 等の対外 identity が同一当事者であること — は **Owner identity binding** パターンで扱う（双方向 `alsoKnownAs`、Owner 登録時に registry-witnessed。GLOSSARY 参照）。束縛は attribution を動かさず、equivalence registry は存在しない。本 package に equivalence を解決するものは無い。
+
 ## 規約
 
 - **DID Document からの公開鍵抽出はここで一元管理する。** consumer が独自コピーを持つことはない（前身コードベースで知られた drift 源）。

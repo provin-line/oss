@@ -72,6 +72,8 @@
 
 **Owner DID / Pipeline DID / Process DID** — アイデンティティ階層: Owner（責任を負う組織）が Pipeline（デプロイされたフロー）を管理し、Pipeline が Process（署名境界）を管理する。クレデンシャルは Process レベルで署名され、責任は階層を上向きに解決される。
 
+**Owner identity binding (`alsoKnownAs`)** — did:dplaax の Owner と組織の対外 identity（例: `did:web`）が同一当事者であることを述べるパターン。検証可能なのは**双方向**の場合のみ — 双方の DID 文書が互いを名指しする状態は、両方の鍵集合の支配者にしか作れない。それでも証明されるのは鍵の共同支配までであり、法人としての同一性ではない — Owner と法人の権威ある束縛は federation registry の組織検証（T1）が担う。束縛は **point-in-time**: 解決した瞬間の共同支配を主張するに過ぎない。よって依拠者は依拠した内容を snapshot し（L2 登録と同様）、監査人は現在の web 側文書を registry-witnessed snapshot と照合して domain 乗っ取りを検出し、監査感応の deployment は鍵履歴で連続性を検証できる T2 method を選好する。束縛は **attribution を一切動かさない**: 責任は alias の有無に関わらず did:dplaax Owner に対して計算される（`audit.attribution.*`）ため、domain の消失・乗っ取りの影響は alias・認証層に留まる。equivalence registry は存在しない。rotation・消失は dplaax 側に append-only で記録される lifecycle event である。
+
 **DelegationCredential** — スコープ付きの権限がアイデンティティ階層を下って委譲されたことを assert する owner 署名のクレデンシャル。検証者は署名の背後の controller chain を再構成できる。
 
 **Data Integrity proof** — クレデンシャルの署名に使う W3C の proof 形式。proof は署名スコープの外に付加され、使用した cryptosuite と verification method を名指しする。
