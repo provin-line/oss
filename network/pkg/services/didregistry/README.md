@@ -15,6 +15,11 @@ Issues and manages `did:dplaax` Owner, Pipeline, and Process DIDs.
 - Key rotation grace semantics: verify-grace keeps the old public key resolvable for
   a window; there is no sign-grace by design (the KMS model stops old-key signing
   immediately).
+- **Owner lifecycle is audit evidence.** Owner registration and outward-identity
+  binding events (addition, rotation, loss — see Owner identity binding in the
+  glossary) carry a snapshot of the resolved outward DID document and belong in an
+  append-only lifecycle log. The yamlstore is the staged PoC substrate; tlog is the
+  target.
 
 ## Storage
 

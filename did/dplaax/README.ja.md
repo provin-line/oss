@@ -16,7 +16,9 @@ did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
 
 Owner DID は識別子に名指しされた federation registry（PoC では `poc.dplaax.io`）が発行する。登録の検証水準 — T1 特性である組織検証 — は federation governance の事項であって protocol ではない: `did:web` 等の対外 identity の支配証明は自然な入力だが、domain 支配単体は T3 級の証拠であり組織検証の代替にはならない。
 
-申請者が登録時に対外 DID を提出した場合、registry は束縛と、その時点で解決した対外 DID 文書の snapshot を append-only lifecycle log に記録する。これにより Owner identity binding（GLOSSARY 参照）は自己主張ではなく**誕生時点から registry-witnessed** となり、この snapshot が後の domain 乗っ取りを検出する監査側の照合基準になる。対外 domain の rotation・消失は同じ log に記録される lifecycle event であり、attribution には一切触れない。
+申請者が登録時に対外 DID を提出した場合、registry は束縛と、その時点で解決した対外 DID 文書の snapshot を append-only lifecycle log に記録する。これにより Owner identity binding（GLOSSARY 参照）は自己主張ではなく**誕生時点から registry-witnessed** となり、この snapshot が後の domain 乗っ取りを検出する監査側の照合基準になる。束縛の追加・rotation・対外 domain の消失は同じ log に記録される lifecycle event であり — 追加と rotation は新たに解決した対外文書を snapshot して照合基準を引き直す — いずれも attribution には一切触れない。
+
+lifecycle log への記録は registry の義務である。PoC の `didregistry` はこれを段階実装する（現在はレコード単位の yamlstore、follow-up として tlog substrate — `network/pkg/services/didregistry` 参照）。
 
 registry domain 自体は discovery 機構であって trust anchor ではない: 検証者が最終的に依拠するのは registry の append-only log（signed checkpoint）であり、chain の検証はそもそも registry の生存に依存しない — chain link は content commitment である。
 

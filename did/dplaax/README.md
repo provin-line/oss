@@ -32,8 +32,14 @@ records the binding and a snapshot of the resolved outward DID document in
 its append-only lifecycle log. The Owner identity binding (see the glossary)
 is then **registry-witnessed from birth** rather than self-asserted, and that
 snapshot is the baseline auditors compare against to detect later domain
-takeover. Rotation and loss of the outward domain are lifecycle events
-recorded in the same log; they never touch attribution.
+takeover. Binding addition, rotation, and loss of the outward domain are
+lifecycle events recorded in the same log — addition and rotation snapshot
+the newly resolved outward document, re-baselining the comparison; none of
+them touch attribution.
+
+Lifecycle-log recording is the registry's obligation; the PoC `didregistry`
+stages it (per-record yamlstore today, the tlog substrate as the follow-up —
+see `network/pkg/services/didregistry`).
 
 The registry domain itself is the discovery mechanism, not the trust anchor:
 verifiers ultimately rely on the registry's append-only log (signed

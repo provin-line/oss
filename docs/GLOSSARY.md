@@ -156,20 +156,24 @@ accountability is resolved upward through the hierarchy.
 
 **Owner identity binding (`alsoKnownAs`)** — The pattern for stating that a
 did:dplaax Owner and an organization's outward identity (e.g. `did:web`) are the
-same party. Verifiable only **bidirectionally** — each DID document names the
-other, a state only the controller of both key sets can produce — and even then
-it proves key co-control, not legal identity; the authoritative
-Owner-to-legal-entity binding is the federation registry's organization
-verification (T1). The binding is **point-in-time**: it asserts co-control at
-the moment of resolution. Relying parties therefore snapshot what they relied
-on (as with L2 registration), auditors compare the current web-side document
-against the registry-witnessed snapshot to detect domain takeover, and
-audit-sensitive deployments prefer T2 methods whose verifiable key history
-makes continuity checkable. The binding **never moves attribution**:
-responsibility is computed against the did:dplaax Owner (`audit.attribution.*`)
-regardless of any alias, so a lost or hijacked domain is bounded to the alias
-and authentication layer. There is no equivalence registry; rotation and loss
-are lifecycle events recorded append-only on the dplaax side.
+same party. Meaningful only **bidirectionally** — each DID document names the
+other, a state only a party controlling both documents could have
+*established* — and it binds document control, not legal identity; the
+authoritative Owner-to-legal-entity binding is the federation registry's
+organization verification (T1). A later resolution proves only that the Owner
+still asserts the alias and that the *current* domain controller claims the
+back-link — a hijacked domain keeps a bidirectional binding looking fresh,
+which is why the audit baseline is the registry-witnessed snapshot (recorded
+when the binding is presented to the registry, at registration or as a later
+lifecycle event), not re-resolution. A binding never presented to the registry
+stays self-asserted and has no witnessed baseline. Relying parties snapshot
+what they relied on (as with L2 registration); audit-sensitive deployments
+prefer T2 methods whose verifiable key history makes continuity checkable. The
+binding **never moves attribution**: responsibility is computed against the
+did:dplaax Owner (`audit.attribution.*`) regardless of any alias, so a lost or
+hijacked domain is bounded to the alias and authentication layer. There is no
+equivalence registry; binding addition, rotation, and loss are lifecycle
+events recorded in the federation registry's append-only lifecycle log.
 
 **DelegationCredential** — An owner-signed credential asserting that scoped authority
 was delegated down the identity hierarchy, letting a verifier reconstruct the

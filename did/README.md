@@ -21,9 +21,9 @@ to `did:dplaax` by the profile.
 
 Cross-method identity — a did:dplaax Owner and an outward identity such as
 `did:web` being the same party — is the **Owner identity binding** pattern
-(bidirectional `alsoKnownAs`, registry-witnessed at Owner registration; see
-the glossary). It never moves attribution and there is no equivalence
-registry; nothing in this package resolves equivalence.
+(bidirectional `alsoKnownAs`, registry-witnessed when presented at Owner
+registration; see the glossary). It never moves attribution and there is no
+equivalence registry; nothing in this package resolves equivalence.
 
 ## Conventions
 
