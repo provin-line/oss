@@ -15,8 +15,12 @@ import (
 )
 
 // JSON-LD context IRIs embedded in every credential issued by New/Builder.
-// The poc.* tier explicitly permits pre-GA byte-level context evolution;
-// post-GA immutability is a spec-layer concern.
+// ContextDplaaxVCV1 is the dplaax protocol context (canonical document
+// owned by the spec, vendored byte-exact here — see
+// ContextDplaaxVCV1Document); a profile may append its own extension
+// context for profile-owned custom subject fields. The poc.* tier
+// explicitly permits pre-GA byte-level context evolution; at GA the URI
+// promotes to https://dplaax.io/vc/v1 and freezes.
 const (
 	ContextCredentialsV2 = "https://www.w3.org/ns/credentials/v2"
 	ContextDplaaxVCV1    = "https://poc.dplaax.io/vc/v1"
