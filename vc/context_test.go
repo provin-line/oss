@@ -57,8 +57,8 @@ func TestProvinContextGroundsClaimNamespace(t *testing.T) {
 	}
 	// The profile context's job is grounding: every namespace prefix the
 	// provin claim registry emits must be mapped to a vocabulary URL.
-	if got, _ := parsed.Context["provin"].(string); got != "https://provin.io/vocab#" {
-		t.Errorf("provin prefix grounding = %q, want https://provin.io/vocab#", got)
+	if got, _ := parsed.Context["provin"].(string); got != "https://provin-line.io/vocab#" {
+		t.Errorf("provin prefix grounding = %q, want https://provin-line.io/vocab#", got)
 	}
 	if protected, _ := parsed.Context["@protected"].(bool); !protected {
 		t.Error("provin context must set @protected: true")

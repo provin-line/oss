@@ -26,9 +26,9 @@ const (
 	ContextDplaaxVCV1    = "https://poc.dplaax.io/vc/v1"
 	// ContextProvinVCV1 is the provin profile context: grounds the "provin"
 	// claim namespace prefix (credential.claim.grounding) and hosts
-	// profile-owned custom subject field terms. poc tier — the provin.io
+	// profile-owned custom subject field terms. poc tier — the provin-line.io
 	// domain acquisition must be confirmed before external deployment.
-	ContextProvinVCV1 = "https://poc.provin.io/vc/v1"
+	ContextProvinVCV1 = "https://poc.provin-line.io/vc/v1"
 )
 
 // PipelinePassCredential is the per-event provenance credential.

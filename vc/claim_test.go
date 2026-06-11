@@ -119,7 +119,7 @@ func TestValidateTransformationClaimOnWireDocuments(t *testing.T) {
 		}`
 	}
 	known := `"https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.io/vc/v1"`
-	withProvin := known + `, "https://poc.provin.io/vc/v1"`
+	withProvin := known + `, "https://poc.provin-line.io/vc/v1"`
 	withForeign := withProvin + `, "https://acme.example/vc/v1"`
 
 	cases := []struct {
