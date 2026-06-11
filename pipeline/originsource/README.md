@@ -17,7 +17,7 @@ unchanged.
 
 What a FirstDrop MAY additionally carry is the **source commitment**
 (`derived_from` / `source_root` / `source_root_canonical` — see
-`packages/vc.SourceCommitment`): a wire-profile audit attribute, declared via the
+`vc.SourceCommitment`): a wire-profile audit attribute, declared via the
 dplaax JSON-LD context, binding the issuer to the claimed source set at issuance
 time. The commitment is not FirstDrop-specific — it is orthogonal to
 `previousCredential`, and a chain-preserving boundary commits to its full

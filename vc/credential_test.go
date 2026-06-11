@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/vc"
 )
 
 func subjectFields() vc.CredentialSubjectFields {

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/vc"
 )
 
 // The sha256 pinned in the spec's contexts/README.md (dplaax.spec_draft).

@@ -1,4 +1,4 @@
-# packages/hoconconfig — Three-Layer HOCON Configuration
+# hoconconfig — Three-Layer HOCON Configuration
 
 Layered configuration loader used by every binary in this repository.
 

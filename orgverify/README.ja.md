@@ -1,4 +1,4 @@
-# packages/orgverify — DNS ベース組織検証
+# orgverify — DNS ベース組織検証
 > 日本語版 — English: [README.md](README.md)
 
 `did:dplaax` の Owner DID が、その `accountId`（FQDN）として使用されているドメインのオーナーによって承認されているかどうかを、DNS TXT レコードを通じて判定する。

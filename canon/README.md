@@ -1,4 +1,4 @@
-# packages/canon — Signing-Scope Canonicalization
+# canon — Signing-Scope Canonicalization
 
 Deterministic byte representations of JSON signing scopes, plus the strict decoder
 that protects them. One responsibility, multiple cryptosuite-specific algorithms.

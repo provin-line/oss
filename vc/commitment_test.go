@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/vc"
 )
 
 func sourceCred(t *testing.T, issuer, outputHash string) *vc.PipelinePassCredential {

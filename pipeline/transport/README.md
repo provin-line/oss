@@ -17,6 +17,6 @@ processor.
 - Cross-organization wiring (imports/exports between accounts) is **not** this
   package's job — that belongs to the network chainmanager's `InfraOperator`.
 - **Emission logging**: the publisher side records each published envelope (hash +
-  sequence number) to a `packages/tlog` log — the "what was delivered" record the
+  sequence number) to a `tlog` log — the "what was delivered" record the
   audit reconciliation model depends on. Retention for the audit horizon is a
   deployment obligation.

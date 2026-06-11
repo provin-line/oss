@@ -22,4 +22,4 @@ dplaax.pipeline.v1  transport messages only (PipelinePassCredential wire form, c
   wire-signing).
 - Wire messages for VC bodies must round-trip through canonicalization without
   precision loss; conversions are guarded by canonical-hash comparison (see
-  `packages/canon`).
+  `canon`).

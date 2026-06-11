@@ -1,4 +1,4 @@
-# packages/vc — Verifiable Credentials (W3C Data Integrity)
+# vc — Verifiable Credentials (W3C Data Integrity)
 
 The credential model, proof creation/verification, cryptosuite registry, and trust
 policy for `PipelinePassCredential` — the VC issued at every pipeline process boundary.

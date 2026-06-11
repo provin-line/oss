@@ -1,4 +1,4 @@
-# packages/tlog — Per-Organization Transparency Log
+# tlog — Per-Organization Transparency Log
 
 Append-only, tamper-evident, independently verifiable record sequences — the
 persistence substrate of the audit model. No network-global log exists
@@ -40,5 +40,5 @@ replay when absent.
 
 - Records are never mutated or deleted; retention for the audit horizon is a
   deployment obligation.
-- Checkpoint signing uses the organization's keys via `packages/crypto`
+- Checkpoint signing uses the organization's keys via `crypto`
   (injected); the log never holds key material.

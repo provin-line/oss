@@ -3,8 +3,8 @@ package vc
 import (
 	"context"
 
-	"github.com/provin-line/oss/packages/crypto"
-	"github.com/provin-line/oss/packages/resolver"
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/resolver"
 )
 
 // Verifier performs credential verification: wire-form checks, issuer DID

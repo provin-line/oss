@@ -1,4 +1,4 @@
-# packages/did — did:dplaax メソッド
+# did — did:dplaax メソッド
 > 日本語版 — English: [README.md](README.md)
 
 `did:dplaax` メソッドにおける DID のパース・DID Document モデル・意味論的バリデーション・公開鍵抽出。

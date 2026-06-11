@@ -21,7 +21,7 @@ type LifecycleEntry struct {
 // the same registry snapshot produces the same accept/reject decision.
 //
 // The published form is an append-only artifact per wire profile, backed by
-// packages/tlog; this package owns only the lookup contract.
+// tlog; this package owns only the lookup contract.
 type LifecycleRegistry interface {
 	// PhaseAt returns the phase in effect for id at t. PhaseUnknown
 	// (fail-closed) when no entry covers t.

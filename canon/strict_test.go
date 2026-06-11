@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/provin-line/oss/packages/canon"
+	"github.com/provin-line/oss/canon"
 )
 
 func TestStrictDecoderDuplicateKey(t *testing.T) {

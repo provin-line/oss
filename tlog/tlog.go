@@ -10,7 +10,7 @@
 //   - publisher emission logs (envelope hash + sequence number)
 //   - ingress receipt logs (verified ingress credentials)
 //   - persistent VC-store registration logs
-//   - the cryptosuite lifecycle registry (packages/vc.LifecycleRegistry)
+//   - the cryptosuite lifecycle registry (vc.LifecycleRegistry)
 //
 // The contract is designed for production from the start; implementations
 // scale up without contract changes: a PoC implementation is a durable

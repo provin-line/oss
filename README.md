@@ -22,10 +22,9 @@ survive the PoC → production transition.
 
 ## Layout
 
-```
+```text
 api/protobuf/   protocol definitions (buf; namespace dplaax.*.v1)
 gen/            generated code (committed — buf not required to build)
-packages/       shared libraries (pure domain; depends on nothing else in this repo)
 network/        registry & coordination server (single binary)
 pipeline/       Pipeline Component peer catalog + shared mechanics
 cmd/provin/     operator CLI
@@ -33,20 +32,56 @@ docs/           architecture / concepts / protocol / did
 scripts/        CI hygiene checks
 ```
 
+The remaining top-level directories are the **library packages** — pure domain
+libraries consumed by `network/`, `pipeline/`, and `cmd/` (see
+[Library packages](#library-packages)).
+
 ## Dependency direction (strict, one-way)
 
-```
+```text
 cmd/  network/  pipeline/          (consumers)
         │
         ▼
-    packages/                      (pure domain; no proto, no internal deps)
+  library packages                 (pure domain; no proto, no internal deps)
         ▲
         │
       gen/  ◄── api/protobuf       (wire types; consumed by network/pipeline/cmd only)
 ```
 
-`packages/` never imports `gen/`. `network/` and `pipeline/` never import each other —
-they interact exclusively over the wire (ConnectRPC / NATS).
+Library packages never import `gen/`. `network/` and `pipeline/` never import each
+other — they interact exclusively over the wire (ConnectRPC / NATS).
+
+## Library packages
+
+- **No internal dependencies**: no library package imports `gen/`, `network/`,
+  `pipeline/`, or `cmd/`. Proto-generated types never appear here.
+- **One-way consumption**: consumers depend on library packages; never the reverse.
+- Interfaces here are the stable contracts of the system. Renaming or reshaping an
+  exported identifier in this layer is a breaking change for every consumer.
+
+| Package | Responsibility |
+|---|---|
+| `did/` | `did:dplaax` method: parsing, DID Document model, validation, public-key extraction |
+| `canon/` | Canonicalization of signing scopes: JCS (RFC 8785), URDNA2015, strict JSON decoding |
+| `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, trust policy |
+| `crypto/` | Key generation / signing / verification interfaces + Ed25519 implementation |
+| `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
+| `resolver/` | DID Document resolution interface + local / grpc / multi implementations |
+| `keystore/` | Private-key storage contract (KMS-model boundary) |
+| `tlog/` | Per-organization transparency log: append-only, tamper-evident record sequences (audit substrate) |
+| `hoconconfig/` | Three-layer HOCON configuration loader |
+| `orgverify/` | DNS-based organization identity verification |
+
+Internal dependency DAG (within the library layer):
+
+```text
+vc ──► did, canon, crypto
+delegation ──► vc, did, crypto
+resolver ──► did
+orgverify ──► did, resolver
+keystore ──► crypto
+tlog ──► crypto
+```
 
 ## Pipeline Component model
 

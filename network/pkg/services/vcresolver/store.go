@@ -18,7 +18,7 @@ package vcresolver
 import (
 	"errors"
 
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/vc"
 )
 
 // ErrNotFound is returned for misses. Handlers map it with errors.Is.

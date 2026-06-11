@@ -1,4 +1,4 @@
-# packages/keystore — Private-Key Storage Contract
+# keystore — Private-Key Storage Contract
 
 The `KeyStore` interface: persistence of registry-held private keys
 (save key pair / get private key / delete keys, addressed by DID + key ID).

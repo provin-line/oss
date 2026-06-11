@@ -4,7 +4,7 @@
 // strictest in the repository.
 //
 // The contract is transport-agnostic and VC-implementation-agnostic: it
-// depends on packages/vc types only — never on a broker client, never on
+// depends on vc types only — never on a broker client, never on
 // generated proto code.
 package contract
 
@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/vc"
 )
 
 // ChainBehavior declares a component's VC chain behaviour on its output

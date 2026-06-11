@@ -27,7 +27,7 @@ obligations are the strictest in the repository.
 ## Conventions
 
 - Interfaces here are transport-agnostic and VC-implementation-agnostic: they depend
-  on `packages/vc` types and `pipeline/transport` abstractions only — never on NATS,
+  on `vc` types and `pipeline/transport` abstractions only — never on NATS,
   never on `gen/`.
 - A component that cannot satisfy a contract obligation must fail at startup, not
   degrade silently at runtime.

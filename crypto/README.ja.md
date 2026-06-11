@@ -1,4 +1,4 @@
-# packages/crypto — 暗号プリミティブ
+# crypto — 暗号プリミティブ
 > 日本語版 — English: [README.md](README.md)
 
 鍵生成・署名・検証のための最小限のインターフェースと Ed25519 実装。

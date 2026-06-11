@@ -1,7 +1,7 @@
 // Package delegation implements the owner-signed DelegationCredential:
 // an Owner DID's assertion that a Pipeline or Process DID acts under its
 // authority, with explicit scopes. Proof mechanics are reused from
-// packages/vc; this package owns only the delegation-specific shape and
+// vc; this package owns only the delegation-specific shape and
 // rules.
 package delegation
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/provin-line/oss/packages/crypto"
-	"github.com/provin-line/oss/packages/resolver"
-	"github.com/provin-line/oss/packages/vc"
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/vc"
 )
 
 // DelegationSubject asserts the delegation.

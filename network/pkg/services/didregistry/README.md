@@ -7,9 +7,9 @@ Issues and manages `did:dplaax` Owner, Pipeline, and Process DIDs.
 - **Every write proves authority cryptographically.** Owner registration verifies a
   self-signed Data Integrity proof (solves bootstrap — no prior account needed);
   pipeline/process issuance additionally verifies an owner-signed delegation
-  credential (`packages/delegation`).
+  credential (`delegation`).
 - On pipeline/process issuance the service generates the `#auth-key` /
-  `#signing-key` Ed25519 pair and persists it via `packages/keystore` — callers never
+  `#signing-key` Ed25519 pair and persists it via `keystore` — callers never
   see private keys.
 - Issued DID Documents embed service endpoints (`#vc-resolver`, etc.) from config.
 - Key rotation grace semantics: verify-grace keeps the old public key resolvable for
@@ -20,4 +20,4 @@ Issues and manages `did:dplaax` Owner, Pipeline, and Process DIDs.
 
 `store/` defines the DID document store interface; `store/yamlstore/` maps the DID
 hierarchy to a directory tree (`{accountType}/{accountId}/pipelines/{id}/processes/{id}`)
-with per-record YAML files. Private keys go through `packages/keystore`, not this store.
+with per-record YAML files. Private keys go through `keystore`, not this store.

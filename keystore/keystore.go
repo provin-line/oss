@@ -7,7 +7,7 @@
 // contract.
 package keystore
 
-import "github.com/provin-line/oss/packages/crypto"
+import "github.com/provin-line/oss/crypto"
 
 // KeyID is the logical key identifier within a DID Document.
 type KeyID string

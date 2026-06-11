@@ -1,6 +1,6 @@
 package vc
 
-import "github.com/provin-line/oss/packages/crypto"
+import "github.com/provin-line/oss/crypto"
 
 // CreateProof produces a Data Integrity proof over document:
 //

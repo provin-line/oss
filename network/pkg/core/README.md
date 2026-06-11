@@ -2,7 +2,7 @@
 
 Shared foundation for all network services.
 
-- **Config**: merges the three HOCON layers (see `packages/hoconconfig`) into the
+- **Config**: merges the three HOCON layers (see `hoconconfig`) into the
   typed runtime config tree. Each service package contributes its `reference.conf`
   at `init()`. Operator overrides are validated at startup — invalid values fail the
   boot, never silently disable a feature.

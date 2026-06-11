@@ -1,4 +1,4 @@
-# packages/hoconconfig — 3 層 HOCON 設定
+# hoconconfig — 3 層 HOCON 設定
 > 日本語版 — English: [README.md](README.md)
 
 このリポジトリ内のすべてのバイナリで使用される層化設定ローダー。

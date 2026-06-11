@@ -9,4 +9,4 @@ Pipeline コンポーネント間のメッセージング境界：`Publisher` / 
 - サブジェクト命名、クレデンシャル、接続ライフサイクル（シャットダウン時のドレイン、サブスクライブ後のフラッシュ）はここで管理 — コンポーネントはブローカークライアントを直接インポートしない。
 - ランタイムループは意図的に最小限：メッセージごとの同期処理、「passed」でパブリッシュ、「filtered」/「error」でログ付きドロップ。リトライ / デッドレターポリシーはコンポーネント内部ではなく、このセームでプラグインされる。
 - 組織間の配線（アカウント間のインポート / エクスポート）はこのパッケージの責務**ではない** — それはネットワーク chainmanager の `InfraOperator` に属する。
-- **Emission ログ**: publisher 側は publish した各 envelope（hash + sequence number）を `packages/tlog` のログに記録する — 監査突合モデルが依存する「配送実績」の記録。監査期間にわたる保持は deployment 義務。
+- **Emission ログ**: publisher 側は publish した各 envelope（hash + sequence number）を `tlog` のログに記録する — 監査突合モデルが依存する「配送実績」の記録。監査期間にわたる保持は deployment 義務。

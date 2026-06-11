@@ -1,4 +1,4 @@
-# packages/did — did:dplaax Method
+# did — did:dplaax Method
 
 DID parsing, the DID Document model, semantic validation, and public-key extraction
 for the `did:dplaax` method.

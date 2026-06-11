@@ -21,5 +21,5 @@ defaults; non-positive overrides fail startup).
 
 **Audit obligation**: the post-hoc audit model requires VC bodies to remain
 resolvable for the audit horizon. The persistent store lands on the
-`packages/tlog`-backed substrate; until then, in-memory operation is acceptable for
+`tlog`-backed substrate; until then, in-memory operation is acceptable for
 development only, never for deployments that claim auditability.

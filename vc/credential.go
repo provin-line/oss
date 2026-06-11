@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/provin-line/oss/packages/canon"
-	"github.com/provin-line/oss/packages/canon/jcs"
+	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/canon/jcs"
 )
 
 // JSON-LD context IRIs embedded in every credential issued by New/Builder.

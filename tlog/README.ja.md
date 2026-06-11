@@ -1,4 +1,4 @@
-# packages/tlog — 組織ごとの Transparency Log
+# tlog — 組織ごとの Transparency Log
 > 日本語版 — English: [README.md](README.md)
 
 Append-only・改竄検出可能・独立検証可能なレコード列 — 監査モデルの永続化基盤。ネットワーク全体のログは存在しない（per-peer trust root）: 各組織が自身の DID の下で自身のログをホストする。
@@ -28,4 +28,4 @@ Append-only・改竄検出可能・独立検証可能なレコード列 — 監�
 ## 規約
 
 - レコードの変更・削除は決して行わない。監査期間にわたる保持は deployment 義務。
-- checkpoint 署名は `packages/crypto` 経由で組織の鍵を使う（注入）。ログは鍵素材を保持しない。
+- checkpoint 署名は `crypto` 経由で組織の鍵を使う（注入）。ログは鍵素材を保持しない。

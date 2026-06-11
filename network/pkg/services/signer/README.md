@@ -1,6 +1,6 @@
 # signer — KMS-Model Signing Service
 
-Ed25519 signing backed by `packages/keystore`. Private keys never leave the registry
+Ed25519 signing backed by `keystore`. Private keys never leave the registry
 process; pipeline components and peers hold DIDs, not keys.
 
 Two signing modes, two consumers:

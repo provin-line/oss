@@ -1,4 +1,4 @@
-# packages/keystore — 秘密鍵ストレージコントラクト
+# keystore — 秘密鍵ストレージコントラクト
 > 日本語版 — English: [README.md](README.md)
 
 `KeyStore` インターフェース: レジストリが保持する秘密鍵の永続化（鍵ペアの保存・秘密鍵の取得・鍵の削除。DID + キー ID でアドレス指定）。

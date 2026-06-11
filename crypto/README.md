@@ -1,4 +1,4 @@
-# packages/crypto — Cryptographic Primitives
+# crypto — Cryptographic Primitives
 
 Minimal interfaces for key generation, signing, and verification, plus the Ed25519
 implementation.

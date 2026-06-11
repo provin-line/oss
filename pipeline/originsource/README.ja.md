@@ -7,7 +7,7 @@ Origin Source コンポーネント型。その**唯一の定義的性質**は�
 
 チェーンは厳密に線形である: Origin Source の FirstDrop は**上流リンクを一切持たない**。集約は上流データとの同一性を断ち切る。チェーンが証明するのは「集約地点以降にこのデータへ何が起きたか」である。入力マニフェストが必要な場合、それは集約器のビジネスロジックとしてデータペイロードに置く。Paper 01 §4.8 の排除は**チェーントポロジー**（DAG 化・親リンクの禁止）と**ベースクレデンシャルスキーマ**（上流参照フィールドなし）についての主張であり — どちらもそのまま維持される。
 
-FirstDrop が追加で運んで**よい**のが**ソースコミットメント**（`derived_from` / `source_root` / `source_root_canonical` — `packages/vc.SourceCommitment` 参照）: 発行時点で claim した source 集合に発行者を拘束する、dplaax JSON-LD context で宣言される wire-profile 監査属性である。コミットメントは FirstDrop 専用ではない — `previousCredential` と直交し、chain-preserving 境界はトリガーの先行イベントを含む全消費分に commit する（全消費分セマンティクス）。本節は集約起点での用法を述べる。これは content commitment であって親リンクではない — 検証器はイベント毎経路でこれを走査せず、監査者が claim された source を非同期に解決してオンデマンドで root を再計算する。
+FirstDrop が追加で運んで**よい**のが**ソースコミットメント**（`derived_from` / `source_root` / `source_root_canonical` — `vc.SourceCommitment` 参照）: 発行時点で claim した source 集合に発行者を拘束する、dplaax JSON-LD context で宣言される wire-profile 監査属性である。コミットメントは FirstDrop 専用ではない — `previousCredential` と直交し、chain-preserving 境界はトリガーの先行イベントを含む全消費分に commit する（全消費分セマンティクス）。本節は集約起点での用法を述べる。これは content commitment であって親リンクではない — 検証器はイベント毎経路でこれを走査せず、監査者が claim された source を非同期に解決してオンデマンドで root を再計算する。
 
 これを emit するのが **audit-reachable conformance class**: deployment ごとの config 駆動であり、wire profile 自体は要求しない。deployment profile（例: バッテリーパスポートのような規制ドメイン）はこの class を必須化できる; class 外では plain な FirstDrop が完全に conformant である。コミットメントが証明するのは「claim が発行後に改変されていないこと」であり、claim の完全性ではない。申告漏れの検出は監査層の突合作業 — claim された commitment と取引相手のイングレス VC ストアの照合（署名済み記録上の mass-balance）— である。
 

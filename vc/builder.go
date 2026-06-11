@@ -1,6 +1,6 @@
 package vc
 
-import "github.com/provin-line/oss/packages/crypto"
+import "github.com/provin-line/oss/crypto"
 
 // Builder constructs signed credentials. One Builder serves one issuing
 // process; chain state (the previous credential) is supplied per call so the

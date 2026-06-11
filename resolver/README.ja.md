@@ -1,4 +1,4 @@
-# packages/resolver — DID Document 解決
+# resolver — DID Document 解決
 > 日本語版 — English: [README.md](README.md)
 
 `Resolver` インターフェース（`Resolve(did string) (*did.DIDDocument, error)`）とその実装群。

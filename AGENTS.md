@@ -11,7 +11,10 @@ Guidance for AI agents and contributors working on provin OSS.
 
 ## Layer rules (enforced by review)
 
-1. `packages/` is pure domain: no imports of `gen/`, `network/`, `pipeline/`, `cmd/`.
+1. Library packages (top-level domain libraries: `vc/`, `canon/`, `crypto/`, `did/`,
+   `delegation/`, `resolver/`, `keystore/`, `tlog/`, `hoconconfig/`, `orgverify/` —
+   the catalog lives in [README.md](README.md)) are pure domain: no imports of
+   `gen/`, `network/`, `pipeline/`, `cmd/`.
 2. `network/` and `pipeline/` never import each other; they interact over the wire.
 3. Every network service follows handler → service → store:
    - handler: proto ↔ domain conversion + Connect error mapping only
@@ -27,7 +30,7 @@ These exist because a cross-implementation hash divergence ("partition trap") br
 verification silently — treat them as hard rules:
 
 - JSON decoding on any protocol path goes through the strict decoder in
-  `packages/canon` (duplicate-key rejection, trailing-data rejection, `UseNumber`).
+  `canon/` (duplicate-key rejection, trailing-data rejection, `UseNumber`).
   Direct `json.Unmarshal` on protocol paths requires a `decoder-hygiene-exempt`
   comment explaining why precision/duplicates cannot matter there.
 - Integers above 2^53 must survive round-trips. Any proto/struct conversion that could

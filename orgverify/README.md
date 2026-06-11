@@ -1,4 +1,4 @@
-# packages/orgverify — DNS-Based Organization Verification
+# orgverify — DNS-Based Organization Verification
 
 Determines whether a `did:dplaax` Owner DID is endorsed by the owner of the domain
 used as its `accountId` (FQDN), via DNS TXT records.

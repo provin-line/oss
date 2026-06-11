@@ -14,7 +14,7 @@ package resolver
 import (
 	"context"
 
-	"github.com/provin-line/oss/packages/did"
+	"github.com/provin-line/oss/did"
 )
 
 // Resolver resolves a DID string to its DID Document.

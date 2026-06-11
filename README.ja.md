@@ -16,10 +16,9 @@ PoC であることは DID の **レジストリセグメント**（例: `did:dp
 
 ## レイアウト
 
-```
+```text
 api/protobuf/   プロトコル定義（buf; 名前空間 dplaax.*.v1）
 gen/            生成コード（コミット済み — ビルドに buf は不要）
-packages/       共有ライブラリ（純粋なドメイン層; このリポジトリ内の他モジュールに依存しない）
 network/        レジストリ & コーディネーションサーバー（単一バイナリ）
 pipeline/       Pipeline Component ピアカタログ + 共有メカニクス
 cmd/provin/     オペレーター CLI
@@ -27,19 +26,51 @@ docs/           アーキテクチャ / コンセプト / プロトコル / DID
 scripts/        CI 衛生チェック
 ```
 
+上記以外のトップレベルディレクトリは **ライブラリパッケージ** — `network/`・`pipeline/`・`cmd/` が利用する純粋なドメインライブラリ群（→ [ライブラリパッケージ](#ライブラリパッケージ)）。
+
 ## 依存の方向（厳密、一方向）
 
-```
+```text
 cmd/  network/  pipeline/          (コンシューマー)
         │
         ▼
-    packages/                      (純粋なドメイン層; proto も内部依存もなし)
+ライブラリパッケージ                (純粋なドメイン層; proto も内部依存もなし)
         ▲
         │
       gen/  ◄── api/protobuf       (ワイヤー型; network/pipeline/cmd のみが利用)
 ```
 
-`packages/` は `gen/` をインポートしない。`network/` と `pipeline/` は互いをインポートしない — 両者の通信はワイヤー（ConnectRPC / NATS）経由のみ。
+ライブラリパッケージは `gen/` をインポートしない。`network/` と `pipeline/` は互いをインポートしない — 両者の通信はワイヤー（ConnectRPC / NATS）経由のみ。
+
+## ライブラリパッケージ
+
+- **内部依存なし**: ライブラリパッケージは `gen/`・`network/`・`pipeline/`・`cmd/` をインポートしない。Proto で生成された型はここには登場しない。
+- **一方向消費**: コンシューマがライブラリパッケージに依存する。逆方向の依存は存在しない。
+- ここで定義するインターフェースはシステムの安定したコントラクトである。この層の exported な識別子をリネームまたは形状変更することは、すべてのコンシューマに対する破壊的変更となる。
+
+| パッケージ | 責務 |
+|---|---|
+| `did/` | `did:dplaax` メソッド: パース・DID Document モデル・バリデーション・公開鍵抽出 |
+| `canon/` | 署名スコープの正規化: JCS (RFC 8785)・URDNA2015・厳格な JSON デコード |
+| `vc/` | W3C VC Data Integrity: クレデンシャルモデル・ビルダー・検証器・暗号スイート・トラストポリシー |
+| `crypto/` | 鍵生成・署名・検証インターフェース + Ed25519 実装 |
+| `delegation/` | Pipeline/Process DID 向けのオーナー署名付き委任クレデンシャル |
+| `resolver/` | DID Document 解決インターフェース + ローカル・grpc・マルチ実装 |
+| `keystore/` | 秘密鍵ストレージコントラクト（KMS モデル境界） |
+| `tlog/` | 組織ごとの transparency log: append-only・改竄検出可能なレコード列（監査基盤） |
+| `hoconconfig/` | 3 層 HOCON 設定ローダー |
+| `orgverify/` | DNS ベースの組織アイデンティティ検証 |
+
+ライブラリ層内部の依存 DAG:
+
+```text
+vc ──► did, canon, crypto
+delegation ──► vc, did, crypto
+resolver ──► did
+orgverify ──► did, resolver
+keystore ──► crypto
+tlog ──► crypto
+```
 
 ## Pipeline Component モデル
 

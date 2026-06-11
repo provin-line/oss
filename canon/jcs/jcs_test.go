@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/provin-line/oss/packages/canon/jcs"
+	"github.com/provin-line/oss/canon/jcs"
 )
 
 // RFC 8785 Section 3.2.3 canonicalization example. Values are built directly

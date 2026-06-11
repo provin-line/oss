@@ -1,6 +1,6 @@
 package vc
 
-import "github.com/provin-line/oss/packages/canon"
+import "github.com/provin-line/oss/canon"
 
 // Wire identifiers of the supported proof cryptosuites.
 const (
@@ -22,5 +22,5 @@ const (
 // Which registered suites are acceptable at a given proof.created instant is
 // governed by the lifecycle policy: the Verifier consults its
 // LifecycleRegistry (see lifecycle.go), whose published append-only form is
-// backed by packages/tlog.
+// backed by tlog.
 func RegisterCryptosuite(name string, c canon.Canonicalizer) { panic("not implemented") }

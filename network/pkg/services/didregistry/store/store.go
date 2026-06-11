@@ -3,14 +3,14 @@
 // build filesystem paths only from safety-checked DID segments.
 //
 // Private keys are NOT stored here — key custody goes through
-// packages/keystore.
+// keystore.
 package store
 
 import (
 	"errors"
 
-	"github.com/provin-line/oss/packages/delegation"
-	"github.com/provin-line/oss/packages/did"
+	"github.com/provin-line/oss/delegation"
+	"github.com/provin-line/oss/did"
 )
 
 // ErrNotFound is returned for misses. Handlers map it with errors.Is —
