@@ -13,12 +13,21 @@ two distinct surfaces backed by one service:
 1. Operator calls `Subscribe` on the subscriber's chainmanager.
 2. Subscriber CM resolves the publisher's DID Document (`#chain-manager` endpoint),
    validates the endpoint URL (SSRF guard), and calls `GetPublisherInfo`
-   (light allow-list check) then `RegisterSubscription` (full allow-list + L2
-   signature) on the publisher CM.
+   (light allow-list check + the publisher's offered payload-delivery modes)
+   then `RegisterSubscription` (full allow-list + L2 signature; the signed view
+   carries the requested payload-delivery mode, making the request
+   non-repudiable — a mode the publisher does not offer is a typed rejection at
+   this step, never a silent runtime fallback) on the publisher CM.
 3. Both sides drive their `InfraOperator` to wire the transport
-   (publisher: export; subscriber: import).
+   (publisher: export; subscriber: import), applying the agreed
+   payload-delivery mode at the export seam.
 
 Allow-lists are DID glob patterns; trust model is default-distrust / opt-in.
+
+Payload delivery (`inline` / `by-reference`, default `by-reference`) is agreed
+per subscription and immutable for its lifetime — changing mode means a new
+subscription. See the `Subscription` record contract (`store/`) and the
+`Envelope` contract (`pipeline/contract`).
 
 ## infra/ — transport abstraction
 

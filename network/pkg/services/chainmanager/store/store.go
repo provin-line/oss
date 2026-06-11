@@ -17,6 +17,18 @@ type Subscription struct {
 	PublisherDID  string
 	// PublishType names the transport backing the connection (e.g. "nats").
 	PublishType string
+	// PayloadDelivery is the subscription's AGREED payload delivery mode:
+	// "inline" (payload bytes ride in the envelope) or "by-reference"
+	// (hash-only envelope; the subscriber fetches payload bytes from the
+	// publisher's serving boundary by content hash). Empty means
+	// by-reference — the conservative default: hash-only is the normative
+	// semantics, and payload bytes are never shipped without explicit
+	// agreement. The requested mode rides the L2-signed
+	// RegisterSubscription view (non-repudiable); a mode the publisher
+	// does not offer is rejected with a typed error at wiring time. The
+	// mode is immutable for the subscription's lifetime — changing it
+	// means a new subscription.
+	PayloadDelivery string
 	// ConnectionInfo carries transport-specific connection parameters as
 	// returned by the publisher's infra operator.
 	ConnectionInfo map[string]string

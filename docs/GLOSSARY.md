@@ -57,6 +57,14 @@ chain without re-reading payloads.
 credentials by hash and are integrity-protected, but never embedded in, recoverable
 from, or interpreted by the credential layer.
 
+**payload delivery mode** — The per-subscription agreed choice of how payload
+bytes travel: *inline* (bytes ride in the envelope) or *by-reference* (hash-only
+envelope; the subscriber fetches bytes from the publisher's serving boundary by
+content hash, and provenance-only consumers never fetch). Negotiated at
+registration, immutable per subscription, defaulting to by-reference.
+Verification is independent of the mode — the hash binding makes the bytes
+provable wherever they came from.
+
 **transformationClaim** — The boundary's claim about the output's information
 source: whether the declared inputs are the output's complete information source
 (closed-world — absence from the declared set licenses an exclusion inference) or

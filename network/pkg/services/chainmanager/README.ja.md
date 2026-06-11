@@ -11,10 +11,12 @@
 ## 接続フロー（サブスクライバー起点）
 
 1. オペレーターがサブスクライバーの chainmanager に対して `Subscribe` を呼び出す。
-2. サブスクライバー CM はパブリッシャーの DID ドキュメント（`#chain-manager` エンドポイント）を解決し、エンドポイント URL を検証（SSRF ガード）したうえで、パブリッシャー CM に対して `GetPublisherInfo`（軽量許可リストチェック）と `RegisterSubscription`（フル許可リスト + L2 署名）を呼び出す。
-3. 双方が自身の `InfraOperator` を駆動してトランスポートをワイヤリングする（パブリッシャー: エクスポート; サブスクライバー: インポート）。
+2. サブスクライバー CM はパブリッシャーの DID ドキュメント（`#chain-manager` エンドポイント）を解決し、エンドポイント URL を検証（SSRF ガード）したうえで、パブリッシャー CM に対して `GetPublisherInfo`（軽量許可リストチェック + パブリッシャーの提供 payload 配送モード）と `RegisterSubscription`（フル許可リスト + L2 署名。署名ビューに要求 payload 配送モードが入り、要求は否認不能になる — パブリッシャーが提供しないモードはこの段階で typed エラーとして拒否され、実行時の silent fallback は起きない）を呼び出す。
+3. 双方が自身の `InfraOperator` を駆動してトランスポートをワイヤリングする（パブリッシャー: エクスポート; サブスクライバー: インポート）。合意済み payload 配送モードはエクスポート境界で適用される。
 
 許可リストは DID グロブパターンで定義し、トラストモデルはデフォルト不信 / オプトイン。
+
+payload 配送（`inline` / `by-reference`、デフォルト `by-reference`）は購読ごとに合意され、購読の生存期間中は不変 — モード変更 = 新規購読。`Subscription` record の契約（`store/`）と `Envelope` の契約（`pipeline/contract`）を参照。
 
 ## infra/ — トランスポート抽象
 

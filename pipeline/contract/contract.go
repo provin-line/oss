@@ -144,10 +144,23 @@ type Component interface {
 // verification) depend ONLY on the credential and its content hashes — never
 // on how the payload travelled. Whether Payload rides inline is a
 // per-subscription transport choice: inline suits low-latency small-message
-// exchange (A2A); by-reference suits large or confidential payloads (AI
-// corpora, supply-chain records), where consumers locate data via the
-// credential's hashes (VC resolver / object store). Verifier code is
-// identical for both forms.
+// exchange (A2A) — choose it when the consumer's processing deadline cannot
+// absorb a resolver round-trip plus fetch (concrete latency budgets are a
+// benchmarks concern, separate repository); by-reference suits large or
+// confidential payloads (AI corpora, supply-chain records), where consumers
+// fetch data from the publisher's serving boundary by content hash, and
+// provenance-only consumers never fetch at all. Verifier code is identical
+// for both forms.
+//
+// The mode is the subscription's AGREED mode, not the subscriber's wish: it
+// is negotiated at registration (the requested mode rides the L2-signed
+// RegisterSubscription view; a mode the publisher does not offer is a typed
+// wiring-time rejection, never a silent runtime fallback) and is immutable
+// for the subscription's lifetime. Inside an organization, components always
+// produce the full (inline) envelope; the agreed mode is applied at the
+// cross-organization export seam — stripping the payload is one-way cheap.
+// Choosing inline does not lift the publisher's audit-side resolver
+// obligation; it only takes resolution off the consume hot path.
 type Envelope struct {
 	Credential *vc.PipelinePassCredential
 	// Payload optionally carries the data bytes inline; nil means

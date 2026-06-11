@@ -16,7 +16,16 @@ processor.
   policies plug in at this seam, not inside components.
 - Cross-organization wiring (imports/exports between accounts) is **not** this
   package's job — that belongs to the network chainmanager's `InfraOperator`.
-- **Emission logging**: the publisher side records each published envelope (hash +
-  sequence number) to a `tlog` log — the "what was delivered" record the
-  audit reconciliation model depends on. Retention for the audit horizon is a
-  deployment obligation.
+- **Payload delivery modes**: inside their own organization, components always
+  produce the full (inline) envelope. The per-subscription agreed mode
+  (`inline` / `by-reference` — see the `Envelope` contract and the chainmanager
+  `Subscription` record) is applied at the cross-organization export seam,
+  where each backend realizes it its own way (per-mode subjects / topics, or a
+  stripping transform). Stripping the payload for by-reference delivery is
+  one-way cheap; the reverse is impossible without a fetch.
+- **Emission logging**: the publisher side records each published event
+  (credential hash + sequence number) to a `tlog` log — the "what was
+  delivered" record the audit reconciliation model depends on. The recorded
+  identity is delivery-form-independent: the same event yields the same record
+  whether it was delivered inline or by reference. Retention for the audit
+  horizon is a deployment obligation.
