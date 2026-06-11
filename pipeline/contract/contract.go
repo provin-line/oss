@@ -46,10 +46,11 @@ type VerificationStrategy int
 
 const (
 	VerificationUnknown VerificationStrategy = iota
-	// VerificationNone — first-stage components consuming non-VC input.
+	// VerificationNone — components with no Pipeline-conformant ingress
+	// (consuming raw external input only).
 	VerificationNone
 	// VerificationAdjacent — verify the immediately preceding VC (mandatory
-	// at every non-first-stage boundary).
+	// at every Pipeline-conformant ingress boundary).
 	VerificationAdjacent
 	// VerificationFull — verify the full chain (observation tooling, sinks).
 	VerificationFull
@@ -106,13 +107,34 @@ const (
 )
 
 // Result is the outcome of one Process call.
+//
+// For a ChainTerminating component (External Sink), StatusPassed means the
+// ingress verification ran and the external write completed — it does NOT
+// require ConfidenceVerified (an observation-only sink may emit invalid
+// credentials); the verdict itself rides Confidence. VC and Payload are nil:
+// a sink produces nothing in-network.
 type Result struct {
 	Status Status
-	// VC is the issued credential (StatusPassed only).
+	// VC is the issued credential (StatusPassed on a producing component
+	// only).
 	VC *vc.PipelinePassCredential
-	// Confidence is the ingress verification verdict (when a verification
-	// strategy other than None ran).
-	Confidence vc.ConfidenceState
+	// Payload is the produced data bytes (StatusPassed on a producing
+	// component only): the exact byte string whose sha256 is the VC's
+	// outputHash, and it is never empty (profile norm — see Envelope).
+	// Components always produce the full inline form; by-reference
+	// stripping happens at the cross-organization export seam, never
+	// here. The runtime loop may re-verify the hash identity before
+	// publishing; a mismatch is a component bug and fails loudly.
+	Payload []byte
+	// Confidence is the ingress verification verdict; nil means no
+	// verification ran. A component declaring VerificationNone always
+	// leaves it nil; under any other strategy it MUST be set for every
+	// event arriving on a Pipeline-conformant ingress side, and stays nil
+	// only for events arriving on non-conformant input — which is outside
+	// the declaration. Absence is a contract-layer concern — the vc
+	// confidence lattice itself has no "unknown" state and gains none
+	// here.
+	Confidence *vc.ConfidenceState
 	// FilteredAtStep is the index of the filter step that rejected the event
 	// (StatusFiltered only).
 	FilteredAtStep int
@@ -124,11 +146,25 @@ type Result struct {
 // Processor turns one input event into one Result. Implementations carry the
 // component's full per-event lifecycle (ingress verification, transformation,
 // signing, observation).
+//
+// Processor is the contract for event-triggered processing — the unit a
+// transport runtime loop drives (one input event in, one Result out).
+// Implementing it is optional: mechanics that own their trigger (timer /
+// window aggregation) implement Component directly and never pass through a
+// Processor. First-stage push ingestion is event-triggered in this sense —
+// the external push is the event.
 type Processor interface {
 	Process(ctx context.Context, input []byte) (*Result, error)
 }
 
-// Component is a runnable pipeline component bound to its transport.
+// Component is a runnable pipeline component bound to its transport. It is
+// the only mandatory contract: a conformant implementation exposes Run plus
+// the declaration methods.
+//
+// One Component value represents exactly one pipeline output side (or a
+// terminating consumer). A Custom component with several output sides
+// composes one Component per side — which components a binary hosts is
+// decided by their signing paths, never by packaging.
 type Component interface {
 	// Run consumes and processes events until ctx is cancelled, then drains
 	// gracefully.
@@ -136,6 +172,24 @@ type Component interface {
 	// ChainBehavior declares the component's output-side chain behaviour.
 	// Must return the same non-Unknown value for the component's lifetime.
 	ChainBehavior() ChainBehavior
+	// VerificationStrategy declares the verification run on every
+	// Pipeline-conformant ingress side of this component — a floor
+	// obligation applied uniformly, not a per-side enumeration.
+	// Non-conformant input (raw external bytes, foreign credentials) is
+	// outside this declaration: it is unverifiable by definition; a
+	// component with no conformant ingress declares VerificationNone.
+	//
+	// The value is an instance declaration fixed at construction, not a
+	// property of the component type — the same component code may run as
+	// a chain head with None and mid-chain with Adjacent. It must return
+	// the same non-Unknown value for the component's lifetime.
+	//
+	// Startup enforcement splits in two: a component declaring a strategy
+	// other than None must be configured with an IngressVCStore (a
+	// self-contained check), while the legitimacy of a None declaration is
+	// checked against deploy wiring metadata at construction time — the
+	// declaration alone cannot reveal whether conformant ingress exists.
+	VerificationStrategy() VerificationStrategy
 }
 
 // Envelope is the unit carried between components on the transport.
@@ -165,6 +219,15 @@ type Envelope struct {
 	Credential *vc.PipelinePassCredential
 	// Payload optionally carries the data bytes inline; nil means
 	// by-reference delivery.
+	//
+	// An inline payload is never empty — a producing component MUST emit
+	// non-empty payload bytes (profile norm). Empty and absent bytes are
+	// indistinguishable on a proto3 wire, so admitting an empty inline
+	// payload would make "publisher sent empty" and "payload stripped in
+	// error" the same bytes; forbidding it makes an absent payload on an
+	// inline-mode subscription a decidable protocol violation.
+	// Business-level "empty" output uses an explicit payload
+	// representation instead.
 	Payload []byte
 	// SequenceNo is the publisher-assigned, strictly increasing sequence
 	// number. It makes append-only emission wire-verifiable: a gap or

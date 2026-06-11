@@ -12,8 +12,9 @@ processor.
   flush-after-subscribe) live here — components never import a broker client
   directly.
 - The runtime loop is intentionally minimal: synchronous per-message processing,
-  publish on "passed", drop-with-log on "filtered"/"error". Retry / dead-letter
-  policies plug in at this seam, not inside components.
+  publish on "passed" (producing components only — a terminating component writes
+  externally and publishes nothing), drop-with-log on "filtered"/"error".
+  Retry / dead-letter policies plug in at this seam, not inside components.
 - Cross-organization wiring (imports/exports between accounts) is **not** this
   package's job — that belongs to the network chainmanager's `InfraOperator`.
 - **Payload delivery modes**: inside their own organization, components always
