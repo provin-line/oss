@@ -5,7 +5,7 @@ FirstDrop VC (empty `previousCredential` — cuts the chain). Internal mechanics
 input cardinality, Pool/cache state, external lookups, aggregation logic — are
 protocol-invisible and free for the implementation to choose.
 
-## Linear chain invariant — and the optional origin commitment
+## Linear chain invariant — and the optional source commitment
 
 The chain is strictly linear: an Origin Source's FirstDrop carries **no upstream
 link**. Aggregation severs identity with upstream data; the chain attests to "what
@@ -15,11 +15,14 @@ Paper 01 §4.8's exclusion is a statement about **chain topology** (no DAG, no p
 links) and the **base credential schema** (no upstream-reference fields) — both hold
 unchanged.
 
-What a FirstDrop MAY additionally carry is the **origin commitment**
+What a FirstDrop MAY additionally carry is the **source commitment**
 (`derived_from` / `source_root` / `source_root_canonical` — see
-`packages/vc.OriginCommitment`): a wire-profile audit attribute, declared via the
+`packages/vc.SourceCommitment`): a wire-profile audit attribute, declared via the
 dplaax JSON-LD context, binding the issuer to the claimed source set at issuance
-time. It is a content commitment,
+time. The commitment is not FirstDrop-specific — it is orthogonal to
+`previousCredential`, and a chain-preserving boundary commits to its full
+consumed set, the triggering predecessor included (all-consumed semantics); this
+section describes its use at the aggregation origin. It is a content commitment,
 not a parent link — verifiers never traverse it on the per-event path; auditors
 resolve the claimed sources asynchronously and recompute the root on demand.
 

@@ -137,11 +137,11 @@ func TestComputeSourceRootRejects(t *testing.T) {
 	}
 }
 
-func TestNewOriginCommitment(t *testing.T) {
+func TestNewSourceCommitment(t *testing.T) {
 	s := threeSources(t)
-	oc, err := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, err := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	if err != nil {
-		t.Fatalf("NewOriginCommitment: %v", err)
+		t.Fatalf("NewSourceCommitment: %v", err)
 	}
 	wantIssuers := []string{
 		"did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:s",
@@ -159,16 +159,16 @@ func TestNewOriginCommitment(t *testing.T) {
 	}
 }
 
-func aggregateCred(t *testing.T, origin *vc.OriginCommitment) *vc.PipelinePassCredential {
+func aggregateCred(t *testing.T, commitment *vc.SourceCommitment) *vc.PipelinePassCredential {
 	t.Helper()
 	subj := subjectFields()
 	subj.TransformationType = vc.TransformationAggregate
 	subj.InputHash = ""
 	return newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:a1",
-		ValidFrom: time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
-		Subject:   subj,
-		Origin:    origin,
+		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:a1",
+		ValidFrom:        time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
+		Subject:          subj,
+		SourceCommitment: commitment,
 	})
 }
 
@@ -176,119 +176,155 @@ func newTestVerifier() *vc.Verifier {
 	return vc.NewVerifier(nil, nil)
 }
 
-func TestVerifyOriginCommitmentVerified(t *testing.T) {
+func TestVerifySourceCommitmentVerified(t *testing.T) {
 	s := threeSources(t)
-	oc, err := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, err := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	if err != nil {
-		t.Fatalf("NewOriginCommitment: %v", err)
+		t.Fatalf("NewSourceCommitment: %v", err)
 	}
 	cred := aggregateCred(t, oc)
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, s)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s)
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceVerified {
 		t.Errorf("verdict = %v, want verified", got)
 	}
 }
 
-func TestVerifyOriginCommitmentTamperedRoot(t *testing.T) {
+func TestVerifySourceCommitmentTamperedRoot(t *testing.T) {
 	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	oc.SourceRoot = "f1220" + strings.Repeat("00", 32)
 	cred := aggregateCred(t, oc)
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, s)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s)
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceFailed {
 		t.Errorf("verdict = %v, want failed", got)
 	}
 }
 
-func TestVerifyOriginCommitmentIncompleteSources(t *testing.T) {
+func TestVerifySourceCommitmentIncompleteSources(t *testing.T) {
 	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	cred := aggregateCred(t, oc)
 	// mineB's credential not yet resolved: issuer subset -> indeterminate.
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, s[:2])
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s[:2])
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceIndeterminate {
 		t.Errorf("verdict = %v, want indeterminate", got)
 	}
 }
 
-func TestVerifyOriginCommitmentForeignSource(t *testing.T) {
+func TestVerifySourceCommitmentForeignSource(t *testing.T) {
 	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s[:2], vc.SourceRootCanonicalJCS) // claims mineA only
+	oc, _ := vc.NewSourceCommitment(s[:2], vc.SourceRootCanonicalJCS) // claims mineA only
 	cred := aggregateCred(t, oc)
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, s) // mineB extra
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s) // mineB extra
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceFailed {
 		t.Errorf("verdict = %v, want failed (issuer outside derived_from)", got)
 	}
 }
 
-func TestVerifyOriginCommitmentUnknownCanonical(t *testing.T) {
+func TestVerifySourceCommitmentUnknownCanonical(t *testing.T) {
 	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	oc.SourceRootCanonical = "bogus-canonical"
 	cred := aggregateCred(t, oc)
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, s)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s)
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceFailed {
 		t.Errorf("verdict = %v, want failed (unknown canonical fails closed)", got)
 	}
 }
 
-func TestVerifyOriginCommitmentMisuse(t *testing.T) {
+func TestVerifySourceCommitmentMisuse(t *testing.T) {
 	v := newTestVerifier()
 	// No commitment at all.
 	plain := aggregateCred(t, nil)
-	if _, err := v.VerifyOriginCommitment(context.Background(), plain, nil); err == nil {
+	if _, err := v.VerifySourceCommitment(context.Background(), plain, nil); err == nil {
 		t.Error("no commitment: want error, got nil")
-	}
-	// Chain-preserving credential carrying a commitment (non-conformant;
-	// New does not validate, so this is constructible).
-	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
-	subj := subjectFields()
-	bad := newCred(t, vc.CredentialFields{
-		Issuer:             "did:dplaax:poc.dplaax.io:org:x:pipeline:p:process:f",
-		ValidFrom:          time.Now(),
-		Subject:            subj,
-		PreviousCredential: "sha256:" + strings.Repeat("9", 64),
-		Origin:             oc,
-	})
-	if _, err := v.VerifyOriginCommitment(context.Background(), bad, s); err == nil {
-		t.Error("chain-preserving credential: want error, got nil")
 	}
 }
 
-func TestVerifyOriginCommitmentEmptyClaim(t *testing.T) {
-	oc, err := vc.NewOriginCommitment(nil, vc.SourceRootCanonicalJCS)
+func TestVerifySourceCommitmentChainPreserving(t *testing.T) {
+	// The commitment is orthogonal to previousCredential: a chain-preserving
+	// credential committing to its full consumed source set — the triggering
+	// predecessor included (all-consumed semantics) — verifies like any other.
+	s := threeSources(t)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
+	prevHash, err := s[0].Hash()
 	if err != nil {
-		t.Fatalf("NewOriginCommitment(nil): %v", err)
+		t.Fatalf("Hash: %v", err)
+	}
+	subj := subjectFields()
+	cred := newCred(t, vc.CredentialFields{
+		Issuer:             "did:dplaax:poc.dplaax.io:org:x:pipeline:p:process:f",
+		ValidFrom:          time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
+		Subject:            subj,
+		PreviousCredential: prevHash,
+		SourceCommitment:   oc,
+	})
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s)
+	if err != nil {
+		t.Fatalf("VerifySourceCommitment: %v", err)
+	}
+	if got != vc.ConfidenceVerified {
+		t.Errorf("verdict = %v, want verified (chain-preserving carries a commitment)", got)
+	}
+}
+
+func TestVerifySourceCommitmentPredecessorOmitted(t *testing.T) {
+	// All-consumed violation: a chain-preserving credential whose commitment
+	// (and gathered set) omit the triggering predecessor must fail even
+	// though the equality property holds over the claimed set — the verifier
+	// holds the predecessor's content hash and requires a matching source.
+	s := threeSources(t)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
+	subj := subjectFields()
+	cred := newCred(t, vc.CredentialFields{
+		Issuer:             "did:dplaax:poc.dplaax.io:org:x:pipeline:p:process:f",
+		ValidFrom:          time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
+		Subject:            subj,
+		PreviousCredential: "sha256:" + strings.Repeat("9", 64), // not among s
+		SourceCommitment:   oc,
+	})
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, s)
+	if err != nil {
+		t.Fatalf("VerifySourceCommitment: %v", err)
+	}
+	if got != vc.ConfidenceFailed {
+		t.Errorf("verdict = %v, want failed (predecessor omitted from commitment)", got)
+	}
+}
+
+func TestVerifySourceCommitmentEmptyClaim(t *testing.T) {
+	oc, err := vc.NewSourceCommitment(nil, vc.SourceRootCanonicalJCS)
+	if err != nil {
+		t.Fatalf("NewSourceCommitment(nil): %v", err)
 	}
 	cred := aggregateCred(t, oc)
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), cred, nil)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, nil)
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceVerified {
 		t.Errorf("verdict = %v, want verified (signed claim of zero sources)", got)
 	}
 }
 
-func TestVerifyOriginCommitmentDuplicateClaimFailsClosed(t *testing.T) {
+func TestVerifySourceCommitmentDuplicateClaimFailsClosed(t *testing.T) {
 	s := threeSources(t)
-	oc, _ := vc.NewOriginCommitment(s, vc.SourceRootCanonicalJCS)
+	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	cred := aggregateCred(t, oc)
 	// Inject a duplicated derived_from entry at the wire level (New
 	// normalizes to a unique set, so craft the wire form directly).
@@ -299,12 +335,12 @@ func TestVerifyOriginCommitmentDuplicateClaimFailsClosed(t *testing.T) {
 	if err := tampered.UnmarshalJSON([]byte(dup)); err != nil {
 		t.Fatalf("UnmarshalJSON: %v", err)
 	}
-	if len(tampered.Origin().DerivedFrom) != len(oc.DerivedFrom)+1 {
-		t.Fatalf("test setup: duplicate not injected: %v", tampered.Origin().DerivedFrom)
+	if len(tampered.SourceCommitment().DerivedFrom) != len(oc.DerivedFrom)+1 {
+		t.Fatalf("test setup: duplicate not injected: %v", tampered.SourceCommitment().DerivedFrom)
 	}
-	got, err := newTestVerifier().VerifyOriginCommitment(context.Background(), &tampered, s)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), &tampered, s)
 	if err != nil {
-		t.Fatalf("VerifyOriginCommitment: %v", err)
+		t.Fatalf("VerifySourceCommitment: %v", err)
 	}
 	if got != vc.ConfidenceFailed {
 		t.Errorf("verdict = %v, want failed (duplicate-carrying claim is malformed)", got)

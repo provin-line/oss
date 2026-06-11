@@ -23,13 +23,16 @@ type ChainBehavior int
 const (
 	ChainBehaviorUnknown ChainBehavior = iota
 	// ChainPreserving — output VC carries previousCredential = hash of the
-	// input VC (FilterConvert).
+	// input VC (FilterConvert). Deployments in the audit-reachable
+	// conformance class additionally attach a vc.SourceCommitment over the
+	// full consumed conformant source set, the triggering predecessor
+	// included (all-consumed semantics; orthogonal to the chain link).
 	ChainPreserving
 	// ChainFirstDrop — output VC has no previousCredential: a fresh chain
 	// origin (Origin Source — external ingestion or aggregation). The chain
 	// carries no upstream link; input manifests are a data-payload concern.
 	// Deployments in the audit-reachable conformance class additionally
-	// attach a vc.OriginCommitment (an audit attribute over the consumed
+	// attach a vc.SourceCommitment (an audit attribute over the consumed
 	// source set, not a parent link — linearity is unaffected).
 	ChainFirstDrop
 	// ChainTerminating — consumes and verifies; produces nothing in-network

@@ -3,7 +3,7 @@
 
 `packages/vc` の VC 機構に対するコンポーネント向けインターフェース：
 
-- `Provider` — `Sign(ctx, payload, inputHash, outputHash) (*Credential, error)`；プロセスごとのチェーン状態（`previousCredential` リンク）を管理し、audit-reachable conformance class で deploy された Origin Source の場合（config 駆動）はオリジンコミットメント（`vc.OriginCommitment` — [../originsource/README.md](../originsource/README.md) 参照）も管理する。
+- `Provider` — `Sign(ctx, payload, inputHash, outputHash) (*Credential, error)`；プロセスごとのチェーン状態（`previousCredential` リンク）を管理し、audit-reachable conformance class で deploy された境界の場合（config 駆動、Origin Source に限らない — chain-preserving は先行イベントを含む全消費分に commit する）はソースコミットメント（`vc.SourceCommitment` — [../originsource/README.md](../originsource/README.md) 参照）も管理する。
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`；各軸の最弱リンクで求めた信頼度 verdict を返す。
 
 ## vcdid/ — DID/VC バックの実装

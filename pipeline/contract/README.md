@@ -13,10 +13,11 @@ obligations are the strictest in the repository.
    transport choice — verification never depends on the delivery form.
 2. **VC chain behaviour** — exactly one per output side:
    - *chain-preserving*: output VC carries `previousCredential` = hash of the input VC
-     (FilterConvert)
+     (FilterConvert; audit-reachable deployments additionally attach a source
+     commitment over the full consumed set, the triggering predecessor included)
    - *FirstDrop issuance*: output VC has no `previousCredential` — a fresh chain
      origin (Origin Source: external ingestion or aggregation; input manifests are a
-     data-payload concern; audit-reachable deployments additionally attach an origin
+     data-payload concern; audit-reachable deployments additionally attach a source
      commitment — an audit attribute, not a parent link)
    - *termination*: consumes and verifies, produces nothing in-network (External Sink)
 3. **Verification obligations on ingress** — which verification strategy a component

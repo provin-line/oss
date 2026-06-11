@@ -40,12 +40,12 @@ type VerifyResult struct {
 // evaluation at proof.created, controller-chain reconstruction to the
 // terminal Owner DID, and weakest-link composition of the axis verdicts.
 //
-// Wire-form checks include the previous-XOR-origin invariant: origin
-// commitment fields coexisting with a non-empty previousCredential fail the
-// data-integrity axis. Builder enforces the invariant at issuance, but only
-// for credentials built here — a non-conformant issuer can craft both, so
-// every verification re-checks it (an O(1) presence check; resolving the
-// commitment itself stays off this path — see VerifyOriginCommitment).
+// Wire-form checks include source-commitment well-formedness: when the
+// commitment fields are present (on any credential — they are orthogonal to
+// previousCredential), derived_from must be a duplicate-free
+// lexicographically sorted set and source_root a multihash-encoded digest.
+// These are O(1)/O(n) shape checks; resolving the commitment itself stays
+// off this path — see VerifySourceCommitment.
 func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*VerifyResult, error) {
 	panic("not implemented")
 }
@@ -54,8 +54,11 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 // structure: previousCredential linkage, the data-flow invariant
 // outputHash[n] == inputHash[n+1] between adjacent credentials, ordering
 // consistency (proof.created monotonicity), that the chain origin carries
-// no previousCredential, and that origin commitment fields appear nowhere
-// but the chain origin.
+// no previousCredential, and that any chain-preserving credential carrying
+// a source commitment includes its predecessor's issuer in derived_from
+// (all-consumed semantics — an O(1) consistency check once the predecessor
+// is at hand; full commitment resolution stays with
+// VerifySourceCommitment).
 func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredential) (*VerifyResult, error) {
 	panic("not implemented")
 }

@@ -22,17 +22,22 @@ const (
 	SourceRootCanonicalJCS = "jcs-rfc8785"
 )
 
-// OriginCommitment is the optional audit commitment a chain-origin
-// (FirstDrop) credential may carry under the audit-reachable conformance
-// class.
+// SourceCommitment is the optional audit commitment any credential may
+// carry under the audit-reachable conformance class: a commitment over the
+// FULL set of Pipeline-conformant source credentials the boundary consumed.
+// It is orthogonal to previousCredential — chain-origin (FirstDrop) and
+// chain-preserving credentials alike may carry it. On a chain-preserving
+// credential the committed set includes the triggering predecessor
+// (all-consumed semantics), so DerivedFrom necessarily contains the
+// predecessor's issuer and the set is never empty there.
 //
-// It is an audit attribute of the FirstDrop, NOT a parent link: the chain
-// stays strictly linear (Paper 01 §4.8 — the base credential schema carries
-// no upstream-reference fields; this commitment is wire-profile vocabulary
+// It is an audit attribute, NOT a parent link: the chain stays strictly
+// linear (Paper 01 §4.8 — the base credential schema carries no
+// upstream-reference fields; this commitment is wire-profile vocabulary
 // declared via the dplaax JSON-LD context, riding the open signed body).
-// Whether an Origin Source emits it is a deployment decision
-// (config-driven); deployment profiles — e.g. a regulatory domain — may
-// require the audit-reachable class.
+// Whether a boundary emits it is a deployment decision (config-driven);
+// deployment profiles — e.g. a regulatory domain — may require the
+// audit-reachable class.
 //
 // What it proves and what it does not: the commitment binds the issuer to
 // the claimed source set at issuance time (tamper-evident after the fact —
@@ -41,17 +46,19 @@ const (
 // Omission detection is an audit-layer reconciliation (claimed commitments
 // vs the counterparties' ingress VC stores), not a cryptographic check.
 //
-// Emitters construct values through NewOriginCommitment — hand-assembly
+// Emitters construct values through NewSourceCommitment — hand-assembly
 // risks diverging from the verifier's recomputation.
-type OriginCommitment struct {
+type SourceCommitment struct {
 	// DerivedFrom is the unique set of issuer DIDs of the Pipeline-conformant
-	// source credentials consumed by the aggregation, carried sorted
+	// source credentials consumed by the boundary, carried sorted
 	// lexicographically ascending: JCS canonicalizes object keys, not array
 	// order, so a pinned order keeps the signed body byte-deterministic for
-	// equal sets. Empty is legal and meaningful — external ingestion with no
-	// conformant upstream; a signed claim of "zero conformant sources" is
-	// itself audit-valuable. External-world lookups (DB / API / file reads
-	// inside the Origin Source) are deliberately excluded — this is an
+	// equal sets. Empty is legal and meaningful on a chain origin — external
+	// ingestion with no conformant upstream; a signed claim of "zero
+	// conformant sources" is itself audit-valuable. On a chain-preserving
+	// credential the set is never empty: all-consumed semantics include the
+	// triggering predecessor's issuer. External-world lookups (DB / API /
+	// file reads inside the boundary) are deliberately excluded — this is an
 	// audit-reachability claim over conformant signing entities only.
 	DerivedFrom []string
 	// SourceRoot is the multihash-encoded (typically "f1220<64 hex>") RFC
@@ -60,9 +67,9 @@ type OriginCommitment struct {
 	// nodes SHA-256(0x01 || left || right), odd leaves promoted (never
 	// duplicated). The empty set commits to SHA-256 of the empty string
 	// (RFC 6962 §2.1). The multihash/multibase form — not this repository's
-	// "sha256:<hex>" content addresses — is pinned by the dPLaaX Origin
-	// Source specification for cross-profile compatibility; verifiers
-	// dispatch on the multihash prefix.
+	// "sha256:<hex>" content addresses — is pinned by the dPLaaX
+	// specification for cross-profile compatibility; verifiers dispatch on
+	// the multihash prefix.
 	SourceRoot string
 	// SourceRootCanonical names the canonical JSON spec the leaves were
 	// computed with (e.g. SourceRootCanonicalJCS). Verifiers dispatch on it;
@@ -70,7 +77,7 @@ type OriginCommitment struct {
 	SourceRootCanonical string
 }
 
-// NewOriginCommitment derives a commitment from the consumed source
+// NewSourceCommitment derives a commitment from the consumed source
 // credentials: DerivedFrom as the unique issuer set (sorted), SourceRoot via
 // ComputeSourceRoot. The single construction path keeps emit and verify
 // from diverging. Errors on an unknown canonical or duplicate sources
@@ -80,12 +87,12 @@ type OriginCommitment struct {
 // hash the full wire document including proof, so a commitment computed
 // over pre-signing in-memory credentials will never verify against the
 // counterparties' stores.
-func NewOriginCommitment(sources []*PipelinePassCredential, canonical string) (*OriginCommitment, error) {
+func NewSourceCommitment(sources []*PipelinePassCredential, canonical string) (*SourceCommitment, error) {
 	root, err := ComputeSourceRoot(sources, canonical)
 	if err != nil {
 		return nil, err
 	}
-	return &OriginCommitment{
+	return &SourceCommitment{
 		DerivedFrom:         uniqueIssuers(sources),
 		SourceRoot:          root,
 		SourceRootCanonical: canonical,
@@ -94,7 +101,7 @@ func NewOriginCommitment(sources []*PipelinePassCredential, canonical string) (*
 
 // ComputeSourceRoot computes the source-root commitment over the consumed
 // source credentials using the named canonicalization. Emitters reach it
-// through NewOriginCommitment; auditors call it to recompute and compare
+// through NewSourceCommitment; auditors call it to recompute and compare
 // against a credential's claimed commitment. Errors on an unknown canonical
 // or duplicate source credentials.
 func ComputeSourceRoot(sources []*PipelinePassCredential, canonical string) (string, error) {
@@ -155,7 +162,7 @@ func merkleTreeHash(leaves [][sha256.Size]byte) [sha256.Size]byte {
 	return sha256.Sum256(buf)
 }
 
-// VerifyOriginCommitment is the on-demand audit check for the
+// VerifySourceCommitment is the on-demand audit check for the
 // audit-reachable class — deliberately OUTSIDE the three normative axes and
 // the per-event verification path. Callers gather the claimed source
 // credentials asynchronously (VC resolver, counterparties' stores).
@@ -168,20 +175,21 @@ func merkleTreeHash(leaves [][sha256.Size]byte) [sha256.Size]byte {
 //   - source set incomplete (claimed leaves not yet resolvable) →
 //     indeterminate; may resolve later
 //   - unknown SourceRootCanonical → failed (fail closed)
-//   - cred carries no origin commitment, or is chain-preserving → error
-//     (misuse: there is nothing to verify)
+//   - chain-preserving credential none of whose gathered sources hashes to
+//     previousCredential, once the claimed issuer set is fully resolved →
+//     failed (all-consumed semantics: the triggering predecessor is part of
+//     the consumed set, and the verifier holds its content hash)
+//   - cred carries no source commitment → error (misuse: there is nothing
+//     to verify)
 //
 // Incompleteness is detectable at issuer granularity only (DerivedFrom is
 // an issuer set): a missing credential whose issuer is already covered by
 // another provided source surfaces as failed, not indeterminate — the
 // commitment grammar cannot distinguish the two.
-func (v *Verifier) VerifyOriginCommitment(ctx context.Context, cred *PipelinePassCredential, sources []*PipelinePassCredential) (ConfidenceState, error) {
-	claimed := cred.Origin()
+func (v *Verifier) VerifySourceCommitment(ctx context.Context, cred *PipelinePassCredential, sources []*PipelinePassCredential) (ConfidenceState, error) {
+	claimed := cred.SourceCommitment()
 	if claimed == nil {
-		return ConfidenceFailed, errors.New("vc: credential carries no origin commitment")
-	}
-	if cred.PreviousCredential() != "" {
-		return ConfidenceFailed, errors.New("vc: chain-preserving credential cannot carry an origin commitment")
+		return ConfidenceFailed, errors.New("vc: credential carries no source commitment")
 	}
 	if claimed.SourceRootCanonical != SourceRootCanonicalJCS {
 		return ConfidenceFailed, nil // unknown canonicalization fails closed
@@ -204,6 +212,27 @@ func (v *Verifier) VerifyOriginCommitment(ctx context.Context, cred *PipelinePas
 	}
 	if len(providedIssuers) < len(claimedSet) {
 		return ConfidenceIndeterminate, nil // claimed issuers not yet resolved
+	}
+
+	// All-consumed semantics: a chain-preserving credential's commitment
+	// covers the full consumed set, the triggering predecessor included. The
+	// claimed set is fully resolved at this point, so a missing predecessor
+	// is an omission, not a not-yet-gathered source.
+	if prev := cred.PreviousCredential(); prev != "" {
+		found := false
+		for _, s := range sources {
+			h, err := s.Hash()
+			if err != nil {
+				return ConfidenceFailed, fmt.Errorf("vc: hashing gathered source: %w", err)
+			}
+			if h == prev {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ConfidenceFailed, nil // predecessor omitted from the commitment
+		}
 	}
 
 	recomputed, err := ComputeSourceRoot(sources, claimed.SourceRootCanonical)

@@ -22,7 +22,7 @@ are in-memory (PoC posture — restart implications are documented per service).
 Storage sits behind store interfaces; swapping YAML for PostgreSQL is a Hub-side
 replacement, not a fork.
 
-Deployments in the audit-reachable conformance class (origin commitments, see
+Deployments in the audit-reachable conformance class (source commitments, see
 [pipeline/originsource](../pipeline/originsource/README.md)) additionally require a
 **durable** VC store: retrospective audits resolve claimed source credentials long
 after issuance, and an in-memory store cannot honor that retention. The in-memory

@@ -3,7 +3,7 @@
 // the storage contracts; the in-memory PoC implementations and the batch
 // resolver land with the service.
 //
-// Audit-reachable deployments (origin commitments — see
+// Audit-reachable deployments (source commitments — see
 // pipeline/originsource) require a DURABLE Store implementation:
 // retrospective audits resolve claimed source credentials long after
 // issuance, which an in-memory store cannot honor. How an auditor LOCATES a

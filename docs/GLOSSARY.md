@@ -65,16 +65,17 @@ property.
 **SchemaRef** — A content-committed reference to the registered schema of the output,
 making retroactive schema modification cryptographically detectable.
 
-**OriginCommitment** — An optional attestation on a FirstDrop committing to the set
-of conformant source credentials its output was derived from. It records *audit
-attributes*, not parent links: the chain stays linear, and reads from the outside
-world are deliberately out of its scope.
+**SourceCommitment** — An optional attestation, on any credential, committing to the
+full set of conformant source credentials the boundary consumed (on a
+chain-preserving credential this includes the triggering predecessor — all-consumed
+semantics). It records *audit attributes*, not parent links: the chain stays linear,
+and reads from the outside world are deliberately out of its scope.
 
-**source_root** — The Merkle set commitment inside an OriginCommitment: a compact,
+**source_root** — The Merkle set commitment inside a SourceCommitment: a compact,
 order-independent commitment to the consumed source credentials, supporting
 per-source inclusion proofs.
 
-**audit-reachable** — The conformance class in which origin commitments are emitted
+**audit-reachable** — The conformance class in which source commitments are emitted
 and verified ingress credentials are retained, so that dataset-level lineage can be
 audited after the fact.
 

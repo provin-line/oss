@@ -32,9 +32,11 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 - Aggregation starts a fresh chain because the aggregated result has no identity
   relationship with any single input (Paper 01 §4.8). The **base credential schema
   carries no upstream-reference fields** — input manifests are a data-payload /
-  business-logic concern. The one sanctioned extension is the **origin commitment**
+  business-logic concern. The one sanctioned extension is the **source commitment**
   (`derived_from` / `source_root` / `source_root_canonical`): an optional audit
-  attribute a FirstDrop carries under the **audit-reachable conformance class**,
+  attribute any credential carries under the **audit-reachable conformance class**
+  (orthogonal to `previousCredential`; chain-preserving credentials commit to their
+  full consumed set, predecessor included),
   riding the open signed body as profile vocabulary declared via the dplaax
   JSON-LD context (the wire names are pinned by the dPLaaX Origin Source
   specification — shared across profiles, so they are not renamed per profile).
@@ -63,7 +65,7 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
   (registry artifact vs service) is still being settled at the spec layer.
 - No-op identifier ban (`""`, `"none"`, `"null"`, `"identity"`) at registration and
   verification time (JOSE `alg:none` class defense).
-- Origin-commitment checking (`VerifyOriginCommitment`) is deliberately **outside the
+- Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'
   stores); the verdict is `indeterminate` until the claimed set is fully resolved, so

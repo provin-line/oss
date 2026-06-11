@@ -7,10 +7,12 @@ import "github.com/provin-line/oss/packages/crypto"
 // caller owns concurrency.
 //
 // The two build methods mirror the output-side chain behaviours of the
-// Pipeline Contract (ChainPreserving / ChainFirstDrop): the
-// previous-XOR-origin invariant is expressed in the method split rather
-// than checked at runtime — a chain-preserving credential cannot be handed
-// an origin commitment, and a FirstDrop cannot be handed a predecessor.
+// Pipeline Contract (ChainPreserving / ChainFirstDrop): the method split
+// makes the chain-topology choice explicit — a chain-preserving credential
+// must be handed its predecessor, and a FirstDrop cannot be handed one. The
+// source commitment is orthogonal to that choice: either method accepts an
+// optional SourceCommitment (audit-reachable class), committing to the full
+// consumed conformant source set.
 type Builder struct {
 	signer      crypto.Signer
 	cryptosuite string
@@ -31,10 +33,18 @@ func NewBuilder(signer crypto.Signer, opts ...BuilderOption) *Builder { panic("n
 // previousCredential is set to previous.Hash() (the boundary was triggered
 // by, and keeps identity with, the predecessor event). previous must be
 // non-nil — passing nil is an error, not a silent FirstDrop.
+//
+// commitment, when non-nil, attaches the audit-reachable commitment over
+// the FULL consumed conformant source set — including previous itself
+// (all-consumed semantics): a commitment whose DerivedFrom omits the
+// predecessor's issuer is an emit-time misuse and an error. nil issues a
+// plain chain-preserving credential, fully conformant outside the
+// audit-reachable class.
 func (b *Builder) BuildChainPreserving(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,
 	previous *PipelinePassCredential,
+	commitment *SourceCommitment,
 ) (*PipelinePassCredential, error) {
 	panic("not implemented")
 }
@@ -45,14 +55,14 @@ func (b *Builder) BuildChainPreserving(
 // identity relationship with any single input, so a fresh chain begins; the
 // chain itself carries no upstream link (Paper 01 §4.8).
 //
-// origin, when non-nil, attaches the audit-reachable commitment over the
-// consumed source set (an audit attribute, not a parent link — see
-// OriginCommitment). nil issues a plain FirstDrop, which is fully
+// commitment, when non-nil, attaches the audit-reachable commitment over
+// the consumed source set (an audit attribute, not a parent link — see
+// SourceCommitment). nil issues a plain FirstDrop, which is fully
 // conformant outside the audit-reachable class.
 func (b *Builder) BuildFirstDrop(
 	issuerDID, keyID, verificationMethod string,
 	subject CredentialSubjectFields,
-	origin *OriginCommitment,
+	commitment *SourceCommitment,
 ) (*PipelinePassCredential, error) {
 	panic("not implemented")
 }

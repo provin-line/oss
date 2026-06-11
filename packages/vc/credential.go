@@ -107,13 +107,13 @@ type CredentialSubjectFields struct {
 	// outputHash[n] == inputHash[n+1]. InputHash is absent for aggregation
 	// FirstDrops — no single input exists; input manifests are a payload
 	// concern, and the cryptographic claim over the consumed source set,
-	// when emitted, is the OriginCommitment.
+	// when emitted, is the SourceCommitment.
 	InputHash  string
 	OutputHash string
 }
 
 // CredentialFields is the write-side input for unsigned construction (New).
-// Signed construction goes through Builder, which owns chain and origin
+// Signed construction goes through Builder, which owns chain and commitment
 // fields.
 type CredentialFields struct {
 	Issuer    string
@@ -128,17 +128,20 @@ type CredentialFields struct {
 	// credentialSubject. The chain is strictly linear: exactly zero or one
 	// predecessor, never multiple (Paper 01 §4.8).
 	PreviousCredential string
-	// Origin is the optional audit commitment of a chain origin
-	// (audit-reachable conformance class). Nil means no commitment. Only
-	// valid when PreviousCredential is empty — a chain-preserving credential
-	// never carries one. On the wire its fields (derived_from, source_root,
-	// source_root_canonical) ride alongside previousCredential inside
-	// credentialSubject, within the signing scope.
-	Origin *OriginCommitment
+	// SourceCommitment is the optional audit commitment over the full
+	// consumed conformant source set (audit-reachable conformance class).
+	// Nil means no commitment. Orthogonal to PreviousCredential — chain
+	// origins and chain-preserving credentials alike may carry it; on a
+	// chain-preserving credential the committed set includes the
+	// predecessor (all-consumed semantics). On the wire its fields
+	// (derived_from, source_root, source_root_canonical) ride alongside
+	// previousCredential inside credentialSubject, within the signing
+	// scope.
+	SourceCommitment *SourceCommitment
 }
 
-// Wire field names (credential body / credentialSubject). The origin
-// commitment names are pinned by the dPLaaX Origin Source specification.
+// Wire field names (credential body / credentialSubject). The
+// source-commitment names are pinned by the dPLaaX specification.
 const (
 	keyContext            = "@context"
 	keyType               = "type"
@@ -182,10 +185,10 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 	if fields.PreviousCredential != "" {
 		subject[keyPreviousCredential] = fields.PreviousCredential
 	}
-	if fields.Origin != nil {
+	if fields.SourceCommitment != nil {
 		// Normalize to the wire grammar: unique set, lexicographic ascending.
-		set := make(map[string]bool, len(fields.Origin.DerivedFrom))
-		for _, d := range fields.Origin.DerivedFrom {
+		set := make(map[string]bool, len(fields.SourceCommitment.DerivedFrom))
+		for _, d := range fields.SourceCommitment.DerivedFrom {
 			set[d] = true
 		}
 		derived := make([]string, 0, len(set))
@@ -198,8 +201,8 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 			wire[i] = d
 		}
 		subject[keyDerivedFrom] = wire
-		subject[keySourceRoot] = fields.Origin.SourceRoot
-		subject[keySourceRootCanon] = fields.Origin.SourceRootCanonical
+		subject[keySourceRoot] = fields.SourceCommitment.SourceRoot
+		subject[keySourceRootCanon] = fields.SourceCommitment.SourceRootCanonical
 	}
 	body := map[string]any{
 		keyContext: []any{ContextCredentialsV2, ContextDplaaxVCV1},
@@ -256,7 +259,7 @@ func (c *PipelinePassCredential) Subject() (CredentialSubjectFields, error) {
 // origin (FirstDrop). The base credential schema carries no upstream
 // references beyond this single link (Paper 01 §4.8 — chain topology stays
 // linear); the only sanctioned exception is the optional, non-linking
-// OriginCommitment audit attribute (see Origin).
+// SourceCommitment audit attribute.
 func (c *PipelinePassCredential) PreviousCredential() string {
 	m, ok := c.body[keySubject].(map[string]any)
 	if !ok {
@@ -265,10 +268,10 @@ func (c *PipelinePassCredential) PreviousCredential() string {
 	return getString(m, keyPreviousCredential)
 }
 
-// Origin returns the origin audit commitment (defensive copy); nil when the
-// credential carries none — which is every chain-preserving credential and
-// any FirstDrop issued outside the audit-reachable class.
-func (c *PipelinePassCredential) Origin() *OriginCommitment {
+// SourceCommitment returns the source audit commitment (defensive copy);
+// nil when the credential carries none — any credential issued outside the
+// audit-reachable class.
+func (c *PipelinePassCredential) SourceCommitment() *SourceCommitment {
 	m, ok := c.body[keySubject].(map[string]any)
 	if !ok {
 		return nil
@@ -279,7 +282,7 @@ func (c *PipelinePassCredential) Origin() *OriginCommitment {
 	if !hasDerived && !hasRoot && !hasCanon {
 		return nil
 	}
-	oc := &OriginCommitment{
+	oc := &SourceCommitment{
 		SourceRoot:          getString(m, keySourceRoot),
 		SourceRootCanonical: getString(m, keySourceRootCanon),
 	}

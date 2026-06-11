@@ -34,11 +34,11 @@
 
 **SchemaRef** — 出力の登録済みスキーマへの content-commit された参照。スキーマの遡及的改変を暗号学的に検出可能にする。
 
-**OriginCommitment** — FirstDrop 上の任意の attest。出力の派生元となった準拠 source クレデンシャル群への commitment。*監査属性*であって親リンクではない: チェーンは線形のままであり、外界からの読み取りは意図的にスコープ外。
+**SourceCommitment** — 任意のクレデンシャルが運べる attest。境界が消費した準拠 source クレデンシャル全集合への commitment（chain-preserving ではトリガーの先行イベントも含む — 全消費分セマンティクス）。*監査属性*であって親リンクではない: チェーンは線形のままであり、外界からの読み取りは意図的にスコープ外。
 
-**source_root** — OriginCommitment 内の Merkle set commitment。消費した source クレデンシャル群への、順序非依存でコンパクトな commitment。source ごとの inclusion proof を支える。
+**source_root** — SourceCommitment 内の Merkle set commitment。消費した source クレデンシャル群への、順序非依存でコンパクトな commitment。source ごとの inclusion proof を支える。
 
-**audit-reachable** — origin commitment を発行し、検証済み ingress クレデンシャルを保持する conformance class。データセットレベルの系譜を事後監査可能にする。
+**audit-reachable** — source commitment を発行し、検証済み ingress クレデンシャルを保持する conformance class。データセットレベルの系譜を事後監査可能にする。
 
 **boundary translation** — 外部エコシステムのクレデンシャルを、その内容を dPLaaX FirstDrop として再署名して取り込むこと。外部クレデンシャル自体の検証は取り込み時点で attest される。チェーンを過去方向に延長するものではない。
 

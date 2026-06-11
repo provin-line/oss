@@ -18,7 +18,7 @@
 
 すべての永続状態は設定可能なデータディレクトリ以下の YAML ファイル（DID ドキュメント、鍵、スキーマ、サブスクリプション、許可リスト）として管理する。VC ストア、ノンスストア、インフラオペレーター状態はインメモリ（PoC 想定 — 再起動時の影響はサービスごとにドキュメント化済み）。ストレージはストアインターフェース越しに抽象化されており、YAML を PostgreSQL に差し替えるのはフォークではなく Hub 側の置き換えで済む。
 
-audit-reachable conformance class（オリジンコミットメント — [pipeline/originsource](../pipeline/originsource/README.ja.md) 参照）で deploy する場合は、加えて **永続** VC ストアが必須となる: 遡及監査は発行からはるかに後で claim された source クレデンシャルを解決するため、インメモリストアではこの保持義務を満たせない。インメモリストアが満たすのは plain な PoC 想定のみである。
+audit-reachable conformance class（ソースコミットメント — [pipeline/originsource](../pipeline/originsource/README.ja.md) 参照）で deploy する場合は、加えて **永続** VC ストアが必須となる: 遡及監査は発行からはるかに後で claim された source クレデンシャルを解決するため、インメモリストアではこの保持義務を満たせない。インメモリストアが満たすのは plain な PoC 想定のみである。
 
 ## 二層認証
 

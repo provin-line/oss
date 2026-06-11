@@ -61,16 +61,16 @@ func TestNewAndAccessors(t *testing.T) {
 	if got := c.PreviousCredential(); got != "sha256:"+strings.Repeat("3", 64) {
 		t.Errorf("PreviousCredential = %q", got)
 	}
-	if c.Origin() != nil {
-		t.Errorf("Origin = %+v, want nil", c.Origin())
+	if c.SourceCommitment() != nil {
+		t.Errorf("SourceCommitment = %+v, want nil", c.SourceCommitment())
 	}
 	if c.Proof() != nil {
 		t.Errorf("Proof = %+v, want nil (unsigned)", c.Proof())
 	}
 }
 
-func TestNewWithOriginCommitment(t *testing.T) {
-	origin := &vc.OriginCommitment{
+func TestNewWithSourceCommitment(t *testing.T) {
+	commitment := &vc.SourceCommitment{
 		DerivedFrom: []string{
 			"did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:src",
 			"did:dplaax:poc.dplaax.io:org:mineB:pipeline:m:process:src",
@@ -82,26 +82,26 @@ func TestNewWithOriginCommitment(t *testing.T) {
 	subj.TransformationType = vc.TransformationAggregate
 	subj.InputHash = "" // absent for aggregation FirstDrops
 	c := newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:agg-01",
-		ValidFrom: time.Now(),
-		Subject:   subj,
-		Origin:    origin,
+		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:agg-01",
+		ValidFrom:        time.Now(),
+		Subject:          subj,
+		SourceCommitment: commitment,
 	})
 
-	got := c.Origin()
+	got := c.SourceCommitment()
 	if got == nil {
-		t.Fatal("Origin = nil, want commitment")
+		t.Fatal("SourceCommitment = nil, want commitment")
 	}
-	if got.SourceRoot != origin.SourceRoot || got.SourceRootCanonical != origin.SourceRootCanonical {
-		t.Errorf("Origin = %+v, want %+v", got, origin)
+	if got.SourceRoot != commitment.SourceRoot || got.SourceRootCanonical != commitment.SourceRootCanonical {
+		t.Errorf("SourceCommitment = %+v, want %+v", got, commitment)
 	}
-	if len(got.DerivedFrom) != 2 || got.DerivedFrom[0] != origin.DerivedFrom[0] {
+	if len(got.DerivedFrom) != 2 || got.DerivedFrom[0] != commitment.DerivedFrom[0] {
 		t.Errorf("DerivedFrom = %v", got.DerivedFrom)
 	}
 	// Defensive copy: mutating the returned commitment must not affect the body.
 	got.DerivedFrom[0] = "tampered"
-	if c.Origin().DerivedFrom[0] == "tampered" {
-		t.Error("Origin() returned a live reference, want defensive copy")
+	if c.SourceCommitment().DerivedFrom[0] == "tampered" {
+		t.Error("SourceCommitment() returned a live reference, want defensive copy")
 	}
 	if c.PreviousCredential() != "" {
 		t.Errorf("PreviousCredential = %q, want empty (FirstDrop)", c.PreviousCredential())
@@ -281,7 +281,7 @@ func TestUnmarshalEmptyObject(t *testing.T) {
 	if err := rt.UnmarshalJSON([]byte(`{}`)); err != nil {
 		t.Fatalf("UnmarshalJSON({}): %v", err)
 	}
-	if rt.Issuer() != "" || rt.Origin() != nil || rt.Proof() != nil {
+	if rt.Issuer() != "" || rt.SourceCommitment() != nil || rt.Proof() != nil {
 		t.Error("empty credential should read as zero values")
 	}
 }

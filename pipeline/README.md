@@ -25,10 +25,12 @@ push, poll, arrival of a non-conformant external credential — yields a **First
   single pending input is still a FirstDrop (the batch-of-1 rule).
 - Fan-out is permitted: linearity constrains each credential to one predecessor,
   not one successor — chains may branch forward.
-- A FirstDrop MAY carry an origin commitment (the audit-reachable conformance
+- Any credential MAY carry a source commitment (the audit-reachable conformance
   class — see [originsource/README.md](originsource/README.md)): an audit
-  attribute over the consumed source set, not a parent link. Trigger semantics
-  and linearity are unaffected.
+  attribute over the full consumed conformant source set, not a parent link.
+  Orthogonal to `previousCredential` — a chain-preserving credential's committed
+  set includes the triggering predecessor (all-consumed semantics). Trigger
+  semantics and linearity are unaffected.
 
 | Term | Operation | Trigger | Chain |
 |---|---|---|---|
