@@ -17,8 +17,12 @@ import (
 // are display-spoofing vectors) and "+" (the deleted join operator's
 // surface form) are rejected per credential.claim.charset; character
 // classes beyond those — case, non-ASCII letters — are deliberately the
-// profile's call. Grammar says nothing about claim meaning; semantics
-// are pinned per claim by the profile that owns the namespace.
+// profile's call. The spec pins the property snapshot to Unicode 15.0;
+// this implementation judges via the Go unicode tables, which currently
+// match (guarded by a unicode.Version test — a toolchain table bump
+// requires re-auditing the class delta against the pinned snapshot).
+// Grammar says nothing about claim meaning; semantics are pinned per
+// claim by the profile that owns the namespace.
 func (tc TransformationClaim) Validate() error {
 	s := string(tc)
 	if s == "" {

@@ -4,13 +4,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/provin-line/oss/vc"
 )
 
-// Grammar checks mirror the spec vectors cred-023 (no "+" joins) and
-// cred-024 (bare values rejected): a claim is a single <namespace>:<label>
-// token (credential.claim.grammar).
+// Grammar checks mirror the spec vectors cred-023 (no "+" joins),
+// cred-024 (bare values rejected), cred-028 (Cf inside a label), and
+// cred-029 ("+" inside a label): a claim is a single <namespace>:<label>
+// token (credential.claim.grammar) over the pinned character set
+// (credential.claim.charset).
 func TestTransformationClaimValidateGrammar(t *testing.T) {
 	valid := []vc.TransformationClaim{
 		vc.ClaimFilter, vc.ClaimConvert, vc.ClaimFilterConvert,
@@ -37,11 +40,24 @@ func TestTransformationClaimValidateGrammar(t *testing.T) {
 		{"provin:fil\tter", "control byte in label"},
 		{"provin:fil\u00a0ter", "non-ASCII whitespace (NBSP) in label"},
 		{"provin:fil\u200eter", "format character (bidi control) in label"},
+		{"provin:fil\u200bter", "zero-width space (Cf) in label (cred-028)"},
 	}
 	for _, tt := range invalid {
 		if err := tt.claim.Validate(); err == nil {
 			t.Errorf("Validate(%q) = nil, want error: %s", tt.claim, tt.name)
 		}
+	}
+}
+
+// credential.claim.charset pins its property snapshot to Unicode 15.0.
+// Validate judges via the Go unicode tables, so this guard fails loudly
+// when a toolchain upgrade bumps them: re-audit the White_Space/Cc/Cf
+// delta against the pinned snapshot before accepting the new tables
+// (newly assigned Cf code points would otherwise silently change which
+// claims this implementation accepts).
+func TestUnicodeTableSnapshot(t *testing.T) {
+	if unicode.Version != "15.0.0" {
+		t.Fatalf("Go unicode tables = %s, but credential.claim.charset pins Unicode 15.0: re-audit the class delta before accepting the new tables", unicode.Version)
 	}
 }
 
