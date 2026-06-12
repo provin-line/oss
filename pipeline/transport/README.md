@@ -24,6 +24,33 @@ event processor.
   publish on "passed" (producing processes only — a terminating process writes
   externally and publishes nothing), drop-with-log on "filtered"/"error".
   Retry / dead-letter policies plug in at this seam, not inside processes.
+  `Loop` (in `loop.go`) implements `contract.Process` and drives one subscription:
+  - **Sequence-on-success**: the publisher-assigned sequence number is advanced
+    only after a successful `Publish` call; a failed publish reuses the same
+    number on the next attempt. A gap in the subscriber's view is protocol
+    evidence of foul play — the publisher must never create one by its own failure.
+    Handlers are sequential per subscription (Subscriber contract), so
+    reuse-on-failure is race-free without a mutex.
+  - **Emission append-after-publish**: the emission log entry (credential hash +
+    sequence number) is appended to the `tlog` *after* a successful `Publish`.
+    `Append` receives a detached context (`context.WithoutCancel`) so that
+    ctx cancellation at graceful shutdown cannot abort recording an event that
+    has already been delivered. `Process` keeps the cancellable ctx — a stuck
+    processor must remain interruptible. If `Append` fails the event was
+    already delivered — the gap is the publisher's own audit-defense loss;
+    the sequence counter still advances. A crash between `Publish` and
+    `Append` creates an un-recorded delivery window (PoC posture — persistent
+    WAL is the follow-up).
+  - **sequenceNo encoding**: the sequence number in the emission record JSON is
+    encoded as a string (`"1"`, not `1`) — survives IEEE-754 JSON consumers
+    whose integer precision is limited to 2^53.
+  - **In-memory sequence restart**: the counter resets to 1 on process restart,
+    violating cross-restart monotonicity from a subscriber's view. Accepted PoC
+    posture (same family as wireauth's in-memory nonce store); persistent
+    sequence state is the follow-up.
+  - **Sink loops**: a `ChainTerminating` loop publishes nothing; wiring a
+    `Publisher`, `Codec`, or `Emission` to a sink is a misconfiguration
+    (`ErrSinkWithPublisher`).
 - Cross-organization wiring (imports/exports between accounts) is **not** this
   package's job — that belongs to the network chainmanager's `InfraOperator`.
 - **Payload delivery modes**: inside their own organization, processes always

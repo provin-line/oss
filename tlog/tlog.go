@@ -7,7 +7,7 @@
 // retention is a deployment obligation, not an optimization.
 //
 // Consumers:
-//   - publisher emission logs (envelope hash + sequence number)
+//   - publisher emission logs (credential hash + sequence number)
 //   - ingress receipt logs (verified ingress credentials)
 //   - persistent VC-store registration logs
 //   - the cryptosuite lifecycle registry (vc.LifecycleRegistry)
