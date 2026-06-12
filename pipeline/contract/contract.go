@@ -264,6 +264,13 @@ type ProcessObserver interface {
 // IngressVCStore persists verified ingress VCs for audit reachability.
 // Processes running a verification strategy other than None MUST be
 // configured with one — verifying without storing breaks chain audits.
+// The call is synchronous and sits between successful ingress
+// verification and transformation, regardless of the event's eventual
+// outcome; an event whose verified input cannot be stored fails
+// (StatusErrored) — fail loud, never continue without the audit trail.
+// The upstreamEndpoint names where the upstream credential can later be
+// fetched from (the publisher's serving boundary): in-org it comes from
+// ingress wiring config, cross-org from the subscription record.
 type IngressVCStore interface {
 	StoreIngressVC(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) error
 }

@@ -7,7 +7,12 @@ pool, no cache, no cross-event state. Stateful behaviour belongs to Source Proce
 
 ```
 ingress VC verification (strategy: none | adjacent | full)
-  → payload extraction → optional input-schema check
+  → ingress VC store (synchronous; a verified input that cannot be stored
+                      fails the event — audit reachability)
+  → payload extraction
+  → payload↔credential binding (sha256(payload) == predecessor's outputHash;
+                                mismatch or missing outputHash fails the event)
+  → optional input-schema check
   → ordered steps: filter (JSONata; falsy ⇒ "filtered", drop)
                    converter (JSONata; whole-doc or per-field steps mode)
   → optional output validation against the pinned schema version
@@ -48,3 +53,33 @@ cross-event state would make the process a Source Process.
 
 Filtered events drop silently (logged); errored events drop loudly (logged). No retry,
 no dead-letter — the transport loop is the seam where dead-lettering plugs in later.
+
+## Runtime (package chained)
+
+**Config surface** — `Strategy`, `IngressConformant`, `UpstreamEndpoint`, `Codec`,
+`Verifier` (adjacent) / `ChainVerifier` (full), `Store`, `Signer`, `Filters`,
+`Converter` (nil = passthrough), `InputValidator`/`InputSchemaRef`,
+`OutputValidator`/`OutputSchemaRef`, `Observers`, `Logger`, `Now`.
+
+**Strategy constraint** — `VerificationNone` and `VerificationUnknown` are rejected at
+construction time. A Chained Process signs chain-preserving credentials and requires a
+verified predecessor for every event; a run without conformant ingress is a FirstDrop
+by the trigger rule and belongs to a Source Process runtime. `IngressConformant` must
+also be `true` (declaration-matrix requirement).
+
+**Fail-closed verification policy (confirmed 2026-06-12)** — only `ConfidenceVerified`
+proceeds; `ConfidenceFailed` and `ConfidenceIndeterminate` both map to `StatusErrored`.
+Observation-class leniency (allowing indeterminate through) is a `SinkKind` property of
+sinks, never of producing processes. The runtime also enforces the payload↔credential
+binding before transformation — the verifier holds only the credential; the runtime is
+the one party holding both artifacts, so its own emitted link satisfies chain
+continuity by construction.
+
+**By-reference limitation** — a `nil` Payload in the decoded envelope (by-reference
+delivery mode) is rejected with `StatusErrored`. By-reference ingress fetch is not
+implemented in the PoC Chained runtime; it lands with the resolver client.
+
+**Result / Go error split** — domain failures (verification, store, nil payload, schema,
+filter, converter, strict-decode, signing) produce a `StatusErrored` `*Result` with a
+non-empty `Error` string; `Process` returns `(result, nil)`. The Go error return is
+reserved for context cancellation (`ctx.Err()`) and internal invariant violations.

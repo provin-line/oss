@@ -14,4 +14,7 @@
   payload (`structpb` collapsing large integers) must fail loudly rather than ship a
   VC whose receiver-side canonicalization diverges from the issuer's.
 - The ingress-VC store obligation (processes that verify must store what they
-  verified) is satisfied by `vcobserver`'s ingress store.
+  verified) is a synchronous lifecycle obligation — `contract.IngressVCStore`,
+  called between verification and transformation; a store failure fails the
+  event. `vcobserver`'s store client is the reference implementation backing
+  that interface; only the observation events themselves are fire-and-forget.
