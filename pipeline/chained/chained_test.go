@@ -573,8 +573,8 @@ func TestProcess_HappyPath_Adjacent(t *testing.T) {
 	if obs.calls[0].Result == nil {
 		t.Error("Observer ProcessEvent.Result is nil")
 	}
-	if obs.calls[0].VCRef == "" {
-		t.Error("Observer ProcessEvent.VCRef is empty on passed result")
+	if obs.calls[0].IssuedVCRef == "" {
+		t.Error("Observer ProcessEvent.IssuedVCRef is empty on passed result")
 	}
 }
 
@@ -1647,12 +1647,12 @@ func TestProcess_ProcessEventFields_Passed(t *testing.T) {
 	if ev.OutputHash == "" {
 		t.Error("ProcessEvent.OutputHash is empty")
 	}
-	if ev.VCRef == "" {
-		t.Error("ProcessEvent.VCRef is empty on passed result")
+	if ev.IssuedVCRef == "" {
+		t.Error("ProcessEvent.IssuedVCRef is empty on passed result")
 	}
-	// VCRef must be sha256:<hex>
-	if len(ev.VCRef) < 8 || ev.VCRef[:7] != "sha256:" {
-		t.Errorf("VCRef=%q does not start with sha256:", ev.VCRef)
+	// IssuedVCRef must be sha256:<hex>
+	if len(ev.IssuedVCRef) < 8 || ev.IssuedVCRef[:7] != "sha256:" {
+		t.Errorf("IssuedVCRef=%q does not start with sha256:", ev.IssuedVCRef)
 	}
 }
 

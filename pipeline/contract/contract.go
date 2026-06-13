@@ -244,14 +244,35 @@ type EnvelopeCodec interface {
 }
 
 // ProcessEvent is the post-processing notification delivered to observers.
+//
+// The credential-reference fields are named by ROLE so a generic observer
+// never has to infer what a non-empty value means from prose: a producing
+// process sets IssuedVCRef (the credential it minted); a terminating Sink
+// Process sets ConsumedVCRef (the credential it consumed and terminated).
+// At most one is populated per event; the other is empty.
 type ProcessEvent struct {
 	Result *Result
-	// InputHash / OutputHash are the sha256 hex digests embedded in the VC.
+	// InputHash / OutputHash are sha256 hex digests ("sha256:<hex>"). For a
+	// producing process they are the issued credential's input/output hashes.
+	// For a terminating Sink Process, InputHash is the hash of the consumed
+	// payload (== the consumed credential's outputHash, enforced by the binding
+	// gate) and OutputHash is empty — a sink produces nothing in-network.
 	InputHash  string
 	OutputHash string
-	// VCRef is the issued credential's content address ("sha256:<hex>").
-	VCRef     string
-	Timestamp time.Time
+	// IssuedVCRef is the content address ("sha256:<hex>") of the credential
+	// this process ISSUED. Producing processes (Source, Chained) set it; a
+	// terminating Sink Process leaves it empty — it issues nothing.
+	IssuedVCRef string
+	// ConsumedVCRef is the content address of the credential this process
+	// CONSUMED at its terminating boundary — a Sink Process sets it as the
+	// audit handle back to the chain it terminated. Producing processes leave
+	// it empty: their consumed predecessor is already reachable via the issued
+	// credential's previousCredential. Resolution caveat: an observation-only
+	// sink does not store the consumed credential for an invalid/indeterminate
+	// verdict (store-on-verified), so resolving ConsumedVCRef in that case
+	// depends on the credential remaining available upstream.
+	ConsumedVCRef string
+	Timestamp     time.Time
 }
 
 // ProcessObserver is notified after each processed event. Observation is

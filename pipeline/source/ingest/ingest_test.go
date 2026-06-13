@@ -220,12 +220,12 @@ func TestProcess_HappyPath(t *testing.T) {
 		t.Errorf("issued subject.OutputHash=%q, want %q", subj.OutputHash, wantHash)
 	}
 
-	// Observer notified once with a non-empty VCRef.
+	// Observer notified once with a non-empty IssuedVCRef.
 	if len(obs.calls) != 1 {
 		t.Fatalf("Observer calls=%d, want 1", len(obs.calls))
 	}
-	if obs.calls[0].VCRef == "" {
-		t.Error("Observer ProcessEvent.VCRef is empty on passed result")
+	if obs.calls[0].IssuedVCRef == "" {
+		t.Error("Observer ProcessEvent.IssuedVCRef is empty on passed result")
 	}
 }
 
@@ -477,11 +477,11 @@ func TestProcess_ProcessEventFields_Passed(t *testing.T) {
 	if ev.OutputHash != wantHash {
 		t.Errorf("OutputHash=%q, want %q", ev.OutputHash, wantHash)
 	}
-	if ev.VCRef == "" {
-		t.Error("ProcessEvent.VCRef is empty on passed result")
+	if ev.IssuedVCRef == "" {
+		t.Error("ProcessEvent.IssuedVCRef is empty on passed result")
 	}
-	if len(ev.VCRef) < 8 || ev.VCRef[:7] != "sha256:" {
-		t.Errorf("VCRef=%q does not start with sha256:", ev.VCRef)
+	if len(ev.IssuedVCRef) < 8 || ev.IssuedVCRef[:7] != "sha256:" {
+		t.Errorf("IssuedVCRef=%q does not start with sha256:", ev.IssuedVCRef)
 	}
 }
 

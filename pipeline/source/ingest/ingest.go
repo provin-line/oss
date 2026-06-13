@@ -226,11 +226,11 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, inputHash, o
 		return
 	}
 	ev := contract.ProcessEvent{
-		Result:     r,
-		InputHash:  inputHash,
-		OutputHash: outputHash,
-		VCRef:      vcRef,
-		Timestamp:  p.now(),
+		Result:      r,
+		InputHash:   inputHash,
+		OutputHash:  outputHash,
+		IssuedVCRef: vcRef,
+		Timestamp:   p.now(),
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
