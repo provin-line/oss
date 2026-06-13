@@ -17,6 +17,8 @@ boundary translation の DID-source 形、の契約。トリガーは foreign DI
 
 ## 参照実装：apipush/
 
-HTTP プッシュエンドポイント（`POST /push`、JSON のみ、ボディサイズ上限あり）がプロセスの入力キューにパブリッシュし、`GET /health` も提供する。署名パスに関する注記：PoC 参照実装は検証戦略 `none` で設定された下流 Chained Process ヘッドに向けて生のペイロードをパブリッシュする。自己完結型の署名バリアント（FirstDrop 自身を発行する）も同様に `pipeline/contract` に準拠する。
+HTTP プッシュエンドポイント（`POST /push`、JSON のみ、ボディサイズ上限あり）がプロセスの入力キューにパブリッシュし、`GET /health` も提供する。署名パスに関する注記：HTTP エンドポイントはトランスポートアダプタ（Subscriber）であり、生のペイロードを下流の **Source Process** ランタイム — [`ingest.go`](ingest.go) の FirstDrop 署名器 — に向けてパブリッシュする。この署名器は何も検証せず（`VerificationNone` は Source の定義そのもの）、バイト列をそのまま署名する。エンドポイントと署名器を1つのプロセスに融合した自己完結型バリアントも同様に `pipeline/contract` に準拠する。
+
+署名ランタイムは設計上 **transform-free**：filter / convert / enrich は Chained Process の責務であり、boundary translation の再整形はバイト列が署名器に届く*前*にアダプタ自身のロジックで行う（上記）。Source に変換を持たせると、対称性で Sink にも同じことが起き、Source / Chained / Sink の区別が何でも屋の単一プロセスへと崩れる。
 
 その他の外部ソースメカニクス（ファイルリーダー、スケジューラ・ポーラー、アーカイブリプレイ）も同じ形状に従い、ここまたは拡張リポジトリに置かれる。

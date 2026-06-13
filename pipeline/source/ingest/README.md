@@ -40,10 +40,18 @@ accountability (see DID method tiers in the glossary).
 ## Reference implementation: apipush/
 
 HTTP push endpoint (`POST /push`, JSON only, bounded body size) publishing to the
-process's input queue, plus `GET /health`. Signing-path note: the PoC reference
-implementation publishes raw payloads for a downstream Chained Process head
-configured with verification strategy `none`; a self-contained signing variant
-(emitting the FirstDrop itself) conforms to `pipeline/contract` the same way.
+process's input queue, plus `GET /health`. Signing-path note: the HTTP endpoint is
+a transport adapter (a Subscriber) that publishes raw payloads to a downstream
+**Source Process** runtime — the FirstDrop signer in [`ingest.go`](ingest.go),
+which verifies nothing (`VerificationNone` is definitional for a Source) and signs
+the bytes verbatim. A self-contained variant fusing the endpoint and the signer
+into one process conforms to `pipeline/contract` the same way.
+
+The signing runtime is **transform-free** by design: filter / convert / enrich is
+the Chained Process's responsibility, so re-shaping for boundary translation is the
+adapter's own logic *before* the bytes reach the signer (above). Letting a Source
+transform would, by symmetry, do the same to the Sink and collapse the
+Source / Chained / Sink distinction into a single do-everything process.
 
 Other external-source mechanics (file readers, schedulers/pollers, archive replay)
 follow the same shape and may live here or in extension repositories.
