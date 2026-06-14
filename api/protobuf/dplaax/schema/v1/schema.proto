@@ -1,0 +1,81 @@
+// dplaax.schema.v1 is the append-only registry of pipeline data schemas. A
+// registered version is immutable; deprecation is a soft flag, never a deletion.
+// Versions are content-addressed and server-assigned — there is no "latest"
+// resolution, by design (pipelines pin exact versions; drift between stages is
+// the failure mode this prevents).
+syntax = "proto3";
+
+package dplaax.schema.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/schema/v1";
+
+// SchemaService registers and serves immutable schema versions.
+service SchemaService {
+  // RegisterSchema appends a new immutable version. The version is assigned by
+  // the server as "YYYY-MM-DD-{hash}", where hash is the first 16 hex chars of a
+  // SHA-256 over length-prefixed (format, body, prerelease) in that order (date =
+  // server clock). Registering byte-identical (format, body, prerelease) content
+  // is idempotent within a UTC day: it returns the existing version rather than
+  // erroring. If that existing version was since deprecated, the returned schema
+  // carries deprecated=true (re-registration does not revive it — deprecation has
+  // no inverse, by design).
+  rpc RegisterSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
+
+  // GetSchema returns one exact (name, version). No "latest" form exists.
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+
+  // ListSchemas lists the versions of a name, filtered by the include flags.
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
+
+  // DeprecateSchema sets the soft deprecation flag; the body is retained.
+  rpc DeprecateSchema(DeprecateSchemaRequest) returns (DeprecateSchemaResponse);
+}
+
+// Schema is one immutable registered version.
+message Schema {
+  string name = 1;
+  // version is the complete unique key "YYYY-MM-DD-{hash16}" — the hash already
+  // covers prerelease, so prerelease is not a separate key dimension.
+  string version = 2;
+  // prerelease is an optional label, for listing/display; empty means stable.
+  string prerelease = 3;
+  // schema_format names the schema language, e.g. "JsonSchema".
+  string schema_format = 4;
+  // schema_body is the opaque schema document bytes.
+  bytes schema_body = 5;
+  bool deprecated = 6;
+}
+
+message RegisterSchemaRequest {
+  string name = 1;
+  string schema_format = 2;
+  bytes schema_body = 3;
+  string prerelease = 4;
+}
+message RegisterSchemaResponse {
+  // schema carries the server-assigned version.
+  Schema schema = 1;
+}
+
+message GetSchemaRequest {
+  string name = 1;
+  string version = 2;
+}
+message GetSchemaResponse {
+  Schema schema = 1;
+}
+
+message ListSchemasRequest {
+  string name = 1;
+  bool include_deprecated = 2;
+  bool include_prerelease = 3;
+}
+message ListSchemasResponse {
+  repeated Schema schemas = 1;
+}
+
+message DeprecateSchemaRequest {
+  string name = 1;
+  string version = 2;
+}
+message DeprecateSchemaResponse {}

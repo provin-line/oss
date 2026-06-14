@@ -12,8 +12,11 @@ var (
 	ErrExists   = errors.New("schemaregistry: version already exists")
 )
 
-// Schema is one immutable schema version. Version is content-addressed
-// ("YYYY-MM-DD-{sha256(format+body)[:6]}") and assigned by the service.
+// Schema is one immutable schema version. Version is content-addressed and
+// assigned by the service: "YYYY-MM-DD-{hash16}", where hash16 is the first 16
+// hex chars (64 bits) of a SHA-256 over a domain-separated (format, body,
+// prerelease) encoding. Because the hash covers prerelease, Version is a complete
+// unique key and Prerelease is listing/display metadata, not a key dimension.
 type Schema struct {
 	Name         string
 	Version      string

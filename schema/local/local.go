@@ -65,30 +65,53 @@ func New() *Validator {
 	return &Validator{schemas: map[string]*entry{}}
 }
 
-// Add registers a JSON Schema document under id, compiling it so a malformed
-// schema fails loudly here rather than at first validation. Re-adding an id
-// overwrites it.
-func (v *Validator) Add(id string, document []byte) error {
-	// Strict-decode the schema document (the only JSON decode path on protocol
-	// boundaries): duplicate keywords / trailing data / invalid Unicode are
-	// rejected, so the registry never commits-by-hash to a schema whose
-	// validation semantics are ambiguous across implementations.
+// validateResourceID is the placeholder compile location used by
+// ValidateDocument. External $ref is denied and internal ("#/…") refs resolve
+// against the document being compiled, so the base URI is immaterial — a fixed
+// value keeps standalone validation deterministic.
+const validateResourceID = "urn:dplaax:schema-local:document"
+
+// compile is the single policy point shared by Add and ValidateDocument:
+// strict-decode the document (the only JSON decode path on protocol boundaries —
+// duplicate keywords / trailing data / invalid Unicode are rejected), pin the
+// draft to 2020-12 (the library's default tracks "latest supported" and shifts),
+// and deny external $ref resolution. It returns the compiled schema.
+func compile(id string, document []byte) (*jsonschema.Schema, error) {
 	var doc any
 	if err := canon.NewStrictDecoder(document).Decode(&doc); err != nil {
-		return fmt.Errorf("schema/local: schema %q is not strict-decodable JSON: %w", id, err)
+		return nil, fmt.Errorf("schema/local: not strict-decodable JSON: %w", err)
 	}
 	c := jsonschema.NewCompiler()
-	// Pin the draft so a no-$schema document validates the same way across
-	// library versions (the library's default tracks "latest supported" and
-	// shifts), and deny external $ref resolution.
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.UseLoader(denyLoader{})
 	if err := c.AddResource(id, doc); err != nil {
-		return fmt.Errorf("schema/local: add schema %q: %w", id, err)
+		return nil, fmt.Errorf("schema/local: add resource: %w", err)
 	}
 	compiled, err := c.Compile(id)
 	if err != nil {
-		return fmt.Errorf("schema/local: compile schema %q: %w", id, err)
+		return nil, fmt.Errorf("schema/local: compile: %w", err)
+	}
+	return compiled, nil
+}
+
+// ValidateDocument reports whether document is a well-formed, self-contained
+// JSON Schema: it must strict-decode, compile under Draft 2020-12, and reference
+// no external $ref. This is the registry-admission check the schema registry
+// reuses (so the registry never holds a schema a downstream validator would
+// reject) and the precondition Add enforces before storing. It registers
+// nothing and resolves no reference.
+func ValidateDocument(document []byte) error {
+	_, err := compile(validateResourceID, document)
+	return err
+}
+
+// Add registers a JSON Schema document under id, compiling it (via the shared
+// policy in compile) so a malformed schema fails loudly here rather than at
+// first validation. Re-adding an id overwrites it.
+func (v *Validator) Add(id string, document []byte) error {
+	compiled, err := compile(id, document)
+	if err != nil {
+		return fmt.Errorf("schema/local: schema %q: %w", id, err)
 	}
 	sum := sha256.Sum256(document)
 	v.mu.Lock()
