@@ -33,4 +33,6 @@ type LifecycleRegistry interface {
 // WithLifecycleRegistry wires the lifecycle registry consulted during
 // signer-authenticity evaluation (Active → verified; Deprecated → verified
 // with annotation; Sunset/Unknown → failed).
-func WithLifecycleRegistry(r LifecycleRegistry) VerifierOption { panic("not implemented") }
+func WithLifecycleRegistry(r LifecycleRegistry) VerifierOption {
+	return func(v *Verifier) { v.lifecycle = r }
+}

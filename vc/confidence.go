@@ -51,7 +51,21 @@ type AxisResult struct {
 // EvaluateConfidence computes the overall verdict as the greatest lower
 // bound (weakest link) of the three axes: any failed → failed; all verified
 // → verified; otherwise indeterminate.
-func EvaluateConfidence(axes AxisResult) ConfidenceState { panic("not implemented") }
+//
+// The glb is the minimum under the lattice order, which the ConfidenceState
+// iota encodes directly (ConfidenceFailed < ConfidenceIndeterminate <
+// ConfidenceVerified). The zero AxisResult therefore composes to
+// ConfidenceFailed — the lattice fails closed.
+func EvaluateConfidence(axes AxisResult) ConfidenceState {
+	min := axes.DataIntegrity
+	if axes.SignerAuthenticity < min {
+		min = axes.SignerAuthenticity
+	}
+	if axes.ChainConsistency < min {
+		min = axes.ChainConsistency
+	}
+	return min
+}
 
 // LifecyclePhase is the lifecycle position of a protocol identifier
 // (cryptosuite, canonicalizer), evaluated at the credential's proof.created

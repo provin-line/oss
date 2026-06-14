@@ -77,9 +77,15 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	default:
 		return nil, fmt.Errorf("did: unknown verification relationship %q", rel)
 	}
+	// Resolve the reference to an absolute method id against the document
+	// subject, and match by that absolute id — NOT by fragment alone. Fragment-
+	// only matching lets a verification method with a different DID id but the
+	// same fragment be selected (key-confusion / fragment-collision injection).
+	wantID := absoluteKeyID(doc.ID, keyID)
+
 	listed := false
 	for _, r := range refs {
-		if fragmentOf(r) == frag {
+		if absoluteKeyID(doc.ID, r) == wantID {
 			listed = true
 			break
 		}
@@ -88,13 +94,18 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 		return nil, fmt.Errorf("did: key %q is not listed under relationship %q", keyID, rel)
 	}
 
-	// Locate the verification method by fragment.
+	// Locate the verification method by exact absolute id. Duplicate matching
+	// ids are ambiguous (a substituted key could shadow the genuine one) and are
+	// rejected rather than silently resolving to the first.
 	var vm *VerificationMethod
 	for i := range doc.VerificationMethod {
-		if fragmentOf(doc.VerificationMethod[i].ID) == frag {
-			vm = &doc.VerificationMethod[i]
-			break
+		if absoluteKeyID(doc.ID, doc.VerificationMethod[i].ID) != wantID {
+			continue
 		}
+		if vm != nil {
+			return nil, fmt.Errorf("did: duplicate verification method id %q (ambiguous)", wantID)
+		}
+		vm = &doc.VerificationMethod[i]
 	}
 	if vm == nil {
 		return nil, fmt.Errorf("did: no verification method for key %q", keyID)
@@ -106,6 +117,18 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	}
 
 	return decodeEd25519JWK(vm.PublicKeyJWK)
+}
+
+// absoluteKeyID resolves a DID URL key reference to its absolute form against
+// the document subject: a reference that already carries a DID part before its
+// "#" (e.g. "did:…:proc1#signing") is returned verbatim; a relative "#signing"
+// or a bare "signing" becomes "<subject>#signing". This is what lets key
+// matching compare full ids rather than fragments alone.
+func absoluteKeyID(subject, ref string) string {
+	if i := strings.Index(ref, "#"); i > 0 {
+		return ref // already absolute: a DID part precedes the fragment
+	}
+	return subject + "#" + fragmentOf(ref)
 }
 
 // fragmentOf returns the fragment of a key reference: the part after the last
