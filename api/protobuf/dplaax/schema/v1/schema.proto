@@ -9,7 +9,13 @@ package dplaax.schema.v1;
 
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/schema/v1";
 
-// SchemaService registers and serves immutable schema versions.
+import "o3co/authz/v1/policy.proto";
+
+// SchemaService registers and serves immutable schema versions. Every RPC
+// declares its authorization policy (resource + action) via the o3co.authz.v1
+// method option; the network layer's interceptor enforces it against the
+// configured policy verifier (an absent option would silently disable the check,
+// so all four RPCs carry one — asserted by a descriptor test).
 service SchemaService {
   // RegisterSchema appends a new immutable version. The version is assigned by
   // the server as "YYYY-MM-DD-{hash}", where hash is the first 16 hex chars of a
@@ -19,16 +25,24 @@ service SchemaService {
   // erroring. If that existing version was since deprecated, the returned schema
   // carries deprecated=true (re-registration does not revive it — deprecation has
   // no inverse, by design).
-  rpc RegisterSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
+  rpc RegisterSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse) {
+    option (o3co.authz.v1.policy) = {resource: "schemas", action: "register"};
+  }
 
   // GetSchema returns one exact (name, version). No "latest" form exists.
-  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse) {
+    option (o3co.authz.v1.policy) = {resource: "schemas", action: "read"};
+  }
 
   // ListSchemas lists the versions of a name, filtered by the include flags.
-  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse) {
+    option (o3co.authz.v1.policy) = {resource: "schemas", action: "read"};
+  }
 
   // DeprecateSchema sets the soft deprecation flag; the body is retained.
-  rpc DeprecateSchema(DeprecateSchemaRequest) returns (DeprecateSchemaResponse);
+  rpc DeprecateSchema(DeprecateSchemaRequest) returns (DeprecateSchemaResponse) {
+    option (o3co.authz.v1.policy) = {resource: "schemas", action: "deprecate"};
+  }
 }
 
 // Schema is one immutable registered version.

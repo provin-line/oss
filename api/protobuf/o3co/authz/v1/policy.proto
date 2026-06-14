@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package o3co.authz.v1;
+
+option go_package = "github.com/o3co/protobuf.interceptors/schema;policy";
+
+import "google/protobuf/descriptor.proto";
+
+message FieldMapping {
+  // placeholder is the name used inside the resource template, e.g. "id" for "<id>"
+  string placeholder = 1;
+  // request_field is the protobuf request field name to extract the value from
+  string request_field = 2;
+}
+
+message Policy {
+  string resource = 1;
+  string action = 2;
+  repeated FieldMapping field_mappings = 3;
+}
+
+extend google.protobuf.MethodOptions {
+  Policy policy = 50000;
+}

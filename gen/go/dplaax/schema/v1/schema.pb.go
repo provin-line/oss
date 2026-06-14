@@ -13,6 +13,7 @@
 package v1
 
 import (
+	_ "github.com/o3co/protobuf.interceptors/schema"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -522,7 +523,7 @@ var File_dplaax_schema_v1_schema_proto protoreflect.FileDescriptor
 
 const file_dplaax_schema_v1_schema_proto_rawDesc = "" +
 	"\n" +
-	"\x1ddplaax/schema/v1/schema.proto\x12\x10dplaax.schema.v1\"\xbc\x01\n" +
+	"\x1ddplaax/schema/v1/schema.proto\x12\x10dplaax.schema.v1\x1a\x1ao3co/authz/v1/policy.proto\"\xbc\x01\n" +
 	"\x06Schema\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1e\n" +
@@ -559,12 +560,16 @@ const file_dplaax_schema_v1_schema_proto_rawDesc = "" +
 	"\x16DeprecateSchemaRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\"\x19\n" +
-	"\x17DeprecateSchemaResponse2\x8e\x03\n" +
-	"\rSchemaService\x12c\n" +
-	"\x0eRegisterSchema\x12'.dplaax.schema.v1.RegisterSchemaRequest\x1a(.dplaax.schema.v1.RegisterSchemaResponse\x12T\n" +
-	"\tGetSchema\x12\".dplaax.schema.v1.GetSchemaRequest\x1a#.dplaax.schema.v1.GetSchemaResponse\x12Z\n" +
-	"\vListSchemas\x12$.dplaax.schema.v1.ListSchemasRequest\x1a%.dplaax.schema.v1.ListSchemasResponse\x12f\n" +
-	"\x0fDeprecateSchema\x12(.dplaax.schema.v1.DeprecateSchemaRequest\x1a).dplaax.schema.v1.DeprecateSchemaResponseB4Z2github.com/provin-line/oss/gen/go/dplaax/schema/v1b\x06proto3"
+	"\x17DeprecateSchemaResponse2\xec\x03\n" +
+	"\rSchemaService\x12|\n" +
+	"\x0eRegisterSchema\x12'.dplaax.schema.v1.RegisterSchemaRequest\x1a(.dplaax.schema.v1.RegisterSchemaResponse\"\x17\x82\xb5\x18\x13\n" +
+	"\aschemas\x12\bregister\x12i\n" +
+	"\tGetSchema\x12\".dplaax.schema.v1.GetSchemaRequest\x1a#.dplaax.schema.v1.GetSchemaResponse\"\x13\x82\xb5\x18\x0f\n" +
+	"\aschemas\x12\x04read\x12o\n" +
+	"\vListSchemas\x12$.dplaax.schema.v1.ListSchemasRequest\x1a%.dplaax.schema.v1.ListSchemasResponse\"\x13\x82\xb5\x18\x0f\n" +
+	"\aschemas\x12\x04read\x12\x80\x01\n" +
+	"\x0fDeprecateSchema\x12(.dplaax.schema.v1.DeprecateSchemaRequest\x1a).dplaax.schema.v1.DeprecateSchemaResponse\"\x18\x82\xb5\x18\x14\n" +
+	"\aschemas\x12\tdeprecateB4Z2github.com/provin-line/oss/gen/go/dplaax/schema/v1b\x06proto3"
 
 var (
 	file_dplaax_schema_v1_schema_proto_rawDescOnce sync.Once

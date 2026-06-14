@@ -33,7 +33,10 @@ lint: vet
 	@for s in scripts/check-*.sh; do [ -x "$$s" ] && "$$s" || true; done
 
 proto:
-	cd api/protobuf && buf generate
+	# Generate only dplaax/*; vendored third-party protos (o3co/authz) are
+	# compiled for import resolution but not regenerated (their Go comes from the
+	# upstream module — regenerating would double-register proto extensions).
+	cd api/protobuf && buf generate --path dplaax
 
 clean:
 	rm -rf $(DIST)
