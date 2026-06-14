@@ -42,9 +42,33 @@ import (
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver/local"
+	schemalocal "github.com/provin-line/oss/schema/local"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
+
+// readingSchema constrains the pipeline payload: an object with a numeric
+// "reading". The chained process validates its input and output against it.
+var readingSchema = []byte(`{
+	"type": "object",
+	"required": ["reading"],
+	"properties": { "reading": { "type": "number" } },
+	"additionalProperties": false
+}`)
+
+const readingSchemaID = "schema:reading"
+
+// readingValidator builds a schema validator registered with readingSchema and
+// the matching content-addressed SchemaRef.
+func readingValidator(t *testing.T) (*schemalocal.Validator, vc.SchemaRef) {
+	t.Helper()
+	v := schemalocal.New()
+	if err := v.Add(readingSchemaID, readingSchema); err != nil {
+		t.Fatalf("schema Add: %v", err)
+	}
+	sum := sha256.Sum256(readingSchema)
+	return v, vc.SchemaRef{ID: readingSchemaID, Type: "JsonSchema", ContentHash: "sha256:" + hex.EncodeToString(sum[:])}
+}
 
 // Process / owner identities for the two issuing processes, under one owner.
 const (
@@ -304,10 +328,11 @@ type e2eOutcome struct {
 // signing and verification, injecting one event. wireDocs populates the DID
 // resolver from the issuers' public keys — letting a caller omit a document to
 // exercise a verification failure end to end.
-func runPipeline(t *testing.T, wireDocs func(didRes *local.Resolver, srcPub, chPub []byte)) e2eOutcome {
+func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resolver, srcPub, chPub []byte)) e2eOutcome {
 	t.Helper()
 	codec := envelopecodec.New()
 	res := newMemResolver()
+	schemaValidator, schemaRef := readingValidator(t)
 
 	kpSource, err := (ed25519.Generator{}).Generate()
 	if err != nil {
@@ -381,6 +406,11 @@ func runPipeline(t *testing.T, wireDocs func(didRes *local.Resolver, srcPub, chP
 		Verifier:          verifier,
 		Store:             chainedStore,
 		Signer:            &registeringSigner{Signer: chainedSig, res: res, t: t},
+		// Real schema validation on input and output (passthrough: output == input).
+		InputValidator:  schemaValidator,
+		InputSchemaRef:  schemaRef,
+		OutputValidator: schemaValidator,
+		OutputSchemaRef: schemaRef,
 		// nil Converter → passthrough; output == input payload.
 	})
 	if err != nil {
@@ -442,9 +472,8 @@ func runPipeline(t *testing.T, wireDocs func(didRes *local.Resolver, srcPub, chP
 	<-bSourceChained.ready
 	<-bChainedSink.ready
 
-	// Inject one raw external push. Publish dispatches synchronously, so the
+	// Inject the raw external push. Publish dispatches synchronously, so the
 	// full source→chained→sink chain completes before Publish returns.
-	payload := []byte(`{"reading":42}`)
 	if err := bIngress.Publish(payload); err != nil {
 		t.Fatalf("inject: %v", err)
 	}
@@ -492,7 +521,7 @@ func sinkRecord(t *testing.T, out *bytes.Buffer) (confidence string, payload []b
 // signatures to verify, both controller chains to reach the owner, and the
 // chain structure (linkage / data-flow / ordering) to hold.
 func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
-	o := runPipeline(t, allDocs)
+	o := runPipeline(t, []byte(`{"reading":42}`), allDocs)
 
 	confidence, payload := sinkRecord(t, o.out)
 	if confidence != "verified" {
@@ -535,7 +564,7 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 // NOT as verified. This proves the positive test's "verified" is sensitive to a
 // real cryptographic failure, not a constant.
 func TestPipeline_MissingChainedDoc_NotVerified(t *testing.T) {
-	o := runPipeline(t, func(didRes *local.Resolver, srcPub, chPub []byte) {
+	o := runPipeline(t, []byte(`{"reading":42}`), func(didRes *local.Resolver, srcPub, chPub []byte) {
 		didRes.Add(processDoc(sourceDID, ownerDID, srcPub))
 		// chainedDID document deliberately omitted.
 		didRes.Add(ownerDoc(ownerDID))
@@ -544,6 +573,23 @@ func TestPipeline_MissingChainedDoc_NotVerified(t *testing.T) {
 	confidence, _ := sinkRecord(t, o.out)
 	if confidence == "verified" {
 		t.Errorf("sink confidence=%q, want a non-verified verdict (chained DID doc absent)", confidence)
+	}
+}
+
+// Negative control: a payload that violates the input schema is dropped by the
+// chained process (StatusErrored — a loud drop), so nothing is ever published
+// downstream and the sink writes nothing. This proves the schema gate is active
+// and actually gating, not a no-op.
+func TestPipeline_SchemaViolation_DroppedAtChained(t *testing.T) {
+	o := runPipeline(t, []byte(`{"reading":"hot"}`), allDocs) // reading must be a number
+
+	if line := bytes.TrimSpace(o.out.Bytes()); len(line) != 0 {
+		t.Errorf("sink wrote %q, want nothing (schema-violating payload must be dropped at the chained process)", line)
+	}
+	// The chained process recorded no emission and stored no ingress VC beyond
+	// the (verified) source credential it consumed before validating.
+	if o.chLog.count() != 0 {
+		t.Errorf("chained emission records=%d, want 0 (input rejected)", o.chLog.count())
 	}
 }
 
