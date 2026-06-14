@@ -3,17 +3,17 @@
 // FirstDrop, a Chained Process verifies + transforms + re-signs chain-preserving,
 // and a Sink Process verifies the full chain and writes an NDJSON record.
 //
-// What is REAL here: the envelope codec round-trip, the payload↔credential
-// binding gates, the previousCredential chain linkage, the chainwalk resolver
-// walk assembling the 2-hop chain, the transport loop's sequence numbering and
-// emission logging, the ingress-VC stores, and the console NDJSON output.
-//
-// What is FAKED: the verification VERDICTS. vc.Verifier.Verify / VerifyChain
-// are panic stubs pending the resolver/crypto layer, so the injected
-// provenance.Verifier and chainwalk.ChainCore return ConfidenceVerified. The
-// signers use vc.New (unsigned) — real DID-backed signing also lands with the
-// network layer. This test proves the pipeline WIRES and FLOWS end to end; real
-// cryptographic verification is the network/crypto step.
+// Everything on this path is REAL: real Ed25519 Data Integrity signing through
+// vcdid.Signer (over a keystore-backed vc.Builder), real credential
+// verification through vc.Verifier resolving Process DID Documents from a local
+// resolver — the three confidence axes, the controller-chain walk to the owner,
+// the previousCredential linkage, the outputHash[n] == inputHash[n+1] data-flow
+// invariant, and proof.created monotonicity. Around the crypto: the envelope
+// codec round-trip, the payload↔credential binding gates, the chainwalk
+// resolver walk assembling the 2-hop chain, the transport loop's sequence
+// numbering and emission logging, the ingress-VC stores, and the console NDJSON
+// output. A genuine source→chained→sink flow ends in a cryptographically
+// verified sink record.
 package e2e
 
 import (
@@ -21,23 +21,36 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/pipeline/chained"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
+	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/sink/console"
 	"github.com/provin-line/oss/pipeline/source/ingest"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
+	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
+)
+
+// Process / owner identities for the two issuing processes, under one owner.
+const (
+	ownerDID   = "did:dplaax:poc.dplaax.io:org:acme"
+	sourceDID  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:pipe:process:source"
+	chainedDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:pipe:process:chained"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,8 +93,8 @@ func (b *broker) Close() error  { return nil }
 
 // ---------------------------------------------------------------------------
 // In-memory credential resolver (shared) — the chainwalk's CredentialResolver.
-// Signers register issued credentials by content address; the sink's chainwalk
-// resolves predecessors from it.
+// The registering signers record issued credentials by content address; the
+// sink's chainwalk resolves predecessors from it.
 // ---------------------------------------------------------------------------
 
 type memResolver struct {
@@ -117,82 +130,92 @@ func (m *memResolver) ResolveCredential(_ context.Context, addr string) (*vc.Pip
 }
 
 // ---------------------------------------------------------------------------
-// Signers (vc.New, unsigned) — register every issued credential in the resolver.
+// Real signing: a keystore-backed vc.Builder behind vcdid.Signers, one per
+// issuing process. registeringSigner records every issued credential in the
+// shared resolver so the sink's chainwalk can reassemble the chain.
 // ---------------------------------------------------------------------------
 
-type sourceSigner struct {
-	t   *testing.T
+type memKeyStore struct{ keys map[string][]byte }
+
+func newMemKeyStore() *memKeyStore { return &memKeyStore{keys: map[string][]byte{}} }
+func (m *memKeyStore) SaveKeyPair(d string, keys map[keystore.KeyID]*crypto.KeyPair) error {
+	for id, kp := range keys {
+		m.keys[d+"#"+string(id)] = kp.PrivateKey
+	}
+	return nil
+}
+func (m *memKeyStore) GetPrivateKey(d string, id keystore.KeyID) ([]byte, error) {
+	k, ok := m.keys[d+"#"+string(id)]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	return k, nil
+}
+func (m *memKeyStore) DeleteKeys(string) error { return nil }
+
+// registeringSigner adds resolver registration around a vcdid.Signer — a test
+// stand-in for the network layer that publishes issued credentials to the VC
+// store. It carries both signing capabilities through the embedded Signer.
+type registeringSigner struct {
+	*vcdid.Signer
 	res *memResolver
-}
-
-func (s *sourceSigner) SignFirstDrop(_ context.Context, _ []byte, inputHash, outputHash string) (*vc.PipelinePassCredential, error) {
-	c, err := vc.New(vc.CredentialFields{
-		Issuer:    "did:example:source",
-		ValidFrom: time.Now(),
-		Subject: vc.CredentialSubjectFields{
-			PipelineID:          "pipe",
-			ProcessID:           "source",
-			TransformationClaim: vc.ClaimConvert,
-			InputHash:           inputHash,
-			OutputHash:          outputHash,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	s.res.register(s.t, c)
-	return c, nil
-}
-
-type chainedSigner struct {
 	t   *testing.T
-	res *memResolver
 }
 
-func (s *chainedSigner) SignChainPreserving(_ context.Context, _ []byte, inputHash, outputHash string, predecessor *vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
-	prevAddr, err := predecessor.Hash()
-	if err != nil {
-		return nil, err
+func (r *registeringSigner) SignFirstDrop(ctx context.Context, payload []byte, inputHash, outputHash string) (*vc.PipelinePassCredential, error) {
+	c, err := r.Signer.SignFirstDrop(ctx, payload, inputHash, outputHash)
+	if err == nil {
+		r.res.register(r.t, c)
 	}
-	c, err := vc.New(vc.CredentialFields{
-		Issuer:    "did:example:chained",
-		ValidFrom: time.Now(),
-		Subject: vc.CredentialSubjectFields{
-			PipelineID:          "pipe",
-			ProcessID:           "chained",
-			TransformationClaim: vc.ClaimConvert,
-			InputHash:           inputHash,
-			OutputHash:          outputHash,
-		},
-		PreviousCredential: prevAddr,
-	})
-	if err != nil {
-		return nil, err
+	return c, err
+}
+
+func (r *registeringSigner) SignChainPreserving(ctx context.Context, payload []byte, inputHash, outputHash string, predecessor *vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
+	c, err := r.Signer.SignChainPreserving(ctx, payload, inputHash, outputHash, predecessor)
+	if err == nil {
+		r.res.register(r.t, c)
 	}
-	s.res.register(s.t, c)
-	return c, nil
+	return c, err
 }
 
 // ---------------------------------------------------------------------------
-// Faked verification verdicts (vc.Verifier is a stub today).
+// DID documents: each process's #signing assertion key, controlled by the
+// process and the process controlled by the owner; the owner self-controlled.
 // ---------------------------------------------------------------------------
 
-type okVerifier struct{}
-
-func (okVerifier) Verify(_ context.Context, _ *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
-	return &vc.VerifyResult{Overall: vc.ConfidenceVerified}, nil
+func processDoc(processDID, owner string, pub []byte) *did.DIDDocument {
+	return &did.DIDDocument{
+		ID:         processDID,
+		Controller: owner,
+		VerificationMethod: []did.VerificationMethod{{
+			ID:         processDID + "#signing",
+			Type:       "JsonWebKey2020",
+			Controller: processDID,
+			PublicKeyJWK: map[string]any{
+				"kty": "OKP",
+				"crv": "Ed25519",
+				"x":   base64.RawURLEncoding.EncodeToString(pub),
+			},
+		}},
+		AssertionMethod: []string{processDID + "#signing"},
+	}
 }
 
-// okChainCore is the chainwalk.ChainCore: it receives the assembled chain and
-// returns a verdict. It records the assembled length so the test can assert the
-// walk reached the origin.
-type okChainCore struct {
+func ownerDoc(owner string) *did.DIDDocument {
+	return &did.DIDDocument{ID: owner, Controller: owner}
+}
+
+// countingChainCore wraps the real chain verifier to record the assembled chain
+// length, so the test can assert the walk reached the origin while still using
+// genuine VerifyChain semantics.
+type countingChainCore struct {
+	inner  *vc.Verifier
 	gotLen int
 }
 
-func (c *okChainCore) VerifyChain(_ context.Context, chain []*vc.PipelinePassCredential) (*vc.VerifyResult, error) {
+func (c *countingChainCore) VerifyChain(ctx context.Context, chain []*vc.PipelinePassCredential) (*vc.VerifyResult, error) {
 	c.gotLen = len(chain)
-	return &vc.VerifyResult{Overall: vc.ConfidenceVerified}, nil
+	return c.inner.VerifyChain(ctx, chain)
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +288,64 @@ func sha256Sum(b []byte) []byte {
 // The end-to-end flow
 // ---------------------------------------------------------------------------
 
-func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
+// e2eOutcome is what one pipeline run produced, for the test to assert over.
+type e2eOutcome struct {
+	out          *bytes.Buffer
+	core         *countingChainCore
+	res          *memResolver
+	srcLog       *memLog
+	chLog        *memLog
+	chainedStore *memStore
+	sinkStore    *memStore
+	payload      []byte
+}
+
+// runPipeline wires and runs the full source→chained→sink pipeline with real
+// signing and verification, injecting one event. wireDocs populates the DID
+// resolver from the issuers' public keys — letting a caller omit a document to
+// exercise a verification failure end to end.
+func runPipeline(t *testing.T, wireDocs func(didRes *local.Resolver, srcPub, chPub []byte)) e2eOutcome {
+	t.Helper()
 	codec := envelopecodec.New()
 	res := newMemResolver()
+
+	kpSource, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen source: %v", err)
+	}
+	kpChained, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen chained: %v", err)
+	}
+	ks := newMemKeyStore()
+	if err := ks.SaveKeyPair(sourceDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpSource}); err != nil {
+		t.Fatalf("save source key: %v", err)
+	}
+	if err := ks.SaveKeyPair(chainedDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpChained}); err != nil {
+		t.Fatalf("save chained key: %v", err)
+	}
+	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+
+	didRes := local.New()
+	wireDocs(didRes, kpSource.PublicKey, kpChained.PublicKey)
+	verifier := vc.NewVerifier(didRes, ed25519.Verifier{})
+
+	sourceSig, err := vcdid.NewSigner(vcdid.Config{
+		Builder: builder, IssuerDID: sourceDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: sourceDID + "#signing",
+		PipelineID:         "pipe", ProcessID: "source", TransformationClaim: vc.ClaimConvert,
+	})
+	if err != nil {
+		t.Fatalf("source vcdid.NewSigner: %v", err)
+	}
+	chainedSig, err := vcdid.NewSigner(vcdid.Config{
+		Builder: builder, IssuerDID: chainedDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: chainedDID + "#signing",
+		PipelineID:         "pipe", ProcessID: "chained", TransformationClaim: vc.ClaimConvert,
+	})
+	if err != nil {
+		t.Fatalf("chained vcdid.NewSigner: %v", err)
+	}
 
 	// Brokers: ingress (raw push → source), source → chained, chained → sink.
 	bIngress := newBroker()
@@ -275,7 +353,7 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 	bChainedSink := newBroker()
 
 	// --- Source (ingest, FirstDrop) ---
-	srcProc, err := ingest.New(ingest.Config{Signer: &sourceSigner{t: t, res: res}})
+	srcProc, err := ingest.New(ingest.Config{Signer: &registeringSigner{Signer: sourceSig, res: res, t: t}})
 	if err != nil {
 		t.Fatalf("ingest.New: %v", err)
 	}
@@ -300,9 +378,9 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 		IngressConformant: true,
 		UpstreamEndpoint:  "mem://source",
 		Codec:             codec,
-		Verifier:          okVerifier{},
+		Verifier:          verifier,
 		Store:             chainedStore,
-		Signer:            &chainedSigner{t: t, res: res},
+		Signer:            &registeringSigner{Signer: chainedSig, res: res, t: t},
 		// nil Converter → passthrough; output == input payload.
 	})
 	if err != nil {
@@ -323,7 +401,7 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 	}
 
 	// --- Sink (verify full via chainwalk, console NDJSON) ---
-	core := &okChainCore{}
+	core := &countingChainCore{inner: verifier}
 	chainVerifier, err := chainwalk.New(res, core)
 	if err != nil {
 		t.Fatalf("chainwalk.New: %v", err)
@@ -371,7 +449,27 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 		t.Fatalf("inject: %v", err)
 	}
 
-	// --- Assertions: the event reached the sink as a verified NDJSON record ---
+	cancel()
+	wg.Wait()
+	return e2eOutcome{
+		out: &out, core: core, res: res,
+		srcLog: srcLog, chLog: chLog,
+		chainedStore: chainedStore, sinkStore: sinkStore,
+		payload: payload,
+	}
+}
+
+// allDocs registers every Process and Owner document — the genuine-verification
+// wiring.
+func allDocs(didRes *local.Resolver, srcPub, chPub []byte) {
+	didRes.Add(processDoc(sourceDID, ownerDID, srcPub))
+	didRes.Add(processDoc(chainedDID, ownerDID, chPub))
+	didRes.Add(ownerDoc(ownerDID))
+}
+
+// sinkRecord parses the single NDJSON line the observation sink wrote.
+func sinkRecord(t *testing.T, out *bytes.Buffer) (confidence string, payload []byte) {
+	t.Helper()
 	line := bytes.TrimSpace(out.Bytes())
 	if len(line) == 0 {
 		t.Fatal("sink wrote nothing — the event did not flow end to end")
@@ -380,48 +478,73 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 		t.Fatalf("sink wrote %d NDJSON lines, want exactly 1", n)
 	}
 	var rec struct {
-		Credential string          `json:"credential"`
 		Confidence string          `json:"confidence"`
 		Payload    json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(line, &rec); err != nil {
 		t.Fatalf("sink record is not valid JSON: %v (%q)", err, line)
 	}
-	if rec.Confidence != "verified" {
-		t.Errorf("sink confidence=%q, want verified", rec.Confidence)
+	return rec.Confidence, rec.Payload
+}
+
+// With every DID document present, the event reaches the sink as a genuinely
+// verified record: the verdict required both Process DIDs to resolve, both
+// signatures to verify, both controller chains to reach the owner, and the
+// chain structure (linkage / data-flow / ordering) to hold.
+func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
+	o := runPipeline(t, allDocs)
+
+	confidence, payload := sinkRecord(t, o.out)
+	if confidence != "verified" {
+		t.Errorf("sink confidence=%q, want verified", confidence)
 	}
 	// The payload survived source (verbatim) and chained (passthrough) intact.
-	if string(rec.Payload) != string(payload) {
-		t.Errorf("sink payload=%q, want %q", rec.Payload, payload)
+	if string(payload) != string(o.payload) {
+		t.Errorf("sink payload=%q, want %q", payload, o.payload)
 	}
 
 	// The sink's chainwalk assembled the full 2-hop chain (chained head + source
 	// origin) — proving the resolver walk followed previousCredential to the
 	// FirstDrop.
-	if core.gotLen != 2 {
-		t.Errorf("chainwalk assembled chain length=%d, want 2 (chained + source origin)", core.gotLen)
+	if o.core.gotLen != 2 {
+		t.Errorf("chainwalk assembled chain length=%d, want 2 (chained + source origin)", o.core.gotLen)
 	}
-	if len(res.resolns) != 1 {
-		t.Errorf("resolver resolutions=%d, want 1 (the source origin)", len(res.resolns))
+	if len(o.res.resolns) != 1 {
+		t.Errorf("resolver resolutions=%d, want 1 (the source origin)", len(o.res.resolns))
 	}
 
 	// Both producing processes recorded an emission; both consuming boundaries
 	// stored their ingress VC.
-	if srcLog.count() != 1 {
-		t.Errorf("source emission records=%d, want 1", srcLog.count())
+	if o.srcLog.count() != 1 {
+		t.Errorf("source emission records=%d, want 1", o.srcLog.count())
 	}
-	if chLog.count() != 1 {
-		t.Errorf("chained emission records=%d, want 1", chLog.count())
+	if o.chLog.count() != 1 {
+		t.Errorf("chained emission records=%d, want 1", o.chLog.count())
 	}
-	if chainedStore.count() != 1 {
-		t.Errorf("chained ingress store=%d, want 1 (the source FirstDrop)", chainedStore.count())
+	if o.chainedStore.count() != 1 {
+		t.Errorf("chained ingress store=%d, want 1 (the source FirstDrop)", o.chainedStore.count())
 	}
-	if sinkStore.count() != 1 {
-		t.Errorf("sink ingress store=%d, want 1 (the chained credential)", sinkStore.count())
+	if o.sinkStore.count() != 1 {
+		t.Errorf("sink ingress store=%d, want 1 (the chained credential)", o.sinkStore.count())
 	}
+}
 
-	cancel()
-	wg.Wait()
+// Negative control: with the chained Process's DID document absent, the sink's
+// full-chain verification cannot authenticate the chained credential, so the
+// observation sink still writes the record (its policy surfaces failures) but
+// NOT as verified. This proves the positive test's "verified" is sensitive to a
+// real cryptographic failure, not a constant.
+func TestPipeline_MissingChainedDoc_NotVerified(t *testing.T) {
+	o := runPipeline(t, func(didRes *local.Resolver, srcPub, chPub []byte) {
+		didRes.Add(processDoc(sourceDID, ownerDID, srcPub))
+		// chainedDID document deliberately omitted.
+		didRes.Add(ownerDoc(ownerDID))
+	})
+
+	confidence, _ := sinkRecord(t, o.out)
+	if confidence == "verified" {
+		t.Errorf("sink confidence=%q, want a non-verified verdict (chained DID doc absent)", confidence)
+	}
 }
 
 func countLines(b []byte) int {
