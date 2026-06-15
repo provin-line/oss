@@ -30,9 +30,11 @@ type Record struct {
 	Index uint64
 	// Payload is the opaque record content; consumers define the encoding.
 	Payload []byte
-	// Hash chains the log: sha256 over (previous record's Hash ‖ canonical
-	// record bytes); the genesis record chains from a zero hash. Any
-	// retroactive modification breaks every subsequent hash.
+	// Hash is an implementation-defined commitment to this record: the chain
+	// hash — sha256 over (previous record's Hash ‖ canonical record bytes),
+	// the genesis record chaining from a zero hash — for hash-chain logs, or
+	// the Merkle leaf hash for tree logs. Any retroactive modification breaks
+	// every subsequent commitment.
 	Hash string
 }
 
@@ -64,10 +66,28 @@ type Log interface {
 	Checkpoint(ctx context.Context) (*Checkpoint, error)
 }
 
-// Proof is an inclusion or consistency proof path. Its interpretation is
-// implementation-defined (Merkle audit path for tree logs); verification
-// goes through the issuing implementation's verifier.
-type Proof struct {
+// InclusionProof is evidence that a single record is committed by a signed
+// Checkpoint — a Merkle audit path from the record's leaf to the tree root
+// (RFC 6962 §2.1.1). It is self-describing: LeafIndex and TreeSize pin which
+// leaf, in which tree state, the Path attests to. Proofs are a tree-log
+// capability (see Prover); hash-chain logs omit Prover and are audited by
+// chain replay instead.
+type InclusionProof struct {
+	// LeafIndex is the zero-based position of the proven record.
+	LeafIndex uint64
+	// TreeSize is the tree size the proof is against (== Checkpoint.Size).
+	TreeSize uint64
+	// Path is the ordered list of sibling hashes from leaf to root.
+	Path [][]byte
+}
+
+// ConsistencyProof is evidence that the log state committed by an older
+// Checkpoint is a prefix of the state committed by a newer one — the
+// append-only guarantee (RFC 6962 §2.1.2).
+type ConsistencyProof struct {
+	OldSize uint64
+	NewSize uint64
+	// Path is the ordered list of node hashes bridging the two tree states.
 	Path [][]byte
 }
 
@@ -75,10 +95,18 @@ type Proof struct {
 // (CT-style Merkle logs). Callers discover it by type assertion on a Log;
 // hash-chain implementations may omit it, in which case auditors verify by
 // replaying the chain segment instead.
+//
+// Proofs are generated here but verified independently of any Log instance:
+// standalone VerifyInclusion / VerifyConsistency functions — pure over the
+// pinned Merkle tree-hashing scheme — land with the Merkle implementation, when
+// that scheme is fixed. Keeping verification standalone is what makes a proof
+// "independently verifiable": a third party checks it against a signed
+// Checkpoint without trusting the log.
 type Prover interface {
-	// ProveInclusion proves that the record at index is committed by cp.
-	ProveInclusion(ctx context.Context, index uint64, cp *Checkpoint) (*Proof, error)
-	// ProveConsistency proves that the log state committed by older is a
-	// prefix of the state committed by newer (append-only evidence).
-	ProveConsistency(ctx context.Context, older, newer *Checkpoint) (*Proof, error)
+	// ProveInclusion returns an InclusionProof that the record at index is
+	// committed by cp.
+	ProveInclusion(ctx context.Context, index uint64, cp *Checkpoint) (*InclusionProof, error)
+	// ProveConsistency returns a ConsistencyProof that the state committed by
+	// older is a prefix of the state committed by newer (append-only evidence).
+	ProveConsistency(ctx context.Context, older, newer *Checkpoint) (*ConsistencyProof, error)
 }
