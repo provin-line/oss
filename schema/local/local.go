@@ -13,12 +13,13 @@
 // canon.StrictDecoder — the one JSON decode path permitted on protocol
 // boundaries — so duplicate keys, trailing data, and invalid Unicode are
 // rejected here exactly as elsewhere in the stack; the validator never approves
-// ambiguous bytes the codec would refuse. The compiler denies external $ref
-// (denyLoader) so schemas are self-contained as a structural guarantee, and
-// pins the default dialect to Draft 2020-12, under which "format" is an
-// annotation, not an assertion. A schema that explicitly declares an older
-// $schema (e.g. draft-07) resolves its embedded meta-schema and follows that
-// dialect's rules — including format assertion — by design.
+// ambiguous bytes the codec would refuse. Schema-document compilation (strict
+// decode, Draft 2020-12 pin, external-$ref denial) is the shared
+// schema/internal/schemadoc policy, the same one schema.ValidateJSONSchema
+// applies at registry admission, so a stored schema is exactly one the registry
+// would admit. Under Draft 2020-12 "format" is an annotation, not an assertion;
+// a schema that explicitly declares an older $schema (e.g. draft-07) follows
+// that dialect's rules — including format assertion — by design.
 package local
 
 import (
@@ -31,23 +32,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/schema/internal/schemadoc"
 	"github.com/provin-line/oss/vc"
 )
 
 // schemaType is the only SchemaRef.Type this validator understands.
 const schemaType = "JsonSchema"
-
-// denyLoader makes "self-contained schema" a STRUCTURAL guarantee rather than a
-// convention: any external $ref (file://, http(s)://, …) fails closed at
-// compile time. Without it the library's default FileLoader would read local
-// files referenced by a crafted $ref — a local-file-inclusion vector in a layer
-// whose threat model already assumes adversarially modified schemas. Internal
-// ("#/…") refs and refs to the resource being compiled do not hit the loader.
-type denyLoader struct{}
-
-func (denyLoader) Load(url string) (any, error) {
-	return nil, fmt.Errorf("schema/local: external $ref is not allowed: %s", url)
-}
 
 // Validator is an in-memory JSON Schema validator. Safe for concurrent use.
 type Validator struct {
@@ -65,51 +55,12 @@ func New() *Validator {
 	return &Validator{schemas: map[string]*entry{}}
 }
 
-// validateResourceID is the placeholder compile location used by
-// ValidateDocument. External $ref is denied and internal ("#/…") refs resolve
-// against the document being compiled, so the base URI is immaterial — a fixed
-// value keeps standalone validation deterministic.
-const validateResourceID = "urn:dplaax:schema-local:document"
-
-// compile is the single policy point shared by Add and ValidateDocument:
-// strict-decode the document (the only JSON decode path on protocol boundaries —
-// duplicate keywords / trailing data / invalid Unicode are rejected), pin the
-// draft to 2020-12 (the library's default tracks "latest supported" and shifts),
-// and deny external $ref resolution. It returns the compiled schema.
-func compile(id string, document []byte) (*jsonschema.Schema, error) {
-	var doc any
-	if err := canon.NewStrictDecoder(document).Decode(&doc); err != nil {
-		return nil, fmt.Errorf("schema/local: not strict-decodable JSON: %w", err)
-	}
-	c := jsonschema.NewCompiler()
-	c.DefaultDraft(jsonschema.Draft2020)
-	c.UseLoader(denyLoader{})
-	if err := c.AddResource(id, doc); err != nil {
-		return nil, fmt.Errorf("schema/local: add resource: %w", err)
-	}
-	compiled, err := c.Compile(id)
-	if err != nil {
-		return nil, fmt.Errorf("schema/local: compile: %w", err)
-	}
-	return compiled, nil
-}
-
-// ValidateDocument reports whether document is a well-formed, self-contained
-// JSON Schema: it must strict-decode, compile under Draft 2020-12, and reference
-// no external $ref. This is the registry-admission check the schema registry
-// reuses (so the registry never holds a schema a downstream validator would
-// reject) and the precondition Add enforces before storing. It registers
-// nothing and resolves no reference.
-func ValidateDocument(document []byte) error {
-	_, err := compile(validateResourceID, document)
-	return err
-}
-
-// Add registers a JSON Schema document under id, compiling it (via the shared
-// policy in compile) so a malformed schema fails loudly here rather than at
-// first validation. Re-adding an id overwrites it.
+// Add registers a JSON Schema document under id, compiling it through the shared
+// schemadoc policy (strict decode, Draft 2020-12, no external $ref) so a
+// malformed schema fails loudly here rather than at first validation. Re-adding
+// an id overwrites it.
 func (v *Validator) Add(id string, document []byte) error {
-	compiled, err := compile(id, document)
+	compiled, err := schemadoc.Compile(id, document)
 	if err != nil {
 		return fmt.Errorf("schema/local: schema %q: %w", id, err)
 	}

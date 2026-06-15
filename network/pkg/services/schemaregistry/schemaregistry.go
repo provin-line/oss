@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
-	"github.com/provin-line/oss/schema/local"
+	"github.com/provin-line/oss/schema"
 )
 
 // formatJSONSchema is the only schema_format this slice admits.
@@ -85,7 +85,7 @@ func (s *Service) Register(ctx context.Context, name, format string, body []byte
 	}
 	// D2: the body must be a well-formed, self-contained JsonSchema, so the
 	// registry never holds a schema a downstream validator would reject.
-	if err := local.ValidateDocument(body); err != nil {
+	if err := schema.ValidateJSONSchema(body); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 
