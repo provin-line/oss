@@ -161,9 +161,9 @@ func TestConvert_IntegerPrecision_Golden(t *testing.T) {
 	}
 }
 
-// TestConvert_ValidateSubset_Integration verifies that after a transformation
-// the output can be validated for expected fields using ValidateSubset.
-func TestConvert_ValidateSubset_Integration(t *testing.T) {
+// TestConvert_RequireFields_Integration verifies that after a transformation
+// the output can be validated for expected fields using RequireFields.
+func TestConvert_RequireFields_Integration(t *testing.T) {
 	c, err := jsonata.New(`{"name": $.firstName & " " & $.lastName, "age": $.age}`)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -175,8 +175,8 @@ func TestConvert_ValidateSubset_Integration(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	if err := converter.ValidateSubset(out, []string{"name", "age"}); err != nil {
-		t.Errorf("ValidateSubset: %v", err)
+	if err := converter.RequireFields(out, []string{"name", "age"}); err != nil {
+		t.Errorf("RequireFields: %v", err)
 	}
 }
 

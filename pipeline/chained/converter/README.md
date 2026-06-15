@@ -46,16 +46,16 @@ Steps mutate the document in order. Each step sees all fields written by prior s
 The final document (all original fields plus all step-assigned fields) is marshaled as
 the output.
 
-## ValidateSubset
+## RequireFields
 
 ```go
-func ValidateSubset(doc []byte, required []string) error
+func RequireFields(doc []byte, fields []string) error
 ```
 
-Checks that a JSON object contains all top-level fields listed in `required`. Dotted
+Checks that a JSON object contains all top-level fields listed in `fields`. Dotted
 paths are **not** supported; each element must be a plain top-level key. Returns an
-error naming the first missing field. Returns nil if `required` is empty or all fields
-are present. Intended for post-transform output validation before forwarding an event.
+error naming the first missing field. Returns nil if `fields` is empty or all are
+present. Intended for post-transform output validation before forwarding an event.
 
 Decodes via `canon.StrictDecoder`, consistent with the protocol-boundary hard rule.
 

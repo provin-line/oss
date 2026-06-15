@@ -45,16 +45,16 @@ Converter はフィルタリングを行わない。通過／破棄の判断は�
 すべてのフィールドを参照できる。最終ドキュメント（元のフィールド + ステップが追加したフィールド）が
 出力としてマーシャルされる。
 
-## ValidateSubset
+## RequireFields
 
 ```go
-func ValidateSubset(doc []byte, required []string) error
+func RequireFields(doc []byte, fields []string) error
 ```
 
-JSON オブジェクトが `required` に列挙されたすべての最上位フィールドを含むかどうかを確認する。
+JSON オブジェクトが `fields` に列挙されたすべての最上位フィールドを含むかどうかを確認する。
 ドット区切りパスは **サポートしない**; 各要素は単純な最上位キーでなければならない。
 最初に見つかった欠落フィールドの名前を含むエラーを返す。
-`required` が空またはすべてのフィールドが存在する場合は nil を返す。
+`fields` が空またはすべてのフィールドが存在する場合は nil を返す。
 変換後にイベントを転送する前の出力バリデーションを意図している。
 
 プロトコル境界のハードルール（`canon.StrictDecoder` を通じたデコード）に従う。
