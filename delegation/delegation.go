@@ -1,8 +1,14 @@
 // Package delegation implements the owner-signed DelegationCredential:
 // an Owner DID's assertion that a Pipeline or Process DID acts under its
-// authority, with explicit scopes. Proof mechanics are reused from
-// vc; this package owns only the delegation-specific shape and
-// rules.
+// authority. Proof mechanics are reused from vc; this package owns only the
+// delegation-specific shape and rules.
+//
+// The subject's pipeline is part of its DID under the did:dplaax structural
+// hierarchy, so the credential carries no pipelineId; a catalog role is the
+// delegated process's own type, declared in the credentials it issues, not
+// granted here. The provin profile does not use a scope and Verify rejects any
+// delegation that carries one fail-closed (spec rule delegation.scope keeps
+// scope optional for other wire profiles; provin is a profile that opts out).
 package delegation
 
 import (
@@ -41,9 +47,13 @@ type DelegationSubject struct {
 	ID string `json:"id"`
 	// DelegatedBy is the owner DID; must equal the credential issuer.
 	DelegatedBy string `json:"delegatedBy"`
-	// Scope lists the delegated authorities (e.g. "pipeline:operate",
-	// "process:sign").
-	Scope []string `json:"scope"`
+	// Scope is NOT part of the provin signed body — provin does not use scope
+	// (the protocol keeps it optional for other wire profiles, spec rule
+	// delegation.scope). This field exists only so Verify can DETECT a scope on
+	// inbound wire and reject it fail-closed: provin must not accept a credential
+	// whose scope it cannot verify, lest a downstream scope-aware consumer treat
+	// provin's acceptance as endorsement of an unsigned scope (authority laundering).
+	Scope []string `json:"scope,omitempty"`
 }
 
 // DelegationCredential is the owner-signed delegation VC.
@@ -106,6 +116,12 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 	// VC type must carry both the base and the profile token.
 	if !contains(cred.Type, "VerifiableCredential") || !contains(cred.Type, delegationType) {
 		return fmt.Errorf("delegation: type %v missing VerifiableCredential / %s", cred.Type, delegationType)
+	}
+	// provin does not use scope and does not sign it. A scope on inbound wire is
+	// rejected fail-closed: provin cannot verify it (it is outside the signed
+	// body) and must not pass on an unverified scope to a scope-aware consumer.
+	if cred.CredentialSubject.Scope != nil {
+		return fmt.Errorf("delegation: credentialSubject.scope is present (%d token(s)); the provin profile does not accept scoped delegations", len(cred.CredentialSubject.Scope))
 	}
 	if cred.CredentialSubject.DelegatedBy != cred.Issuer {
 		return fmt.Errorf("delegation: delegatedBy %q != issuer %q", cred.CredentialSubject.DelegatedBy, cred.Issuer)
@@ -170,13 +186,13 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 //
 // ACCEPTED LIMITATION: this helper still RECONSTRUCTS the body from typed
 // fields, so encodings that are semantically identical after parsing — a "Z" vs
-// "+00:00" zone, a null vs an empty scope array — hash the same even though the
-// wire bytes differ. That is instant- and authority-preserving (an attacker
-// cannot change a non-empty subject or scope without breaking the signature),
-// and delegation credentials are not content-addressed, so byte-exact wire
-// reproduction is not required here. A future field on DelegationSubject MUST be
-// added to this map or it travels unsigned; if the shape grows, move to a
-// body-as-source-of-truth model like vc.PipelinePassCredential.
+// "+00:00" zone — hash the same even though the wire bytes differ. That is
+// instant- and authority-preserving (an attacker cannot change the subject id
+// or delegatedBy without breaking the signature), and delegation credentials
+// are not content-addressed, so byte-exact wire reproduction is not required
+// here. Any future field on DelegationSubject must be added to this map or it
+// travels unsigned; if the shape grows, move to a body-as-source-of-truth model
+// like vc.PipelinePassCredential.
 func (c *DelegationCredential) signingBody() map[string]any {
 	return map[string]any{
 		"@context":  toAnySlice(c.Context),
@@ -186,7 +202,6 @@ func (c *DelegationCredential) signingBody() map[string]any {
 		"credentialSubject": map[string]any{
 			"id":          c.CredentialSubject.ID,
 			"delegatedBy": c.CredentialSubject.DelegatedBy,
-			"scope":       toAnySlice(c.CredentialSubject.Scope),
 		},
 	}
 }

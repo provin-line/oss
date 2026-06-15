@@ -3,6 +3,8 @@ package delegation_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,7 +82,6 @@ func sampleSubject() delegation.DelegationSubject {
 	return delegation.DelegationSubject{
 		ID:          processDID,
 		DelegatedBy: ownerDID,
-		Scope:       []string{"process:sign"},
 	}
 }
 
@@ -128,7 +129,7 @@ func TestVerify_NonOwnerIssuer(t *testing.T) {
 	// A delegation whose issuer is a Process DID (not an Owner) must be rejected:
 	// delegations are owner-signed.
 	signer, r := fixture(t, processDID)
-	subject := delegation.DelegationSubject{ID: processDID, DelegatedBy: processDID, Scope: []string{"process:sign"}}
+	subject := delegation.DelegationSubject{ID: processDID, DelegatedBy: processDID}
 	cred, err := delegation.Build(signer, processDID, subject)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -138,15 +139,32 @@ func TestVerify_NonOwnerIssuer(t *testing.T) {
 	}
 }
 
-func TestVerify_TamperedScope(t *testing.T) {
+func TestVerify_RejectsWireScope(t *testing.T) {
+	// A delegation is signed without a scope; a scope is then appended on the
+	// wire (an attacker, or a credential from a scope-using profile). provin must
+	// reject it fail-closed — it never signs scope and must not pass on an
+	// unverified scope to a downstream scope-aware consumer.
 	signer, r := fixture(t, ownerDID)
 	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	cred.CredentialSubject.Scope = []string{"pipeline:operate", "process:sign", "owner:everything"}
-	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
-		t.Error("Verify after scope tampering: want error (proof does not cover the new scope)")
+	wire, err := json.Marshal(cred)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	withScope := strings.Replace(string(wire),
+		`"delegatedBy":"`+ownerDID+`"`,
+		`"delegatedBy":"`+ownerDID+`","scope":["process:sign"]`, 1)
+	if withScope == string(wire) {
+		t.Fatal("scope injection did not modify the wire bytes")
+	}
+	var rt delegation.DelegationCredential
+	if err := json.Unmarshal([]byte(withScope), &rt); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, &rt); err == nil {
+		t.Error("Verify on a delegation carrying a wire scope: want error (fail-closed)")
 	}
 }
 
@@ -227,7 +245,6 @@ func TestVerify_SubjectNotUnderIssuer(t *testing.T) {
 	subject := delegation.DelegationSubject{
 		ID:          "did:dplaax:poc.dplaax.io:org:beta:pipeline:p1",
 		DelegatedBy: ownerDID,
-		Scope:       []string{"pipeline:operate"},
 	}
 	cred, err := delegation.Build(signer, ownerDID, subject)
 	if err != nil {
@@ -243,7 +260,6 @@ func TestVerify_SubjectNotPipelineOrProcess(t *testing.T) {
 	subject := delegation.DelegationSubject{
 		ID:          "did:dplaax:poc.dplaax.io:org:acme", // an owner DID, not pipeline/process
 		DelegatedBy: ownerDID,
-		Scope:       []string{"owner:everything"},
 	}
 	cred, err := delegation.Build(signer, ownerDID, subject)
 	if err != nil {
