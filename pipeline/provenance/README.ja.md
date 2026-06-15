@@ -3,8 +3,8 @@
 
 `vc` の VC 機構に対するプロセス向けインターフェース：
 
-- `ChainedSigner` — `Sign(ctx, payload, inputHash, outputHash, predecessor)`；Chained Process のためのチェーン保持 credential を発行する（`previousCredential` = predecessor の content hash）。predecessor は**この event の検証済み入力 credential** であり、runtime が呼び出しごとに渡す。audit-reachable な deployment（config 駆動）では、消費した conformant set へのソースコミットメント（`vc.SourceCommitment` — [../source/README.md](../source/README.md) 参照）を signer が付与する — stateless な 1:1 プロセスではその set は正確に {predecessor}（all-consumed 意味論）。
-- `SourceSigner` — `Sign(ctx, payload, inputHash, outputHash)`；Source Process のための FirstDrop（新しいチェーン起点）を発行する。audit-reachable な集約が必要とする consumed-set の経路は aggregate runtime の着手時に gate する。
+- `ChainedSigner` — `SignChainPreserving(ctx, payload, inputHash, outputHash, predecessor)`；Chained Process のためのチェーン保持 credential を発行する（`previousCredential` = predecessor の content hash）。predecessor は**この event の検証済み入力 credential** であり、runtime が呼び出しごとに渡す。audit-reachable な deployment（config 駆動）では、消費した conformant set へのソースコミットメント（`vc.SourceCommitment` — [../source/README.md](../source/README.md) 参照）を signer が付与する — stateless な 1:1 プロセスではその set は正確に {predecessor}（all-consumed 意味論）。
+- `SourceSigner` — `SignFirstDrop(ctx, payload, inputHash, outputHash)`；Source Process のための FirstDrop（新しいチェーン起点）を発行する。audit-reachable な集約が必要とする consumed-set の経路は aggregate runtime の着手時に gate する。
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`；各軸の最弱リンクで求めた信頼度 verdict を返す。
 - `ChainVerifier` — `VerifyChain(ctx, head) (*VerifyResult, error)`；`VerificationFull` を宣言するプロセス（sink、観測ツール）向けの全チェーン検証。content address によるチェーン取得は実装の関心事。
 

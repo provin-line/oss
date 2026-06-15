@@ -5,11 +5,14 @@ implementations.
 
 ## Implementations
 
-| Path | Behaviour |
-|---|---|
-| `local/` | In-memory store; tests and fixtures |
-| `grpc/` | ConnectRPC call to a registry's DIDService |
-| `multi/` | Home-registry-first with fallback to additional registries |
+| Path | Status | Behaviour |
+| --- | --- | --- |
+| `local/` | implemented | In-memory store; tests and fixtures |
+| `grpc/` | planned | ConnectRPC call to a registry's DIDService |
+| `multi/` | planned | Home-registry-first with fallback to additional registries |
+
+Only `local/` is present in this module today. The `grpc/` and `multi/` rows —
+and the Conventions below — describe their intended contract.
 
 ## Conventions
 

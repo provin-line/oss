@@ -30,8 +30,11 @@ store satisfies only the plain PoC posture.
 
 ## Two-layer authentication
 
-- **L1 (operator-facing)**: Bearer JWT verified by `pkg/auth` (JWKS/Ed25519 or HS256),
-  enforced against per-RPC policy options (resource + action).
+- **L1 (operator-facing)**: per-RPC policy options (resource + action) enforced by
+  `pkg/auth` — the PEP that wires the o3co authorization interceptors against a
+  configured policy-verifier (PDP). Token issuance and the policy decision are
+  external (the dPLaaX `auth.provider` / `auth.policy-verifier` services);
+  `pkg/auth` itself decides no policy and verifies no JWT signature.
 - **L2 (peer-facing)**: every ChainPeerService RPC carries an `AuthProof` — Ed25519
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
   epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no

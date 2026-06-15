@@ -2,7 +2,7 @@
 
 Process-facing interfaces over the VC machinery in `vc`:
 
-- `ChainedSigner` — `Sign(ctx, payload, inputHash, outputHash, predecessor)`;
+- `ChainedSigner` — `SignChainPreserving(ctx, payload, inputHash, outputHash, predecessor)`;
   issues the chain-preserving credential for a Chained Process
   (`previousCredential` = the predecessor's content hash). The predecessor is
   the event's verified input credential, handed per call by the runtime. For
@@ -10,7 +10,7 @@ Process-facing interfaces over the VC machinery in `vc`:
   commitment (`vc.SourceCommitment` — see [../source/README.md](../source/README.md))
   over the consumed conformant set — for a stateless 1:1 process exactly
   {predecessor} (all-consumed semantics).
-- `SourceSigner` — `Sign(ctx, payload, inputHash, outputHash)`; issues a
+- `SourceSigner` — `SignFirstDrop(ctx, payload, inputHash, outputHash)`; issues a
   FirstDrop (fresh chain origin) for a Source Process. The consumed-set path
   an audit-reachable aggregation needs gates with the aggregate runtime.
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`; returns the
