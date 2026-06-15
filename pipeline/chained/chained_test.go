@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	pipelinev1 "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
 	"github.com/provin-line/oss/pipeline/chained"
 	converterjsonata "github.com/provin-line/oss/pipeline/chained/converter/jsonata"
 	"github.com/provin-line/oss/pipeline/chained/filter"
@@ -227,7 +227,7 @@ func encodeEnvelopeByRef(t *testing.T, cred *vc.PipelinePassCredential) []byte {
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
-	wire, err := proto.Marshal(&pipelinev1.Envelope{
+	wire, err := proto.Marshal(&pipeline.Envelope{
 		Credential: credJSON,
 		SequenceNo: 1,
 		// Payload field absent → nil after decode

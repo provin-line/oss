@@ -9,8 +9,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	schemav1 "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
-	schemav1connect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/v1connect"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
@@ -21,19 +21,19 @@ var validBody = []byte(`{"type":"object","required":["reading"],"properties":{"r
 // testClient stands up the full proto→handler→service→yamlstore path behind an
 // in-process Connect server (Connect protocol over HTTP/1.1 — no extra
 // dependency; production serves the same handler over h2c). Returns a client.
-func testClient(t *testing.T) schemav1connect.SchemaServiceClient {
+func testClient(t *testing.T) schemapbconnect.SchemaServiceClient {
 	t.Helper()
 	clock := func() time.Time { return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC) }
 	svc := schemaregistry.New(yamlstore.New(t.TempDir()), schemaregistry.WithClock(clock))
-	_, h := schemav1connect.NewSchemaServiceHandler(handler.New(svc))
+	_, h := schemapbconnect.NewSchemaServiceHandler(handler.New(svc))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return schemav1connect.NewSchemaServiceClient(srv.Client(), srv.URL)
+	return schemapbconnect.NewSchemaServiceClient(srv.Client(), srv.URL)
 }
 
-func mustRegister(t *testing.T, c schemav1connect.SchemaServiceClient, name, prerelease string, body []byte) *schemav1.Schema {
+func mustRegister(t *testing.T, c schemapbconnect.SchemaServiceClient, name, prerelease string, body []byte) *schemapb.Schema {
 	t.Helper()
-	resp, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemav1.RegisterSchemaRequest{
+	resp, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemapb.RegisterSchemaRequest{
 		Name: name, SchemaFormat: "JsonSchema", SchemaBody: body, Prerelease: prerelease,
 	}))
 	if err != nil {
@@ -48,7 +48,7 @@ func TestRegisterGet_RoundTrip(t *testing.T) {
 	if reg.GetVersion() == "" {
 		t.Fatal("no version assigned")
 	}
-	got, err := c.GetSchema(context.Background(), connect.NewRequest(&schemav1.GetSchemaRequest{
+	got, err := c.GetSchema(context.Background(), connect.NewRequest(&schemapb.GetSchemaRequest{
 		Name: "reading", Version: reg.GetVersion(),
 	}))
 	if err != nil {
@@ -70,7 +70,7 @@ func TestRegister_Idempotent(t *testing.T) {
 
 func TestGet_UnknownIsNotFound(t *testing.T) {
 	c := testClient(t)
-	_, err := c.GetSchema(context.Background(), connect.NewRequest(&schemav1.GetSchemaRequest{
+	_, err := c.GetSchema(context.Background(), connect.NewRequest(&schemapb.GetSchemaRequest{
 		Name: "reading", Version: "2026-06-14-deadbeefdeadbeef",
 	}))
 	if connect.CodeOf(err) != connect.CodeNotFound {
@@ -82,13 +82,13 @@ func TestList_Filters(t *testing.T) {
 	c := testClient(t)
 	mustRegister(t, c, "reading", "", validBody)           // stable
 	pre := mustRegister(t, c, "reading", "rc1", validBody) // prerelease (distinct version)
-	if _, err := c.DeprecateSchema(context.Background(), connect.NewRequest(&schemav1.DeprecateSchemaRequest{
+	if _, err := c.DeprecateSchema(context.Background(), connect.NewRequest(&schemapb.DeprecateSchemaRequest{
 		Name: "reading", Version: pre.GetVersion(),
 	})); err != nil {
 		t.Fatalf("DeprecateSchema: %v", err)
 	}
 
-	def, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemav1.ListSchemasRequest{Name: "reading"}))
+	def, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemapb.ListSchemasRequest{Name: "reading"}))
 	if err != nil {
 		t.Fatalf("ListSchemas: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestList_Filters(t *testing.T) {
 		t.Errorf("default list: got %d, want 1 (stable only)", n)
 	}
 
-	all, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemav1.ListSchemasRequest{
+	all, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemapb.ListSchemasRequest{
 		Name: "reading", IncludeDeprecated: true, IncludePrerelease: true,
 	}))
 	if err != nil {
@@ -109,7 +109,7 @@ func TestList_Filters(t *testing.T) {
 
 func TestRegister_PathTraversalName_InvalidArgument(t *testing.T) {
 	c := testClient(t)
-	_, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemav1.RegisterSchemaRequest{
+	_, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemapb.RegisterSchemaRequest{
 		Name: "../evil", SchemaFormat: "JsonSchema", SchemaBody: validBody,
 	}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
@@ -132,14 +132,14 @@ func TestRegister_InvalidSchemaBodies_InvalidArgument(t *testing.T) {
 		if label == "unsupported format" {
 			format = "Cddl"
 		}
-		_, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemav1.RegisterSchemaRequest{
+		_, err := c.RegisterSchema(context.Background(), connect.NewRequest(&schemapb.RegisterSchemaRequest{
 			Name: "reading", SchemaFormat: format, SchemaBody: body,
 		}))
 		if connect.CodeOf(err) != connect.CodeInvalidArgument {
 			t.Errorf("%s: got code %v, want InvalidArgument", label, connect.CodeOf(err))
 		}
 	}
-	list, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemav1.ListSchemasRequest{
+	list, err := c.ListSchemas(context.Background(), connect.NewRequest(&schemapb.ListSchemasRequest{
 		Name: "reading", IncludeDeprecated: true, IncludePrerelease: true,
 	}))
 	if err != nil {

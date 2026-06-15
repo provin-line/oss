@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 
-	pipelinev1 "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/vc"
 	"google.golang.org/protobuf/proto"
@@ -63,7 +63,7 @@ func (c *Codec) MarshalEnvelope(e *contract.Envelope) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("envelopecodec: marshal credential: %w", err)
 	}
-	wire, err := proto.Marshal(&pipelinev1.Envelope{
+	wire, err := proto.Marshal(&pipeline.Envelope{
 		Credential: cred,
 		Payload:    e.Payload,
 		SequenceNo: e.SequenceNo,
@@ -78,7 +78,7 @@ func (c *Codec) MarshalEnvelope(e *contract.Envelope) ([]byte, error) {
 // document goes through the strict decode path (vc.UnmarshalJSON); wire
 // absence of the payload maps to nil (by-reference delivery).
 func (c *Codec) UnmarshalEnvelope(data []byte) (*contract.Envelope, error) {
-	var pb pipelinev1.Envelope
+	var pb pipeline.Envelope
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return nil, fmt.Errorf("envelopecodec: unmarshal envelope: %w", err)
 	}

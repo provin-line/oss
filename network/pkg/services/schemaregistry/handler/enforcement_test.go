@@ -11,8 +11,8 @@ import (
 	policy "github.com/o3co/protobuf.interceptors/schema"
 	"google.golang.org/protobuf/proto"
 
-	schemav1 "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
-	schemav1connect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/v1connect"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
@@ -21,21 +21,21 @@ import (
 
 // authClient stands up the SchemaService behind the authorization interceptor
 // chain (auth.Interceptors) backed by a static verifier with the given rules.
-func authClient(t *testing.T, rules []endpoint.StaticRule) schemav1connect.SchemaServiceClient {
+func authClient(t *testing.T, rules []endpoint.StaticRule) schemapbconnect.SchemaServiceClient {
 	t.Helper()
 	clock := func() time.Time { return time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC) }
 	svc := schemaregistry.New(yamlstore.New(t.TempDir()), schemaregistry.WithClock(clock))
-	_, h := schemav1connect.NewSchemaServiceHandler(
+	_, h := schemapbconnect.NewSchemaServiceHandler(
 		handler.New(svc),
 		connect.WithInterceptors(auth.Interceptors(endpoint.NewStaticEndpoint(rules))...),
 	)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return schemav1connect.NewSchemaServiceClient(srv.Client(), srv.URL)
+	return schemapbconnect.NewSchemaServiceClient(srv.Client(), srv.URL)
 }
 
-func registerReq(token string) *connect.Request[schemav1.RegisterSchemaRequest] {
-	req := connect.NewRequest(&schemav1.RegisterSchemaRequest{
+func registerReq(token string) *connect.Request[schemapb.RegisterSchemaRequest] {
+	req := connect.NewRequest(&schemapb.RegisterSchemaRequest{
 		Name: "reading", SchemaFormat: "JsonSchema", SchemaBody: validBody,
 	})
 	if token != "" {
@@ -74,7 +74,7 @@ func TestEnforcement_MissingToken(t *testing.T) {
 // option. A missing option silently disables the authorization check, so this
 // catches an accidentally-unprotected RPC at build time.
 func TestSchemaService_AllRPCsAnnotated(t *testing.T) {
-	methods := schemav1.File_dplaax_schema_v1_schema_proto.Services().ByName("SchemaService").Methods()
+	methods := schemapb.File_dplaax_schema_v1_schema_proto.Services().ByName("SchemaService").Methods()
 	if methods.Len() != 4 {
 		t.Fatalf("SchemaService has %d methods, want 4", methods.Len())
 	}

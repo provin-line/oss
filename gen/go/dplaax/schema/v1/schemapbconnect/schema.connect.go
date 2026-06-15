@@ -8,7 +8,7 @@
 //
 // Source: dplaax/schema/v1/schema.proto
 
-package v1connect
+package schemapbconnect
 
 import (
 	connect "connectrpc.com/connect"

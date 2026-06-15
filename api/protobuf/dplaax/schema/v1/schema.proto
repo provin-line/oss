@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package dplaax.schema.v1;
 
-option go_package = "github.com/provin-line/oss/gen/go/dplaax/schema/v1";
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/schema/v1;schemapb";
 
 import "o3co/authz/v1/policy.proto";
 

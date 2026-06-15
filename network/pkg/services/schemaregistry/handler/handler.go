@@ -9,8 +9,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	schemav1 "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
-	schemav1connect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/v1connect"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 )
@@ -30,54 +30,54 @@ type Handler struct {
 	svc Registry
 }
 
-var _ schemav1connect.SchemaServiceHandler = (*Handler)(nil)
+var _ schemapbconnect.SchemaServiceHandler = (*Handler)(nil)
 
 // New returns a Handler backed by svc.
 func New(svc Registry) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) RegisterSchema(ctx context.Context, req *connect.Request[schemav1.RegisterSchemaRequest]) (*connect.Response[schemav1.RegisterSchemaResponse], error) {
+func (h *Handler) RegisterSchema(ctx context.Context, req *connect.Request[schemapb.RegisterSchemaRequest]) (*connect.Response[schemapb.RegisterSchemaResponse], error) {
 	m := req.Msg
 	sc, err := h.svc.Register(ctx, m.GetName(), m.GetSchemaFormat(), m.GetSchemaBody(), m.GetPrerelease())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&schemav1.RegisterSchemaResponse{Schema: toProto(sc)}), nil
+	return connect.NewResponse(&schemapb.RegisterSchemaResponse{Schema: toProto(sc)}), nil
 }
 
-func (h *Handler) GetSchema(ctx context.Context, req *connect.Request[schemav1.GetSchemaRequest]) (*connect.Response[schemav1.GetSchemaResponse], error) {
+func (h *Handler) GetSchema(ctx context.Context, req *connect.Request[schemapb.GetSchemaRequest]) (*connect.Response[schemapb.GetSchemaResponse], error) {
 	m := req.Msg
 	sc, err := h.svc.Get(ctx, m.GetName(), m.GetVersion())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&schemav1.GetSchemaResponse{Schema: toProto(sc)}), nil
+	return connect.NewResponse(&schemapb.GetSchemaResponse{Schema: toProto(sc)}), nil
 }
 
-func (h *Handler) ListSchemas(ctx context.Context, req *connect.Request[schemav1.ListSchemasRequest]) (*connect.Response[schemav1.ListSchemasResponse], error) {
+func (h *Handler) ListSchemas(ctx context.Context, req *connect.Request[schemapb.ListSchemasRequest]) (*connect.Response[schemapb.ListSchemasResponse], error) {
 	m := req.Msg
 	list, err := h.svc.List(ctx, m.GetName(), m.GetIncludeDeprecated(), m.GetIncludePrerelease())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	out := make([]*schemav1.Schema, 0, len(list))
+	out := make([]*schemapb.Schema, 0, len(list))
 	for _, sc := range list {
 		out = append(out, toProto(sc))
 	}
-	return connect.NewResponse(&schemav1.ListSchemasResponse{Schemas: out}), nil
+	return connect.NewResponse(&schemapb.ListSchemasResponse{Schemas: out}), nil
 }
 
-func (h *Handler) DeprecateSchema(ctx context.Context, req *connect.Request[schemav1.DeprecateSchemaRequest]) (*connect.Response[schemav1.DeprecateSchemaResponse], error) {
+func (h *Handler) DeprecateSchema(ctx context.Context, req *connect.Request[schemapb.DeprecateSchemaRequest]) (*connect.Response[schemapb.DeprecateSchemaResponse], error) {
 	m := req.Msg
 	if err := h.svc.Deprecate(ctx, m.GetName(), m.GetVersion()); err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&schemav1.DeprecateSchemaResponse{}), nil
+	return connect.NewResponse(&schemapb.DeprecateSchemaResponse{}), nil
 }
 
-func toProto(s *store.Schema) *schemav1.Schema {
-	return &schemav1.Schema{
+func toProto(s *store.Schema) *schemapb.Schema {
+	return &schemapb.Schema{
 		Name:         s.Name,
 		Version:      s.Version,
 		Prerelease:   s.Prerelease,

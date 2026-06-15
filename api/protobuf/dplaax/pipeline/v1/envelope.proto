@@ -11,7 +11,7 @@ syntax = "proto3";
 
 package dplaax.pipeline.v1;
 
-option go_package = "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1";
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1;pipeline";
 
 // Envelope is the unit carried between Pipeline Processes on the pipeline
 // transport.

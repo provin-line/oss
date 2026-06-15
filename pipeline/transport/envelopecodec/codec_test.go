@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pipelinev1 "github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/pipeline/v1"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/vc"
@@ -139,7 +139,7 @@ func TestWireCredentialIsCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalEnvelope: %v", err)
 	}
-	var pb pipelinev1.Envelope
+	var pb pipeline.Envelope
 	if err := proto.Unmarshal(wire, &pb); err != nil {
 		t.Fatalf("proto.Unmarshal: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestMarshalRejections(t *testing.T) {
 
 func TestUnmarshalRejections(t *testing.T) {
 	codec := envelopecodec.New()
-	mustWire := func(pb *pipelinev1.Envelope) []byte {
+	mustWire := func(pb *pipeline.Envelope) []byte {
 		t.Helper()
 		b, err := proto.Marshal(pb)
 		if err != nil {
@@ -211,27 +211,27 @@ func TestUnmarshalRejections(t *testing.T) {
 		}
 	})
 	t.Run("missing credential", func(t *testing.T) {
-		wire := mustWire(&pipelinev1.Envelope{Payload: []byte("x"), SequenceNo: 1})
+		wire := mustWire(&pipeline.Envelope{Payload: []byte("x"), SequenceNo: 1})
 		if _, err := codec.UnmarshalEnvelope(wire); !errors.Is(err, envelopecodec.ErrMissingCredential) {
 			t.Errorf("got %v, want ErrMissingCredential", err)
 		}
 	})
 	t.Run("zero sequence", func(t *testing.T) {
-		wire := mustWire(&pipelinev1.Envelope{Credential: validCred, Payload: []byte("x")})
+		wire := mustWire(&pipeline.Envelope{Credential: validCred, Payload: []byte("x")})
 		if _, err := codec.UnmarshalEnvelope(wire); !errors.Is(err, envelopecodec.ErrZeroSequenceNo) {
 			t.Errorf("got %v, want ErrZeroSequenceNo", err)
 		}
 	})
 	t.Run("duplicate-key credential JSON", func(t *testing.T) {
 		dup := []byte(`{"issuer":"did:dplaax:a","issuer":"did:dplaax:b"}`)
-		wire := mustWire(&pipelinev1.Envelope{Credential: dup, SequenceNo: 1})
+		wire := mustWire(&pipeline.Envelope{Credential: dup, SequenceNo: 1})
 		if _, err := codec.UnmarshalEnvelope(wire); err == nil {
 			t.Error("duplicate-key credential JSON must be rejected (StrictDecoder)")
 		}
 	})
 	t.Run("trailing-data credential JSON", func(t *testing.T) {
 		trailing := append(append([]byte{}, validCred...), []byte(`{"more":1}`)...)
-		wire := mustWire(&pipelinev1.Envelope{Credential: trailing, SequenceNo: 1})
+		wire := mustWire(&pipeline.Envelope{Credential: trailing, SequenceNo: 1})
 		if _, err := codec.UnmarshalEnvelope(wire); err == nil {
 			t.Error("trailing data after the credential document must be rejected (StrictDecoder)")
 		}

@@ -14,7 +14,7 @@
 // 	protoc        (unknown)
 // source: dplaax/pipeline/v1/envelope.proto
 
-package v1
+package pipeline
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -119,7 +119,7 @@ const file_dplaax_pipeline_v1_envelope_proto_rawDesc = "" +
 	"credential\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x1f\n" +
 	"\vsequence_no\x18\x03 \x01(\x04R\n" +
-	"sequenceNoB6Z4github.com/provin-line/oss/gen/go/dplaax/pipeline/v1b\x06proto3"
+	"sequenceNoB?Z=github.com/provin-line/oss/gen/go/dplaax/pipeline/v1;pipelineb\x06proto3"
 
 var (
 	file_dplaax_pipeline_v1_envelope_proto_rawDescOnce sync.Once

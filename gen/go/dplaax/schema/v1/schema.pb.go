@@ -10,7 +10,7 @@
 // 	protoc        (unknown)
 // source: dplaax/schema/v1/schema.proto
 
-package v1
+package schemapb
 
 import (
 	_ "github.com/o3co/protobuf.interceptors/schema"
@@ -569,7 +569,7 @@ const file_dplaax_schema_v1_schema_proto_rawDesc = "" +
 	"\vListSchemas\x12$.dplaax.schema.v1.ListSchemasRequest\x1a%.dplaax.schema.v1.ListSchemasResponse\"\x13\x82\xb5\x18\x0f\n" +
 	"\aschemas\x12\x04read\x12\x80\x01\n" +
 	"\x0fDeprecateSchema\x12(.dplaax.schema.v1.DeprecateSchemaRequest\x1a).dplaax.schema.v1.DeprecateSchemaResponse\"\x18\x82\xb5\x18\x14\n" +
-	"\aschemas\x12\tdeprecateB4Z2github.com/provin-line/oss/gen/go/dplaax/schema/v1b\x06proto3"
+	"\aschemas\x12\tdeprecateB=Z;github.com/provin-line/oss/gen/go/dplaax/schema/v1;schemapbb\x06proto3"
 
 var (
 	file_dplaax_schema_v1_schema_proto_rawDescOnce sync.Once
