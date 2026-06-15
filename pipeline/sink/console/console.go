@@ -1,4 +1,4 @@
-// Package console implements sink.SinkWriter as an NDJSON emitter — the
+// Package console implements sink.Writer as an NDJSON emitter — the
 // observation-only reference sink. It writes one newline-delimited JSON record
 // per consumed event to an io.Writer (stdout in deployment), surfacing the
 // verification verdict alongside the payload. It is development and inspection
@@ -25,7 +25,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// Writer is an NDJSON SinkWriter over an io.Writer. Safe for concurrent use:
+// Writer is an NDJSON Writer over an io.Writer. Safe for concurrent use:
 // each record is marshalled fully, then written under a mutex so lines never
 // interleave.
 type Writer struct {
@@ -45,8 +45,8 @@ type record struct {
 	Payload    json.RawMessage `json:"payload"`
 }
 
-// Write emits one NDJSON record. Implements sink.SinkWriter.
-func (c *Writer) Write(ctx context.Context, rec sink.SinkRecord) error {
+// Write emits one NDJSON record. Implements sink.Writer.
+func (c *Writer) Write(ctx context.Context, rec sink.Record) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

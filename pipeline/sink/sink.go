@@ -8,7 +8,7 @@
 // The sink reuses the Chained runtime's ingress half — decode, strategy-driven
 // verification, the payload↔credential binding gate, and the synchronous
 // ingress-VC store — but has no transform/sign half. In its place is a single
-// external write (SinkWriter). The terminal Result carries a nil VC and nil
+// external write (Writer). The terminal Result carries a nil VC and nil
 // Payload: a sink appends nothing to the chain (contract.Result).
 //
 // # SinkKind verdict policy
@@ -66,19 +66,19 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// SinkRecord is the unit handed to a SinkWriter: the consumed credential, the
+// Record is the unit handed to a Writer: the consumed credential, the
 // payload bytes it describes, and the verification verdict to surface
 // alongside them.
-type SinkRecord struct {
+type Record struct {
 	Credential *vc.PipelinePassCredential
 	Payload    []byte
 	Verdict    *vc.VerifyResult
 }
 
-// SinkWriter delivers one consumed event to the external world. Implementations
+// Writer delivers one consumed event to the external world. Implementations
 // (console, warehouse, EDC, …) live in subpackages or extension repositories.
-type SinkWriter interface {
-	Write(ctx context.Context, rec SinkRecord) error
+type Writer interface {
+	Write(ctx context.Context, rec Record) error
 }
 
 // Typed construction errors.
@@ -109,7 +109,7 @@ type Config struct {
 	// Store persists the verified ingress VC. Required.
 	Store contract.IngressVCStore
 	// Writer delivers the consumed event externally. Required.
-	Writer SinkWriter
+	Writer Writer
 	// UpstreamEndpoint names where the ingress VC can later be fetched. Required.
 	UpstreamEndpoint string
 	// Observers are notified after every outcome (passed/errored).
@@ -264,7 +264,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	}
 
 	// Stage 7 — External write.
-	if err := p.cfg.Writer.Write(ctx, SinkRecord{Credential: cred, Payload: payload, Verdict: verifyResult}); err != nil {
+	if err := p.cfg.Writer.Write(ctx, Record{Credential: cred, Payload: payload, Verdict: verifyResult}); err != nil {
 		if isCtxErr(err) {
 			return nil, err
 		}

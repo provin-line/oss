@@ -1,7 +1,7 @@
 // Package sink_test tests the Sink Process runtime.
 //
 // Test strategy: real codec (envelopecodec); recording fakes for Verifier,
-// ChainVerifier, Store, SinkWriter, and Observers so verdict policy, the
+// ChainVerifier, Store, Writer, and Observers so verdict policy, the
 // payload↔credential binding gate, the store-on-verified rule, and the
 // external write can each be asserted independently.
 package sink_test
@@ -66,11 +66,11 @@ func (f *fakeStore) StoreIngressVC(_ context.Context, _ *vc.PipelinePassCredenti
 }
 
 type fakeWriter struct {
-	records   []sink.SinkRecord
+	records   []sink.Record
 	returnErr error
 }
 
-func (f *fakeWriter) Write(_ context.Context, rec sink.SinkRecord) error {
+func (f *fakeWriter) Write(_ context.Context, rec sink.Record) error {
 	f.records = append(f.records, rec)
 	return f.returnErr
 }

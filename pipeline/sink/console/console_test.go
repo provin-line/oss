@@ -15,8 +15,8 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// compile-time: *Writer must implement sink.SinkWriter.
-var _ sink.SinkWriter = (*console.Writer)(nil)
+// compile-time: *Writer must implement sink.Writer.
+var _ sink.Writer = (*console.Writer)(nil)
 
 func cred(t *testing.T) *vc.PipelinePassCredential {
 	t.Helper()
@@ -42,7 +42,7 @@ func TestWrite_NDJSONLine(t *testing.T) {
 
 	payload := []byte(`{"msg":"hi"}`)
 	c := cred(t)
-	rec := sink.SinkRecord{Credential: c, Payload: payload, Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
+	rec := sink.Record{Credential: c, Payload: payload, Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
 
 	if err := w.Write(context.Background(), rec); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -86,7 +86,7 @@ func TestWrite_ConfidenceMapping(t *testing.T) {
 	for state, want := range cases {
 		var buf bytes.Buffer
 		w := console.New(&buf)
-		rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: state}}
+		rec := sink.Record{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: state}}
 		if err := w.Write(context.Background(), rec); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestWrite_ConfidenceMapping(t *testing.T) {
 func TestWrite_NilVerdict_Unknown(t *testing.T) {
 	var buf bytes.Buffer
 	w := console.New(&buf)
-	rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{}`), Verdict: nil}
+	rec := sink.Record{Credential: cred(t), Payload: []byte(`{}`), Verdict: nil}
 	if err := w.Write(context.Background(), rec); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestWrite_MultipleRecords_OneLineEach(t *testing.T) {
 	var buf bytes.Buffer
 	w := console.New(&buf)
 	for i := 0; i < 3; i++ {
-		rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{"i":1}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
+		rec := sink.Record{Credential: cred(t), Payload: []byte(`{"i":1}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
 		if err := w.Write(context.Background(), rec); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestWrite_MultipleRecords_OneLineEach(t *testing.T) {
 // Underlying writer error propagates.
 func TestWrite_WriterError_Propagates(t *testing.T) {
 	w := console.New(errWriter{})
-	rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
+	rec := sink.Record{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
 	if err := w.Write(context.Background(), rec); err == nil {
 		t.Fatal("expected the underlying writer error to propagate")
 	}
@@ -145,7 +145,7 @@ func TestWrite_ConcurrentLinesIntact(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{"k":"v"}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
+			rec := sink.Record{Credential: cred(t), Payload: []byte(`{"k":"v"}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
 			_ = w.Write(context.Background(), rec)
 		}()
 	}
@@ -165,7 +165,7 @@ func TestWrite_CtxCancelled(t *testing.T) {
 	w := console.New(&buf)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	rec := sink.SinkRecord{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
+	rec := sink.Record{Credential: cred(t), Payload: []byte(`{}`), Verdict: &vc.VerifyResult{Overall: vc.ConfidenceVerified}}
 	if err := w.Write(ctx, rec); !errors.Is(err, context.Canceled) {
 		t.Errorf("err=%v, want context.Canceled", err)
 	}
