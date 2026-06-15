@@ -30,16 +30,22 @@ func Interceptors(verifier endpoint.VerifierEndpoint) []connect.Interceptor {
 	}
 }
 
-// NewVerifier builds the production VerifierEndpoint — the o3co
-// auth.policy-verifier REST client — for the given base URL. The URL must carry
-// an explicit http:// or https:// scheme (NewO3coEndpoint would otherwise
-// silently prepend http://; requiring the scheme keeps a plaintext PDP call a
-// deliberate choice, not an accidental default).
-func NewVerifier(policyVerifierURL string, opts ...endpoint.O3coOption) (endpoint.VerifierEndpoint, error) {
+// NewVerifier builds the production VerifierEndpoint — the configured
+// policy-verifier (PDP) client — for the given base URL. It returns the
+// backend-neutral endpoint.VerifierEndpoint interface so callers depend on this
+// seam, not on a concrete backend: swapping the PDP backend stays internal to
+// this constructor. The URL must carry an explicit http:// or https:// scheme
+// (the backend would otherwise silently prepend http://; requiring the scheme
+// keeps a plaintext PDP call a deliberate choice, not an accidental default).
+//
+// Backend tunables are deliberately not exposed here yet: adding a
+// backend-neutral option later (auth.VerifierOption translated internally, or
+// AuthConfig fields) keeps this seam free of any concrete backend's option type.
+func NewVerifier(policyVerifierURL string) (endpoint.VerifierEndpoint, error) {
 	if err := validateVerifierURL(policyVerifierURL); err != nil {
 		return nil, fmt.Errorf("auth: policy-verifier URL: %w", err)
 	}
-	return endpoint.NewO3coEndpoint(policyVerifierURL, opts...)
+	return endpoint.NewO3coEndpoint(policyVerifierURL)
 }
 
 // validateVerifierURL rejects a URL that is empty, scheme-less, not http(s), or
