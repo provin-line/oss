@@ -14,8 +14,11 @@ import (
 // to compute source-root leaves. They are the dPLaaX specification's
 // canonical-JSON registry names — shared across wire profiles (the dplaas
 // profile uses the same identifiers), distinct from this repository's
-// internal canonicalizer package names. They enter the LifecycleRegistry
-// like cryptosuites: lifecycle phases apply, zero/no-op values fail closed.
+// internal canonicalizer package names. The profile pins a single suite today
+// (SourceRootCanonicalJCS): ComputeSourceRoot accepts only it and fails closed
+// otherwise. A registration surface and lifecycle phases — as cryptosuites have
+// via RegisterCryptosuite — would be added here only if a second source-root
+// suite is ever introduced.
 const (
 	// SourceRootCanonicalJCS — JCS (RFC 8785) canonicalization (Phase 1, MUST
 	// for emitters).
