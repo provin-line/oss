@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -285,6 +286,40 @@ func TestVerify_DeprecatedCryptosuite_StillVerifies(t *testing.T) {
 	}
 	if res.Axes.SignerAuthenticity != vc.ConfidenceVerified {
 		t.Errorf("SignerAuthenticity=%v, want Verified (Deprecated is still acceptable)", res.Axes.SignerAuthenticity)
+	}
+}
+
+// A Deprecated cryptosuite verifies, but the verdict MUST carry a notation
+// (confidence.cryptosuite-lifecycle: Deprecated is "verified with notation").
+func TestVerify_DeprecatedCryptosuite_CarriesNotation(t *testing.T) {
+	cred, pub := signedCred(t)
+	v := vc.NewVerifier(resolverWith(pub, ownerDID), ed25519Verifier(),
+		vc.WithLifecycleRegistry(stubLifecycle{phase: vc.PhaseDeprecated}))
+
+	res, err := v.Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(res.Notations) == 0 {
+		t.Fatal("Deprecated cryptosuite: want a notation on the verdict, got none")
+	}
+	if !strings.Contains(strings.ToLower(strings.Join(res.Notations, " ")), "deprecat") {
+		t.Errorf("notation should mention deprecation, got %v", res.Notations)
+	}
+}
+
+// An Active cryptosuite verifies with no notation.
+func TestVerify_ActiveCryptosuite_NoNotation(t *testing.T) {
+	cred, pub := signedCred(t)
+	v := vc.NewVerifier(resolverWith(pub, ownerDID), ed25519Verifier(),
+		vc.WithLifecycleRegistry(stubLifecycle{phase: vc.PhaseActive}))
+
+	res, err := v.Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(res.Notations) != 0 {
+		t.Errorf("Active cryptosuite: want no notation, got %v", res.Notations)
 	}
 }
 

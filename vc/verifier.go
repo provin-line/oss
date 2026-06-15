@@ -55,6 +55,12 @@ func NewVerifier(r resolver.Resolver, sigVerifier crypto.Verifier, opts ...Verif
 type VerifyResult struct {
 	Overall ConfidenceState
 	Axes    AxisResult
+	// Notations carry advisory annotations on an otherwise-verified verdict —
+	// e.g. a Deprecated cryptosuite, which the lifecycle rule accepts as
+	// "verified with notation" (confidence.cryptosuite-lifecycle). Empty when
+	// the verdict is unannotated. For a chain, the per-credential notations are
+	// concatenated.
+	Notations []string
 }
 
 // Verify performs single-credential verification across the three normative
@@ -79,12 +85,13 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var notations []string
 	axes := AxisResult{
 		DataIntegrity:      v.evalDataIntegrity(cred),
-		SignerAuthenticity: v.evalSignerAuthenticity(ctx, cred),
+		SignerAuthenticity: v.evalSignerAuthenticity(ctx, cred, &notations),
 		ChainConsistency:   v.evalChainConsistency(ctx, cred),
 	}
-	return &VerifyResult{Overall: EvaluateConfidence(axes), Axes: axes}, nil
+	return &VerifyResult{Overall: EvaluateConfidence(axes), Axes: axes, Notations: notations}, nil
 }
 
 // evalDataIntegrity evaluates the data-integrity axis from this credential
@@ -204,7 +211,7 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // (failed): the in-memory/registry resolvers have no transient class — a
 // resolver that can time out must surface a typed transient error to yield
 // indeterminate here.
-func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential) ConfidenceState {
+func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string) ConfidenceState {
 	proof := cred.Proof()
 	if proof == nil {
 		return ConfidenceFailed // unsigned
@@ -254,9 +261,12 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 			return ConfidenceIndeterminate
 		}
 		switch phase {
-		case PhaseActive, PhaseDeprecated:
-			// acceptable — Deprecated will carry an annotation once VerifyResult
-			// grows the channel; verified for now.
+		case PhaseActive:
+			// acceptable, unannotated.
+		case PhaseDeprecated:
+			// acceptable, but the verdict carries an annotation.
+			*notations = append(*notations,
+				"signer-authenticity: cryptosuite "+proof.Cryptosuite+" is Deprecated (verified with notation)")
 		default:
 			return ConfidenceFailed // Sunset / Unknown fail closed
 		}
@@ -371,14 +381,17 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 		return nil, err
 	}
 
-	// 1. Per-credential verification, folded by weakest link per axis.
+	// 1. Per-credential verification, folded by weakest link per axis; the
+	// per-credential notations concatenate onto the chain verdict.
 	acc := AxisResult{ConfidenceVerified, ConfidenceVerified, ConfidenceVerified}
+	var notations []string
 	for _, cred := range chain {
 		r, err := v.Verify(ctx, cred)
 		if err != nil {
 			return nil, err
 		}
 		acc = glbAxes(acc, r.Axes)
+		notations = append(notations, r.Notations...)
 	}
 
 	// 2. Chain-structure checks contributing to DataIntegrity / ChainConsistency.
@@ -425,7 +438,7 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 		SignerAuthenticity: ConfidenceVerified,
 		ChainConsistency:   cc,
 	})
-	return &VerifyResult{Overall: EvaluateConfidence(acc), Axes: acc}, nil
+	return &VerifyResult{Overall: EvaluateConfidence(acc), Axes: acc, Notations: notations}, nil
 }
 
 // glbAxes folds two axis results by the per-axis greatest lower bound.
