@@ -8,8 +8,8 @@ Issues and manages `did:dplaax` Owner, Pipeline, and Process DIDs.
   self-signed Data Integrity proof (solves bootstrap — no prior account needed);
   pipeline/process issuance additionally verifies an owner-signed delegation
   credential (`delegation`).
-- On pipeline/process issuance the service generates the `#auth-key` /
-  `#signing-key` Ed25519 pair and persists it via `keystore` — callers never
+- On pipeline/process issuance the service generates the `#auth` /
+  `#signing` Ed25519 pair and persists it via `keystore` — callers never
   see private keys.
 - Issued DID Documents embed service endpoints (`#vc-resolver`, etc.) from config.
 - Key rotation grace semantics: verify-grace keeps the old public key resolvable for

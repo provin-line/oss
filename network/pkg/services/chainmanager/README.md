@@ -47,7 +47,7 @@ forgery must not burn a legitimate signer's nonce):
 
 1. missing-proof fail-fast → 2. issuedAt truncation → 3. restart epoch barrier →
 4. acceptance window (asymmetric past/skew) → 5. key resolution via DID Document
-(`#auth-key`, authentication relationship + controller match) → 6. signer-to-actor
+(`#auth`, authentication relationship + controller match) → 6. signer-to-actor
 authorization → 7. canonical-bytes rebuild → 8. Ed25519 verify → 9. nonce record.
 
 **L2 identities and the audit horizon.** The signed view is access control at

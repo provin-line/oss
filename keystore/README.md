@@ -14,7 +14,7 @@ seam where Vault / HSM / cloud-KMS backends plug in later.
 ## Conventions
 
 - Key IDs are logical (`auth`, `signing`) and map to DID Document fragments
-  (`#auth-key`, `#signing-key`).
+  (`#auth`, `#signing`).
 - Implementations store private keys with restrictive permissions (file mode 0600
   for the YAML backend) and build storage paths only from safety-checked DID segments.
 - Implementations live with their service (e.g. the registry's YAML store);

@@ -213,7 +213,7 @@ func TestUnmarshalProofExcludedFromHash(t *testing.T) {
 	unsignedHash, _ := c.Hash()
 	wire, _ := c.MarshalJSON()
 	withProof := strings.Replace(string(wire), "{",
-		`{"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","verificationMethod":"did:dplaax:poc.dplaax.io:org:acme#signing-key","proofPurpose":"assertionMethod","created":"2026-06-10T12:00:00Z","proofValue":"z3FXQ"},`, 1)
+		`{"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","verificationMethod":"did:dplaax:poc.dplaax.io:org:acme#signing","proofPurpose":"assertionMethod","created":"2026-06-10T12:00:00Z","proofValue":"z3FXQ"},`, 1)
 
 	var rt vc.PipelinePassCredential
 	if err := rt.UnmarshalJSON([]byte(withProof)); err != nil {

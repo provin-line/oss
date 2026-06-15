@@ -16,10 +16,10 @@ import "github.com/provin-line/oss/crypto"
 type KeyID string
 
 const (
-	// KeyIDAuth maps to the #auth-key verification method (authentication
+	// KeyIDAuth maps to the #auth verification method (authentication
 	// relationship; peer/connection auth).
 	KeyIDAuth KeyID = "auth"
-	// KeyIDSigning maps to the #signing-key verification method
+	// KeyIDSigning maps to the #signing verification method
 	// (assertionMethod relationship; VC signing).
 	KeyIDSigning KeyID = "signing"
 )

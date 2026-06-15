@@ -41,10 +41,10 @@ type VerificationRelationship string
 
 const (
 	// RelationshipAuthentication gates peer/connection authentication keys
-	// (#auth-key).
+	// (#auth).
 	RelationshipAuthentication VerificationRelationship = "authentication"
 	// RelationshipAssertionMethod gates credential-signing keys
-	// (#signing-key).
+	// (#signing).
 	RelationshipAssertionMethod VerificationRelationship = "assertionMethod"
 )
 
