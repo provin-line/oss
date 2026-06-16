@@ -23,9 +23,14 @@ import (
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/signer"
 	signerhandler "github.com/provin-line/oss/network/pkg/services/signer/handler"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+
+	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
 
-// BuildHandler wires the three services into one mux: the Connect RPC services
+// BuildHandler wires the services into one mux: the Connect RPC services
 // sit behind the L1 authorization interceptors (verifier injected — main builds
 // it from config, tests inject a static endpoint), while the public W3C DID
 // resolution route and /healthz are mounted unauthenticated. Stores root under
@@ -45,6 +50,9 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, ver
 		didStore, keyStore, ed25519.Generator{}, ed25519.Verifier{}, regCfg.ID,
 		didregistry.WithServiceEndpoints(regCfg.Endpoints),
 	)
+	// VC store/pool are in-memory (PoC posture) — no data-dir wiring; the durable
+	// store and the async batch resolver land in a later slice.
+	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 
@@ -53,6 +61,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, ver
 		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), authz)),
 		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
+		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz)),
 	} {
 		mux.Handle(p.path, p.h)
 	}

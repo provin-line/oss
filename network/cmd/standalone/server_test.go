@@ -15,6 +15,8 @@ import (
 	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	signerpb "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
+	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
+	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -45,6 +47,8 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 		{Resource: "dids", Action: "issue"},
 		{Resource: "dids", Action: "read"},
 		{Resource: "signer", Action: "sign-vc"},
+		{Resource: "vc", Action: "store"},
+		{Resource: "vc", Action: "read"},
 	})
 	h, err := BuildHandler(coreCfg, regCfg, verifier)
 	if err != nil {
@@ -214,5 +218,39 @@ func TestBoot_RPCRequiresAuth(t *testing.T) {
 	_, err := didClient.ResolveDID(context.Background(), connect.NewRequest(&didpb.ResolveDIDRequest{Did: ownerDID}))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("no token: want Unauthenticated, got %v (%v)", connect.CodeOf(err), err)
+	}
+}
+
+// VCResolverService is mounted in the assembled stack: store a VC and resolve it
+// back at its returned content address.
+func TestBoot_VCStoreResolve(t *testing.T) {
+	ctx := context.Background()
+	srv, _, _ := assembled(t)
+	vcClient := vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL)
+
+	credential, _ := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            pipelineDID,
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "proc1"},
+	})
+	stored, err := vcClient.StoreVC(ctx, bearer(connect.NewRequest(&vcpb.StoreVCRequest{Credential: credential})))
+	if err != nil {
+		t.Fatalf("StoreVC: %v (code %v)", err, connect.CodeOf(err))
+	}
+	hash := stored.Msg.GetHash()
+	if hash == "" {
+		t.Fatal("empty hash")
+	}
+	got, err := vcClient.ResolveVC(ctx, bearer(connect.NewRequest(&vcpb.ResolveVCRequest{Hash: hash})))
+	if err != nil {
+		t.Fatalf("ResolveVC: %v", err)
+	}
+	var resolved vc.PipelinePassCredential
+	if err := json.Unmarshal(got.Msg.GetCredential(), &resolved); err != nil {
+		t.Fatalf("unmarshal resolved: %v", err)
+	}
+	if resolved.Issuer() != pipelineDID {
+		t.Errorf("resolved issuer = %q, want %q", resolved.Issuer(), pipelineDID)
 	}
 }
