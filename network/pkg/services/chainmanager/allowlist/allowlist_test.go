@@ -29,9 +29,16 @@ func TestMatch_Bool(t *testing.T) {
 		{"trailing star two remainder", "did:dplaax:*:org:acme:*", "did:dplaax:reg:org:acme:pipeline:p1", true},
 		{"trailing star bare prefix", "did:dplaax:*", "did:dplaax:reg:org:acme", true},
 		{"trailing star one remainder", "did:dplaax:reg:org:acme:*", "did:dplaax:reg:org:acme:pipeline", true},
+		{"trailing star matches owner and below", "did:dplaax:reg:org:acme:*", "did:dplaax:reg:org:acme", true},
+
+		// Pipeline arity (7 segments): a fixed pattern matches only same-arity
+		// candidates; wildcards may stand in the pipeline/process structural
+		// positions.
+		{"pipeline-arity all wildcards", "did:dplaax:*:*:*:*:*", "did:dplaax:reg:org:acme:pipeline:p1", true},
+		{"pipeline-arity exact", "did:dplaax:reg:org:acme:pipeline:p1", "did:dplaax:reg:org:acme:pipeline:p1", true},
+		{"process-arity exact", "did:dplaax:reg:org:acme:pipeline:p1:process:x", "did:dplaax:reg:org:acme:pipeline:p1:process:x", true},
 
 		{"no trailing star, candidate longer", "did:dplaax:reg:org:acme", "did:dplaax:reg:org:acme:pipeline:p1", false},
-		{"interior length mismatch, literal past end", "did:dplaax:*:*:*:extra", "did:dplaax:reg:org:acme", false},
 
 		// Fail-closed: a candidate that does not parse as a dplaax DID never
 		// matches, not even a broad wildcard.
@@ -65,6 +72,17 @@ func TestMatch_InvalidPattern(t *testing.T) {
 		{"too short, prefix only", "did:dplaax"},
 		{"empty pattern", ""},
 		{"trailing colon empty segment", "did:dplaax:reg:"},
+
+		// Dead fixed (non-trailing-*) patterns: a pattern with no trailing
+		// wildcard must have a valid DID arity (owner=5 / pipeline=7 / process=9
+		// segments), else no dplaax DID can ever match it and storing it as a rule
+		// would silently deny the intended subscriber (Codex P2). The minimum DID
+		// is the 5-segment owner.
+		{"fixed too short, registry only", "did:dplaax:reg"},
+		{"fixed too short, no accountID", "did:dplaax:reg:org"},
+		{"fixed between owner and pipeline arity", "did:dplaax:reg:org:acme:pipeline"},
+		{"fixed interior wildcards, dead arity", "did:dplaax:*:*:*:extra"},
+		{"fixed between pipeline and process arity", "did:dplaax:reg:org:acme:pipeline:p1:process"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -28,8 +28,9 @@ import (
 
 // ErrInvalidPattern is returned for a structurally invalid allow-list pattern: a
 // "*" combined with other characters in a segment, an empty segment, a wildcard
-// or non-literal in the did:dplaax method prefix, or a pattern too short to name
-// any DID.
+// or non-literal in the did:dplaax method prefix, or a fixed (non-trailing-"*")
+// pattern whose length does not match any dplaax DID arity (so no DID could ever
+// match it — a dead rule).
 var ErrInvalidPattern = errors.New("allowlist: invalid pattern")
 
 // methodPrefix is the two literal leading segments every dplaax DID — and every
@@ -55,7 +56,9 @@ func Match(pattern, candidateDID string) (bool, error) {
 
 // parsePattern splits and validates a pattern into its segments. The method
 // prefix must be the literal "did:dplaax"; every remaining segment must be either
-// a bare "*" or a non-empty literal containing no "*".
+// a bare "*" or a non-empty literal containing no "*"; and a fixed pattern (one
+// with no trailing "*") must have a length that matches a dplaax DID arity, so it
+// can actually name a DID.
 func parsePattern(pattern string) ([]string, error) {
 	segs := strings.Split(pattern, ":")
 	// Need the method prefix plus at least one segment to match against.
@@ -75,7 +78,22 @@ func parsePattern(pattern string) ([]string, error) {
 			return nil, ErrInvalidPattern
 		}
 	}
+	// A pattern with no trailing "*" matches only candidates of exactly its own
+	// length, so it must align to a valid dplaax DID arity — otherwise no DID can
+	// ever match it and storing it as a rule would silently deny the intended
+	// subscriber (a dead rule). A trailing "*" is open-ended (it absorbs the
+	// remainder), so any length >= the method prefix + one segment is fine.
+	if segs[len(segs)-1] != "*" && !validDIDArity(len(segs)-len(methodPrefix)) {
+		return nil, ErrInvalidPattern
+	}
 	return segs, nil
+}
+
+// validDIDArity reports whether n post-method segments form one of the dplaax
+// DID shapes: owner (registry/accountType/accountID = 3), pipeline (+pipeline/id
+// = 5), or process (+process/id = 7).
+func validDIDArity(n int) bool {
+	return n == 3 || n == 5 || n == 7
 }
 
 // matchSegments walks pattern and candidate segments in lockstep. A trailing "*"

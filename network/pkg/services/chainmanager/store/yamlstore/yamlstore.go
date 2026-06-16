@@ -144,7 +144,11 @@ func NewAllowListStore(dir string) *AllowListStore {
 
 // path maps a pipeline DID to its allow-list file. The key must be a parseable
 // dplaax pipeline DID; a non-pipeline or unparseable key is rejected, not
-// silently pathed.
+// silently pathed. The IsPipeline guard fixes resourcePath at exactly
+// "pipeline/{id}", so every allow-list path has uniform depth
+// (…/{accountID}/pipeline/{id}.yaml) — no file is ever also a directory of a
+// deeper record. If that guard is ever loosened to admit other DID shapes,
+// re-check this file/dir-overlap invariant.
 func (s *AllowListStore) path(pipelineDID string) (string, error) {
 	d, err := dplaax.Parse(pipelineDID)
 	if err != nil {
