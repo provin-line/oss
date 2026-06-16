@@ -1,0 +1,67 @@
+// dplaax.vc.v1 is the provenance-chain VC resolver: pipeline runtimes submit
+// Verifiable Credentials, which are stored by content address and served back
+// for audit and for cross-registry chain resolution.
+//
+// Message-shape principle (mirrors dplaax.did.v1 / dplaax.schema.v1): a VC
+// crosses the wire as opaque bytes carrying its canonical (JCS) JSON — the proto
+// does not re-model it. The VC body's canonical round-trip IS its content
+// address ("sha256:<hex>" over the JCS-canonical body), the same address a
+// previousCredential link references and an auditor recomputes, so a proto
+// re-model would be a second, drift-prone source of truth.
+//
+// ResolveVC is the cross-registry fetch contract: a peer registry's resolver
+// calls it to fill a previousCredential hole in a chain it is auditing (the
+// async batch resolver is a later slice; the wire it depends on is frozen here).
+syntax = "proto3";
+
+package dplaax.vc.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/vc/v1;vcpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// VCResolverService stores and resolves provenance VCs. Every RPC declares its
+// authorization policy (resource + action) via the o3co.authz.v1 method option;
+// the network layer's interceptor enforces it. An absent option would silently
+// disable the check, so both RPCs carry one — asserted by a descriptor test.
+service VCResolverService {
+  // StoreVC stores a submitted VC keyed by its content address, which the server
+  // RECOMPUTES from the submitted bytes (never a caller-supplied key). When the
+  // VC references a previousCredential the server does not already hold, that
+  // hole is enqueued as unresolved for the (later) batch resolver; the optional
+  // upstream_endpoint is the caller's hint for where the predecessor can be
+  // fetched. Storing a VC already held is idempotent.
+  rpc StoreVC(StoreVCRequest) returns (StoreVCResponse) {
+    option (o3co.authz.v1.policy) = {resource: "vc", action: "store"};
+  }
+
+  // ResolveVC returns the VC held at a content address, or NotFound. A VC body
+  // is provenance data, not an open identity document, so this read is L1-gated
+  // (unlike W3C DID resolution). It is also the cross-registry fetch a peer
+  // resolver calls; how that peer authenticates is a deployment concern.
+  rpc ResolveVC(ResolveVCRequest) returns (ResolveVCResponse) {
+    option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
+  }
+}
+
+message StoreVCRequest {
+  // credential is the VC (canonical JSON) to store.
+  bytes credential = 1;
+  // upstream_endpoint is an optional hint for where this VC's predecessor
+  // (previousCredential) can be fetched. Empty leaves the hole to be resolved
+  // from the referring credential's issuer DID by the batch resolver.
+  string upstream_endpoint = 2;
+}
+message StoreVCResponse {
+  // hash is the recomputed content address ("sha256:<hex>") the VC is stored at.
+  string hash = 1;
+}
+
+message ResolveVCRequest {
+  // hash is the content address ("sha256:<hex>") to resolve.
+  string hash = 1;
+}
+message ResolveVCResponse {
+  // credential is the held VC (canonical JSON).
+  bytes credential = 1;
+}
