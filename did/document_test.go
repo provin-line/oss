@@ -280,6 +280,36 @@ func TestDIDDocument_UnknownMembersPreserved(t *testing.T) {
 	}
 }
 
+// A present-but-wrong-typed KNOWN member must fail closed on unmarshal, exactly
+// as the former typed decode did: preserving unknown members must not extend to
+// tolerating malformed known ones. The dangerous case is a non-string
+// controller, which the accessor would otherwise collapse to "" — and "" means
+// "self-controlled owner" to the chain walk, so a malformed owner document
+// would silently pass chain-consistency (fail-open).
+func TestDIDDocument_MalformedKnownMemberRejected(t *testing.T) {
+	cases := map[string]string{
+		"controller as array":       `{"id":"` + subjectDID + `","controller":["` + subjectDID + `"]}`,
+		"controller as object":      `{"id":"` + subjectDID + `","controller":{"id":"x"}}`,
+		"id as number":              `{"id":123}`,
+		"authentication as string":  `{"id":"` + subjectDID + `","authentication":"` + subjectDID + `#auth"}`,
+		"verificationMethod object": `{"id":"` + subjectDID + `","verificationMethod":{"id":"x"}}`,
+	}
+	for name, wire := range cases {
+		t.Run(name, func(t *testing.T) {
+			var doc did.DIDDocument
+			if err := json.Unmarshal([]byte(wire), &doc); err == nil {
+				t.Errorf("malformed known member (%s) was accepted; want fail-closed error", name)
+			}
+		})
+	}
+
+	// Unknown members of any type remain preserved (not validated).
+	var ok did.DIDDocument
+	if err := json.Unmarshal([]byte(`{"id":"`+subjectDID+`","futureScalar":1,"futureArr":["x"],"futureObj":{"k":"v"}}`), &ok); err != nil {
+		t.Fatalf("unknown members must not be validated: %v", err)
+	}
+}
+
 // Hash is deterministic over the canonical body and changes when any member —
 // including an unmodelled one — changes.
 func TestDIDDocument_HashDeterministicAndMemberSensitive(t *testing.T) {

@@ -175,13 +175,45 @@ func (d *DIDDocument) MarshalJSON() ([]byte, error) { return jcs.Canonicalize(d.
 
 // UnmarshalJSON parses the wire form under strict-decoder rules, preserving
 // unknown members in the body so the canonical hash commits to the document as
-// resolved.
+// resolved. Known members are type-checked and a wrong-typed one fails closed:
+// preserving UNKNOWN members must not extend to tolerating MALFORMED known ones,
+// which the accessors would otherwise coerce to a zero value — and a zero value
+// can read as valid (a non-string controller would collapse to "", which the
+// controller-chain walk treats as a self-controlled owner). This restores the
+// fail-closed contract of the former typed decode.
 func (d *DIDDocument) UnmarshalJSON(data []byte) error {
 	var doc map[string]any
 	if err := canon.NewStrictDecoder(data).Decode(&doc); err != nil {
 		return fmt.Errorf("did: %w", err)
 	}
+	if err := validateKnownMembers(doc); err != nil {
+		return err
+	}
 	d.body = doc
+	return nil
+}
+
+// validateKnownMembers rejects a document whose known members are present but of
+// the wrong JSON type. Unknown members are not inspected (they are preserved
+// verbatim); only members this model assigns meaning to are constrained, so a
+// malformed known member cannot be silently coerced past a security gate.
+// @context is intentionally not constrained: it is not consumed by any accessor
+// and JSON-LD legitimately allows a string, array, or object there.
+func validateKnownMembers(body map[string]any) error {
+	for _, k := range []string{keyID, keyController} {
+		if v, present := body[k]; present {
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("did: member %q must be a string, got %T", k, v)
+			}
+		}
+	}
+	for _, k := range []string{keyAlsoKnownAs, keyVerificationMethod, keyAuthentication, keyAssertionMethod, keyService} {
+		if v, present := body[k]; present {
+			if _, ok := v.([]any); !ok {
+				return fmt.Errorf("did: member %q must be an array, got %T", k, v)
+			}
+		}
+	}
 	return nil
 }
 
