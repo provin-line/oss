@@ -25,6 +25,11 @@ type Resolver interface {
 // JSON (application/did+json). Malformed DIDs are 400, misses are 404, and the
 // path traversal guard is the did:dplaax parser the service applies (an unsafe
 // segment fails to parse → 400).
+//
+// Access control: this endpoint is intentionally UNAUTHENTICATED — public DID
+// resolution is a W3C-style open read, unlike the connect ResolveDID RPC, which
+// carries the dids:read authz policy. Mount it accordingly (no auth interceptor);
+// do not assume the RPC's authorization covers this path.
 func NewResolutionHandler(r Resolver, registry string) http.Handler {
 	return &resolutionHandler{r: r, registry: registry}
 }

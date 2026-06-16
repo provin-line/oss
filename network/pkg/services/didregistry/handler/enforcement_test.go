@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -239,5 +240,57 @@ func TestE2E_RegisterIssueResolve(t *testing.T) {
 	}
 	if len(logResp.Msg.GetEvents()) != 1 {
 		t.Errorf("process lifecycle log has %d events, want 1 (register)", len(logResp.Msg.GetEvents()))
+	}
+}
+
+// The domain→Connect error mapping — this phase's core contract — is asserted
+// over the wire for each code, not just the happy path.
+func TestWireErrorMapping(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, pub := newSvc(t)
+	c := authClient(t, svc, []endpoint.StaticRule{
+		{Resource: "dids", Action: "register"},
+		{Resource: "dids", Action: "issue"},
+		{Resource: "dids", Action: "read"},
+	})
+	auth := func(r interface{ Header() http.Header }) { r.Header().Set("Authorization", "Bearer dummy") }
+
+	// (a) ResolveDID of an absent DID → NotFound.
+	r1 := connect.NewRequest(&didpb.ResolveDIDRequest{Did: ownerDID})
+	auth(r1)
+	if _, err := c.ResolveDID(ctx, r1); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("absent resolve: want NotFound, got %v (%v)", connect.CodeOf(err), err)
+	}
+
+	// (b) Malformed did_document bytes → InvalidArgument (the docFromBytes boundary).
+	r2 := connect.NewRequest(&didpb.RegisterOwnerRequest{DidDocument: []byte("{not json")})
+	auth(r2)
+	if _, err := c.RegisterOwner(ctx, r2); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("malformed doc: want InvalidArgument, got %v (%v)", connect.CodeOf(err), err)
+	}
+
+	// (c) Malformed delegation bytes → InvalidArgument (the strict-decoder boundary).
+	r3 := connect.NewRequest(&didpb.IssuePipelineRequest{TargetDid: pipelineDID, Delegation: []byte(`{"dup":1,"dup":2}`)})
+	auth(r3)
+	if _, err := c.IssuePipeline(ctx, r3); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("malformed/duplicate-key delegation: want InvalidArgument, got %v (%v)", connect.CodeOf(err), err)
+	}
+
+	// (d) Duplicate issuance of the same target → AlreadyExists.
+	reg := connect.NewRequest(&didpb.RegisterOwnerRequest{DidDocument: signedOwnerDocBytes(t, signer, pub)})
+	auth(reg)
+	if _, err := c.RegisterOwner(ctx, reg); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		ip := connect.NewRequest(&didpb.IssuePipelineRequest{TargetDid: pipelineDID, Delegation: delegationBytes(t, signer, pipelineDID)})
+		auth(ip)
+		_, err := c.IssuePipeline(ctx, ip)
+		if i == 0 && err != nil {
+			t.Fatalf("first issue: %v", err)
+		}
+		if i == 1 && connect.CodeOf(err) != connect.CodeAlreadyExists {
+			t.Errorf("duplicate issue: want AlreadyExists, got %v (%v)", connect.CodeOf(err), err)
+		}
 	}
 }

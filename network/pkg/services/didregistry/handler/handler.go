@@ -16,6 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
@@ -184,13 +185,31 @@ func docFromBytes(b []byte) (*did.DIDDocument, error) {
 	return &doc, nil
 }
 
+// delegationToBytes emits the JCS-canonical form. DelegationCredential has no
+// MarshalJSON, so a plain json.Marshal would emit Go struct-field order — but the
+// opaque-bytes contract is canonical JSON (so a consumer can compare/hash the
+// bytes), matching how DID Documents marshal. Round-trip through the strict
+// decoder (UseNumber) then canonicalize.
 func delegationToBytes(dlg *delegation.DelegationCredential) ([]byte, error) {
-	return json.Marshal(dlg)
+	raw, err := json.Marshal(dlg)
+	if err != nil {
+		return nil, err
+	}
+	var v any
+	if err := canon.NewStrictDecoder(raw).Decode(&v); err != nil {
+		return nil, err
+	}
+	return jcs.Canonicalize(v)
 }
 
+// delegationFromBytes decodes an inbound delegation through the strict decoder
+// (RFC 8785 duplicate-key rejection, UTF-8 validation) — the protocol-boundary
+// discipline: a malformed credential must fail closed as InvalidArgument, never
+// be coerced past the boundary into a DID-minting call. A decode failure is a
+// malformed request, not an internal error.
 func delegationFromBytes(b []byte) (*delegation.DelegationCredential, error) {
 	var dlg delegation.DelegationCredential
-	if err := json.Unmarshal(b, &dlg); err != nil {
+	if err := canon.NewStrictDecoder(b).Decode(&dlg); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	return &dlg, nil
