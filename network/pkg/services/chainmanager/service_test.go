@@ -85,6 +85,31 @@ func TestService_UpdateAllowList_InvalidPipelineDID(t *testing.T) {
 	}
 }
 
+// A mutating call on an already-canceled context must not touch the store — the
+// codebase idiom (signer/schema/did/vc all guard ctx.Err() at entry).
+func TestService_UpdateAllowList_ContextCanceled(t *testing.T) {
+	spy := &spyAllowStore{}
+	svc := New(memstore.NewSubscriptionStore(), spy)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := svc.UpdateAllowList(ctx, "did:dplaax:reg:org:acme:pipeline:p1", []string{"did:dplaax:*"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if spy.saved {
+		t.Error("Save was called on a canceled context")
+	}
+}
+
+func TestService_ListSubscriptions_ContextCanceled(t *testing.T) {
+	svc := New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := svc.ListSubscriptions(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
 func TestService_UpdateAllowList_InvalidPattern(t *testing.T) {
 	spy := &spyAllowStore{}
 	svc := New(memstore.NewSubscriptionStore(), spy)

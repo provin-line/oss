@@ -47,6 +47,23 @@ func TestOperatorHandler_ListSubscriptions(t *testing.T) {
 	}
 }
 
+// A subscription with no Created timestamp maps to an empty wire string, not the
+// year-0001 zero-value sentinel (D-o5 zero handling).
+func TestOperatorHandler_ListSubscriptions_ZeroCreated(t *testing.T) {
+	svc, subs, _ := newSvc(t)
+	if err := subs.Save(&store.Subscription{ID: "sub-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewOperator(svc)
+	resp, err := h.ListSubscriptions(context.Background(), connect.NewRequest(&chainpb.ListSubscriptionsRequest{}))
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v", err)
+	}
+	if got := resp.Msg.GetSubscriptions()[0].GetCreated(); got != "" {
+		t.Errorf("zero Created = %q, want empty string", got)
+	}
+}
+
 func TestOperatorHandler_ListSubscriptions_Empty(t *testing.T) {
 	svc, _, _ := newSvc(t)
 	h := NewOperator(svc)

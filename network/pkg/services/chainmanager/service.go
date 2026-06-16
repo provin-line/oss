@@ -34,6 +34,9 @@ func New(subs store.SubscriptionStore, allows store.AllowListStore) *Service {
 // ListSubscriptions returns the subscriptions this CM holds. An empty store
 // yields an empty slice, not an error.
 func (s *Service) ListSubscriptions(ctx context.Context) ([]*store.Subscription, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return s.subs.List()
 }
 
@@ -43,8 +46,12 @@ func (s *Service) ListSubscriptions(ctx context.Context) ([]*store.Subscription,
 // stored allow-list untouched. The key must be a parseable dplaax pipeline DID
 // (ErrInvalidPipelineDID otherwise); each pattern must be a valid trust pattern
 // (allowlist.ErrInvalidPattern otherwise). On success the rule set fully replaces
-// the prior one.
+// the prior one. An already-canceled context is honored at entry, before any
+// validation or write, so a disconnected/timed-out caller never mutates state.
 func (s *Service) UpdateAllowList(ctx context.Context, pipelineDID string, patterns []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	d, err := dplaax.Parse(pipelineDID)
 	if err != nil {
 		return fmt.Errorf("%w: %q: %v", ErrInvalidPipelineDID, pipelineDID, err)

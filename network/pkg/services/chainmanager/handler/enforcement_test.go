@@ -67,3 +67,19 @@ func TestEnforcement_MissingToken(t *testing.T) {
 		t.Errorf("missing token: want CodeUnauthenticated, got %v (%v)", connect.CodeOf(err), err)
 	}
 }
+
+// ListSubscriptions carries a distinct policy (chain:read), so its gate is
+// exercised separately: a caller granted only update-allowlist must be denied.
+func TestEnforcement_ListSubscriptions_Denied(t *testing.T) {
+	c := authClient(t, []endpoint.StaticRule{{Resource: "chain", Action: "update-allowlist"}})
+	_, err := c.ListSubscriptions(context.Background(), bearerReq())
+	if connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Errorf("denied list: want CodePermissionDenied, got %v (%v)", connect.CodeOf(err), err)
+	}
+}
+
+func bearerReq() *connect.Request[chainpb.ListSubscriptionsRequest] {
+	req := connect.NewRequest(&chainpb.ListSubscriptionsRequest{})
+	req.Header().Set("Authorization", "Bearer dummy")
+	return req
+}
