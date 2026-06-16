@@ -20,15 +20,15 @@ import (
 // ContextDplaaxVCV1Document); a profile may append its own extension
 // context for profile-owned custom subject fields. The poc.* tier
 // explicitly permits pre-GA byte-level context evolution; at GA the URI
-// promotes to https://dplaax.io/vc/v1 and freezes.
+// promotes to https://dplaax.dev/vc/v1 and freezes.
 const (
 	ContextCredentialsV2 = "https://www.w3.org/ns/credentials/v2"
-	ContextDplaaxVCV1    = "https://poc.dplaax.io/vc/v1"
+	ContextDplaaxVCV1    = "https://poc.dplaax.dev/vc/v1"
 	// ContextProvinVCV1 is the provin profile context: grounds the "provin"
 	// claim namespace prefix (credential.claim.grounding) and hosts
-	// profile-owned custom subject field terms. poc tier — the provin-line.io
+	// profile-owned custom subject field terms. poc tier — the provin.dev
 	// domain acquisition must be confirmed before external deployment.
-	ContextProvinVCV1 = "https://poc.provin-line.io/vc/v1"
+	ContextProvinVCV1 = "https://poc.provin.dev/vc/v1"
 )
 
 // PipelinePassCredential is the per-event provenance credential.

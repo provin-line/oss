@@ -27,7 +27,7 @@ func TestHandler_StoreVC_ErrorCodes(t *testing.T) {
 	}
 	// Non-string previousCredential → InvalidArgument (not silent chain-origin).
 	bad, _ := json.Marshal(map[string]any{
-		"issuer":            "did:dplaax:poc.dplaax.io:org:acme",
+		"issuer":            "did:dplaax:poc.dplaax.dev:org:acme",
 		"credentialSubject": map[string]any{"previousCredential": 123},
 	})
 	_, err = h.StoreVC(context.Background(), connect.NewRequest(&vcpb.StoreVCRequest{Credential: bad}))

@@ -6,12 +6,12 @@
   ],
   "description": "provin profile context document — byte ledger (sha256) and the prefix grounding it carries",
   "input": {
-    "context_uri": "https://poc.provin-line.io/vc/v1"
+    "context_uri": "https://poc.provin.dev/vc/v1"
   },
   "expect": {
-    "sha256": "46fadaa9178cbdf9002d81265ec41dd962142be8daa4edb04f49ddc4f47c1159",
+    "sha256": "35c8066d47eba1c0c284632f3b390fdb525162b45f5629b31457b030e41a9b86",
     "grounds": {
-      "provin": "https://provin-line.io/vocab#"
+      "provin": "https://provin.dev/vocab#"
     },
     "protected": true
   }

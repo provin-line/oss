@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	ownerDID   = "did:dplaax:poc.dplaax.io:org:acme"
-	processDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+	ownerDID   = "did:dplaax:poc.dplaax.dev:org:acme"
+	processDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 )
 
 type memKeyStore struct{ keys map[string][]byte }
@@ -113,7 +113,7 @@ func TestBuild_Verify_RoundTrip(t *testing.T) {
 func TestBuild_RejectsDelegatedByMismatch(t *testing.T) {
 	signer, _ := fixture(t, ownerDID)
 	subject := sampleSubject()
-	subject.DelegatedBy = "did:dplaax:poc.dplaax.io:org:someone-else"
+	subject.DelegatedBy = "did:dplaax:poc.dplaax.dev:org:someone-else"
 	if _, err := delegation.Build(signer, ownerDID, subject); err == nil {
 		t.Error("Build with delegatedBy != issuer: want error")
 	}
@@ -126,7 +126,7 @@ func TestVerify_DelegatedByMismatch(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	// delegatedBy no longer equals the issuer — checked before proof.
-	cred.Issuer = "did:dplaax:poc.dplaax.io:org:other"
+	cred.Issuer = "did:dplaax:poc.dplaax.dev:org:other"
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
 		t.Error("Verify with delegatedBy != issuer: want error")
 	}
@@ -211,7 +211,7 @@ func TestVerify_VerificationMethodNotIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	cred.Proof.VerificationMethod = "did:dplaax:poc.dplaax.io:org:other#signing"
+	cred.Proof.VerificationMethod = "did:dplaax:poc.dplaax.dev:org:other#signing"
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
 		t.Error("Verify with a verificationMethod naming another DID: want error")
 	}
@@ -226,7 +226,7 @@ func TestVerify_SubstitutedDocID(t *testing.T) {
 	// A resolver whose returned document has an ID other than the issuer.
 	other, _ := (ed25519.Generator{}).Generate()
 	r := local.New()
-	doc := signingDocAs("did:dplaax:poc.dplaax.io:org:imposter", ownerDID, other.PublicKey)
+	doc := signingDocAs("did:dplaax:poc.dplaax.dev:org:imposter", ownerDID, other.PublicKey)
 	r.Add(doc) // stored under the imposter id; will not resolve the issuer
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
 		t.Error("Verify against a substituted document id: want error")
@@ -239,7 +239,7 @@ func TestVerify_TamperedSubjectID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	cred.CredentialSubject.ID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:evil"
+	cred.CredentialSubject.ID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:evil"
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
 		t.Error("Verify after delegated-id tampering: want error (proof covers the subject)")
 	}
@@ -249,7 +249,7 @@ func TestVerify_SubjectNotUnderIssuer(t *testing.T) {
 	signer, r := fixture(t, ownerDID)
 	// acme owner signs a delegation for a pipeline under a DIFFERENT owner.
 	subject := delegation.DelegationSubject{
-		ID:          "did:dplaax:poc.dplaax.io:org:beta:pipeline:p1",
+		ID:          "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p1",
 		DelegatedBy: ownerDID,
 	}
 	cred, err := delegation.Build(signer, ownerDID, subject)
@@ -264,7 +264,7 @@ func TestVerify_SubjectNotUnderIssuer(t *testing.T) {
 func TestVerify_SubjectNotPipelineOrProcess(t *testing.T) {
 	signer, r := fixture(t, ownerDID)
 	subject := delegation.DelegationSubject{
-		ID:          "did:dplaax:poc.dplaax.io:org:acme", // an owner DID, not pipeline/process
+		ID:          "did:dplaax:poc.dplaax.dev:org:acme", // an owner DID, not pipeline/process
 		DelegatedBy: ownerDID,
 	}
 	cred, err := delegation.Build(signer, ownerDID, subject)

@@ -21,10 +21,10 @@ func mustTime(t *testing.T) time.Time { t.Helper(); return time.Now() }
 
 func signedPub(t *testing.T) []byte { t.Helper(); _, pub, _ := fixture(t); return pub }
 
-const ownerDID = "did:dplaax:poc.dplaax.io:org:acme"
+const ownerDID = "did:dplaax:poc.dplaax.dev:org:acme"
 
 // pipelineDID is the structural parent of issuerDID, for multi-hop walks.
-const pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
+const pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
 // didDoc builds a DID Document. When pub is non-nil, it carries an
 // AssertionMethod key (vmID) controlled by the document subject.
@@ -228,7 +228,7 @@ func TestVerify_IssuerNotResolvable(t *testing.T) {
 // A controller pointing outside the issuer's owner lineage breaks the chain.
 func TestVerify_BrokenControllerChain_Fails(t *testing.T) {
 	cred, pub := signedCred(t)
-	const foreignOwner = "did:dplaax:poc.dplaax.io:org:attacker"
+	const foreignOwner = "did:dplaax:poc.dplaax.dev:org:attacker"
 	r := resolverWith(pub, foreignOwner, didDoc(foreignOwner, foreignOwner, "", nil))
 	v := vc.NewVerifier(r, ed25519Verifier())
 
@@ -329,7 +329,7 @@ func TestVerify_MalformedSourceCommitment_DataIntegrityFails(t *testing.T) {
 	cred, pub := signedCred(t)
 	forged := reUnmarshal(t, cred, func(m map[string]any) {
 		subj := m["credentialSubject"].(map[string]any)
-		subj["derived_from"] = []any{"did:dplaax:poc.dplaax.io:org:z", "did:dplaax:poc.dplaax.io:org:a"}
+		subj["derived_from"] = []any{"did:dplaax:poc.dplaax.dev:org:z", "did:dplaax:poc.dplaax.dev:org:a"}
 		subj["source_root"] = "f1220" + "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 		subj["source_root_canonical"] = "jcs-rfc8785"
 	})
@@ -433,7 +433,7 @@ func (s substitutingResolver) Resolve(_ context.Context, _ string) (*did.DIDDocu
 // resolver or another axis (registry-substitution defense on the signing path).
 func TestVerify_SubstitutedDocID_SignerAuthenticityFails(t *testing.T) {
 	cred, pub := signedCred(t)
-	doc := didDoc("did:dplaax:poc.dplaax.io:org:other", "did:dplaax:poc.dplaax.io:org:other", vmID, pub)
+	doc := didDoc("did:dplaax:poc.dplaax.dev:org:other", "did:dplaax:poc.dplaax.dev:org:other", vmID, pub)
 	v := vc.NewVerifier(substitutingResolver{doc: doc}, ed25519Verifier())
 
 	res, err := v.Verify(context.Background(), cred)

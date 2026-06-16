@@ -12,7 +12,7 @@
 | プロトコル | `dplaax` | proto 名前空間（`dplaax.*.v1`）、DID メソッド（`did:dplaax`）、JSON-LD コンテキスト IRI |
 | プロダクト | `provin` | このリポジトリ、CLI バイナリ（`provin`）、Docker イメージ |
 
-PoC であることは DID の **レジストリセグメント**（例: `did:dplaax:poc.dplaax.io:org:acme`）で表現し、メソッド名には含めない。これにより、PoC から本番への移行後も来歴チェーンが維持される。
+PoC であることは DID の **レジストリセグメント**（例: `did:dplaax:poc.dplaax.dev:org:acme`）で表現し、メソッド名には含めない。これにより、PoC から本番への移行後も来歴チェーンが維持される。
 
 ## レイアウト
 

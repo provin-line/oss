@@ -9,12 +9,12 @@ profile の T1 native DID method: パース・セグメント文法・意味論�
 did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
 ```
 
-- `registry` は**ドメイン名**（例: `poc.dplaax.io`）であり、解決 URL はここから導出される（`https://{registry}/did/...`）。環境（PoC・本番）はここで表現し、メソッド名には含めない — W3C DID Core §3.1 はメソッド名を `[a-z0-9]` に制限している。
+- `registry` は**ドメイン名**（例: `poc.dplaax.dev`）であり、解決 URL はここから導出される（`https://{registry}/did/...`）。環境（PoC・本番）はここで表現し、メソッド名には含めない — W3C DID Core §3.1 はメソッド名を `[a-z0-9]` に制限している。
 - 階層: Owner DID（リソースパスなし）→ Pipeline DID（`:pipeline:{id}`）→ Process DID（`:pipeline:{id}:process:{id}`）。
 
 ## 登録と identity binding
 
-Owner DID は識別子に名指しされた federation registry（PoC では `poc.dplaax.io`）が発行する。登録の検証水準 — T1 特性である組織検証 — は federation governance の事項であって protocol ではない: `did:web` 等の対外 identity の支配証明は自然な入力だが、domain 支配単体は T3 級の証拠であり組織検証の代替にはならない。
+Owner DID は識別子に名指しされた federation registry（PoC では `poc.dplaax.dev`）が発行する。登録の検証水準 — T1 特性である組織検証 — は federation governance の事項であって protocol ではない: `did:web` 等の対外 identity の支配証明は自然な入力だが、domain 支配単体は T3 級の証拠であり組織検証の代替にはならない。
 
 申請者が登録時に対外 DID を提出した場合、registry は束縛と、その時点で解決した対外 DID 文書の snapshot を append-only lifecycle log に記録する。これにより Owner identity binding（GLOSSARY 参照）は自己主張ではなく**誕生時点から registry-witnessed** となり、この snapshot が後の domain 乗っ取りを検出する監査側の照合基準になる。束縛の追加・rotation・対外 domain の消失は同じ log に記録される lifecycle event であり — 追加と rotation は新たに解決した対外文書を snapshot して照合基準を引き直す — いずれも attribution には一切触れない。
 

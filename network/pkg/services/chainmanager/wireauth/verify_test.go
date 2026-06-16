@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	subDID = "did:dplaax:poc.dplaax.io:org:sub"
-	pubDID = "did:dplaax:poc.dplaax.io:org:acme"
+	subDID = "did:dplaax:poc.dplaax.dev:org:sub"
+	pubDID = "did:dplaax:poc.dplaax.dev:org:acme"
 )
 
 func at() time.Time { return time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC) }
@@ -135,7 +135,7 @@ func TestVerify_KeyResolutionFailures(t *testing.T) {
 		"controller mismatch": mapResolver{subDID: did.New(did.DocumentFields{
 			ID: subDID, Controller: subDID,
 			VerificationMethod: []did.VerificationMethod{{
-				ID: subDID + "#auth", Type: "JsonWebKey2020", Controller: "did:dplaax:poc.dplaax.io:org:evil",
+				ID: subDID + "#auth", Type: "JsonWebKey2020", Controller: "did:dplaax:poc.dplaax.dev:org:evil",
 				PublicKeyJWK: ed25519JWK(otherPub),
 			}},
 			Authentication: []string{subDID + "#auth"},
@@ -157,7 +157,7 @@ func TestVerify_KeyResolutionFailures(t *testing.T) {
 // fails. This is the unknown-key-share defense (D-w1).
 func TestVerify_SharedKeyAliasingRejected(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	alias := "did:dplaax:poc.dplaax.io:org:alias"
+	alias := "did:dplaax:poc.dplaax.dev:org:alias"
 	// Both DIDs resolve to documents carrying the same public key under #auth.
 	v := testVerifier(t, mapResolver{
 		subDID: authDoc(subDID, pub),

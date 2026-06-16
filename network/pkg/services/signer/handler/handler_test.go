@@ -14,7 +14,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/signer/handler"
 )
 
-const did = "did:dplaax:poc.dplaax.io:org:acme"
+const did = "did:dplaax:poc.dplaax.dev:org:acme"
 
 type memKeyStore struct {
 	keys map[string]map[keystore.KeyID]*crypto.KeyPair

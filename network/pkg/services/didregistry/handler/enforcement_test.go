@@ -28,10 +28,10 @@ import (
 )
 
 const (
-	registry    = "poc.dplaax.io"
-	ownerDID    = "did:dplaax:poc.dplaax.io:org:acme"
-	pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
-	processDID  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+	registry    = "poc.dplaax.dev"
+	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+	processDID  = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 )
 
 // --- in-memory keystore -----------------------------------------------------

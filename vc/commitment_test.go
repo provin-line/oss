@@ -27,11 +27,11 @@ func sourceCred(t *testing.T, issuer, outputHash string) *vc.PipelinePassCredent
 func threeSources(t *testing.T) []*vc.PipelinePassCredential {
 	t.Helper()
 	return []*vc.PipelinePassCredential{
-		sourceCred(t, "did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:s",
+		sourceCred(t, "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
 			"sha256:"+strings.Repeat("5", 64)),
-		sourceCred(t, "did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:s",
+		sourceCred(t, "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
 			"sha256:"+strings.Repeat("6", 64)),
-		sourceCred(t, "did:dplaax:poc.dplaax.io:org:mineB:pipeline:m:process:s",
+		sourceCred(t, "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s",
 			"sha256:"+strings.Repeat("7", 64)),
 	}
 }
@@ -144,8 +144,8 @@ func TestNewSourceCommitment(t *testing.T) {
 		t.Fatalf("NewSourceCommitment: %v", err)
 	}
 	wantIssuers := []string{
-		"did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:s",
-		"did:dplaax:poc.dplaax.io:org:mineB:pipeline:m:process:s",
+		"did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+		"did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s",
 	}
 	if len(oc.DerivedFrom) != 2 || oc.DerivedFrom[0] != wantIssuers[0] || oc.DerivedFrom[1] != wantIssuers[1] {
 		t.Errorf("DerivedFrom = %v, want %v (unique, sorted)", oc.DerivedFrom, wantIssuers)
@@ -165,7 +165,7 @@ func aggregateCred(t *testing.T, commitment *vc.SourceCommitment) *vc.PipelinePa
 	subj.TransformationClaim = vc.ClaimAggregate
 	subj.InputHash = ""
 	return newCred(t, vc.CredentialFields{
-		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:a1",
+		Issuer:           "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:a1",
 		ValidFrom:        time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
 		Subject:          subj,
 		SourceCommitment: commitment,
@@ -268,7 +268,7 @@ func TestVerifySourceCommitmentChainPreserving(t *testing.T) {
 	}
 	subj := subjectFields()
 	cred := newCred(t, vc.CredentialFields{
-		Issuer:             "did:dplaax:poc.dplaax.io:org:x:pipeline:p:process:f",
+		Issuer:             "did:dplaax:poc.dplaax.dev:org:x:pipeline:p:process:f",
 		ValidFrom:          time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
 		Subject:            subj,
 		PreviousCredential: prevHash,
@@ -292,7 +292,7 @@ func TestVerifySourceCommitmentPredecessorOmitted(t *testing.T) {
 	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	subj := subjectFields()
 	cred := newCred(t, vc.CredentialFields{
-		Issuer:             "did:dplaax:poc.dplaax.io:org:x:pipeline:p:process:f",
+		Issuer:             "did:dplaax:poc.dplaax.dev:org:x:pipeline:p:process:f",
 		ValidFrom:          time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC),
 		Subject:            subj,
 		PreviousCredential: "sha256:" + strings.Repeat("9", 64), // not among s

@@ -11,8 +11,8 @@ func TestMethodOf(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"did:dplaax:poc.dplaax.io:org:acme", "dplaax"},
-		{"did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x", "dplaax"},
+		{"did:dplaax:poc.dplaax.dev:org:acme", "dplaax"},
+		{"did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x", "dplaax"},
 		{"did:web:example.com", "web"},
 		{"did:webvh:QmHash:example.com", "webvh"},
 		{"did:key:z6Mk", "key"},

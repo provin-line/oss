@@ -30,7 +30,7 @@ const (
 
 // RegistryConfig is the typed registry-identity config.
 type RegistryConfig struct {
-	// ID is the did:dplaax {registry} segment (e.g. "poc.dplaax.io").
+	// ID is the did:dplaax {registry} segment (e.g. "poc.dplaax.dev").
 	ID string
 	// Endpoints are the service endpoints embedded in issued DID Documents, in
 	// deterministic (sorted-by-id) order.

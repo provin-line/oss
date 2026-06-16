@@ -12,7 +12,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-const issuer = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+const issuer = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 
 func newSvc() *vcresolver.Service {
 	return vcresolver.New(memstore.NewStore(), memstore.NewPool())

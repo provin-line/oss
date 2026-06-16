@@ -12,7 +12,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/signer"
 )
 
-const did = "did:dplaax:poc.dplaax.io:org:acme"
+const did = "did:dplaax:poc.dplaax.dev:org:acme"
 
 // --- in-memory keystore wrapping keystore.ErrNotFound (the contract) ---------
 

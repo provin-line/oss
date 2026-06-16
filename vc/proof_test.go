@@ -39,7 +39,7 @@ type errStr string
 func (e errStr) Error() string { return string(e) }
 
 const (
-	issuerDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+	issuerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 	vmID      = issuerDID + "#signing"
 )
 

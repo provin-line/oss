@@ -35,13 +35,13 @@ func newCred(t *testing.T, fields vc.CredentialFields) *vc.PipelinePassCredentia
 func TestNewAndAccessors(t *testing.T) {
 	validFrom := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	c := newCred(t, vc.CredentialFields{
-		Issuer:             "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:filter-01",
+		Issuer:             "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:filter-01",
 		ValidFrom:          validFrom,
 		Subject:            subjectFields(),
 		PreviousCredential: "sha256:" + strings.Repeat("3", 64),
 	})
 
-	if got := c.Issuer(); got != "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:filter-01" {
+	if got := c.Issuer(); got != "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:filter-01" {
 		t.Errorf("Issuer = %q", got)
 	}
 	vf, err := c.ValidFrom()
@@ -72,8 +72,8 @@ func TestNewAndAccessors(t *testing.T) {
 func TestNewWithSourceCommitment(t *testing.T) {
 	commitment := &vc.SourceCommitment{
 		DerivedFrom: []string{
-			"did:dplaax:poc.dplaax.io:org:mineA:pipeline:m:process:src",
-			"did:dplaax:poc.dplaax.io:org:mineB:pipeline:m:process:src",
+			"did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:src",
+			"did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:src",
 		},
 		SourceRoot:          "f1220" + strings.Repeat("ab", 32),
 		SourceRootCanonical: vc.SourceRootCanonicalJCS,
@@ -82,7 +82,7 @@ func TestNewWithSourceCommitment(t *testing.T) {
 	subj.TransformationClaim = vc.ClaimAggregate
 	subj.InputHash = "" // absent for aggregation FirstDrops
 	c := newCred(t, vc.CredentialFields{
-		Issuer:           "did:dplaax:poc.dplaax.io:org:factory:pipeline:agg:process:agg-01",
+		Issuer:           "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:agg-01",
 		ValidFrom:        time.Now(),
 		Subject:          subj,
 		SourceCommitment: commitment,
@@ -110,7 +110,7 @@ func TestNewWithSourceCommitment(t *testing.T) {
 
 func TestHashDeterministicAndDefensiveBody(t *testing.T) {
 	c := newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
 		ValidFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Subject:   subjectFields(),
 	})
@@ -136,7 +136,7 @@ func TestHashDeterministicAndDefensiveBody(t *testing.T) {
 
 func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	c := newCred(t, vc.CredentialFields{
-		Issuer:             "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		Issuer:             "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
 		ValidFrom:          time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		Subject:            subjectFields(),
 		PreviousCredential: "sha256:" + strings.Repeat("4", 64),
@@ -153,7 +153,7 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	// The @context array is the signing-scope contract: protocol context
 	// plus the provin profile context that grounds the claim namespace.
 	if !strings.Contains(string(wire),
-		`"@context":["https://www.w3.org/ns/credentials/v2","https://poc.dplaax.io/vc/v1","https://poc.provin-line.io/vc/v1"]`) {
+		`"@context":["https://www.w3.org/ns/credentials/v2","https://poc.dplaax.dev/vc/v1","https://poc.provin.dev/vc/v1"]`) {
 		t.Errorf("wire form missing expected @context array: %s", wire)
 	}
 	var rt vc.PipelinePassCredential
@@ -175,7 +175,7 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 
 func TestUnknownSignedScopeFieldSurvives(t *testing.T) {
 	c := newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
 		ValidFrom: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		Subject:   subjectFields(),
 	})
@@ -206,14 +206,14 @@ func TestUnknownSignedScopeFieldSurvives(t *testing.T) {
 
 func TestUnmarshalProofExcludedFromHash(t *testing.T) {
 	c := newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
 		ValidFrom: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		Subject:   subjectFields(),
 	})
 	unsignedHash, _ := c.Hash()
 	wire, _ := c.MarshalJSON()
 	withProof := strings.Replace(string(wire), "{",
-		`{"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","verificationMethod":"did:dplaax:poc.dplaax.io:org:acme#signing","proofPurpose":"assertionMethod","created":"2026-06-10T12:00:00Z","proofValue":"z3FXQ"},`, 1)
+		`{"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022","verificationMethod":"did:dplaax:poc.dplaax.dev:org:acme#signing","proofPurpose":"assertionMethod","created":"2026-06-10T12:00:00Z","proofValue":"z3FXQ"},`, 1)
 
 	var rt vc.PipelinePassCredential
 	if err := rt.UnmarshalJSON([]byte(withProof)); err != nil {
@@ -247,7 +247,7 @@ func TestUnmarshalRejectsDuplicateKeys(t *testing.T) {
 
 func TestUnmarshalProofUnknownMembersSurvive(t *testing.T) {
 	c := newCred(t, vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:pipeline:p:process:x",
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
 		ValidFrom: time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC),
 		Subject:   subjectFields(),
 	})

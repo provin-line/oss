@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	ownerDID    = "did:dplaax:poc.dplaax.io:org:acme"
-	pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
-	processDID  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+	processDID  = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 )
 
 func newStore(t *testing.T) *yamlstore.Store {
@@ -339,7 +339,7 @@ func TestPathGuard_RejectsTraversalSegment(t *testing.T) {
 	// A DID whose accountId is a traversal segment must be rejected before any
 	// path is built (defense-in-depth: Parse already enforces the safe-segment
 	// rule, but the store guards independently).
-	evil := &dplaax.DID{Method: "dplaax", Registry: "poc.dplaax.io", AccountType: "org", AccountID: ".."}
+	evil := &dplaax.DID{Method: "dplaax", Registry: "poc.dplaax.dev", AccountType: "org", AccountID: ".."}
 	if err := s.SaveOwner(evil, doc("x", "x")); err == nil {
 		t.Error("SaveOwner with a traversal accountId: want error")
 	}

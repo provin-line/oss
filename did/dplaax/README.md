@@ -12,7 +12,7 @@ DID Document model and dispatch live in the parent `did` package.
 did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
 ```
 
-- `registry` is a **domain name** (e.g. `poc.dplaax.io`); resolution URL derives from it
+- `registry` is a **domain name** (e.g. `poc.dplaax.dev`); resolution URL derives from it
   (`https://{registry}/did/...`). Environment (PoC / production) is expressed here,
   never in the method name — W3C DID Core §3.1 restricts method names to `[a-z0-9]`.
 - Hierarchy: Owner DID (no resource path) → Pipeline DID (`:pipeline:{id}`) →
@@ -21,7 +21,7 @@ did:dplaax:{registry}:{accountType}:{accountId}[:{resourcePath}]
 ## Registration & identity binding
 
 Owner DIDs are issued by the federation registry named in the identifier
-(`poc.dplaax.io` in the PoC). The verification bar for registration —
+(`poc.dplaax.dev` in the PoC). The verification bar for registration —
 organization verification, the T1 property — is federation governance, not
 protocol: presenting control of an outward identity such as `did:web` is a
 natural input, but domain control alone is T3-grade evidence and does not

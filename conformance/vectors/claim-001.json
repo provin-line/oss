@@ -9,12 +9,12 @@
     "claim": "provin:filter",
     "context": [
       "https://www.w3.org/ns/credentials/v2",
-      "https://poc.dplaax.io/vc/v1",
-      "https://poc.provin-line.io/vc/v1"
+      "https://poc.dplaax.dev/vc/v1",
+      "https://poc.provin.dev/vc/v1"
     ]
   },
   "expect": {
     "valid": true,
-    "iri": "https://provin-line.io/vocab#filter"
+    "iri": "https://provin.dev/vocab#filter"
   }
 }

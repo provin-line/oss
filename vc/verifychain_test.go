@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	procAOrigin   = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:procA"
-	procBSameOrg  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:procB"
-	procBOtherOrg = "did:dplaax:poc.dplaax.io:org:beta:pipeline:p1:process:procB"
+	procAOrigin   = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:procA"
+	procBSameOrg  = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:procB"
+	procBOtherOrg = "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p1:process:procB"
 )
 
 func ownerOf(t *testing.T, processDID string) string {

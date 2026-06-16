@@ -18,7 +18,7 @@ var _ contract.EnvelopeCodec = (*envelopecodec.Codec)(nil)
 func newTestCredential(t *testing.T) *vc.PipelinePassCredential {
 	t.Helper()
 	cred, err := vc.New(vc.CredentialFields{
-		Issuer:    "did:dplaax:poc.dplaax.io:org:acme:process:p1",
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:process:p1",
 		ValidFrom: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC),
 		Subject: vc.CredentialSubjectFields{
 			PipelineID:          "pipe-1",

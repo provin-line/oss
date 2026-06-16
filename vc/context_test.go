@@ -15,7 +15,7 @@ import (
 // test fails on any local drift of the vendored copy. Upstream divergence
 // (the spec updating its canonical file and pin) is NOT detected here; the
 // sync is push-based per the spec's contexts/README.md.
-const contextDplaaxVCV1SHA256 = "1938cbc1682da9842c56d57d03c2b9ace7ec62c04607d792e7e482bcaa95807d"
+const contextDplaaxVCV1SHA256 = "9716bca789bdb1042451746800cc463a616a57817008001a3a895e88c0aff25f"
 
 func TestContextDocumentMatchesSpec(t *testing.T) {
 	doc := vc.ContextDplaaxVCV1Document()
@@ -58,8 +58,8 @@ func TestProvinContextGroundsClaimNamespace(t *testing.T) {
 	}
 	// The profile context's job is grounding: every namespace prefix the
 	// provin claim registry emits must be mapped to a vocabulary URL.
-	if got, _ := parsed.Context["provin"].(string); got != "https://provin-line.io/vocab#" {
-		t.Errorf("provin prefix grounding = %q, want https://provin-line.io/vocab#", got)
+	if got, _ := parsed.Context["provin"].(string); got != "https://provin.dev/vocab#" {
+		t.Errorf("provin prefix grounding = %q, want https://provin.dev/vocab#", got)
 	}
 	if protected, _ := parsed.Context["@protected"].(bool); !protected {
 		t.Error("provin context must set @protected: true")

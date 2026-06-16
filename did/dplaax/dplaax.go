@@ -25,7 +25,7 @@ const Method = "dplaax"
 
 // DID is a parsed did:dplaax identifier.
 //
-// Registry is a domain name (e.g. "poc.dplaax.io"); resolution URLs derive
+// Registry is a domain name (e.g. "poc.dplaax.dev"); resolution URLs derive
 // from it (https://{registry}/did/...). Environment (PoC / production) is
 // expressed in Registry, never in the method name.
 type DID struct {

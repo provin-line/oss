@@ -9,7 +9,7 @@ import (
 	"github.com/provin-line/oss/did"
 )
 
-const subjectDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+const subjectDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 
 func ed25519JWK(pub []byte) map[string]any {
 	return map[string]any{
@@ -91,7 +91,7 @@ func TestExtractPublicKey_ControllerMismatch(t *testing.T) {
 	doc := docWith([]did.VerificationMethod{{
 		ID:           subjectDID + "#signing",
 		Type:         "JsonWebKey2020",
-		Controller:   "did:dplaax:poc.dplaax.io:org:evil",
+		Controller:   "did:dplaax:poc.dplaax.dev:org:evil",
 		PublicKeyJWK: ed25519JWK(pub),
 	}})
 	if _, err := did.ExtractPublicKey(doc, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
@@ -148,7 +148,7 @@ func TestExtractPublicKey_FragmentCollisionInjection_Rejected(t *testing.T) {
 	realPub, _, _ := stded25519.GenerateKey(nil)
 	attackerPub, _, _ := stded25519.GenerateKey(nil)
 	attacker := did.VerificationMethod{
-		ID:           "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:attacker#signing",
+		ID:           "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:attacker#signing",
 		Type:         "JsonWebKey2020",
 		Controller:   subjectDID, // spoofed to the document subject
 		PublicKeyJWK: ed25519JWK(attackerPub),
@@ -201,7 +201,7 @@ func TestDIDDocument_NewAccessorsRoundTrip(t *testing.T) {
 	doc := did.New(did.DocumentFields{
 		Context:     []string{"https://www.w3.org/ns/did/v1"},
 		ID:          subjectDID,
-		Controller:  "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1",
+		Controller:  "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1",
 		AlsoKnownAs: []string{"https://acme.example/p1/proc1"},
 		VerificationMethod: []did.VerificationMethod{{
 			ID:           subjectDID + "#signing",
@@ -220,7 +220,7 @@ func TestDIDDocument_NewAccessorsRoundTrip(t *testing.T) {
 	if doc.ID() != subjectDID {
 		t.Errorf("ID()=%q, want %q", doc.ID(), subjectDID)
 	}
-	if doc.Controller() != "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1" {
+	if doc.Controller() != "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1" {
 		t.Errorf("Controller()=%q", doc.Controller())
 	}
 	if aka := doc.AlsoKnownAs(); len(aka) != 1 || aka[0] != "https://acme.example/p1/proc1" {
@@ -236,7 +236,7 @@ func TestDIDDocument_NewAccessorsRoundTrip(t *testing.T) {
 		t.Errorf("Service()=%v", svc)
 	}
 	// An owner-style document omits an empty controller rather than surfacing "".
-	owner := did.New(did.DocumentFields{ID: "did:dplaax:poc.dplaax.io:org:acme"})
+	owner := did.New(did.DocumentFields{ID: "did:dplaax:poc.dplaax.dev:org:acme"})
 	if _, present := owner.Body()["controller"]; present {
 		t.Error("empty controller must be omitted from the body")
 	}

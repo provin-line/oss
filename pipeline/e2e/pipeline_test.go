@@ -72,9 +72,9 @@ func readingValidator(t *testing.T) (*schemalocal.Validator, vc.SchemaRef) {
 
 // Process / owner identities for the two issuing processes, under one owner.
 const (
-	ownerDID   = "did:dplaax:poc.dplaax.io:org:acme"
-	sourceDID  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:pipe:process:source"
-	chainedDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:pipe:process:chained"
+	ownerDID   = "did:dplaax:poc.dplaax.dev:org:acme"
+	sourceDID  = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:source"
+	chainedDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:chained"
 )
 
 // ---------------------------------------------------------------------------

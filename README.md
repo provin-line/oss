@@ -17,7 +17,7 @@ self-hostable.
 | Product | `provin` | this repository, CLI binary (`provin`), Docker images |
 
 PoC-ness is expressed in the **registry segment** of DIDs (e.g.
-`did:dplaax:poc.dplaax.io:org:acme`), never in the method name — so provenance chains
+`did:dplaax:poc.dplaax.dev:org:acme`), never in the method name — so provenance chains
 survive the PoC → production transition.
 
 ## Layout

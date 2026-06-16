@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	registry    = "poc.dplaax.io"
-	ownerDID    = "did:dplaax:poc.dplaax.io:org:acme"
-	pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
-	processDID  = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
+	registry    = "poc.dplaax.dev"
+	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+	processDID  = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 )
 
 // --- in-memory keystore -----------------------------------------------------
@@ -286,7 +286,7 @@ func TestRegisterOwner_RejectsForeignRegistry(t *testing.T) {
 	svc, _, _ := newService(t)
 	// An owner whose registry segment is not this registry.
 	foreignKP, _ := (ed25519.Generator{}).Generate()
-	foreignDID := "did:dplaax:other.dplaax.io:org:acme"
+	foreignDID := "did:dplaax:other.dplaax.dev:org:acme"
 	ks := newMemKS()
 	ks.SaveKeyPair(foreignDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: foreignKP})
 	fsigner := ed25519.NewSigner(ks)
@@ -318,7 +318,7 @@ func TestIssue_RejectsDelegationTargetMismatch(t *testing.T) {
 	svc, signer, signPub := newService(t)
 	registerOwner(t, svc, signer, signPub)
 	// Delegation authorizes a different pipeline than the target.
-	otherPipe := "did:dplaax:poc.dplaax.io:org:acme:pipeline:other"
+	otherPipe := "did:dplaax:poc.dplaax.dev:org:acme:pipeline:other"
 	_, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, otherPipe))
 	if !errors.Is(err, didregistry.ErrUnauthorized) {
 		t.Errorf("delegation/target mismatch: want ErrUnauthorized, got %v", err)
@@ -434,7 +434,7 @@ func TestResolveDID_RejectsForeignRegistry(t *testing.T) {
 	ctx := context.Background()
 	svc, signer, signPub := newService(t)
 	registerOwner(t, svc, signer, signPub) // registers the local org:acme owner
-	foreign := "did:dplaax:other.dplaax.io:org:acme"
+	foreign := "did:dplaax:other.dplaax.dev:org:acme"
 	got, err := svc.ResolveDID(ctx, foreign)
 	if !errors.Is(err, didregistry.ErrUnauthorized) {
 		t.Errorf("foreign-registry resolve: want ErrUnauthorized, got doc=%v err=%v", got, err)

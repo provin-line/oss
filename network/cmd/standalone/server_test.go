@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	registryID  = "poc.dplaax.io"
-	ownerDID    = "did:dplaax:poc.dplaax.io:org:acme"
-	pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
+	registryID  = "poc.dplaax.dev"
+	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 )
 
 // assembled stands up the full mux over httptest with a static authorizer

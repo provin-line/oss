@@ -11,7 +11,7 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 )
 
-const did = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
+const did = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
 func kp(b byte) *crypto.KeyPair {
 	return &crypto.KeyPair{Algorithm: "Ed25519", PrivateKey: []byte{b, b, b, b}, PublicKey: []byte{b}}
@@ -86,7 +86,7 @@ func TestDeleteKeys(t *testing.T) {
 		t.Fatalf("after delete: want ErrNotFound, got %v", err)
 	}
 	// Deleting an absent DID is a no-op, not an error.
-	if err := s.DeleteKeys("did:dplaax:poc.dplaax.io:org:absent"); err != nil {
+	if err := s.DeleteKeys("did:dplaax:poc.dplaax.dev:org:absent"); err != nil {
 		t.Errorf("delete absent: %v", err)
 	}
 }
@@ -117,9 +117,9 @@ func TestKeyFilePerms0600(t *testing.T) {
 func TestPathTraversalRejected(t *testing.T) {
 	s := newStore(t)
 	for _, bad := range []string{
-		"did:dplaax:poc.dplaax.io:org:..",  // traversal segment
-		"did:dplaax:poc.dplaax.io:org:a/b", // separator in segment
-		"did:dplaax:poc.dplaax.io:org:",    // empty segment
+		"did:dplaax:poc.dplaax.dev:org:..",  // traversal segment
+		"did:dplaax:poc.dplaax.dev:org:a/b", // separator in segment
+		"did:dplaax:poc.dplaax.dev:org:",    // empty segment
 	} {
 		if err := s.SaveKeyPair(bad, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp(2)}); err == nil {
 			t.Errorf("SaveKeyPair(%q): want error, got nil", bad)

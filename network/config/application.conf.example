@@ -16,12 +16,12 @@ provin.network {
     # REQUIRED — no default. The did:dplaax {registry} segment this server is
     # authoritative for; appears in every DID it mints and resolves. Must be a
     # valid DID segment ([A-Za-z0-9._-], not all dots).
-    id = "poc.dplaax.io"
+    id = "poc.dplaax.dev"
 
     # OPTIONAL. Service endpoints embedded in every issued Pipeline/Process DID
     # Document, keyed by endpoint id (the key becomes the "#<id>" fragment).
     service-endpoints {
-      # vc-resolver { type = "VCResolver", url = "https://poc.dplaax.io/vc" }
+      # vc-resolver { type = "VCResolver", url = "https://poc.dplaax.dev/vc" }
     }
   }
 

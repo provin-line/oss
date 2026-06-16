@@ -32,7 +32,7 @@ func loadWith(t *testing.T, appConf string) *hoconconfig.Config {
 
 func TestLoad_Valid(t *testing.T) {
 	rc, err := registry.LoadRegistryConfig(loadWith(t, `provin.network.registry {
-		id = "poc.dplaax.io"
+		id = "poc.dplaax.dev"
 		service-endpoints {
 		  vc-resolver { type = "VCResolver", url = "https://r.example/vc" }
 		  chain       { type = "Chain",      url = "https://r.example/chain" }
@@ -41,7 +41,7 @@ func TestLoad_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistryConfig: %v", err)
 	}
-	if rc.ID != "poc.dplaax.io" {
+	if rc.ID != "poc.dplaax.dev" {
 		t.Errorf("ID = %q", rc.ID)
 	}
 	// Sorted by id: chain, vc-resolver.
@@ -54,7 +54,7 @@ func TestLoad_Valid(t *testing.T) {
 }
 
 func TestLoad_NoEndpoints(t *testing.T) {
-	rc, err := registry.LoadRegistryConfig(loadWith(t, `provin.network.registry.id = "poc.dplaax.io"`))
+	rc, err := registry.LoadRegistryConfig(loadWith(t, `provin.network.registry.id = "poc.dplaax.dev"`))
 	if err != nil {
 		t.Fatalf("LoadRegistryConfig: %v", err)
 	}
@@ -70,15 +70,15 @@ func TestLoad_RejectsBadInput(t *testing.T) {
 		"hash in id (fails dplaax.Parse)":  `provin.network.registry.id = "poc#test"`,
 		"all-dots id (fails dplaax.Parse)": `provin.network.registry.id = "..."`,
 		"empty endpoint type": `provin.network.registry {
-			id = "poc.dplaax.io"
+			id = "poc.dplaax.dev"
 			service-endpoints { e { type = "", url = "https://r/v" } }
 		}`,
 		"non-http endpoint url": `provin.network.registry {
-			id = "poc.dplaax.io"
+			id = "poc.dplaax.dev"
 			service-endpoints { e { type = "T", url = "ftp://r/v" } }
 		}`,
 		"endpoint url missing host": `provin.network.registry {
-			id = "poc.dplaax.io"
+			id = "poc.dplaax.dev"
 			service-endpoints { e { type = "T", url = "https://" } }
 		}`,
 	}

@@ -11,7 +11,7 @@ import (
 
 var _ resolver.Resolver = (*local.Resolver)(nil)
 
-const testDID = "did:dplaax:poc.dplaax.io:org:acme"
+const testDID = "did:dplaax:poc.dplaax.dev:org:acme"
 
 func TestResolve_RoundTrip(t *testing.T) {
 	r := local.New()
@@ -29,7 +29,7 @@ func TestResolve_RoundTrip(t *testing.T) {
 
 func TestResolve_NotFound(t *testing.T) {
 	r := local.New()
-	if _, err := r.Resolve(context.Background(), "did:dplaax:poc.dplaax.io:org:absent"); err == nil {
+	if _, err := r.Resolve(context.Background(), "did:dplaax:poc.dplaax.dev:org:absent"); err == nil {
 		t.Error("resolving an unregistered DID: want error")
 	}
 }

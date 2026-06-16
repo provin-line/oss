@@ -86,7 +86,7 @@ func TestClaimVectors(t *testing.T) {
 		loadVector(t, path, &v)
 		t.Run(v.ID, func(t *testing.T) {
 			cred, err := vc.New(vc.CredentialFields{
-				Issuer:    "did:dplaax:poc.dplaax.io:org:conformance:process:p1",
+				Issuer:    "did:dplaax:poc.dplaax.dev:org:conformance:process:p1",
 				ValidFrom: time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC),
 				Subject: vc.CredentialSubjectFields{
 					PipelineID:          "conformance",

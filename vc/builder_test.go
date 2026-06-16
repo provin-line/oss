@@ -91,7 +91,7 @@ func TestBuilder_Commitment_AllConsumed(t *testing.T) {
 	signer, _, _ := fixture(t)
 	b := vc.NewBuilder(signer)
 
-	const upstreamDID = "did:dplaax:poc.dplaax.io:org:upstream:pipeline:p1:process:up"
+	const upstreamDID = "did:dplaax:poc.dplaax.dev:org:upstream:pipeline:p1:process:up"
 	previous, err := vc.New(vc.CredentialFields{
 		Issuer:    upstreamDID,
 		ValidFrom: time.Now(),
@@ -103,7 +103,7 @@ func TestBuilder_Commitment_AllConsumed(t *testing.T) {
 
 	// A commitment omitting the predecessor's issuer is an emit-time misuse.
 	bad := &vc.SourceCommitment{
-		DerivedFrom:         []string{"did:dplaax:poc.dplaax.io:org:someone-else"},
+		DerivedFrom:         []string{"did:dplaax:poc.dplaax.dev:org:someone-else"},
 		SourceRoot:          "sha256:root",
 		SourceRootCanonical: "f00",
 	}

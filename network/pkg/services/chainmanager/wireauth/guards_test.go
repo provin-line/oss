@@ -202,7 +202,7 @@ func TestVerify_Authorization(t *testing.T) {
 		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
 		callerFields := okFields()
 		mutate := func(_ string, _ *did.DIDDocument, f map[string]any) error {
-			f["actor"] = "did:dplaax:poc.dplaax.io:org:evil"
+			f["actor"] = "did:dplaax:poc.dplaax.dev:org:evil"
 			f["injected"] = "x"
 			return nil
 		}
@@ -247,7 +247,7 @@ func TestVerify_ReplayAndNoBurn(t *testing.T) {
 // collide in the nonce store.
 func TestVerify_PerSignerNonceIsolation(t *testing.T) {
 	signerA, pubA := signerFor(t, subDID)
-	otherDID := "did:dplaax:poc.dplaax.io:org:sub2"
+	otherDID := "did:dplaax:poc.dplaax.dev:org:sub2"
 	signerB, pubB := signerFor(t, otherDID)
 	v := testVerifier(t, mapResolver{
 		subDID:   authDoc(subDID, pubA),
