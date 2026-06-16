@@ -1,0 +1,151 @@
+// dplaax.chain.v1 is the cross-pipeline chain-connection control plane: two
+// services over one frozen wire. ChainService is the operator-facing L1 surface
+// (JWT; every RPC declares an o3co.authz.v1 policy option the network
+// interceptor enforces). ChainPeerService is the internet-facing L2 surface: it
+// carries NO L1 policy option — each request instead presents an AuthProof the
+// handler verifies in-band via the wireauth library. The split is a tested
+// descriptor contract asserted in both directions (slice-9 D-c1): policy option
+// present on every operator RPC, absent on every peer RPC, and an auth_proof
+// field present on every peer request.
+syntax = "proto3";
+
+package dplaax.chain.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/chain/v1;chainpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// ── L2 wire auth ────────────────────────────────────────────────────────────
+
+// AuthProof is the wireauth Proof on the wire — the L2 authentication token a
+// peer presents on every ChainPeerService request. It maps 1:1 to
+// wireauth.Proof (slice-9 D-c2).
+message AuthProof {
+  // signer_did is the DID whose #auth key signed this proof.
+  string signer_did = 1;
+  // nonce is the single-use replay guard.
+  string nonce = 2;
+  // issued_at is an RFC 3339 UTC second-precision timestamp string — the exact
+  // canonical form the signature covers. It is deliberately a string, not
+  // google.protobuf.Timestamp: the wireauth verifier requires second precision
+  // and rejects sub-second, so a nanos-capable Timestamp would invite an
+  // immediately-malformed proof. The handler parses it through a strict codec
+  // (next-B), rejecting any non-canonical form before verification.
+  string issued_at = 3;
+  // signature is the raw Ed25519 signature over the canonical signed view.
+  bytes signature = 4;
+}
+
+// Subscription is one established pipeline chain connection (mirrors store.Subscription).
+message Subscription {
+  string id = 1;
+  string subscriber_did = 2;
+  string publisher_did = 3;
+  // publish_type names the transport backing the connection (e.g. "nats").
+  string publish_type = 4;
+  // payload_delivery is "inline" or "by-reference"; empty means by-reference.
+  string payload_delivery = 5;
+  // connection_info carries transport-specific connection parameters.
+  map<string, string> connection_info = 6;
+  // created is an RFC 3339 UTC timestamp string (display field).
+  string created = 7;
+}
+
+// AllowRule is one allow-list entry: a DID glob pattern.
+message AllowRule {
+  string pattern = 1;
+}
+
+// ── ChainService (operator, L1 JWT) ───────────────────────────────────────────
+
+service ChainService {
+  rpc Subscribe(SubscribeRequest) returns (SubscribeResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "subscribe"};
+  }
+  rpc Unsubscribe(UnsubscribeRequest) returns (UnsubscribeResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "unsubscribe"};
+  }
+  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListSubscriptionsResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "read"};
+  }
+  rpc UpdateAllowList(UpdateAllowListRequest) returns (UpdateAllowListResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "update-allowlist"};
+  }
+}
+
+// Subscribe/Unsubscribe carry the last-slice connection flow (the most
+// decision-heavy part); their messages are intentionally minimal here and grow
+// additively (proto3-safe) when that flow lands.
+message SubscribeRequest {
+  string subscriber_did = 1;
+  string publisher_did = 2;
+  // payload_delivery is the requested mode ("inline"/"by-reference"; empty =
+  // by-reference, the conservative default).
+  string payload_delivery = 3;
+}
+message SubscribeResponse {
+  string subscription_id = 1;
+}
+
+message UnsubscribeRequest {
+  string subscription_id = 1;
+}
+message UnsubscribeResponse {}
+
+message ListSubscriptionsRequest {}
+message ListSubscriptionsResponse {
+  repeated Subscription subscriptions = 1;
+}
+
+message UpdateAllowListRequest {
+  string pipeline_did = 1;
+  // rules is the full replacement rule set (full-replacement semantics).
+  repeated AllowRule rules = 2;
+}
+message UpdateAllowListResponse {}
+
+// ── ChainPeerService (internet, L2 wireauth) ──────────────────────────────────
+
+service ChainPeerService {
+  rpc GetPublisherInfo(GetPublisherInfoRequest) returns (GetPublisherInfoResponse);
+  rpc RegisterSubscription(RegisterSubscriptionRequest) returns (RegisterSubscriptionResponse);
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+}
+
+message GetPublisherInfoRequest {
+  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  AuthProof auth_proof = 1;
+  string publisher_did = 2;
+}
+message GetPublisherInfoResponse {
+  // publish_type names the transport the publisher serves over.
+  string publish_type = 1;
+  // supported_payload_delivery lists the modes the publisher offers for
+  // negotiation ("inline"/"by-reference").
+  repeated string supported_payload_delivery = 2;
+}
+
+message RegisterSubscriptionRequest {
+  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  AuthProof auth_proof = 1;
+  string subscriber_did = 2;
+  string publisher_did = 3;
+  // payload_delivery is the requested mode (empty = by-reference).
+  string payload_delivery = 4;
+}
+message RegisterSubscriptionResponse {
+  string subscription_id = 1;
+  // connection_info carries the transport parameters from the infra operator.
+  map<string, string> connection_info = 2;
+  string publish_type = 3;
+  // payload_delivery is the AGREED mode (a mode the publisher does not offer is
+  // rejected with a typed error at wiring time).
+  string payload_delivery = 4;
+}
+
+message DisconnectRequest {
+  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  AuthProof auth_proof = 1;
+  string subscription_id = 2;
+}
+message DisconnectResponse {}
