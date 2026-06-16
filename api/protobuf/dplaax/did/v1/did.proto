@@ -1,0 +1,191 @@
+// dplaax.did.v1 is the DID-lifecycle service: did:dplaax Owner registration,
+// Pipeline/Process issuance under owner-signed delegation, resolution,
+// status/revoke, listing, and append-only lifecycle-event reads.
+//
+// Message-shape principle (slice-4 D-d2/D-d3): DID Documents, delegation
+// credentials, outward-identity snapshots, and lifecycle events are carried as
+// opaque bytes holding their canonical (JCS) JSON — the proto does not re-model
+// them. Their canonical round-trip is normative (the document hash is recorded
+// into the lifecycle log and is the content address an external verifier
+// recomputes), so a proto re-model would be a second, drift-prone source of
+// truth. This mirrors dplaax.pipeline.v1.Envelope.credential and keeps message
+// field numbers stable as the JSON shapes evolve.
+syntax = "proto3";
+
+package dplaax.did.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/did/v1;didpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// DIDService manages the did:dplaax identity lifecycle. Every RPC declares its
+// authorization policy (resource + action) via the o3co.authz.v1 method option;
+// the network layer's interceptor enforces it. An absent option would silently
+// disable the check, so all RPCs carry one — asserted by a descriptor test.
+//
+// The trust model is owner-whitelist: an Owner is the self-sovereign root whose
+// keys are caller-supplied (the registry never holds the owner private key);
+// Pipeline/Process keys are registry-generated at issuance. Issuance authority
+// is proven by an owner-signed DelegationCredential whose subject is
+// structurally under the owner on the did:dplaax issuance plane.
+service DIDService {
+  // RegisterOwner records a self-sovereign Owner DID. The caller submits the
+  // owner DID Document self-signed (eddsa-jcs-2022) over its entire body —
+  // including any self-asserted alsoKnownAs binding. The registry verifies the
+  // proof under the document's embedded key, that the DID is well-formed, and
+  // that the DID's {registry} segment is its own canonical identity (cross-
+  // registry replay defense). Exact re-submission is idempotent. An initial
+  // outward-identity snapshot, when present, is recorded with the register
+  // event as a self-asserted (caller-submitted) witness.
+  rpc RegisterOwner(RegisterOwnerRequest) returns (RegisterOwnerResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "register"};
+  }
+
+  // IssuePipeline mints a Pipeline DID under the authenticated owner. The owner
+  // signs a minimal DelegationCredential over the target DID (its identifier is
+  // structurally predictable, so it is signed before it exists). The registry
+  // verifies the delegation (issuer = owner, subject structurally under owner,
+  // signature valid), checks the namespace slot is free, generates the subject
+  // keypair (#auth/#signing), assembles the DID Document, persists document +
+  // delegation, and appends a register lifecycle event on the subject DID.
+  rpc IssuePipeline(IssuePipelineRequest) returns (IssuePipelineResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "issue"};
+  }
+
+  // IssueProcess mints a Process DID under a Pipeline of the authenticated
+  // owner. Same flow as IssuePipeline; the delegation subject must additionally
+  // be structurally under the named parent pipeline.
+  rpc IssueProcess(IssueProcessRequest) returns (IssueProcessResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "issue"};
+  }
+
+  // ResolveDID returns the DID Document for a did:dplaax identifier. The
+  // returned document's id equals the requested DID (registry-substitution
+  // defense is the caller's to re-check against the recomputed hash).
+  rpc ResolveDID(ResolveDIDRequest) returns (ResolveDIDResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
+  }
+
+  // ResolveDelegation returns the owner-signed DelegationCredential that
+  // authorized a Pipeline or Process DID. A verifier reconstructing the
+  // issuer->Owner authorization chain reads it here; the Owner *name* is
+  // derived by structurally parsing the issuer DID (no resolution), and this
+  // delegation supplies the cryptographic authorization (slice-4 D-d7).
+  rpc ResolveDelegation(ResolveDelegationRequest) returns (ResolveDelegationResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
+  }
+
+  // UpdateStatus changes a DID's lifecycle status (slice-4 produces "revoked").
+  // The change is recorded as a revoke lifecycle event; the updated DID
+  // Document is returned.
+  rpc UpdateStatus(UpdateStatusRequest) returns (UpdateStatusResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "revoke"};
+  }
+
+  // ListPipelines lists the Pipeline DIDs issued under an Owner.
+  rpc ListPipelines(ListPipelinesRequest) returns (ListPipelinesResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
+  }
+
+  // ListProcesses lists the Process DIDs issued under a Pipeline.
+  rpc ListProcesses(ListProcessesRequest) returns (ListProcessesResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
+  }
+
+  // ReadLifecycleLog returns the append-only lifecycle events recorded for a
+  // DID, oldest first. Availability of this read is the opt-in audit-reachable
+  // posture (identity-lifecycle facet) surfaced in issued credentials; until the
+  // tlog substrate lands the log is registry-witnessed (append-only by registry
+  // honesty), not third-party tamper-evident, so a verifier MUST treat a
+  // withheld/truncated log as fail/indeterminate, never silent pass.
+  rpc ReadLifecycleLog(ReadLifecycleLogRequest) returns (ReadLifecycleLogResponse) {
+    option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
+  }
+}
+
+message RegisterOwnerRequest {
+  // did_document is the owner DID Document (canonical JSON) self-signed over its
+  // full body, with the proof embedded.
+  bytes did_document = 1;
+  // outward_snapshot is an optional caller-submitted snapshot of the outward
+  // identity referenced by alsoKnownAs, recorded verbatim as opaque bytes
+  // (provin does not model external DID methods). Absent means none submitted —
+  // the binding stays self-asserted.
+  bytes outward_snapshot = 2;
+}
+message RegisterOwnerResponse {
+  // did_document is the persisted owner document (canonical JSON).
+  bytes did_document = 1;
+}
+
+message IssuePipelineRequest {
+  // target_did is the Pipeline DID to mint (structurally under the owner).
+  string target_did = 1;
+  // delegation is the owner-signed DelegationCredential over target_did
+  // (canonical JSON).
+  bytes delegation = 2;
+}
+message IssuePipelineResponse {
+  // did_document is the registry-assembled Pipeline document (canonical JSON),
+  // carrying the generated #auth/#signing keys.
+  bytes did_document = 1;
+  // delegation is the persisted delegation as stored (canonical JSON).
+  bytes delegation = 2;
+}
+
+message IssueProcessRequest {
+  // target_did is the Process DID to mint (structurally under parent_pipeline).
+  string target_did = 1;
+  bytes delegation = 2;
+}
+message IssueProcessResponse {
+  bytes did_document = 1;
+  bytes delegation = 2;
+}
+
+message ResolveDIDRequest {
+  string did = 1;
+}
+message ResolveDIDResponse {
+  bytes did_document = 1;
+}
+
+message ResolveDelegationRequest {
+  // did is the delegated subject (Pipeline or Process) DID.
+  string did = 1;
+}
+message ResolveDelegationResponse {
+  bytes delegation = 1;
+}
+
+message UpdateStatusRequest {
+  string did = 1;
+  // status is the target lifecycle status; slice-4 accepts "revoked".
+  string status = 2;
+}
+message UpdateStatusResponse {
+  bytes did_document = 1;
+}
+
+message ListPipelinesRequest {
+  string owner_did = 1;
+}
+message ListPipelinesResponse {
+  repeated string dids = 1;
+}
+
+message ListProcessesRequest {
+  string pipeline_did = 1;
+}
+message ListProcessesResponse {
+  repeated string dids = 1;
+}
+
+message ReadLifecycleLogRequest {
+  string did = 1;
+}
+message ReadLifecycleLogResponse {
+  // events are the lifecycle events (canonical JSON), oldest first, hash-chained
+  // by prevEventHash.
+  repeated bytes events = 1;
+}
