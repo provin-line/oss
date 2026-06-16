@@ -10,7 +10,17 @@
 // contract.
 package keystore
 
-import "github.com/provin-line/oss/crypto"
+import (
+	"errors"
+
+	"github.com/provin-line/oss/crypto"
+)
+
+// ErrNotFound is returned (wrapped) by GetPrivateKey when no key is held for the
+// requested (did, keyID). Callers distinguish an absent key from a malformed or
+// storage failure via errors.Is — e.g. the SignerService maps it to a NotFound
+// response while keeping malformed-key/internal failures as Internal.
+var ErrNotFound = errors.New("keystore: key not found")
 
 // KeyID is the logical key identifier within a DID Document.
 type KeyID string
@@ -34,6 +44,9 @@ type KeyStore interface {
 	// GetPrivateKey returns the private key bytes for the DID's logical key.
 	// This is the raw-key path (CLI-local / test owner keys); production
 	// signing never retrieves key material — it routes through SignerService.
+	// When no key is held for (did, keyID), implementations return a wrapped
+	// ErrNotFound (errors.Is) so callers can distinguish an absent key from a
+	// storage failure.
 	GetPrivateKey(did string, keyID KeyID) ([]byte, error)
 	// DeleteKeys removes every key held for the DID.
 	DeleteKeys(did string) error
