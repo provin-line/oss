@@ -5,7 +5,8 @@ Proto definitions for the dplaax protocol, managed with `buf`.
 ## Namespace
 
 ```
-dplaax.did.v1       DIDService, SignerService + DID Document / delegation messages
+dplaax.did.v1       DIDService + DID Document / delegation messages
+dplaax.signer.v1    SignerService (KMS-model Ed25519 signing; raw-bytes seam)
 dplaax.schema.v1    SchemaService (immutable, append-only registry)
 dplaax.chain.v1     ChainService (operator) + ChainPeerService (internet-facing, L2-auth)
 dplaax.vc.v1        VCResolverService (provenance chain resolution)

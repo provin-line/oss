@@ -1,0 +1,83 @@
+// dplaax.signer.v1 is the KMS-model signing service: Ed25519 signatures where
+// the private key never crosses the RPC boundary. Pipeline processes and peers
+// hold DIDs, not keys; they call this service, and the registry process holds
+// the key material (via the keystore) and returns only the signature.
+//
+// Contract shape (slice-5 D-s1): both RPCs are a thin transport of the committed
+// crypto.Signer seam — they take the RAW bytes to sign and return the RAW
+// Ed25519 signature. Output encoding is the caller's concern, not this service's:
+// VC proofs are base58btc-multibase-encoded by the vc layer (vc.CreateProof does
+// its own multibaseEncodeBase58 over these raw bytes), and L2 wire-signing uses
+// the raw 64-byte signature directly. The service does not re-frame the input as
+// a "sha256:<hex>" prehash or the output as multibase — that would force a
+// pointless decode round-trip on the client.
+//
+// Two RPCs, two domains (D-s2/D-s3): Sign and SignRaw are cryptographically
+// identical (Ed25519 over the supplied bytes), but they are split so the two
+// signing domains carry distinct authorization policies (an operator can grant
+// VC-signing without granting wire-signing) and so each binds to its key
+// relationship: Sign uses the DID's #signing assertionMethod key (VC proof
+// domain), SignRaw uses the #auth authentication key (L2 wire domain). The
+// server rejects a key_id that does not match the RPC's domain.
+//
+// This service is the KMS *deployment pattern* over the seam, not a protocol
+// mandate: a single-process deployment may sign inline (crypto.Signer over local
+// keys) and never expose this service, and still produce protocol-valid proofs.
+// The proto standardizes the wire shape if you run one.
+syntax = "proto3";
+
+package dplaax.signer.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/signer/v1;signerpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// SignerService signs raw bytes under a DID's key. Every RPC declares its
+// authorization policy (resource + action) via the o3co.authz.v1 method option;
+// the network layer's interceptor enforces it. An absent option would silently
+// disable the check, so both RPCs carry one — asserted by a descriptor test.
+service SignerService {
+  // Sign produces an Ed25519 signature over data with the DID's #signing
+  // assertionMethod key — the VC proof-creation domain. data is the raw bytes to
+  // sign (e.g. the proof hashData vc.CreateProof builds); the returned signature
+  // is raw (the vc layer encodes it base58btc-multibase). key_id must be
+  // "signing"; any other value is rejected (D-s3).
+  rpc Sign(SignRequest) returns (SignResponse) {
+    option (o3co.authz.v1.policy) = {resource: "signer", action: "sign-vc"};
+  }
+
+  // SignRaw produces an Ed25519 signature over data with the DID's #auth
+  // authentication key — the L2 wire-signing domain (chainmanager wireauth).
+  // data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
+  // the returned signature is the raw 64-byte Ed25519 signature. key_id must be
+  // "auth"; any other value is rejected (D-s3).
+  rpc SignRaw(SignRawRequest) returns (SignRawResponse) {
+    option (o3co.authz.v1.policy) = {resource: "signer", action: "sign-wire"};
+  }
+}
+
+message SignRequest {
+  // did is the signer DID whose key material is held by the registry.
+  string did = 1;
+  // key_id is the logical key identifier; must be "signing" for Sign. It is
+  // carried explicitly (not implied) to keep the full (did, key_id) addressing
+  // the crypto.Signer seam uses.
+  string key_id = 2;
+  // data is the raw bytes to sign.
+  bytes data = 3;
+}
+message SignResponse {
+  // signature is the raw Ed25519 signature (no multibase framing).
+  bytes signature = 1;
+}
+
+message SignRawRequest {
+  string did = 1;
+  // key_id must be "auth" for SignRaw.
+  string key_id = 2;
+  bytes data = 3;
+}
+message SignRawResponse {
+  // signature is the raw 64-byte Ed25519 signature.
+  bytes signature = 1;
+}
