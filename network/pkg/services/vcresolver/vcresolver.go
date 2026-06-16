@@ -56,8 +56,17 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 	if err := s.store.Put(hash, &cred); err != nil {
 		return "", err
 	}
+	// Storing this VC resolves any queued hole for its own hash — an out-of-order
+	// submission (a successor queued this predecessor before it arrived). Remove
+	// is idempotent, so this is a no-op when the hash was never queued.
+	if err := s.pool.Remove(hash); err != nil {
+		return "", err
+	}
 	if hasPrev {
-		if _, err := s.store.Get(prev); errors.Is(err, ErrNotFound) {
+		switch _, err := s.store.Get(prev); {
+		case err == nil:
+			// Predecessor already held — no hole to queue.
+		case errors.Is(err, ErrNotFound):
 			if err := s.pool.Add(UnresolvedEntry{
 				Hash:             prev,
 				UpstreamEndpoint: upstreamEndpoint,
@@ -65,6 +74,10 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 			}); err != nil {
 				return "", err
 			}
+		default:
+			// A real store failure (not a miss) — propagate it rather than
+			// silently dropping the chain hole.
+			return "", err
 		}
 	}
 	return hash, nil

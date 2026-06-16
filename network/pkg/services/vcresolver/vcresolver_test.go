@@ -9,6 +9,7 @@ import (
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/vc"
 )
 
 const issuer = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
@@ -128,6 +129,64 @@ func TestResolveVC_Errors(t *testing.T) {
 	wellFormedAbsent := "sha256:" + strings.Repeat("b", 64)
 	if _, err := svc.ResolveVC(context.Background(), wellFormedAbsent); !errors.Is(err, vcresolver.ErrNotFound) {
 		t.Errorf("absent: want ErrNotFound, got %v", err)
+	}
+}
+
+// Out-of-order submission: a successor queues its predecessor as a hole; when
+// the predecessor later arrives, storing it removes the now-resolved hole.
+func TestStoreVC_OutOfOrder_RemovesResolvedHole(t *testing.T) {
+	store := memstore.NewStore()
+	pool := memstore.NewPool()
+	svc := vcresolver.New(store, pool)
+
+	// Learn the predecessor's content address without storing it.
+	pBytes := vcBytes(t, issuer, nil)
+	var p vc.PipelinePassCredential
+	if err := json.Unmarshal(pBytes, &p); err != nil {
+		t.Fatal(err)
+	}
+	pHash, err := p.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Successor arrives first → P is queued.
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, pHash), ""); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Len() != 1 {
+		t.Fatalf("after successor: pool len = %d, want 1", pool.Len())
+	}
+	// P arrives later → its hole is removed.
+	if _, err := svc.StoreVC(context.Background(), pBytes, ""); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Len() != 0 {
+		t.Fatalf("after predecessor: pool len = %d, want 0", pool.Len())
+	}
+}
+
+// getErrStore returns a non-ErrNotFound error from Get to exercise the
+// store-failure path; Put delegates to a real store.
+type getErrStore struct {
+	inner *memstore.Store
+	err   error
+}
+
+func (s getErrStore) Put(hash string, c *vc.PipelinePassCredential) error {
+	return s.inner.Put(hash, c)
+}
+func (s getErrStore) Get(string) (*vc.PipelinePassCredential, error) { return nil, s.err }
+
+// A predecessor lookup that fails for a real reason (not a miss) must propagate,
+// not be swallowed into a silent success that drops the chain hole.
+func TestStoreVC_PropagatesStoreError(t *testing.T) {
+	sentinel := errors.New("boom")
+	svc := vcresolver.New(getErrStore{inner: memstore.NewStore(), err: sentinel}, memstore.NewPool())
+	prev := "sha256:" + strings.Repeat("a", 64)
+	_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("want propagated store error, got %v", err)
 	}
 }
 

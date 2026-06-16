@@ -222,7 +222,10 @@ func TestBoot_RPCRequiresAuth(t *testing.T) {
 }
 
 // VCResolverService is mounted in the assembled stack: store a VC and resolve it
-// back at its returned content address.
+// back at its returned content address. The unresolved-pool enqueue path is
+// unit-covered (vcresolver_test) rather than here: the pool has no wire surface
+// this slice (ListUnresolved is deferred), so it is intentionally unobservable
+// over the assembled mux.
 func TestBoot_VCStoreResolve(t *testing.T) {
 	ctx := context.Background()
 	srv, _, _ := assembled(t)
