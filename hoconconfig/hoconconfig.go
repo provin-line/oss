@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -274,4 +275,36 @@ func (c *Config) StringList(path string) ([]string, error) {
 		out[i] = string(s)
 	}
 	return out, nil
+}
+
+// Keys returns the field names of the HOCON object at path, sorted for
+// deterministic iteration. Returns ErrMissingKey (wrapped) if the key is absent
+// and ErrTypeMismatch (wrapped) if the value is not an object. This is the
+// accessor for object-keyed config blocks (e.g. a set of named service
+// endpoints): enumerate the keys here, then read each entry's fields with the
+// scalar accessors at "path.<key>.<field>".
+//
+// Like String, a scalar parent (a non-object at path) surfaces as
+// ErrTypeMismatch rather than a library panic.
+func (c *Config) Keys(path string) (keys []string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			keys = nil
+			err = fmt.Errorf("%w: scalar parent at %q (library panic: %v)", ErrTypeMismatch, path, r)
+		}
+	}()
+	v := c.h.Get(path)
+	if v == nil {
+		return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	}
+	obj, ok := v.(hocon.Object)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q is not an object (got %T)", ErrTypeMismatch, path, v)
+	}
+	keys = make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, nil
 }

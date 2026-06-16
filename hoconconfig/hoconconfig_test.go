@@ -61,6 +61,47 @@ func TestLoadReferenceOnly(t *testing.T) {
 	}
 }
 
+func TestKeys(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-keys"),
+		`provin.test.endpoints {
+		   vc-resolver { type = "VCResolver", url = "https://r/vc" }
+		   chain       { type = "Chain",      url = "https://r/chain" }
+		 }`)
+	cfg, err := hoconconfig.Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	keys, err := cfg.Keys("provin.test.endpoints")
+	if err != nil {
+		t.Fatalf("Keys: %v", err)
+	}
+	// Sorted, deterministic.
+	if len(keys) != 2 || keys[0] != "chain" || keys[1] != "vc-resolver" {
+		t.Fatalf("keys = %v, want [chain vc-resolver]", keys)
+	}
+	// Nested fields read with the scalar accessor at path.<key>.<field>.
+	typ, err := cfg.String("provin.test.endpoints.vc-resolver.type")
+	if err != nil || typ != "VCResolver" {
+		t.Fatalf("nested read: got %q err %v", typ, err)
+	}
+}
+
+func TestKeys_Errors(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-keys-err"),
+		`provin.test.scalar = "x"`)
+	cfg, err := hoconconfig.Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := cfg.Keys("provin.test.absent"); !errors.Is(err, hoconconfig.ErrMissingKey) {
+		t.Errorf("absent: want ErrMissingKey, got %v", err)
+	}
+	if _, err := cfg.Keys("provin.test.scalar"); !errors.Is(err, hoconconfig.ErrTypeMismatch) {
+		t.Errorf("scalar: want ErrTypeMismatch, got %v", err)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Application layer overrides reference
 // ─────────────────────────────────────────────────────────────────────────────
