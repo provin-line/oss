@@ -29,9 +29,9 @@ const pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
 // didDoc builds a DID Document. When pub is non-nil, it carries an
 // AssertionMethod key (vmID) controlled by the document subject.
 func didDoc(id, controller, vmID string, pub []byte) *did.DIDDocument {
-	d := &did.DIDDocument{ID: id, Controller: controller}
+	fields := did.DocumentFields{ID: id, Controller: controller}
 	if pub != nil {
-		d.VerificationMethod = []did.VerificationMethod{{
+		fields.VerificationMethod = []did.VerificationMethod{{
 			ID:         vmID,
 			Type:       "JsonWebKey2020",
 			Controller: id,
@@ -41,9 +41,9 @@ func didDoc(id, controller, vmID string, pub []byte) *did.DIDDocument {
 				"x":   base64.RawURLEncoding.EncodeToString(pub),
 			},
 		}}
-		d.AssertionMethod = []string{vmID}
+		fields.AssertionMethod = []string{vmID}
 	}
-	return d
+	return did.New(fields)
 }
 
 // signedCred builds a genuine signed FirstDrop and returns it with the

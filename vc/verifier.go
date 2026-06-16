@@ -242,7 +242,7 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 	if err != nil {
 		return ConfidenceFailed // definitive not-found
 	}
-	if doc.ID != issuer {
+	if doc.ID() != issuer {
 		return ConfidenceFailed // registry-substitution defense on the signing path
 	}
 	pub, err := did.ExtractPublicKey(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
@@ -341,23 +341,24 @@ func (v *Verifier) walkControllerChain(ctx context.Context, start string) (strin
 		if err != nil {
 			return "", errControllerUnreachable // intermediate (or issuer) document unavailable
 		}
-		if doc.ID != cur {
+		if doc.ID() != cur {
 			return "", errControllerBroken // registry-substitution defense
 		}
+		ctrl := doc.Controller()
 		if d.IsOwner() {
-			if doc.Controller != "" && doc.Controller != cur {
+			if ctrl != "" && ctrl != cur {
 				return "", errControllerBroken // owner must be self-controlled
 			}
 			return cur, nil
 		}
-		if doc.Controller == "" {
+		if ctrl == "" {
 			return "", errControllerBroken // a non-owner with no controller cannot reach an owner
 		}
-		parent, err := dplaax.Parse(doc.Controller)
+		parent, err := dplaax.Parse(ctrl)
 		if err != nil || !isStructuralAncestor(parent, d) {
 			return "", errControllerBroken
 		}
-		cur = doc.Controller
+		cur = ctrl
 	}
 	return "", errControllerBroken // exceeded the depth bound without reaching the owner
 }

@@ -208,7 +208,7 @@ func (r *registeringSigner) SignChainPreserving(ctx context.Context, payload []b
 // ---------------------------------------------------------------------------
 
 func processDoc(processDID, owner string, pub []byte) *did.DIDDocument {
-	return &did.DIDDocument{
+	return did.New(did.DocumentFields{
 		ID:         processDID,
 		Controller: owner,
 		VerificationMethod: []did.VerificationMethod{{
@@ -222,11 +222,11 @@ func processDoc(processDID, owner string, pub []byte) *did.DIDDocument {
 			},
 		}},
 		AssertionMethod: []string{processDID + "#signing"},
-	}
+	})
 }
 
 func ownerDoc(owner string) *did.DIDDocument {
-	return &did.DIDDocument{ID: owner, Controller: owner}
+	return did.New(did.DocumentFields{ID: owner, Controller: owner})
 }
 
 // countingChainCore wraps the real chain verifier to record the assembled chain

@@ -159,8 +159,8 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 	if err != nil {
 		return fmt.Errorf("delegation: resolve issuer: %w", err)
 	}
-	if doc.ID != cred.Issuer {
-		return fmt.Errorf("delegation: resolved document id %q != issuer %q (registry-substitution defense)", doc.ID, cred.Issuer)
+	if doc.ID() != cred.Issuer {
+		return fmt.Errorf("delegation: resolved document id %q != issuer %q (registry-substitution defense)", doc.ID(), cred.Issuer)
 	}
 	pub, err := did.ExtractPublicKey(doc, cred.Proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {

@@ -3,6 +3,7 @@ package did_test
 import (
 	stded25519 "crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 
 	"github.com/provin-line/oss/did"
@@ -10,26 +11,37 @@ import (
 
 const subjectDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:proc1"
 
+func ed25519JWK(pub []byte) map[string]any {
+	return map[string]any{
+		"kty": "OKP",
+		"crv": "Ed25519",
+		"x":   base64.RawURLEncoding.EncodeToString(pub),
+	}
+}
+
+// docWith builds a DID document carrying vms, with #signing listed under the
+// assertionMethod relationship — the adversarial cases craft vms directly
+// (body-as-SoT documents are assembled from typed fields, never mutated).
+func docWith(vms []did.VerificationMethod) *did.DIDDocument {
+	return did.New(did.DocumentFields{
+		ID:                 subjectDID,
+		Controller:         subjectDID,
+		VerificationMethod: vms,
+		AssertionMethod:    []string{subjectDID + "#signing"},
+		Authentication:     []string{},
+	})
+}
+
 // docWithSigningKey builds a DID document whose #signing key (assertionMethod)
 // carries an Ed25519 JWK for pub.
 func docWithSigningKey(t *testing.T, pub []byte) *did.DIDDocument {
 	t.Helper()
-	return &did.DIDDocument{
-		ID:         subjectDID,
-		Controller: subjectDID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         subjectDID + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: subjectDID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{subjectDID + "#signing"},
-		Authentication:  []string{},
-	}
+	return docWith([]did.VerificationMethod{{
+		ID:           subjectDID + "#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   subjectDID,
+		PublicKeyJWK: ed25519JWK(pub),
+	}})
 }
 
 func TestExtractPublicKey_RoundTrip(t *testing.T) {
@@ -74,10 +86,14 @@ func TestExtractPublicKey_UnknownKey(t *testing.T) {
 
 func TestExtractPublicKey_ControllerMismatch(t *testing.T) {
 	pub, _, _ := stded25519.GenerateKey(nil)
-	doc := docWithSigningKey(t, pub)
 	// A verification method whose controller is some other DID must be rejected
 	// (key-confusion / cross-document injection defense).
-	doc.VerificationMethod[0].Controller = "did:dplaax:poc.dplaax.io:org:evil"
+	doc := docWith([]did.VerificationMethod{{
+		ID:           subjectDID + "#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   "did:dplaax:poc.dplaax.io:org:evil",
+		PublicKeyJWK: ed25519JWK(pub),
+	}})
 	if _, err := did.ExtractPublicKey(doc, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("verification-method controller != document: want error")
 	}
@@ -86,31 +102,40 @@ func TestExtractPublicKey_ControllerMismatch(t *testing.T) {
 func TestExtractPublicKey_BadJWK(t *testing.T) {
 	pub, _, _ := stded25519.GenerateKey(nil)
 
+	badDoc := func(jwk map[string]any) *did.DIDDocument {
+		return docWith([]did.VerificationMethod{{
+			ID:           subjectDID + "#signing",
+			Type:         "JsonWebKey2020",
+			Controller:   subjectDID,
+			PublicKeyJWK: jwk,
+		}})
+	}
+
 	// Wrong key type.
-	d1 := docWithSigningKey(t, pub)
-	d1.VerificationMethod[0].PublicKeyJWK["kty"] = "RSA"
-	if _, err := did.ExtractPublicKey(d1, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
+	j1 := ed25519JWK(pub)
+	j1["kty"] = "RSA"
+	if _, err := did.ExtractPublicKey(badDoc(j1), subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("non-OKP key type: want error")
 	}
 
 	// Wrong curve.
-	d2 := docWithSigningKey(t, pub)
-	d2.VerificationMethod[0].PublicKeyJWK["crv"] = "X25519"
-	if _, err := did.ExtractPublicKey(d2, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
+	j2 := ed25519JWK(pub)
+	j2["crv"] = "X25519"
+	if _, err := did.ExtractPublicKey(badDoc(j2), subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("non-Ed25519 curve: want error")
 	}
 
 	// Malformed base64 in x.
-	d3 := docWithSigningKey(t, pub)
-	d3.VerificationMethod[0].PublicKeyJWK["x"] = "!!!not base64!!!"
-	if _, err := did.ExtractPublicKey(d3, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
+	j3 := ed25519JWK(pub)
+	j3["x"] = "!!!not base64!!!"
+	if _, err := did.ExtractPublicKey(badDoc(j3), subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("malformed base64url x: want error")
 	}
 
 	// Wrong key length (not 32 bytes).
-	d4 := docWithSigningKey(t, pub)
-	d4.VerificationMethod[0].PublicKeyJWK["x"] = base64.RawURLEncoding.EncodeToString([]byte("too short"))
-	if _, err := did.ExtractPublicKey(d4, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
+	j4 := ed25519JWK(pub)
+	j4["x"] = base64.RawURLEncoding.EncodeToString([]byte("too short"))
+	if _, err := did.ExtractPublicKey(badDoc(j4), subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("wrong public-key length: want error")
 	}
 }
@@ -122,17 +147,19 @@ func TestExtractPublicKey_BadJWK(t *testing.T) {
 func TestExtractPublicKey_FragmentCollisionInjection_Rejected(t *testing.T) {
 	realPub, _, _ := stded25519.GenerateKey(nil)
 	attackerPub, _, _ := stded25519.GenerateKey(nil)
-	doc := docWithSigningKey(t, realPub)
 	attacker := did.VerificationMethod{
-		ID:         "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:attacker#signing",
-		Type:       "JsonWebKey2020",
-		Controller: subjectDID, // spoofed to the document subject
-		PublicKeyJWK: map[string]any{
-			"kty": "OKP", "crv": "Ed25519",
-			"x": base64.RawURLEncoding.EncodeToString(attackerPub),
-		},
+		ID:           "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1:process:attacker#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   subjectDID, // spoofed to the document subject
+		PublicKeyJWK: ed25519JWK(attackerPub),
 	}
-	doc.VerificationMethod = append([]did.VerificationMethod{attacker}, doc.VerificationMethod...)
+	real := did.VerificationMethod{
+		ID:           subjectDID + "#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   subjectDID,
+		PublicKeyJWK: ed25519JWK(realPub),
+	}
+	doc := docWith([]did.VerificationMethod{attacker, real})
 
 	got, err := did.ExtractPublicKey(doc, subjectDID+"#signing", did.RelationshipAssertionMethod)
 	if err != nil {
@@ -148,19 +175,136 @@ func TestExtractPublicKey_FragmentCollisionInjection_Rejected(t *testing.T) {
 func TestExtractPublicKey_DuplicateMethodID_Rejected(t *testing.T) {
 	realPub, _, _ := stded25519.GenerateKey(nil)
 	attackerPub, _, _ := stded25519.GenerateKey(nil)
-	doc := docWithSigningKey(t, realPub)
 	dup := did.VerificationMethod{
-		ID:         subjectDID + "#signing",
-		Type:       "JsonWebKey2020",
-		Controller: subjectDID,
-		PublicKeyJWK: map[string]any{
-			"kty": "OKP", "crv": "Ed25519",
-			"x": base64.RawURLEncoding.EncodeToString(attackerPub),
-		},
+		ID:           subjectDID + "#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   subjectDID,
+		PublicKeyJWK: ed25519JWK(attackerPub),
 	}
-	doc.VerificationMethod = append([]did.VerificationMethod{dup}, doc.VerificationMethod...)
+	real := did.VerificationMethod{
+		ID:           subjectDID + "#signing",
+		Type:         "JsonWebKey2020",
+		Controller:   subjectDID,
+		PublicKeyJWK: ed25519JWK(realPub),
+	}
+	doc := docWith([]did.VerificationMethod{dup, real})
 
 	if _, err := did.ExtractPublicKey(doc, subjectDID+"#signing", did.RelationshipAssertionMethod); err == nil {
 		t.Error("duplicate verification-method id: want error (ambiguous key)")
+	}
+}
+
+// New assembles a body from typed fields and the accessors read it back; empty
+// members are omitted, not surfaced as zero values.
+func TestDIDDocument_NewAccessorsRoundTrip(t *testing.T) {
+	pub, _, _ := stded25519.GenerateKey(nil)
+	doc := did.New(did.DocumentFields{
+		Context:     []string{"https://www.w3.org/ns/did/v1"},
+		ID:          subjectDID,
+		Controller:  "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1",
+		AlsoKnownAs: []string{"https://acme.example/p1/proc1"},
+		VerificationMethod: []did.VerificationMethod{{
+			ID:           subjectDID + "#signing",
+			Type:         "JsonWebKey2020",
+			Controller:   subjectDID,
+			PublicKeyJWK: ed25519JWK(pub),
+		}},
+		AssertionMethod: []string{subjectDID + "#signing"},
+		Service: []did.ServiceEndpoint{{
+			ID:              subjectDID + "#vc-resolver",
+			Type:            "VCResolver",
+			ServiceEndpoint: "https://registry.example/vc",
+		}},
+	})
+
+	if doc.ID() != subjectDID {
+		t.Errorf("ID()=%q, want %q", doc.ID(), subjectDID)
+	}
+	if doc.Controller() != "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1" {
+		t.Errorf("Controller()=%q", doc.Controller())
+	}
+	if aka := doc.AlsoKnownAs(); len(aka) != 1 || aka[0] != "https://acme.example/p1/proc1" {
+		t.Errorf("AlsoKnownAs()=%v", aka)
+	}
+	if vms := doc.VerificationMethod(); len(vms) != 1 || vms[0].ID != subjectDID+"#signing" {
+		t.Errorf("VerificationMethod()=%v", vms)
+	}
+	if am := doc.AssertionMethod(); len(am) != 1 || am[0] != subjectDID+"#signing" {
+		t.Errorf("AssertionMethod()=%v", am)
+	}
+	if svc := doc.Service(); len(svc) != 1 || svc[0].Type != "VCResolver" {
+		t.Errorf("Service()=%v", svc)
+	}
+	// An owner-style document omits an empty controller rather than surfacing "".
+	owner := did.New(did.DocumentFields{ID: "did:dplaax:poc.dplaax.io:org:acme"})
+	if _, present := owner.Body()["controller"]; present {
+		t.Error("empty controller must be omitted from the body")
+	}
+}
+
+// Body returns a defensive copy: mutating it does not change the document.
+func TestDIDDocument_BodyDefensiveCopy(t *testing.T) {
+	doc := did.New(did.DocumentFields{ID: subjectDID, Controller: subjectDID})
+	b := doc.Body()
+	b["id"] = "tampered"
+	if doc.ID() != subjectDID {
+		t.Error("mutating Body() leaked into the document")
+	}
+}
+
+// Unknown members survive the resolution round-trip and participate in the hash
+// — required because the document hash is recorded as a lifecycle snapshot.
+func TestDIDDocument_UnknownMembersPreserved(t *testing.T) {
+	wire := []byte(`{"id":"` + subjectDID + `","controller":"` + subjectDID + `","futureProperty":{"k":"v"},"keyAgreement":["` + subjectDID + `#kex"]}`)
+	var doc did.DIDDocument
+	if err := json.Unmarshal(wire, &doc); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, present := doc.Body()["futureProperty"]; !present {
+		t.Error("unknown member futureProperty was dropped on round-trip")
+	}
+	if _, present := doc.Body()["keyAgreement"]; !present {
+		t.Error("unmodelled member keyAgreement was dropped on round-trip")
+	}
+	// Re-marshalling must retain the unknown members.
+	out, err := json.Marshal(&doc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var reparsed map[string]any
+	if err := json.Unmarshal(out, &reparsed); err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	if _, present := reparsed["futureProperty"]; !present {
+		t.Error("futureProperty did not survive Marshal")
+	}
+}
+
+// Hash is deterministic over the canonical body and changes when any member —
+// including an unmodelled one — changes.
+func TestDIDDocument_HashDeterministicAndMemberSensitive(t *testing.T) {
+	var a, b did.DIDDocument
+	if err := json.Unmarshal([]byte(`{"id":"`+subjectDID+`","x":1}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"id":"`+subjectDID+`","x":1}`), &b); err != nil {
+		t.Fatal(err)
+	}
+	ha, err := a.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	hb, _ := b.Hash()
+	if ha != hb {
+		t.Errorf("identical bodies hashed differently: %q vs %q", ha, hb)
+	}
+
+	var c did.DIDDocument
+	if err := json.Unmarshal([]byte(`{"id":"`+subjectDID+`","x":2}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	hc, _ := c.Hash()
+	if ha == hc {
+		t.Error("a changed member did not change the hash")
 	}
 }

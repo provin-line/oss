@@ -15,15 +15,15 @@ const testDID = "did:dplaax:poc.dplaax.io:org:acme"
 
 func TestResolve_RoundTrip(t *testing.T) {
 	r := local.New()
-	doc := &did.DIDDocument{ID: testDID, Controller: testDID}
+	doc := did.New(did.DocumentFields{ID: testDID, Controller: testDID})
 	r.Add(doc)
 
 	got, err := r.Resolve(context.Background(), testDID)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got.ID != testDID {
-		t.Errorf("resolved ID=%q, want %q", got.ID, testDID)
+	if got.ID() != testDID {
+		t.Errorf("resolved ID=%q, want %q", got.ID(), testDID)
 	}
 }
 
@@ -36,13 +36,13 @@ func TestResolve_NotFound(t *testing.T) {
 
 func TestAdd_Overwrite(t *testing.T) {
 	r := local.New()
-	r.Add(&did.DIDDocument{ID: testDID, Controller: "old"})
-	r.Add(&did.DIDDocument{ID: testDID, Controller: "new"})
+	r.Add(did.New(did.DocumentFields{ID: testDID, Controller: "old"}))
+	r.Add(did.New(did.DocumentFields{ID: testDID, Controller: "new"}))
 	got, err := r.Resolve(context.Background(), testDID)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got.Controller != "new" {
-		t.Errorf("Controller=%q, want the overwriting value %q", got.Controller, "new")
+	if got.Controller() != "new" {
+		t.Errorf("Controller=%q, want the overwriting value %q", got.Controller(), "new")
 	}
 }

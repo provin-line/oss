@@ -46,20 +46,27 @@ func (e errStr) Error() string { return string(e) }
 var errNotFound = errStr("key not found")
 
 func signingDoc(subject string, pub []byte) *did.DIDDocument {
-	return &did.DIDDocument{
-		ID:         subject,
-		Controller: subject,
+	return signingDocAs(subject, subject, pub)
+}
+
+// signingDocAs builds a document with subject docID whose #signing assertion key
+// is identified under vmSubject — equal for a genuine doc, divergent to forge a
+// registry-substituted document for the substitution-defense test.
+func signingDocAs(docID, vmSubject string, pub []byte) *did.DIDDocument {
+	return did.New(did.DocumentFields{
+		ID:         docID,
+		Controller: docID,
 		VerificationMethod: []did.VerificationMethod{{
-			ID:         subject + "#signing",
+			ID:         vmSubject + "#signing",
 			Type:       "JsonWebKey2020",
-			Controller: subject,
+			Controller: docID,
 			PublicKeyJWK: map[string]any{
 				"kty": "OKP", "crv": "Ed25519",
 				"x": base64.RawURLEncoding.EncodeToString(pub),
 			},
 		}},
-		AssertionMethod: []string{subject + "#signing"},
-	}
+		AssertionMethod: []string{vmSubject + "#signing"},
+	})
 }
 
 // fixture wires a signer for issuerDID and a resolver carrying its DID document.
@@ -219,8 +226,7 @@ func TestVerify_SubstitutedDocID(t *testing.T) {
 	// A resolver whose returned document has an ID other than the issuer.
 	other, _ := (ed25519.Generator{}).Generate()
 	r := local.New()
-	doc := signingDoc(ownerDID, other.PublicKey)
-	doc.ID = "did:dplaax:poc.dplaax.io:org:imposter"
+	doc := signingDocAs("did:dplaax:poc.dplaax.io:org:imposter", ownerDID, other.PublicKey)
 	r.Add(doc) // stored under the imposter id; will not resolve the issuer
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil {
 		t.Error("Verify against a substituted document id: want error")

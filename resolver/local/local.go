@@ -26,7 +26,7 @@ func New() *Resolver {
 // Add registers doc under its ID, overwriting any existing entry.
 func (r *Resolver) Add(doc *did.DIDDocument) {
 	r.mu.Lock()
-	r.docs[doc.ID] = doc
+	r.docs[doc.ID()] = doc
 	r.mu.Unlock()
 }
 
