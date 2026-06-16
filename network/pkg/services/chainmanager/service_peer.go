@@ -123,19 +123,24 @@ func (s *Service) Disconnect(ctx context.Context, subscriptionID, callerDID stri
 	if sub.SubscriberDID != callerDID {
 		return ErrNotOwner
 	}
-	if err := s.subs.Delete(subscriptionID); err != nil {
-		return err
-	}
-	last, err := s.isLastForPublisher(sub.PublisherDID)
+	// Tear down the export BEFORE the irreversible Delete, and only when this is
+	// the last subscription for the publisher. Ordering matters (Codex/Claude
+	// convergent): if RemoveExport ran after Delete and then failed, the
+	// subscription would be gone while the export lingered (a retry would hit
+	// NotFound and never clean it up). With RemoveExport first — and idempotent
+	// (D-p8) — a RemoveExport failure leaves the subscription intact (fully
+	// retryable, no orphan), and a Delete failure after a successful RemoveExport
+	// is recovered by a retry that re-runs the idempotent RemoveExport then Delete.
+	count, err := s.countForPublisher(sub.PublisherDID)
 	if err != nil {
 		return err
 	}
-	if last {
+	if count <= 1 { // this subscription is still stored, so count>=1; ==1 means it is the last
 		if err := s.infra.RemoveExport(sub.PublisherDID); err != nil {
 			return fmt.Errorf("chainmanager: remove export: %w", err)
 		}
 	}
-	return nil
+	return s.subs.Delete(subscriptionID)
 }
 
 // admit validates the publisher key and matches callerDID against the publisher's
@@ -163,13 +168,6 @@ func (s *Service) admit(publisherDID, callerDID string) error {
 // isFirstForPublisher reports whether no subscription yet references publisherDID
 // (so this RegisterSubscription is the one creating the export).
 func (s *Service) isFirstForPublisher(publisherDID string) (bool, error) {
-	n, err := s.countForPublisher(publisherDID)
-	return n == 0, err
-}
-
-// isLastForPublisher reports whether no subscription remains for publisherDID
-// (called after the Delete, so a zero count means the export can be removed).
-func (s *Service) isLastForPublisher(publisherDID string) (bool, error) {
 	n, err := s.countForPublisher(publisherDID)
 	return n == 0, err
 }

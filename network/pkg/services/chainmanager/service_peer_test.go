@@ -17,9 +17,10 @@ const (
 // fakeInfra records AddExport/RemoveExport so tests can assert the export
 // lifecycle (and inject an AddExport failure).
 type fakeInfra struct {
-	added   []string
-	removed []string
-	addErr  error
+	added     []string
+	removed   []string
+	addErr    error
+	removeErr error
 }
 
 func (f *fakeInfra) PublishType() string { return "noop" }
@@ -30,9 +31,15 @@ func (f *fakeInfra) AddExport(s string) (map[string]string, error) {
 	f.added = append(f.added, s)
 	return map[string]string{"subject": s}, nil
 }
-func (f *fakeInfra) RemoveExport(s string) error          { f.removed = append(f.removed, s); return nil }
-func (f *fakeInfra) AddImport(_, _, _ string) error       { return nil }
-func (f *fakeInfra) RemoveImport(_, _ string) error       { return nil }
+func (f *fakeInfra) RemoveExport(s string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removed = append(f.removed, s)
+	return nil
+}
+func (f *fakeInfra) AddImport(_, _, _ string) error { return nil }
+func (f *fakeInfra) RemoveImport(_, _ string) error { return nil }
 
 // failingSubStore wraps a real store but forces Save to fail.
 type failingSubStore struct {
@@ -214,6 +221,25 @@ func TestPeer_Disconnect_SiblingRemains(t *testing.T) {
 	}
 	if len(inf.removed) != 0 {
 		t.Errorf("sibling remains: RemoveExport must not be called, removed=%v", inf.removed)
+	}
+}
+
+// A RemoveExport failure during Disconnect must NOT delete the subscription:
+// teardown runs before the irreversible Delete, so the call is fully retryable
+// and never orphans the export (Codex/Claude convergent).
+func TestPeer_Disconnect_RemoveExportFailureKeepsSubscription(t *testing.T) {
+	inf := &fakeInfra{}
+	svc, subs := svcWith(t, inf)
+	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inf.removeErr = errors.New("infra down")
+	if err := svc.Disconnect(context.Background(), sub.ID, subOwner); err == nil {
+		t.Fatal("Disconnect succeeded despite RemoveExport failure")
+	}
+	if got, _ := subs.Get(sub.ID); got == nil {
+		t.Error("subscription was deleted even though RemoveExport failed (not retryable)")
 	}
 }
 

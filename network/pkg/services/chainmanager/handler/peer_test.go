@@ -95,7 +95,7 @@ func TestPeerHandler_RegisterSubscription_VerifyContract(t *testing.T) {
 	svc := &fakePeer{sub: &store.Subscription{ID: "s1", PublishType: "noop", PayloadDelivery: "inline", ConnectionInfo: map[string]string{"subject": "x"}}}
 	h := handler.NewPeer(svc, v)
 	resp, err := h.RegisterSubscription(context.Background(), connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
-		AuthProof: proofMsg("did:dplaax:reg:org:sub", goodIssuedAt),
+		AuthProof:     proofMsg("did:dplaax:reg:org:sub", goodIssuedAt),
 		SubscriberDid: "did:dplaax:reg:org:sub", PublisherDid: "did:dplaax:reg:org:acme:pipeline:p1", PayloadDelivery: "inline",
 	}))
 	if err != nil {
@@ -125,7 +125,7 @@ func TestPeerHandler_RegisterSubscription_EmptyModeSignedVerbatim(t *testing.T) 
 	svc := &fakePeer{sub: &store.Subscription{ID: "s1"}}
 	h := handler.NewPeer(svc, v)
 	_, err := h.RegisterSubscription(context.Background(), connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
-		AuthProof: proofMsg("did:dplaax:reg:org:sub", goodIssuedAt),
+		AuthProof:     proofMsg("did:dplaax:reg:org:sub", goodIssuedAt),
 		SubscriberDid: "did:dplaax:reg:org:sub", PublisherDid: "did:dplaax:reg:org:acme:pipeline:p1", PayloadDelivery: "",
 	}))
 	if err != nil {
