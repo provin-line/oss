@@ -40,15 +40,24 @@ is the Hub swap point for the pub-sub backend. Implementations:
 ## wireauth/ — L2 peer authentication
 
 Every ChainPeerService RPC carries an `AuthProof`: Ed25519 signature over a
-JCS-canonicalized per-RPC view (op discriminator + view version + nonce + issuedAt +
-business fields). Verification is an ordered pipeline — cheap fail-fast checks first,
-signature verification late, nonce recorded **only after** signature success (a failed
-forgery must not burn a legitimate signer's nonce):
+JCS-canonicalized per-RPC view (**signerDID** + op discriminator + view version +
+nonce + issuedAt + business fields). Binding `signerDID` into the signed bytes
+closes unknown-key-share: a DID alias that shares another DID's `#auth` key cannot
+reuse its signature. Verification is an ordered pipeline — cheap fail-fast checks
+first, signature verification late, **authorization after the signature** (so
+policy never runs on an unauthenticated caller — no allow-list oracle), nonce
+recorded **only after** signature success (a failed forgery must not burn a
+legitimate signer's nonce):
 
-1. missing-proof fail-fast → 2. issuedAt truncation → 3. restart epoch barrier →
-4. acceptance window (asymmetric past/skew) → 5. key resolution via DID Document
-(`#auth`, authentication relationship + controller match) → 6. signer-to-actor
-authorization → 7. canonical-bytes rebuild → 8. Ed25519 verify → 9. nonce record.
+1. structural / malformed fail-fast (missing proof; empty op; oversized nonce;
+   non-second-precision issuedAt rejected, not truncated — sub-second precision
+   would let the window check be shifted without changing the signed bytes;
+   fields value-grammar) → 2. restart epoch barrier (ceiled to the next whole
+   second) → 3. acceptance window (asymmetric past/skew) → 4. key resolution via
+   DID Document (`#auth`, authentication relationship + controller match) →
+   5. canonical-bytes rebuild → 6. Ed25519 verify → 7. signer-to-actor
+   authorization (over an immutable snapshot of the resolved doc + fields) →
+   8. nonce record.
 
 **L2 identities and the audit horizon.** The signed view is access control at
 the moment of the call, but the stored record doubles as audit evidence for the
