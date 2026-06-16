@@ -83,6 +83,13 @@ func TestMatch_InvalidPattern(t *testing.T) {
 		{"fixed between owner and pipeline arity", "did:dplaax:reg:org:acme:pipeline"},
 		{"fixed interior wildcards, dead arity", "did:dplaax:*:*:*:extra"},
 		{"fixed between pipeline and process arity", "did:dplaax:reg:org:acme:pipeline:p1:process"},
+
+		// Unsafe literal segments: a non-wildcard literal that is not a dplaax
+		// safe-segment can never appear in a real candidate, so it is a dead rule —
+		// fail-loud at the boundary instead of silently never-matching (Codex Med).
+		{"literal with slash", "did:dplaax:reg:org:ac/me"},
+		{"literal all dots", "did:dplaax:reg:org:.."},
+		{"literal with space", "did:dplaax:reg:org:ac me"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -96,5 +103,46 @@ func TestMatch_InvalidPattern(t *testing.T) {
 				t.Errorf("Match(%q, ...) = true on a malformed pattern, want false", c.pattern)
 			}
 		})
+	}
+}
+
+// ValidatePattern is the write-boundary counterpart to Match: it must return the
+// same validity verdict (ErrInvalidPattern or nil) Match would, with no candidate.
+func TestValidatePattern_AgreesWithMatch(t *testing.T) {
+	valid := []string{
+		"did:dplaax:reg:org:acme",
+		"did:dplaax:*:org:acme",
+		"did:dplaax:*",
+		"did:dplaax:reg:org:acme:*",
+		"did:dplaax:*:*:*:*:*",
+		"did:dplaax:reg:org:acme:pipeline:p1",
+	}
+	invalid := []string{
+		"did:dplaax:reg:org:ac*me",
+		"did:dplaax::org:acme",
+		"did:*:reg:org:acme",
+		"did:web:reg:org:acme",
+		"did:dplaax",
+		"did:dplaax:reg",
+		"did:dplaax:reg:org:acme:pipeline",
+		"did:dplaax:reg:org:ac/me",
+		"did:dplaax:reg:org:..",
+	}
+	const candidate = "did:dplaax:reg:org:acme"
+	for _, p := range valid {
+		if err := ValidatePattern(p); err != nil {
+			t.Errorf("ValidatePattern(%q) = %v, want nil", p, err)
+		}
+		if _, err := Match(p, candidate); err != nil {
+			t.Errorf("Match(%q, _) = %v, but ValidatePattern accepted it (disagreement)", p, err)
+		}
+	}
+	for _, p := range invalid {
+		if !errors.Is(ValidatePattern(p), ErrInvalidPattern) {
+			t.Errorf("ValidatePattern(%q) = %v, want ErrInvalidPattern", p, ValidatePattern(p))
+		}
+		if _, err := Match(p, candidate); !errors.Is(err, ErrInvalidPattern) {
+			t.Errorf("Match(%q, _) err = %v, but ValidatePattern rejected it (disagreement)", p, err)
+		}
 	}
 }
