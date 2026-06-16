@@ -39,11 +39,13 @@ type AcceptanceWindow struct {
 }
 
 // VerifierConfig configures a Verifier. Resolver, Crypto, and Nonces are
-// required (NewVerifier errors if any is nil). Clock defaults to time.Now,
-// Epoch to the next whole second after construction, and Window to {60s past,
-// 5s future}. Canonicalization is NOT configurable: the signed-view format is
-// frozen to JCS (ViewVersion), and a verify-side canon the sign side did not
-// honor would be a divergence hazard, not a feature.
+// required (NewVerifier errors if any is nil). Clock defaults to time.Now and
+// Epoch to the next whole second after construction. Window defaults to {60s
+// past, 5s future} ONLY when wholly unset (the zero AcceptanceWindow); a
+// partially-set window is honored exactly, so MaxFuture:0 stays expressible.
+// Negative window durations are rejected. Canonicalization is NOT configurable:
+// the signed-view format is frozen to JCS (ViewVersion), and a verify-side canon
+// the sign side did not honor would be a divergence hazard, not a feature.
 type VerifierConfig struct {
 	Resolver DIDResolver
 	Crypto   crypto.Verifier
@@ -83,12 +85,15 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if epoch.IsZero() {
 		epoch = ceilToSecond(clock().UTC())
 	}
+	// Default only when the window is wholly unset: a partially-set window must
+	// be honored exactly, so MaxFuture:0 ("reject any future-dated proof") stays
+	// expressible rather than being silently widened to the default tolerance.
 	window := cfg.Window
-	if window.MaxPast == 0 {
-		window.MaxPast = 60 * time.Second
+	if window == (AcceptanceWindow{}) {
+		window = AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 5 * time.Second}
 	}
-	if window.MaxFuture == 0 {
-		window.MaxFuture = 5 * time.Second
+	if window.MaxPast < 0 || window.MaxFuture < 0 {
+		return nil, fmt.Errorf("wireauth: VerifierConfig.Window durations must be non-negative")
 	}
 	return &Verifier{
 		resolver: cfg.Resolver, crypto: cfg.Crypto, nonces: cfg.Nonces,

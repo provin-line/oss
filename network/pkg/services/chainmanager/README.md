@@ -39,7 +39,8 @@ is the Hub swap point for the pub-sub backend. Implementations:
 
 ## wireauth/ — L2 peer authentication
 
-Every ChainPeerService RPC carries an `AuthProof`: Ed25519 signature over a
+Every ChainPeerService RPC carries an `AuthProof` (the proto message; the Go
+library type is `wireauth.Proof`): Ed25519 signature over a
 JCS-canonicalized per-RPC view (**signerDID** + op discriminator + view version +
 nonce + issuedAt + business fields). Binding `signerDID` into the signed bytes
 closes unknown-key-share: a DID alias that shares another DID's `#auth` key cannot

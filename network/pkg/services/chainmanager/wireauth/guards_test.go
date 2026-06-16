@@ -118,6 +118,38 @@ func TestVerify_AcceptanceWindow(t *testing.T) {
 	})
 }
 
+func TestNewVerifier_WindowSemantics(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	resolver := mapResolver{subDID: authDoc(subDID, pub)}
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+
+	t.Run("explicit MaxFuture:0 rejects a future proof", func(t *testing.T) {
+		// now is 1s before issuedAt; an explicit zero future tolerance must reject
+		// it rather than fall back to the default 5s.
+		v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+			Clock:  func() time.Time { return at().Add(-time.Second) },
+			Epoch:  at().Add(-time.Hour),
+			Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 0},
+		})
+		if err != nil {
+			t.Fatalf("NewVerifier: %v", err)
+		}
+		assertErrIs(t, v.Verify(context.Background(), "Op", okFields(), proof, nil), wireauth.ErrFromFuture)
+	})
+
+	t.Run("negative window durations rejected", func(t *testing.T) {
+		base := wireauth.VerifierConfig{Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore()}
+		for _, w := range []wireauth.AcceptanceWindow{{MaxPast: -time.Second}, {MaxFuture: -time.Second}} {
+			c := base
+			c.Window = w
+			if _, err := wireauth.NewVerifier(c); err == nil {
+				t.Errorf("window %+v: want error, got nil", w)
+			}
+		}
+	})
+}
+
 func TestVerify_SignatureGuards(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := mapResolver{subDID: authDoc(subDID, pub)}

@@ -35,6 +35,11 @@ func Sign(signer crypto.Signer, signerDID, op string, fields map[string]any, non
 	if signerDID == "" || op == "" || nonce == "" {
 		return Proof{}, fmt.Errorf("%w: signerDID, op, and nonce must be non-empty", ErrMalformedProof)
 	}
+	// Mirror the verifier's nonce bound so Sign never mints a proof a verifier
+	// is structurally bound to reject.
+	if len(nonce) > maxNonceLen {
+		return Proof{}, fmt.Errorf("%w: nonce exceeds %d bytes", ErrMalformedProof, maxNonceLen)
+	}
 	issuedAt = issuedAt.UTC().Truncate(time.Second)
 	msg, err := viewBytes(signerDID, op, nonce, issuedAt, fields)
 	if err != nil {

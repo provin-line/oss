@@ -142,6 +142,16 @@ func TestSign_RejectsEmptyParts(t *testing.T) {
 	}
 }
 
+// Sign must mirror the verifier's nonce bound: a proof it mints for an oversized
+// nonce would be structurally unverifiable, so Sign rejects it up front.
+func TestSign_RejectsOversizedNonce(t *testing.T) {
+	cs := &capturingSigner{}
+	oversized := string(make([]byte, maxNonceLen+1))
+	if _, err := Sign(cs, "did:x", "Op", map[string]any{"a": "b"}, oversized, fixedTime()); !errors.Is(err, ErrMalformedProof) {
+		t.Errorf("oversized nonce: want ErrMalformedProof, got %v", err)
+	}
+}
+
 func TestNewNonce_UniqueAndNonEmpty(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
