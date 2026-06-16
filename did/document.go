@@ -133,7 +133,10 @@ func (d *DIDDocument) Authentication() []string { return getStringSlice(d.body, 
 // relationship (#signing credential-issuance keys).
 func (d *DIDDocument) AssertionMethod() []string { return getStringSlice(d.body, keyAssertionMethod) }
 
-// VerificationMethod returns the public-key entries (typed copies).
+// VerificationMethod returns the public-key entries (typed copies). This is a
+// lossy read view — members beyond the four modeled fields are not surfaced —
+// not a round-trip surface; the body (Hash/MarshalJSON) remains the source of
+// truth that commits to every member.
 func (d *DIDDocument) VerificationMethod() []VerificationMethod {
 	list, _ := d.body[keyVerificationMethod].([]any)
 	out := make([]VerificationMethod, 0, len(list))
@@ -145,7 +148,8 @@ func (d *DIDDocument) VerificationMethod() []VerificationMethod {
 	return out
 }
 
-// Service returns the service endpoints (typed copies).
+// Service returns the service endpoints (typed copies). Like VerificationMethod,
+// this is a lossy read view, not a round-trip surface.
 func (d *DIDDocument) Service() []ServiceEndpoint {
 	list, _ := d.body[keyService].([]any)
 	out := make([]ServiceEndpoint, 0, len(list))
