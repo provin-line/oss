@@ -11,6 +11,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
+	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+	chainpbconnect "github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
 	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	signerpb "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
@@ -49,6 +51,8 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 		{Resource: "signer", Action: "sign-vc"},
 		{Resource: "vc", Action: "store"},
 		{Resource: "vc", Action: "read"},
+		{Resource: "chain", Action: "read"},
+		{Resource: "chain", Action: "update-allowlist"},
 	})
 	h, err := BuildHandler(coreCfg, regCfg, verifier)
 	if err != nil {
@@ -166,6 +170,31 @@ func TestBoot_RegisterIssueResolveSign(t *testing.T) {
 	ok, err := (ed25519.Verifier{}).Verify(signPub, data, sigResp.Msg.GetSignature())
 	if err != nil || !ok {
 		t.Fatalf("signature verify: ok=%v err=%v", ok, err)
+	}
+}
+
+// The ChainService (L1 operator surface) is mounted in the assembled stack: an
+// authorized UpdateAllowList and ListSubscriptions route through the mux and the
+// authz gate. This covers routing + the gate, not write-content (the allow-list
+// has no read RPC and ListSubscriptions reads a different store); rule-persistence
+// correctness is covered at the domain/handler level.
+func TestBoot_ChainOperator(t *testing.T) {
+	ctx := context.Background()
+	srv, _, _ := assembled(t)
+	chainClient := chainpbconnect.NewChainServiceClient(srv.Client(), srv.URL)
+
+	if _, err := chainClient.UpdateAllowList(ctx, bearer(connect.NewRequest(&chainpb.UpdateAllowListRequest{
+		PipelineDid: pipelineDID,
+		Rules:       []*chainpb.AllowRule{{Pattern: "did:dplaax:*:org:acme:*"}},
+	}))); err != nil {
+		t.Fatalf("UpdateAllowList: %v (code %v)", err, connect.CodeOf(err))
+	}
+	resp, err := chainClient.ListSubscriptions(ctx, bearer(connect.NewRequest(&chainpb.ListSubscriptionsRequest{})))
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v (code %v)", err, connect.CodeOf(err))
+	}
+	if len(resp.Msg.GetSubscriptions()) != 0 {
+		t.Errorf("fresh store ListSubscriptions = %d, want 0", len(resp.Msg.GetSubscriptions()))
 	}
 }
 
