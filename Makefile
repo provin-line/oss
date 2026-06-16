@@ -20,6 +20,7 @@ help:
 #   pipeline/sink/console         → $(DIST)/console-sink
 #   cmd/provin                    → $(DIST)/provin
 build:
+	mkdir -p $(DIST)
 	go build -o $(DIST)/standalone ./network/cmd/standalone
 
 test:

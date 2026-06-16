@@ -1,0 +1,34 @@
+# Example operator config for the `standalone` binary.
+#
+# The binary loads ./config/application.conf (relative to its working dir),
+# layered over the packages' embedded reference.conf defaults, plus an optional
+# overlay file named by the CONFIG_OVERLAY environment variable. Copy this to
+# config/application.conf and fill the two values that have no default — the
+# binary fails closed at boot until both are set.
+
+provin.network {
+
+  # REQUIRED — no default. The authorization decision point (o3co policy
+  # verifier). Must carry an explicit http:// or https:// scheme.
+  auth.policy-verifier-url = "https://auth.example.internal/policy"
+
+  registry {
+    # REQUIRED — no default. The did:dplaax {registry} segment this server is
+    # authoritative for; appears in every DID it mints and resolves. Must be a
+    # valid DID segment ([A-Za-z0-9._-], not all dots).
+    id = "poc.dplaax.io"
+
+    # OPTIONAL. Service endpoints embedded in every issued Pipeline/Process DID
+    # Document, keyed by endpoint id (the key becomes the "#<id>" fragment).
+    service-endpoints {
+      # vc-resolver { type = "VCResolver", url = "https://poc.dplaax.io/vc" }
+    }
+  }
+
+  # OPTIONAL (defaults shown). Listen address and durable-state root; stores
+  # live under data-dir in dids/ , schemas/ , keys/ subdirs.
+  core {
+    listen-addr = ":8443"
+    data-dir    = "./data"
+  }
+}

@@ -52,24 +52,27 @@ func TestGet_Absent_IsErrNotFound(t *testing.T) {
 	}
 }
 
-// Atomic whole-keyset replace: re-saving a DID with a different keyset leaves the
-// new complete set, never a mix of old and new keys (no partial keyset visible).
-func TestSave_AtomicReplace(t *testing.T) {
+// Create-only: re-saving an existing DID is rejected and the original keyset is
+// left untouched — never destroyed in a non-atomic replace window.
+func TestSave_RejectsExisting(t *testing.T) {
 	s := newStore(t)
-	s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{
+	if err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{
 		keystore.KeyIDAuth:    kp(1),
 		keystore.KeyIDSigning: kp(2),
-	})
+	}); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
 	if err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{
 		keystore.KeyIDAuth:    kp(3),
 		keystore.KeyIDSigning: kp(4),
-	}); err != nil {
-		t.Fatalf("re-save: %v", err)
+	}); err == nil {
+		t.Fatal("re-save: want error (create-only), got nil")
 	}
+	// Original keyset is intact.
 	auth, _ := s.GetPrivateKey(did, keystore.KeyIDAuth)
 	sign, _ := s.GetPrivateKey(did, keystore.KeyIDSigning)
-	if string(auth) != string([]byte{3, 3, 3, 3}) || string(sign) != string([]byte{4, 4, 4, 4}) {
-		t.Fatalf("replace not atomic: auth=%v sign=%v", auth, sign)
+	if string(auth) != string([]byte{1, 1, 1, 1}) || string(sign) != string([]byte{2, 2, 2, 2}) {
+		t.Fatalf("original keyset altered: auth=%v sign=%v", auth, sign)
 	}
 }
 

@@ -35,8 +35,16 @@ func New(root string) *Store {
 
 // SaveKeyPair persists every key pair for did atomically: the whole keyset is
 // written into a temp directory (each file fsynced), then published with a
-// single rename. A mid-write failure leaves only an orphaned temp dir, never a
-// partial keyset in place; re-saving a DID replaces its keyset atomically.
+// single rename onto the (absent) target. A mid-write failure leaves only an
+// orphaned temp dir, never a partial keyset.
+//
+// It is create-only: an existing keyset is never overwritten (matching the
+// sibling didregistry yamlstore, and the actual issuance contract — keys are
+// saved once per fresh DID, after the document store has already won the
+// uniqueness race). Replacing a directory in place cannot be made atomic with a
+// single rename, so rather than destroy a live keyset in a non-atomic window
+// (the failure this store exists to prevent), a re-save fails. Rotation, if it
+// ever lands, introduces a genuinely-atomic replace with its own contract.
 func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair) error {
 	dir, err := s.didDir(did)
 	if err != nil {
@@ -46,6 +54,9 @@ func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 		if err := safeSegment(string(keyID)); err != nil {
 			return err
 		}
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Errorf("filestore: keyset already exists for %s", did)
 	}
 	parent := filepath.Dir(dir)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -69,15 +80,13 @@ func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 		return err
 	}
 
-	// Publish. A plain rename is atomic when the target is absent; on re-save the
-	// target exists, so remove it first — a reader in the (rare, single-issuer)
-	// window sees ErrNotFound, never a half-replaced keyset.
-	if _, err := os.Stat(dir); err == nil {
-		if err := os.RemoveAll(dir); err != nil {
-			return fmt.Errorf("filestore: replace keyset: %w", err)
-		}
-	}
+	// Publish atomically onto the absent target. A lost create race (the target
+	// appeared since the Stat above) fails the rename onto a non-empty dir — never
+	// a destroyed keyset.
 	if err := os.Rename(tmp, dir); err != nil {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			return fmt.Errorf("filestore: keyset already exists for %s", did)
+		}
 		return fmt.Errorf("filestore: publish keyset: %w", err)
 	}
 	return fsyncDir(parent)

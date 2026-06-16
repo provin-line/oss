@@ -67,6 +67,8 @@ func TestLoad_RejectsBadInput(t *testing.T) {
 	cases := map[string]string{
 		"empty id (the reference default)": ``,
 		"colon in id":                      `provin.network.registry.id = "poc:dplaax"`,
+		"hash in id (fails dplaax.Parse)":  `provin.network.registry.id = "poc#test"`,
+		"all-dots id (fails dplaax.Parse)": `provin.network.registry.id = "..."`,
 		"empty endpoint type": `provin.network.registry {
 			id = "poc.dplaax.io"
 			service-endpoints { e { type = "", url = "https://r/v" } }

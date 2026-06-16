@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
 )
 
@@ -91,18 +92,16 @@ func loadEndpoints(cfg *hoconconfig.Config) ([]did.ServiceEndpoint, error) {
 	return out, nil
 }
 
-// validateRegistryID requires a single, non-empty did:dplaax segment: no ":"
-// (the DID delimiter), no path separators / whitespace / NUL, and not a
-// traversal token. Dots are allowed (registries are dotted hostnames).
+// validateRegistryID requires a value that is a valid did:dplaax segment by the
+// SAME grammar dplaax.Parse applies ([A-Za-z0-9._-], not all-dots): the id is
+// the {registry} segment of every DID this server mints and resolves, so an id
+// dplaax.Parse would later reject must fail at boot, not at request time.
 func validateRegistryID(id string) error {
 	if id == "" {
 		return fmt.Errorf("must not be empty")
 	}
-	if id == "." || id == ".." {
-		return fmt.Errorf("must not be %q", id)
-	}
-	if strings.ContainsAny(id, ":/\\ \t\r\n\x00") {
-		return fmt.Errorf("must be a single did:dplaax segment (no ':' , path separators, or whitespace): %q", id)
+	if !dplaax.IsSafeSegment(id) {
+		return fmt.Errorf("must be a valid did:dplaax segment ([A-Za-z0-9._-], not all dots): %q", id)
 	}
 	return nil
 }
