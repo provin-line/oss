@@ -7,6 +7,7 @@
 package store
 
 import (
+	"encoding/base64"
 	"errors"
 	"time"
 
@@ -72,6 +73,28 @@ type LifecycleEvent struct {
 	// PrevEventHash chains this event to its predecessor (append-only evidence);
 	// computed by the service, empty for the first event in a log.
 	PrevEventHash string
+}
+
+// CanonicalMap renders the event as its canonical field map — the single shape
+// shared by the service (which JCS-hashes it for the PrevEventHash chain) and
+// the handler (which JCS-canonicalizes it for the wire). Because the wire bytes
+// equal the canonical hashing input, a consumer verifies the chain by taking the
+// SHA-256 of each received event and matching it to the next event's
+// PrevEventHash. OutwardSnapshot is base64-encoded and omitted when empty;
+// WitnessedAt is normalized to UTC RFC3339Nano so the bytes do not depend on the
+// stored zone.
+func (e LifecycleEvent) CanonicalMap() map[string]any {
+	m := map[string]any{
+		"eventType":      e.EventType,
+		"didDocSnapshot": e.DIDDocSnapshot,
+		"witnessSource":  e.WitnessSource,
+		"witnessedAt":    e.WitnessedAt.UTC().Format(time.RFC3339Nano),
+		"prevEventHash":  e.PrevEventHash,
+	}
+	if len(e.OutwardSnapshot) > 0 {
+		m["outwardSnapshot"] = base64.StdEncoding.EncodeToString(e.OutwardSnapshot)
+	}
+	return m
 }
 
 // DIDStore persists DID Documents and their delegations across the

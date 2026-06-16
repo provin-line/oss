@@ -584,21 +584,12 @@ func (s *Service) appendEvent(d *dplaax.DID, ev store.LifecycleEvent) error {
 }
 
 // hashEvent is the canonical content address of a lifecycle event over its
-// stored representation, including PrevEventHash so the chain is tamper-evident.
-// Every reader recomputes it over the read-back event, so the chain verifies
-// independent of on-disk serialization precision.
+// stored representation (store.LifecycleEvent.CanonicalMap — the same shape the
+// handler puts on the wire), including PrevEventHash so the chain is
+// tamper-evident. Every reader recomputes it over the read-back event, so the
+// chain verifies independent of on-disk serialization precision.
 func hashEvent(ev store.LifecycleEvent) (string, error) {
-	m := map[string]any{
-		"eventType":      ev.EventType,
-		"didDocSnapshot": ev.DIDDocSnapshot,
-		"witnessSource":  ev.WitnessSource,
-		"witnessedAt":    ev.WitnessedAt.UTC().Format(time.RFC3339Nano),
-		"prevEventHash":  ev.PrevEventHash,
-	}
-	if len(ev.OutwardSnapshot) > 0 {
-		m["outwardSnapshot"] = base64.StdEncoding.EncodeToString(ev.OutwardSnapshot)
-	}
-	return jcs.Hash(m)
+	return jcs.Hash(ev.CanonicalMap())
 }
 
 // storeResolver adapts a DIDStore to resolver.Resolver so delegation.Verify can
