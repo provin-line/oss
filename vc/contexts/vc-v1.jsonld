@@ -17,6 +17,9 @@
     "previousCredential": "dplaax:previousCredential",
     "derived_from": "dplaax:derivedFrom",
     "source_root": "dplaax:sourceRoot",
-    "source_root_canonical": "dplaax:sourceRootCanonical"
+    "source_root_canonical": "dplaax:sourceRootCanonical",
+    "DelegationCredential": "dplaax:DelegationCredential",
+    "delegatedBy": "dplaax:delegatedBy",
+    "scope": "dplaax:scope"
   }
 }

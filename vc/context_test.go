@@ -15,7 +15,7 @@ import (
 // test fails on any local drift of the vendored copy. Upstream divergence
 // (the spec updating its canonical file and pin) is NOT detected here; the
 // sync is push-based per the spec's contexts/README.md.
-const contextDplaaxVCV1SHA256 = "4f79e1f18e257de0a822668b63b625831c37788e1e45441a01b48c53f4c5e6b2"
+const contextDplaaxVCV1SHA256 = "1938cbc1682da9842c56d57d03c2b9ace7ec62c04607d792e7e482bcaa95807d"
 
 func TestContextDocumentMatchesSpec(t *testing.T) {
 	doc := vc.ContextDplaaxVCV1Document()
@@ -37,6 +37,7 @@ func TestContextDocumentMatchesSpec(t *testing.T) {
 		"contentHash", "inputHash", "outputHash", "previousCredential",
 		"derived_from", "source_root", "source_root_canonical",
 		"PipelinePassCredential",
+		"DelegationCredential", "delegatedBy", "scope",
 	} {
 		if _, ok := parsed.Context[key]; !ok {
 			t.Errorf("context document missing term %q", key)
