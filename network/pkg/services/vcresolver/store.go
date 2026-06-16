@@ -34,13 +34,28 @@ type Store interface {
 // UnresolvedEntry is one queued chain hole: a previousCredential hash we do
 // not hold, plus the upstream endpoint to fetch it from.
 type UnresolvedEntry struct {
-	Hash             string
+	// Hash is the previousCredential content address ("sha256:<hex>") not held.
+	Hash string
+	// UpstreamEndpoint is the caller-supplied hint for where the predecessor can
+	// be fetched. Empty means none was supplied — the batch resolver derives the
+	// endpoint from ReferrerIssuer instead.
 	UpstreamEndpoint string
-	RetryCount       int
+	// ReferrerIssuer is the issuer DID of the credential that referenced this
+	// hole. With no UpstreamEndpoint hint, the batch resolver derives the fetch
+	// endpoint from this DID's #vc-resolver service endpoint — so an empty-hint
+	// entry stays resolvable after the referrer credential is gone.
+	ReferrerIssuer string
+	// RetryCount is the batch resolver's bounded-retry counter.
+	RetryCount int
 }
 
 // Pool queues unresolved entries for the batch resolver. Ordering is
 // newest-first (recent chain holes are the most likely to be resolvable).
+//
+// Add is an idempotent upsert keyed by Hash: re-adding a queued hole does not
+// duplicate it, but fills an empty UpstreamEndpoint / ReferrerIssuer from the new
+// entry and never clobbers a non-empty hint with an empty one — so a hole first
+// queued with no hint is repaired when a better-informed referrer arrives.
 type Pool interface {
 	Add(e UnresolvedEntry) error
 	ListNewest(n int) ([]UnresolvedEntry, error)

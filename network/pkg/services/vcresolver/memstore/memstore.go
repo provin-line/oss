@@ -1,0 +1,131 @@
+// Package memstore is the in-memory PoC implementation of the vcresolver Store
+// and Pool. State is lost on restart (the chain re-fills as new VCs arrive);
+// audit-reachable deployments require the durable substrate instead.
+package memstore
+
+import (
+	"sync"
+
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/vc"
+)
+
+// Store is an in-memory vcresolver.Store keyed by content address.
+type Store struct {
+	mu sync.RWMutex
+	m  map[string]*vc.PipelinePassCredential
+}
+
+var _ vcresolver.Store = (*Store)(nil)
+
+// NewStore returns an empty Store.
+func NewStore() *Store {
+	return &Store{m: make(map[string]*vc.PipelinePassCredential)}
+}
+
+// Put stores cred at hash (overwriting is harmless — content-addressed, so the
+// same hash carries the same body).
+func (s *Store) Put(hash string, cred *vc.PipelinePassCredential) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[hash] = cred
+	return nil
+}
+
+// Get returns the VC at hash, or vcresolver.ErrNotFound.
+func (s *Store) Get(hash string) (*vc.PipelinePassCredential, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.m[hash]
+	if !ok {
+		return nil, vcresolver.ErrNotFound
+	}
+	return c, nil
+}
+
+// Pool is an in-memory vcresolver.Pool: newest-first, deduped/upserted by hash.
+type Pool struct {
+	mu     sync.Mutex
+	order  []string // hashes, newest first
+	byHash map[string]vcresolver.UnresolvedEntry
+}
+
+var _ vcresolver.Pool = (*Pool)(nil)
+
+// NewPool returns an empty Pool.
+func NewPool() *Pool {
+	return &Pool{byHash: make(map[string]vcresolver.UnresolvedEntry)}
+}
+
+// Add upserts e keyed by Hash: a new hole is prepended (newest-first); a
+// re-added hole is not duplicated but has its empty UpstreamEndpoint /
+// ReferrerIssuer filled from e (a non-empty hint is never clobbered with an
+// empty one), preserving RetryCount.
+func (p *Pool) Add(e vcresolver.UnresolvedEntry) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if existing, ok := p.byHash[e.Hash]; ok {
+		if existing.UpstreamEndpoint == "" {
+			existing.UpstreamEndpoint = e.UpstreamEndpoint
+		}
+		if existing.ReferrerIssuer == "" {
+			existing.ReferrerIssuer = e.ReferrerIssuer
+		}
+		p.byHash[e.Hash] = existing
+		return nil
+	}
+	p.byHash[e.Hash] = e
+	p.order = append([]string{e.Hash}, p.order...)
+	return nil
+}
+
+// ListNewest returns up to n entries, newest first.
+func (p *Pool) ListNewest(n int) ([]vcresolver.UnresolvedEntry, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]vcresolver.UnresolvedEntry, 0)
+	for _, h := range p.order {
+		if len(out) >= n {
+			break
+		}
+		out = append(out, p.byHash[h])
+	}
+	return out, nil
+}
+
+// Remove drops the entry at hash. Removing an absent hash is a no-op.
+func (p *Pool) Remove(hash string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.byHash[hash]; !ok {
+		return nil
+	}
+	delete(p.byHash, hash)
+	for i, h := range p.order {
+		if h == hash {
+			p.order = append(p.order[:i], p.order[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+// IncrementRetry bumps the retry counter for hash, or vcresolver.ErrNotFound.
+func (p *Pool) IncrementRetry(hash string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byHash[hash]
+	if !ok {
+		return vcresolver.ErrNotFound
+	}
+	e.RetryCount++
+	p.byHash[hash] = e
+	return nil
+}
+
+// Len reports the number of queued holes.
+func (p *Pool) Len() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.byHash)
+}
