@@ -130,23 +130,36 @@ func (s *Store) SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation
 	return s.saveNode(d, doc, dlg)
 }
 
-// saveNode writes the document (O_EXCL — a re-save is ErrExists), the optional
-// delegation, and the initial active status. The document is the existence
-// marker: it is created exclusively first, so a partially-written node is never
-// published and a duplicate registration fails before any other file is touched.
+// saveNode publishes a DID node atomically: the document, optional delegation,
+// and initial active status are written into a temp directory, then the whole
+// directory is renamed into place. A concurrent reader therefore observes either
+// nothing (ErrNotFound) or a complete node — never a half-written one — and a
+// write failure mid-assembly leaves only an orphaned temp dir, never a stranded
+// partial node. A duplicate registration is rejected because the rename onto an
+// existing node directory fails (mapped to ErrExists).
 func (s *Store) saveNode(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
 	dir, err := s.nodeDir(d)
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(dir); err == nil {
+		return store.ErrExists
+	}
+	parent := filepath.Dir(dir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("yamlstore: mkdir: %w", err)
+	}
+	tmp, err := os.MkdirTemp(parent, ".tmp-node-*")
+	if err != nil {
+		return fmt.Errorf("yamlstore: temp node: %w", err)
+	}
+	defer os.RemoveAll(tmp) // a no-op once the dir has been renamed away.
+
 	docBytes, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("yamlstore: marshal document: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("yamlstore: mkdir: %w", err)
-	}
-	if err := createExclusive(filepath.Join(dir, documentFile), docBytes); err != nil {
+	if err := writeFileSync(filepath.Join(tmp, documentFile), docBytes); err != nil {
 		return err
 	}
 	if dlg != nil {
@@ -154,11 +167,25 @@ func (s *Store) saveNode(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.De
 		if err != nil {
 			return fmt.Errorf("yamlstore: marshal delegation: %w", err)
 		}
-		if err := atomicWrite(filepath.Join(dir, delegationFile), dlgBytes); err != nil {
+		if err := writeFileSync(filepath.Join(tmp, delegationFile), dlgBytes); err != nil {
 			return err
 		}
 	}
-	return s.writeStatus(dir, store.StatusActive)
+	statusBytes, err := yaml.Marshal(statusRecord{Status: string(store.StatusActive)})
+	if err != nil {
+		return fmt.Errorf("yamlstore: marshal status: %w", err)
+	}
+	if err := writeFileSync(filepath.Join(tmp, statusFile), statusBytes); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmp, dir); err != nil {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			return store.ErrExists // lost a create race against a concurrent registration
+		}
+		return fmt.Errorf("yamlstore: publish node: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Resolve(d *dplaax.DID) (*did.DIDDocument, error) {
@@ -269,10 +296,13 @@ func (s *Store) listChildren(parent string, childDID func(id string) *dplaax.DID
 	return out, nil
 }
 
-// AppendLifecycleEvent writes ev as the next per-event file under the node's
-// lifecycle dir. The sequence is the count of existing events; a concurrent
-// append that grabbed the same index loses the O_EXCL race, so the writer
-// advances to the next free slot. The store never rewrites or deletes an entry.
+// AppendLifecycleEvent writes ev at the next sequence slot under the node's
+// lifecycle dir. The slot is claimed with O_EXCL: a concurrent append that
+// already took it returns store.ErrConflict, NOT a write at a later slot — ev's
+// PrevEventHash was chained against the tail the caller read, so landing it past
+// a now-intervening event would corrupt the chain. The caller re-reads and
+// recomputes on conflict (per the interface contract). The store never rewrites
+// or deletes an entry, and dense O_EXCL claiming leaves no gaps.
 func (s *Store) AppendLifecycleEvent(d *dplaax.DID, ev store.LifecycleEvent) error {
 	dir, err := s.nodeDir(d)
 	if err != nil {
@@ -290,18 +320,13 @@ func (s *Store) AppendLifecycleEvent(d *dplaax.DID, ev store.LifecycleEvent) err
 	if err != nil {
 		return err
 	}
-	// Advance past any concurrently-claimed slots; the bound is generous and
-	// only guards against a live race, not unbounded contention.
-	for i := 0; i < 1024; i++ {
-		err := createExclusive(filepath.Join(logDir, eventFileName(seq+i)), data)
-		if err == nil {
-			return nil
+	if err := createExclusive(filepath.Join(logDir, eventFileName(seq)), data); err != nil {
+		if errors.Is(err, store.ErrExists) {
+			return store.ErrConflict
 		}
-		if !errors.Is(err, store.ErrExists) {
-			return err
-		}
+		return err
 	}
-	return fmt.Errorf("yamlstore: lifecycle append: no free slot after %d attempts", 1024)
+	return nil
 }
 
 func (s *Store) ReadLifecycleLog(d *dplaax.DID) ([]store.LifecycleEvent, error) {
@@ -412,9 +437,34 @@ func readFile(p string) ([]byte, error) {
 	return data, nil
 }
 
+// writeFileSync creates p exclusively, writes data, and fsyncs before close so
+// the bytes reach disk before the file is published (used to build a node in a
+// temp dir, where the name is fresh so O_EXCL always succeeds). Power-loss
+// durability of the parent directory entry is out of scope for this staged PoC
+// substrate — the tlog backend is the durable target.
+func writeFileSync(p string, data []byte) error {
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("yamlstore: create %s: %w", filepath.Base(p), err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("yamlstore: write %s: %w", filepath.Base(p), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("yamlstore: sync %s: %w", filepath.Base(p), err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("yamlstore: close %s: %w", filepath.Base(p), err)
+	}
+	return nil
+}
+
 // createExclusive publishes data at p only if p does not already exist: the
-// record is written to a temp file in the same dir and linked into place, so a
-// reader never sees a partial file and a collision returns store.ErrExists.
+// record is written to a temp file (fsynced) in the same dir and linked into
+// place, so a reader never sees a partial file and a collision returns
+// store.ErrExists.
 func createExclusive(p string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
 	if err != nil {
@@ -425,6 +475,10 @@ func createExclusive(p string, data []byte) error {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("yamlstore: write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("yamlstore: sync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("yamlstore: close temp: %w", err)
@@ -448,6 +502,11 @@ func atomicWrite(p string, data []byte) error {
 		tmp.Close()
 		os.Remove(tmpName)
 		return fmt.Errorf("yamlstore: write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("yamlstore: sync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)

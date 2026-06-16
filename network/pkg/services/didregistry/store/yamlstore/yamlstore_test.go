@@ -2,7 +2,9 @@ package yamlstore_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -209,6 +211,126 @@ func TestLifecycle_AppendReadInOrder(t *testing.T) {
 	}
 	if evs[1].PrevEventHash != "sha256:event0" {
 		t.Errorf("prevEventHash round-trip: %q", evs[1].PrevEventHash)
+	}
+}
+
+// Concurrent appends must never lose, overwrite, or land an event at a slot
+// past an intervening one: each goroutine reads the same tail, so all but the
+// slot winners get ErrConflict (the store does not silently advance, which would
+// store a stale-chained event). Winners form a dense, gap-free log.
+func TestLifecycle_ConcurrentAppendIsCASNotAdvance(t *testing.T) {
+	s := newStore(t)
+	d := mustParse(t, ownerDID)
+	if err := s.SaveOwner(d, doc(ownerDID, ownerDID)); err != nil {
+		t.Fatal(err)
+	}
+	const n = 32
+	var wg sync.WaitGroup
+	results := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = s.AppendLifecycleEvent(d, store.LifecycleEvent{
+				EventType: "register", DIDDocSnapshot: "sha256:x", WitnessSource: "self-asserted",
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, store.ErrConflict):
+		default:
+			t.Fatalf("unexpected append error: %v", err)
+		}
+	}
+	if wins == 0 {
+		t.Fatal("no concurrent append succeeded")
+	}
+	// The log holds exactly the winners, with no gap (every read returns a
+	// dense, parseable sequence).
+	evs, err := s.ReadLifecycleLog(d)
+	if err != nil {
+		t.Fatalf("ReadLifecycleLog: %v", err)
+	}
+	if len(evs) != wins {
+		t.Errorf("log length=%d, want %d (one entry per slot winner)", len(evs), wins)
+	}
+}
+
+// A document carrying an unknown member and a large integer must survive
+// Save→Resolve with an identical canonical hash: the store round-trips the
+// body-as-SoT document through its JCS marshaller, and any lost member or
+// precision would change the snapshot the lifecycle log commits to.
+func TestSaveOwner_HashFaithfulRoundTrip(t *testing.T) {
+	s := newStore(t)
+	d := mustParse(t, ownerDID)
+	var in did.DIDDocument
+	wire := `{"id":"` + ownerDID + `","controller":"` + ownerDID + `","futureMember":{"k":"v"},"bigCounter":123456789012345678}`
+	if err := json.Unmarshal([]byte(wire), &in); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want, err := in.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if err := s.SaveOwner(d, &in); err != nil {
+		t.Fatalf("SaveOwner: %v", err)
+	}
+	got, err := s.Resolve(d)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	gotHash, err := got.Hash()
+	if err != nil {
+		t.Fatalf("Hash (resolved): %v", err)
+	}
+	if gotHash != want {
+		t.Errorf("hash changed across store round-trip: got %s, want %s", gotHash, want)
+	}
+}
+
+// Concurrent registration of the same DID: exactly one wins, the rest get
+// ErrExists, and the published node is complete (atomic whole-node publish — no
+// torn or partial node is ever observed).
+func TestSaveOwner_ConcurrentDuplicate(t *testing.T) {
+	s := newStore(t)
+	d := mustParse(t, ownerDID)
+	const n = 16
+	var wg sync.WaitGroup
+	results := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = s.SaveOwner(d, doc(ownerDID, ownerDID))
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, store.ErrExists):
+		default:
+			t.Fatalf("unexpected save error: %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Errorf("concurrent duplicate register: %d succeeded, want exactly 1", wins)
+	}
+	// The published node is complete: document resolves and status is active.
+	if got, err := s.Resolve(d); err != nil || got.ID() != ownerDID {
+		t.Errorf("Resolve after concurrent register: %q, %v", got, err)
+	}
+	if st, err := s.GetStatus(d); err != nil || st != store.StatusActive {
+		t.Errorf("GetStatus after concurrent register: %q, %v", st, err)
 	}
 }
 

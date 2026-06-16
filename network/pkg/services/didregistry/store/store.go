@@ -25,6 +25,13 @@ var ErrNotFound = errors.New("didregistry: not found")
 // re-submission is idempotent. Handlers map it with errors.Is.
 var ErrExists = errors.New("didregistry: already exists")
 
+// ErrConflict is returned by AppendLifecycleEvent when a concurrent append took
+// the next sequence slot. The caller (which owns the hash chain) MUST re-read
+// the log and recompute PrevEventHash before retrying — the store deliberately
+// does not silently advance, because an event chained against a stale tail would
+// corrupt the log. Handlers map it with errors.Is.
+var ErrConflict = errors.New("didregistry: append conflict")
+
 // DIDStatus is the lifecycle status of a stored DID.
 type DIDStatus string
 
@@ -83,11 +90,17 @@ type DIDStore interface {
 	ListPipelines(owner *dplaax.DID) ([]DIDSummary, error)
 	ListProcesses(pipeline *dplaax.DID) ([]DIDSummary, error)
 
-	// AppendLifecycleEvent records ev on d's append-only log. The store assigns
-	// the next sequence position and never rewrites or deletes an existing entry
-	// (the append-only guarantee is a store boundary, so the yamlstore→tlog swap
-	// is implementation-only). PrevEventHash and WitnessedAt are set by the
-	// caller (service); the store does not compute or validate them.
+	// AppendLifecycleEvent records ev at the next sequence position on d's
+	// append-only log and never rewrites or deletes an existing entry (the
+	// append-only guarantee is a store boundary, so the yamlstore→tlog swap is
+	// implementation-only). PrevEventHash and WitnessedAt are set by the caller
+	// (service); the store does not compute or validate them. Append is a
+	// compare-and-set on the slot: a concurrent append that already took it
+	// returns ErrConflict rather than landing ev at a later slot, because ev's
+	// PrevEventHash was computed against the now-stale tail. The caller therefore
+	// must serialize appends per DID, or re-read the log and recompute
+	// PrevEventHash on ErrConflict before retrying — the store guarantees no loss
+	// or overwrite, not that on-disk order matches call order.
 	AppendLifecycleEvent(d *dplaax.DID, ev LifecycleEvent) error
 	// ReadLifecycleLog returns d's lifecycle events in append order (oldest
 	// first); an empty log for a DID with no events is not an error.
