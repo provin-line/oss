@@ -103,10 +103,29 @@ func (s *Service) requireDID(didStr string) (*dplaax.DID, error) {
 	return d, nil
 }
 
-// requireOwnRegistry enforces the registry-segment binding for writes.
+// requireOwnRegistry enforces the registry-segment binding. It applies to reads
+// as well as writes: the yamlstore omits the registry from its path (one
+// registry per store), so without this gate a foreign-registry DID with the same
+// account/resource segments would alias — and resolve to — a local record. This
+// registry answers only for its own registry segment.
 func (s *Service) requireOwnRegistry(d *dplaax.DID) error {
 	if d.Registry != s.registry {
 		return fmt.Errorf("%w: DID registry %q is not this registry %q", ErrUnauthorized, d.Registry, s.registry)
+	}
+	return nil
+}
+
+// requireActive confirms a DID exists and is active. Used to gate authority
+// derivation: a revoked owner cannot mint pipelines/processes, and a revoked
+// pipeline cannot parent new processes (revocation that did not stop derivation
+// would be a hollow control).
+func (s *Service) requireActive(d *dplaax.DID) error {
+	st, err := s.store.GetStatus(d)
+	if err != nil {
+		return err // ErrNotFound when the DID does not exist
+	}
+	if st != store.StatusActive {
+		return fmt.Errorf("%w: %s is %s, not active", ErrUnauthorized, d.String(), st)
 	}
 	return nil
 }
@@ -188,11 +207,22 @@ const (
 )
 
 // issue mints a Pipeline/Process DID. It verifies the owner-signed delegation
-// authorizes exactly this target, checks the parent exists, generates the
+// authorizes exactly this target, checks the parent is active, generates the
 // #auth/#signing keypair, assembles and persists the document, then records the
 // register lifecycle event. The document is committed (store.Save*) before the
 // keys are persisted, so the store is the single linearization point: a
 // concurrent duplicate loses at Save (ErrExists) before touching the keystore.
+// Keys-before-document is deliberately NOT used — under a concurrent same-target
+// race it would leave the document's embedded public key and the keystore's
+// private key mismatched (a silent signing failure), which is worse than the
+// failure this ordering admits.
+//
+// Known PoC partial-failure windows (the store has no delete, so cross-store
+// atomicity is out of scope for this staged substrate — see the store package's
+// durability note): if SaveKeyPair fails after the document is committed, a
+// resolvable but keyless DID exists; if appendEvent fails after Save, a DID
+// exists with no lifecycle snapshot. A retry hits ErrExists and cannot self-heal
+// these. The durable tlog substrate is where transactional issuance lands.
 func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, kind didKind) (*did.DIDDocument, *delegation.DelegationCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -228,13 +258,17 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 		return nil, nil, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 
-	// controller = the structural parent; a process additionally requires its
-	// parent pipeline to exist (the owner's existence is proven by the
-	// delegation resolving above).
+	// Authority must be live: a revoked owner cannot mint, and (for a process) a
+	// revoked parent pipeline cannot parent. requireActive also confirms
+	// existence, so it subsumes the parent-existence check.
+	if err := s.requireActive(target.OwnerDID()); err != nil {
+		return nil, nil, err
+	}
+	// controller = the structural parent (pipeline → owner; process → pipeline).
 	parent := target.OwnerDID()
 	if kind == kindProcess {
 		parent = target.PipelineDID()
-		if _, err := s.store.Resolve(parent); err != nil {
+		if err := s.requireActive(parent); err != nil {
 			return nil, nil, fmt.Errorf("parent pipeline: %w", err)
 		}
 	}
@@ -288,6 +322,9 @@ func (s *Service) ResolveDID(ctx context.Context, didStr string) (*did.DIDDocume
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireOwnRegistry(d); err != nil {
+		return nil, err
+	}
 	return s.store.Resolve(d)
 }
 
@@ -299,6 +336,9 @@ func (s *Service) ResolveDelegation(ctx context.Context, didStr string) (*delega
 	}
 	d, err := s.requireDID(didStr)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireOwnRegistry(d); err != nil {
 		return nil, err
 	}
 	return s.store.ResolveDelegation(d)
@@ -320,6 +360,13 @@ func (s *Service) UpdateStatus(ctx context.Context, didStr, status string) (*did
 	st := store.DIDStatus(status)
 	if st != store.StatusRevoked {
 		return nil, fmt.Errorf("%w: unsupported status %q (slice-4 accepts %q)", ErrInvalidArgument, status, store.StatusRevoked)
+	}
+	// Idempotent: re-revoking an already-revoked DID is a non-mutating success
+	// and appends no second revoke event.
+	if cur, err := s.store.GetStatus(d); err != nil {
+		return nil, err
+	} else if cur == store.StatusRevoked {
+		return s.store.Resolve(d)
 	}
 	if err := s.store.UpdateStatus(d, st); err != nil {
 		return nil, err
@@ -351,6 +398,9 @@ func (s *Service) ListPipelines(ctx context.Context, ownerDID string) ([]store.D
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireOwnRegistry(d); err != nil {
+		return nil, err
+	}
 	if err := dplaax.RequireOwner(d); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
@@ -364,6 +414,9 @@ func (s *Service) ListProcesses(ctx context.Context, pipelineDID string) ([]stor
 	}
 	d, err := s.requireDID(pipelineDID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireOwnRegistry(d); err != nil {
 		return nil, err
 	}
 	if !d.IsPipeline() {
@@ -380,6 +433,9 @@ func (s *Service) ReadLifecycleLog(ctx context.Context, didStr string) ([]store.
 	}
 	d, err := s.requireDID(didStr)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireOwnRegistry(d); err != nil {
 		return nil, err
 	}
 	return s.store.ReadLifecycleLog(d)
@@ -524,7 +580,7 @@ func (s *Service) appendEvent(d *dplaax.DID, ev store.LifecycleEvent) error {
 		}
 		return err
 	}
-	return fmt.Errorf("didregistry: lifecycle append on %s: too many conflicts", d.String())
+	return fmt.Errorf("didregistry: lifecycle append on %s: too many conflicts: %w", d.String(), store.ErrConflict)
 }
 
 // hashEvent is the canonical content address of a lifecycle event over its

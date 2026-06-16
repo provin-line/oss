@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/delegation"
@@ -391,5 +392,141 @@ func TestIssuePipeline_DuplicateIsErrExists(t *testing.T) {
 	_, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID))
 	if !errors.Is(err, store.ErrExists) {
 		t.Errorf("duplicate issue: want ErrExists, got %v", err)
+	}
+}
+
+// A revoked owner cannot mint new pipelines (revocation enforces, not just
+// audits — confirmed slice-4 intent).
+func TestIssuePipeline_RejectsRevokedOwner(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	registerOwner(t, svc, signer, signPub)
+	if _, err := svc.UpdateStatus(ctx, ownerDID, "revoked"); err != nil {
+		t.Fatalf("revoke owner: %v", err)
+	}
+	_, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID))
+	if !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("issue under revoked owner: want ErrUnauthorized, got %v", err)
+	}
+}
+
+// A revoked pipeline cannot parent new processes.
+func TestIssueProcess_RejectsRevokedPipeline(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	registerOwner(t, svc, signer, signPub)
+	if _, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID)); err != nil {
+		t.Fatalf("issue pipeline: %v", err)
+	}
+	if _, err := svc.UpdateStatus(ctx, pipelineDID, "revoked"); err != nil {
+		t.Fatalf("revoke pipeline: %v", err)
+	}
+	_, _, err := svc.IssueProcess(ctx, processDID, mustDelegate(t, signer, processDID))
+	if !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("issue process under revoked pipeline: want ErrUnauthorized, got %v", err)
+	}
+}
+
+// A foreign-registry DID must not alias a local record: the yamlstore omits the
+// registry from its path, so without the registry-segment gate on reads,
+// resolving did:dplaax:other.../org:acme would return THIS registry's acme doc.
+func TestResolveDID_RejectsForeignRegistry(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	registerOwner(t, svc, signer, signPub) // registers the local org:acme owner
+	foreign := "did:dplaax:other.dplaax.io:org:acme"
+	got, err := svc.ResolveDID(ctx, foreign)
+	if !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("foreign-registry resolve: want ErrUnauthorized, got doc=%v err=%v", got, err)
+	}
+}
+
+// The lifecycle chain is verifiable by an independent reimplementation of the
+// event hash: a revoke event's PrevEventHash equals the canonical hash of the
+// register event before it.
+func TestLifecycleChain_IndependentlyVerifies(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	registerOwner(t, svc, signer, signPub)
+	if _, err := svc.UpdateStatus(ctx, ownerDID, "revoked"); err != nil {
+		t.Fatal(err)
+	}
+	log, err := svc.ReadLifecycleLog(ctx, ownerDID)
+	if err != nil || len(log) != 2 {
+		t.Fatalf("log=%+v, err=%v", log, err)
+	}
+	if want := independentEventHash(t, log[0]); log[1].PrevEventHash != want {
+		t.Errorf("chain broken: revoke.PrevEventHash=%q, independent hash of register=%q", log[1].PrevEventHash, want)
+	}
+}
+
+// independentEventHash recomputes the canonical event hash from scratch — a
+// second implementation of the chain rule, so a drift in the service's hashEvent
+// canonicalization is caught.
+func independentEventHash(t *testing.T, ev store.LifecycleEvent) string {
+	t.Helper()
+	m := map[string]any{
+		"eventType":      ev.EventType,
+		"didDocSnapshot": ev.DIDDocSnapshot,
+		"witnessSource":  ev.WitnessSource,
+		"witnessedAt":    ev.WitnessedAt.UTC().Format(time.RFC3339Nano),
+		"prevEventHash":  ev.PrevEventHash,
+	}
+	if len(ev.OutwardSnapshot) > 0 {
+		m["outwardSnapshot"] = base64.StdEncoding.EncodeToString(ev.OutwardSnapshot)
+	}
+	h, err := jcs.Hash(m)
+	if err != nil {
+		t.Fatalf("jcs.Hash: %v", err)
+	}
+	return h
+}
+
+// A proof carrying any member outside the signed six rides unsigned and must be
+// rejected.
+func TestRegisterOwner_RejectsExtraProofMember(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	doc := signedOwnerDoc(t, signer, signPub, nil)
+	raw, _ := json.Marshal(doc)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	proof := m["proof"].(map[string]any)
+	proof["domain"] = "https://evil.example" // an extra, unsigned member
+	raw2, _ := json.Marshal(m)
+	var tampered did.DIDDocument
+	if err := json.Unmarshal(raw2, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RegisterOwner(ctx, &tampered, nil); !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("extra proof member: want ErrUnauthorized, got %v", err)
+	}
+}
+
+// The bootstrap key must be listed under assertionMethod: a #signing key the
+// document only lists under authentication must not validate the proof.
+func TestRegisterOwner_RejectsWrongRelationshipKey(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	// Build a doc that lists #signing under authentication, not assertionMethod.
+	base := did.New(did.DocumentFields{
+		ID: ownerDID, Controller: ownerDID,
+		VerificationMethod: []did.VerificationMethod{{
+			ID: ownerDID + "#signing", Type: "JsonWebKey2020", Controller: ownerDID,
+			PublicKeyJWK: ed25519JWK(signPub),
+		}},
+		Authentication: []string{ownerDID + "#signing"},
+	})
+	body := base.Body()
+	proof, _ := vc.CreateProof(signer, ownerDID, "signing", ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
+	pb, _ := json.Marshal(proof)
+	var pm map[string]any
+	json.Unmarshal(pb, &pm)
+	body["proof"] = pm
+	raw, _ := json.Marshal(body)
+	var doc did.DIDDocument
+	json.Unmarshal(raw, &doc)
+	if _, err := svc.RegisterOwner(ctx, &doc, nil); !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("wrong-relationship bootstrap key: want ErrUnauthorized, got %v", err)
 	}
 }
