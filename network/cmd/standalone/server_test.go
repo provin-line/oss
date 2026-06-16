@@ -1,0 +1,218 @@
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"connectrpc.com/connect"
+	"github.com/o3co/protobuf.interceptors/endpoint"
+
+	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
+	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	signerpb "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
+	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
+
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/delegation"
+	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/vc"
+)
+
+const (
+	registryID  = "poc.dplaax.io"
+	ownerDID    = "did:dplaax:poc.dplaax.io:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.io:org:acme:pipeline:p1"
+)
+
+// assembled stands up the full mux over httptest with a static authorizer
+// granting the rules the e2e exercises, and returns it with an owner signer
+// (CLI-local key) and the owner's signing public key.
+func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
+	t.Helper()
+	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
+	regCfg := &registry.RegistryConfig{ID: registryID}
+	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{
+		{Resource: "dids", Action: "register"},
+		{Resource: "dids", Action: "issue"},
+		{Resource: "dids", Action: "read"},
+		{Resource: "signer", Action: "sign-vc"},
+	})
+	h, err := BuildHandler(coreCfg, regCfg, verifier)
+	if err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	// Owner's CLI-local signing key (held by the owner, not the registry).
+	ownerKS := filestore.New(t.TempDir())
+	ownerKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate owner key: %v", err)
+	}
+	if err := ownerKS.SaveKeyPair(ownerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: ownerKP}); err != nil {
+		t.Fatalf("save owner key: %v", err)
+	}
+	return srv, ed25519.NewSigner(ownerKS), ownerKP.PublicKey
+}
+
+func ed25519JWK(pub []byte) map[string]any {
+	return map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)}
+}
+
+func signedOwnerDocBytes(t *testing.T, signer crypto.Signer, signPub []byte) []byte {
+	t.Helper()
+	base := did.New(did.DocumentFields{
+		ID: ownerDID, Controller: ownerDID,
+		VerificationMethod: []did.VerificationMethod{{
+			ID: ownerDID + "#signing", Type: "JsonWebKey2020", Controller: ownerDID,
+			PublicKeyJWK: ed25519JWK(signPub),
+		}},
+		AssertionMethod: []string{ownerDID + "#signing"},
+	})
+	body := base.Body()
+	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	pb, _ := json.Marshal(proof)
+	var pm map[string]any
+	json.Unmarshal(pb, &pm)
+	body["proof"] = pm
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func bearer[T any](req *connect.Request[T]) *connect.Request[T] {
+	req.Header().Set("Authorization", "Bearer dummy")
+	return req
+}
+
+// The walking-skeleton proof: register → issue → resolve → sign across all three
+// services in one assembled process, sharing one file keystore.
+func TestBoot_RegisterIssueResolveSign(t *testing.T) {
+	ctx := context.Background()
+	srv, ownerSigner, ownerPub := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	signerClient := signerpbconnect.NewSignerServiceClient(srv.Client(), srv.URL)
+
+	// Register the owner.
+	if _, err := didClient.RegisterOwner(ctx, bearer(connect.NewRequest(&didpb.RegisterOwnerRequest{
+		DidDocument: signedOwnerDocBytes(t, ownerSigner, ownerPub),
+	}))); err != nil {
+		t.Fatalf("RegisterOwner: %v (code %v)", err, connect.CodeOf(err))
+	}
+
+	// Issue a pipeline (registry generates + stores its keys in the shared keystore).
+	dlg, err := delegation.Build(ownerSigner, ownerDID, delegation.DelegationSubject{ID: pipelineDID, DelegatedBy: ownerDID})
+	if err != nil {
+		t.Fatalf("delegation.Build: %v", err)
+	}
+	dlgBytes, _ := json.Marshal(dlg)
+	issued, err := didClient.IssuePipeline(ctx, bearer(connect.NewRequest(&didpb.IssuePipelineRequest{
+		TargetDid: pipelineDID, Delegation: dlgBytes,
+	})))
+	if err != nil {
+		t.Fatalf("IssuePipeline: %v (code %v)", err, connect.CodeOf(err))
+	}
+
+	// Resolve the pipeline over the RPC.
+	res, err := didClient.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: pipelineDID})))
+	if err != nil {
+		t.Fatalf("ResolveDID: %v", err)
+	}
+	var resolved did.DIDDocument
+	if err := json.Unmarshal(res.Msg.GetDidDocument(), &resolved); err != nil {
+		t.Fatalf("unmarshal resolved: %v", err)
+	}
+	if resolved.ID() != pipelineDID {
+		t.Errorf("resolved id = %q, want %q", resolved.ID(), pipelineDID)
+	}
+
+	// Sign with the pipeline's registry-held #signing key via the Signer service,
+	// and verify against the issued document's signing key — proving did + signer
+	// + keystore interoperate over the shared store.
+	var issuedDoc did.DIDDocument
+	if err := json.Unmarshal(issued.Msg.GetDidDocument(), &issuedDoc); err != nil {
+		t.Fatalf("unmarshal issued: %v", err)
+	}
+	signPub, err := did.ExtractPublicKey(&issuedDoc, pipelineDID+"#signing", did.RelationshipAssertionMethod)
+	if err != nil {
+		t.Fatalf("ExtractPublicKey: %v", err)
+	}
+	data := []byte("payload to sign")
+	sigResp, err := signerClient.Sign(ctx, bearer(connect.NewRequest(&signerpb.SignRequest{
+		Did: pipelineDID, KeyId: "signing", Data: data,
+	})))
+	if err != nil {
+		t.Fatalf("Signer.Sign: %v (code %v)", err, connect.CodeOf(err))
+	}
+	ok, err := (ed25519.Verifier{}).Verify(signPub, data, sigResp.Msg.GetSignature())
+	if err != nil || !ok {
+		t.Fatalf("signature verify: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestBoot_Healthz(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("healthz status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestBoot_PublicResolution(t *testing.T) {
+	ctx := context.Background()
+	srv, ownerSigner, ownerPub := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	if _, err := didClient.RegisterOwner(ctx, bearer(connect.NewRequest(&didpb.RegisterOwnerRequest{
+		DidDocument: signedOwnerDocBytes(t, ownerSigner, ownerPub),
+	}))); err != nil {
+		t.Fatalf("RegisterOwner: %v", err)
+	}
+	// The resolution route is public (no auth header).
+	resp, err := http.Get(srv.URL + "/did/org/acme/did.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolution status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/did+json" {
+		t.Errorf("content-type = %q, want application/did+json", ct)
+	}
+	var doc did.DIDDocument
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.ID() != ownerDID {
+		t.Errorf("resolved id = %q, want %q", doc.ID(), ownerDID)
+	}
+}
+
+func TestBoot_RPCRequiresAuth(t *testing.T) {
+	// The connect services sit behind the interceptor: no bearer token → Unauthenticated.
+	srv, _, _ := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	_, err := didClient.ResolveDID(context.Background(), connect.NewRequest(&didpb.ResolveDIDRequest{Did: ownerDID}))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("no token: want Unauthenticated, got %v (%v)", connect.CodeOf(err), err)
+	}
+}

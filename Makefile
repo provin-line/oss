@@ -14,13 +14,13 @@ help:
 	@echo "  make clean   — remove $(DIST)/"
 
 # Binaries land here as their packages materialize:
-#   network/cmd/standalone        → $(DIST)/standalone
+#   network/cmd/standalone        → $(DIST)/standalone   [built]
 #   pipeline/chained/cmd          → $(DIST)/chained
 #   pipeline/source/ingest/apipush → $(DIST)/apipush-source
 #   pipeline/sink/console         → $(DIST)/console-sink
 #   cmd/provin                    → $(DIST)/provin
 build:
-	@echo "no binaries yet — skeleton phase"
+	go build -o $(DIST)/standalone ./network/cmd/standalone
 
 test:
 	go test ./...

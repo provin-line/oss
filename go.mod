@@ -13,6 +13,7 @@ require (
 	github.com/o3co/protobuf.interceptors v0.2.0
 	github.com/o3co/protobuf.interceptors/connectrpc v0.2.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	golang.org/x/net v0.49.0
 )
 
 require golang.org/x/text v0.33.0 // indirect
