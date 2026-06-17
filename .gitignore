@@ -1,5 +1,7 @@
 # build artifacts
 dist/
+# stray `go build` output of cmd/standalone at repo root (binary artifact)
+/standalone
 
 # OS / editor noise
 .DS_Store
