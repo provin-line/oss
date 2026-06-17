@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/nats-io/nkeys"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
@@ -26,10 +27,35 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/vc"
 )
+
+const nodeDID = "did:dplaax:poc.dplaax.dev:org:node"
+
+// natsChainCfg builds a valid nats chain config (fresh throwaway seeds, a temp
+// resolver dir) so BuildHandler constructs + wires the real nats infra operator
+// and both chain surfaces. The boot tests exercise the mount structure, not the
+// data plane (the full Subscribe->JWT round-trip through the mount is C2b-2b).
+func natsChainCfg(t *testing.T) *chainconfig.Config {
+	t.Helper()
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	return &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS: chainconfig.NATSConfig{
+			URL:           "nats://localhost:4222",
+			AccountSeed:   string(accSeed),
+			TrustRootSeed: string(opSeed),
+			ResolverDir:   t.TempDir(),
+			NodeDID:       nodeDID,
+		},
+	}
+}
 
 const (
 	registryID  = "poc.dplaax.dev"
@@ -54,7 +80,7 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 		{Resource: "chain", Action: "read"},
 		{Resource: "chain", Action: "update-allowlist"},
 	})
-	h, err := BuildHandler(coreCfg, regCfg, verifier)
+	h, err := BuildHandler(coreCfg, regCfg, natsChainCfg(t), verifier)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
@@ -284,5 +310,21 @@ func TestBoot_VCStoreResolve(t *testing.T) {
 	}
 	if resolved.Issuer() != pipelineDID {
 		t.Errorf("resolved issuer = %q, want %q", resolved.Issuer(), pipelineDID)
+	}
+}
+
+// ChainPeerService (the internet-facing L2 surface) is mounted WITHOUT the L1
+// authz interceptor: a request with no bearer token reaches the handler and is
+// rejected by wireauth for the missing proof (InvalidArgument), NOT by the L1
+// interceptor (which would return Unauthenticated before the handler). This
+// proves both that the peer surface is mounted and that it carries no L1 gate.
+func TestBoot_ChainPeerServiceMountedNoL1(t *testing.T) {
+	srv, _, _ := assembled(t)
+	peerClient := chainpbconnect.NewChainPeerServiceClient(srv.Client(), srv.URL)
+	_, err := peerClient.GetPublisherInfo(context.Background(),
+		connect.NewRequest(&chainpb.GetPublisherInfoRequest{PublisherDid: pipelineDID}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("peer GetPublisherInfo without proof: got %v (%v), want InvalidArgument (mounted, no L1)",
+			connect.CodeOf(err), err)
 	}
 }

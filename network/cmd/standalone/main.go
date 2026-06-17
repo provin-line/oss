@@ -15,6 +15,7 @@ import (
 
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/network/pkg/auth"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
 )
@@ -39,13 +40,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}
+	chainCfg, err := chainconfig.LoadChainConfig(cfg)
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
 
 	verifier, err := auth.NewVerifier(authCfg.PolicyVerifierURL)
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}
 
-	handler, err := BuildHandler(coreCfg, regCfg, verifier)
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}

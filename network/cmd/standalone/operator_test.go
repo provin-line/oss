@@ -1,3 +1,8 @@
+//go:build !dev
+
+// These assertions are about the PRODUCTION (default) build: noop is refused and
+// not compiled into the binary. Under `-tags dev` the opposite holds, so the file
+// is tagged !dev to avoid a false failure in a dev build.
 package main
 
 import (

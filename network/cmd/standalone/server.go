@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 
@@ -14,11 +15,15 @@ import (
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	chainyaml "github.com/provin-line/oss/network/pkg/services/chainmanager/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/didregistry"
 	didhandler "github.com/provin-line/oss/network/pkg/services/didregistry/handler"
 	didyaml "github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
@@ -44,7 +49,7 @@ import (
 //
 // It is the testable seam: the boot e2e exercises the assembled mux over httptest
 // without binding a port; main wraps the returned handler in h2c and serves it.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, verifier endpoint.VerifierEndpoint) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -59,9 +64,52 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, ver
 	// store and the async batch resolver land in a later slice.
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 	// Chain stores share a fixed chain/ subdir; each nests its own subscriptions/
-	// and allowlists/ tree under it. B1 mounts only the operator (L1) surface.
+	// and allowlists/ tree under it. C2b-2a mounts BOTH chain surfaces (operator/L1
+	// and peer/L2) from one Service instance with the subscriber side fully wired.
 	chainRoot := filepath.Join(coreCfg.DataDir, "chain")
-	chainSvc := chainmanager.New(chainyaml.NewSubscriptionStore(chainRoot), chainyaml.NewAllowListStore(chainRoot))
+	guard := core.NewURLGuard(core.WithAllowLoopback(coreCfg.AllowLoopback))
+	// The cross-registry resolver feeds BOTH the subscriber side (publisher
+	// #chain-manager endpoint) and the peer verifier (signer #auth key). The
+	// base-URL seam lets a deployment (or the boot e2e) override the default
+	// https://{registry} mapping (D-m6).
+	var resolverOpts []didresolver.Option
+	if chainCfg.Transport == chainconfig.TransportNATS && chainCfg.NATS.ResolverBaseURL != "" {
+		base := chainCfg.NATS.ResolverBaseURL
+		resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
+	}
+	resolver := didresolver.New(guard, resolverOpts...)
+
+	chainOp, err := chainOperator(chainCfg)
+	if err != nil {
+		return nil, err
+	}
+	// The subscriber-side peer client signs as the node's DID with its keystore
+	// #auth key (composed here — the service layer stays proto-free, slice-13
+	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
+	nodeDID := ""
+	if chainCfg.Transport == chainconfig.TransportNATS {
+		nodeDID = chainCfg.NATS.NodeDID
+	}
+	peerCli := peerclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient())
+
+	chainSvc := chainmanager.New(
+		chainyaml.NewSubscriptionStore(chainRoot), chainyaml.NewAllowListStore(chainRoot),
+		chainmanager.WithInfraOperator(chainOp),
+		chainmanager.WithDIDResolver(resolver),
+		chainmanager.WithPeerClient(peerCli),
+		chainmanager.WithEndpointGuard(guard),
+	)
+
+	// The peer surface verifies each RPC in-band via L2 wireauth (signer #auth key
+	// resolved through the same resolver); it carries NO L1 interceptor.
+	peerVerifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: chain peer verifier: %w", err)
+	}
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 
@@ -71,10 +119,15 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, ver
 		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz)),
-		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc), authz)),
+		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc)), authz)),
 	} {
 		mux.Handle(p.path, p.h)
 	}
+
+	// ChainPeerService is the internet-facing L2 surface: mounted WITHOUT the L1
+	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11).
+	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(chainSvc, peerVerifier))
+	mux.Handle(peerPath, peerHandler)
 
 	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4) and
 	// liveness. These deliberately carry no authz interceptor.
