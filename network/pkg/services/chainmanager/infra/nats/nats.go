@@ -120,11 +120,18 @@ func New(cfg Config) (*Operator, error) {
 // (slice-16 D-x1), so a restarted operator resumes with its full grant set —
 // otherwise a Remove would no-op and the next Add would re-publish a JWT carrying
 // only the new grant, dropping prior grants. ErrNotPublished is first boot (fresh
-// claims). A present-but-corrupt or wrong-account JWT fails closed: dropping
-// grants silently is worse than refusing to start. The token's signature is
-// verified by DecodeAccountClaims; we additionally bind it to this account by
-// subject (we do not require the issuer be the current trust-root — key rotation
-// re-signs on the next mutation, and the resolver re-validates on serve).
+// claims).
+//
+// It fails closed on anything it would not itself have produced — dropping grants
+// silently, or laundering an untrusted file into an authorized grant on the next
+// re-sign, are both worse than refusing to start. DecodeAccountClaims verifies the
+// token's own signature; we additionally require (a) the subject is this account
+// and (b) the issuer is THIS trust root (security: a JWT signed by a different
+// operator, or a stale/foreign resolver file, must not be absorbed and re-signed —
+// Codex review). Standard claim validation (expiry / not-before / structure) must
+// also pass. A deliberate trust-root rotation that leaves an old-issuer file is a
+// one-time operator chore (clear or re-publish), correctly surfaced as a boot
+// error rather than silently laundered.
 func (o *Operator) hydrate() error {
 	token, err := o.publisher.Load(o.accountPub)
 	if errors.Is(err, ErrNotPublished) {
@@ -139,6 +146,18 @@ func (o *Operator) hydrate() error {
 	}
 	if ac.Subject != o.accountPub {
 		return fmt.Errorf("nats: published claims subject %q does not match account %q", ac.Subject, o.accountPub)
+	}
+	trustRootPub, err := o.trustRoot.PublicKey()
+	if err != nil {
+		return fmt.Errorf("nats: trust-root public key: %w", err)
+	}
+	if ac.Issuer != trustRootPub {
+		return fmt.Errorf("nats: published claims issuer %q is not this trust root %q (untrusted/stale resolver file)", ac.Issuer, trustRootPub)
+	}
+	vr := jwt.CreateValidationResults()
+	ac.Validate(vr)
+	if vr.IsBlocking(true) {
+		return fmt.Errorf("nats: published claims for %s failed validation: %v", o.accountPub, vr.Errors())
 	}
 	o.claims.Exports = ac.Exports
 	o.claims.Imports = ac.Imports

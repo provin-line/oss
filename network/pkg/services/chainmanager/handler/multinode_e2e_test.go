@@ -96,7 +96,6 @@ func TestMultiNodeDelivery(t *testing.T) {
 	pubAccPub, _ := pubAcc.PublicKey()
 	subAcc, _ := nkeys.CreateAccount()
 	subAccSeed, _ := subAcc.Seed()
-	subAccPub, _ := subAcc.PublicKey()
 
 	pubOp := mustOperator(t, pubAccSeed, opSeed, sharedDir)
 	subOp := mustOperator(t, subAccSeed, opSeed, sharedDir)
@@ -151,8 +150,6 @@ func TestMultiNodeDelivery(t *testing.T) {
 		TrustedKeys: []string{opPub}, AccountResolver: mr,
 	})
 	defer natsSrv.Shutdown()
-	_ = pubAccPub
-	_ = subAccPub
 
 	pubClient := natsClient(t, natsSrv.ClientURL(), pubAcc)
 	defer pubClient.Close()

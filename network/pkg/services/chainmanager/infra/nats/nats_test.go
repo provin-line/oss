@@ -405,6 +405,28 @@ func TestNew_RejectsForeignSubjectStoredJWT(t *testing.T) {
 	}
 }
 
+func TestNew_RejectsForeignIssuerStoredJWT(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	accPub, _ := acc.PublicKey()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	// A valid account JWT for THIS account, but signed by a DIFFERENT operator
+	// (foreign issuer). Absorbing it would launder an untrusted file into an
+	// authorized grant on the next mutation (Codex P1) — New must fail closed.
+	foreignOp, _ := nkeys.CreateOperator()
+	token, err := jwt.NewAccountClaims(accPub).Encode(foreignOp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := natsop.New(natsop.Config{
+		AccountSeed: string(accSeed), TrustRootSeed: string(opSeed),
+		URL: "nats://h:4222", Publisher: loadFake{token: token},
+	}); err == nil {
+		t.Error("New accepted a stored JWT signed by a foreign operator")
+	}
+}
+
 func TestMutators_RejectMalformed(t *testing.T) {
 	o, _, _, _ := fixture(t)
 	if _, err := o.AddExport(""); err == nil {
