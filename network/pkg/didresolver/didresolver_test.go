@@ -84,6 +84,36 @@ func TestResolve_Success_AndURLDerivation(t *testing.T) {
 	}
 }
 
+// URL derivation must be the inverse of the resolution handler for every DID
+// shape (owner / pipeline / process) and must tolerate a trailing-slash base.
+func TestResolve_URLDerivation_AllShapes(t *testing.T) {
+	cases := []struct {
+		did      string
+		wantPath string
+	}{
+		{"did:dplaax:poc.dplaax.dev:org:acme", "/did/org/acme/did.json"},                                               // owner
+		{"did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1", "/did/org/acme/pipeline/p1/did.json"},                       // pipeline
+		{"did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:s1", "/did/org/acme/pipeline/p1/process/s1/did.json"}, // process
+	}
+	for _, tc := range cases {
+		t.Run(tc.wantPath, func(t *testing.T) {
+			s := &stub{docID: tc.did}
+			srv := httptest.NewServer(s)
+			t.Cleanup(srv.Close)
+			// a trailing-slash base exercises TrimRight in resolutionURL
+			r := didresolver.New(loopbackGuard(), didresolver.WithRegistryBaseURL(func(string) (string, error) {
+				return srv.URL + "/", nil
+			}))
+			if _, err := r.Resolve(context.Background(), tc.did); err != nil {
+				t.Fatalf("Resolve(%s): %v", tc.did, err)
+			}
+			if s.gotPath != tc.wantPath {
+				t.Errorf("path = %q, want %q", s.gotPath, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestResolve_NotFound(t *testing.T) {
 	r := newResolver(t, &stub{notFound: true}, loopbackGuard())
 	_, err := r.Resolve(context.Background(), testDID)

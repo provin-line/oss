@@ -119,8 +119,11 @@ func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument
 	if err := doc.UnmarshalJSON(body); err != nil {
 		return nil, fmt.Errorf("didresolver: parse document for %s: %w", didStr, err)
 	}
-	if doc.ID() != didStr {
-		return nil, fmt.Errorf("%w: got %q for %q", ErrDIDIdentityMismatch, doc.ID(), didStr)
+	// Compare to the canonical reconstruction (d.String()), not the raw input, so
+	// the check stays correct if the parser ever normalizes (the remote resolves
+	// and returns the canonical id).
+	if doc.ID() != d.String() {
+		return nil, fmt.Errorf("%w: got %q for %q", ErrDIDIdentityMismatch, doc.ID(), d.String())
 	}
 	return &doc, nil
 }

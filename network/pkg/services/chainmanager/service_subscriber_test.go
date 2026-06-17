@@ -413,26 +413,6 @@ func TestSubscribe_CompensationSurvivesCanceledContext(t *testing.T) {
 	}
 }
 
-// An explicit WithPeerClient must win over WithSubscriberSigner (D-r5): the fake
-// client is used and Subscribe succeeds; if the signer-built (nil-signer) client
-// had won instead, the call would not reach the fake.
-func TestSubscribe_ExplicitPeerClientWinsOverSigner(t *testing.T) {
-	inf, peer := &fakeInfra{}, defaultPeer()
-	svc := New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore(),
-		WithInfraOperator(inf),
-		WithDIDResolver(&fakeResolver{doc: pubDoc()}),
-		WithSubscriberSigner(nil, "did:dplaax:reg:org:sub"), // would build a nil-signer client if it won
-		WithPeerClient(peer),                                // explicit — must win
-		WithEndpointGuard(publicGuard()),
-	)
-	if _, err := svc.Subscribe(context.Background(), subOwner, pubPipeline, ""); err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	if peer.registered == 0 {
-		t.Error("explicit WithPeerClient was not used (the signer-built client won)")
-	}
-}
-
 // countForPublisher must ignore subscriber-direction records so a publisher
 // Disconnect tears down its export based on publisher records alone.
 func TestCountForPublisher_IgnoresSubscriberDirection(t *testing.T) {

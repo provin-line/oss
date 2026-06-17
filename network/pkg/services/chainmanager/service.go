@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/allowlist"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
@@ -42,12 +40,6 @@ type Service struct {
 	peer     PeerClient
 	guard    *core.URLGuard
 
-	// peerExplicit records that WithPeerClient was used, so an explicitly injected
-	// client (even nil) wins over the WithSubscriberSigner convenience build.
-	peerExplicit        bool
-	subscriberSigner    crypto.Signer
-	subscriberSignerDID string
-
 	// mu serializes the infra-touching peer lifecycle (RegisterSubscription /
 	// Disconnect / Subscribe / Unsubscribe): their export/import ref-counting is a
 	// check-then-act sequence across several store calls, which the per-method
@@ -65,17 +57,15 @@ func WithInfraOperator(op infra.Operator) Option {
 }
 
 // New returns a Service backed by the given stores. Pass WithInfraOperator to
-// enable the peer operations and the subscriber options to enable Subscribe/
-// Unsubscribe. If WithSubscriberSigner was supplied and no explicit PeerClient
-// was, the default ConnectRPC peer client is assembled here — after all options,
-// so a WithEndpointGuard set later still feeds the client's transport.
+// enable the peer operations and the subscriber options (WithDIDResolver +
+// WithPeerClient + WithEndpointGuard) to enable Subscribe/Unsubscribe. The
+// service layer depends only on the PeerClient interface — assembling a concrete
+// client (e.g. from a signer) is the composition layer's job, since the client
+// pulls in the wire/proto transport (AGENTS.md layer rule 3).
 func New(subs store.SubscriptionStore, allows store.AllowListStore, opts ...Option) *Service {
 	s := &Service{subs: subs, allows: allows}
 	for _, opt := range opts {
 		opt(s)
-	}
-	if !s.peerExplicit && s.subscriberSigner != nil {
-		s.peer = peerclient.New(s.subscriberSigner, s.subscriberSignerDID, s.endpointGuard().HTTPClient())
 	}
 	return s
 }

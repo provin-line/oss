@@ -76,27 +76,6 @@ func publisherPeerServer(t *testing.T, rules []store.AllowRule) (string, crypto.
 	return srv.URL, subSigner, pubSubs
 }
 
-// The WithSubscriberSigner convenience path (slice-13 D-r5): the Service builds
-// its own peer client from the signer, and the full round-trip still succeeds.
-func TestSubscriberE2E_ViaWithSubscriberSigner(t *testing.T) {
-	ctx := context.Background()
-	srvURL, subSigner, _ := publisherPeerServer(t, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}})
-	guard := core.NewURLGuard(core.WithAllowLoopback(true))
-	subSvc := chainmanager.New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore(),
-		chainmanager.WithInfraOperator(noop.New()),
-		chainmanager.WithDIDResolver(e2eResolver{e2ePub: pubEndpointDoc(e2ePub, srvURL)}),
-		chainmanager.WithSubscriberSigner(subSigner, e2eSub), // convenience: Service builds the client
-		chainmanager.WithEndpointGuard(guard),
-	)
-	id, err := subSvc.Subscribe(ctx, e2eSub, e2ePub, "inline")
-	if err != nil {
-		t.Fatalf("Subscribe via WithSubscriberSigner: %v", err)
-	}
-	if err := subSvc.Unsubscribe(ctx, id); err != nil {
-		t.Fatalf("Unsubscribe: %v", err)
-	}
-}
-
 // The full subscriber-initiated round-trip over a real signature/verify exchange:
 // Subscribe (GetPublisherInfo + RegisterSubscription) → ListSubscriptions →
 // Unsubscribe (Disconnect). This proves the D-p4 signed-view byte contract from
