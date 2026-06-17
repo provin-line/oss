@@ -16,6 +16,7 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/vc"
@@ -99,6 +100,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel) // drain the runner even if the test fails before the explicit cancel below
 	runDone := make(chan error, 1)
 	go func() { runDone <- dp.Run(ctx) }()
 
@@ -170,6 +172,52 @@ loop:
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("dp.Run did not return after context cancel")
+	}
+}
+
+// TestDataPlane_FirstLoopErrorCancelsSiblings is the regression guard for the
+// early-loop-failure deadlock: when one loop returns an error before the context is
+// cancelled (here a Subscribe failure on a malformed subject), Run must cancel its
+// siblings and return that error promptly — it must NOT block in wg.Wait until an
+// external context cancellation arrives. The context passed in is never cancelled, so
+// a Run that returns at all proves the internal child-context cancellation works.
+func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	conn, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	builder := vc.NewBuilder(ed25519.NewSigner(dpKeyStore(t)))
+
+	// A healthy loop (would otherwise block on <-ctx.Done forever) plus a loop whose
+	// ingress subject is malformed, so its Subscribe fails at Run time. buildSourceLoop
+	// does not validate the subject (that is the config layer's job), so it builds.
+	goodLC := dpPipelineCfg().Loops[0]
+	goodLC.Name = "good"
+	badLC := goodLC
+	badLC.Name = "bad"
+	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
+
+	good, err := buildSourceLoop(conn, builder, goodLC)
+	if err != nil {
+		t.Fatalf("build good loop: %v", err)
+	}
+	bad, err := buildSourceLoop(conn, builder, badLC)
+	if err != nil {
+		t.Fatalf("build bad loop: %v", err)
+	}
+	dp := &dataPlane{conn: conn, loops: []*transport.Loop{good, bad}}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- dp.Run(context.Background()) }()
+
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("Run returned nil; want the failing loop's Subscribe error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run blocked after a loop failed early — siblings were not cancelled")
 	}
 }
 

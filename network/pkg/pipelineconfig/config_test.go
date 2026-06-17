@@ -81,6 +81,19 @@ func TestLoad_ValidSource(t *testing.T) {
 	}
 }
 
+func TestLoad_AbsentSchemaRefIsEmpty(t *testing.T) {
+	// schema-ref is optional in slice-17b: omitting it is equivalent to "" and must load.
+	body := strings.Replace(validSourceLoop, `schema-ref = ""`, "", 1)
+	cfg := loadWith(t, loopsConf(body))
+	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err != nil {
+		t.Fatalf("absent schema-ref should load: %v", err)
+	}
+	if len(pc.Loops) != 1 {
+		t.Fatalf("loops: got %d want 1", len(pc.Loops))
+	}
+}
+
 func TestLoad_EmptyLoopsIsZeroLoops(t *testing.T) {
 	// No application.conf override: the reference default is an empty loops {}.
 	cfg := loadWith(t, "")
@@ -112,6 +125,15 @@ func TestLoad_FailClosed(t *testing.T) {
 			`did = "did:dplaax:reg:org:acme:pipeline:pipe"`)},
 		{"unknown transformation claim", mut(`transformation-claim = "convert"`, `transformation-claim = "frobnicate"`)},
 		{"non-empty schema-ref", mut(`schema-ref = ""`, `schema-ref = "sha256:abc"`)},
+		{"VM names a different DID", mut(
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing"`,
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:other#signing"`)},
+		{"VM fragment mismatches key-id", mut(
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing"`,
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src#auth"`)},
+		{"VM has no fragment", mut(
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing"`,
+			`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

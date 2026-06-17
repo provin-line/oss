@@ -14,8 +14,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -92,34 +94,55 @@ func main() {
 		Handler: h2c.NewHandler(handler, &http2.Server{}),
 	}
 
-	// Run the HTTP server and the data plane concurrently under a shared cancellable
-	// context. The HTTP server is the primary service: if it returns, cancel so the
-	// data plane drains. A data-plane ERROR also cancels (the node cannot do its job);
-	// a clean data-plane return (zero loops) does not bring the HTTP server down.
+	log.Printf("standalone: listening on %s (registry %q, %d data-plane loop(s))",
+		coreCfg.ListenAddr, regCfg.ID, len(pipeCfg.Loops))
+
+	// A failed boot (e.g. the HTTP port is already in use) or a data-plane failure is
+	// NOT a clean stop: exit non-zero so a supervisor restarts the node. This preserves
+	// the fatal-on-serve-error behavior the pre-data-plane main had via log.Fatalf.
+	if err := runServices(ctx, srv, dp); err != nil {
+		log.Printf("standalone: %v", err)
+		os.Exit(1)
+	}
+	log.Printf("standalone: shutdown complete")
+}
+
+// runServices runs the HTTP server and the data plane concurrently under a shared
+// cancellable context, waits for both to drain, and returns the first non-shutdown
+// error (nil on a clean shutdown). The HTTP server is the primary service: if it
+// returns, the context is cancelled so the data plane drains. A data-plane ERROR also
+// cancels (the node cannot do its job); a clean data-plane return (zero loops) does
+// not bring the HTTP server down.
+func runServices(ctx context.Context, srv *http.Server, dp *dataPlane) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
+	errs := make(chan error, 2)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		defer cancel()
 		if err := serveHTTP(runCtx, srv); err != nil {
-			log.Printf("standalone: http server: %v", err)
+			errs <- fmt.Errorf("http server: %w", err)
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		if err := dp.Run(runCtx); err != nil {
-			log.Printf("standalone: data plane: %v", err)
 			cancel()
+			errs <- fmt.Errorf("data plane: %w", err)
 		}
 	}()
 
-	log.Printf("standalone: listening on %s (registry %q, %d data-plane loop(s))",
-		coreCfg.ListenAddr, regCfg.ID, len(pipeCfg.Loops))
 	wg.Wait()
-	log.Printf("standalone: shutdown complete")
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // serveHTTP runs srv.ListenAndServe and shuts it down gracefully when ctx is

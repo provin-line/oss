@@ -1,7 +1,7 @@
 # network/ — Registry & Coordination Server
 
-A single standalone binary (`network/cmd/standalone`) exposing the dplaax network
-services over ConnectRPC (h2c):
+The dplaax network services, exposed over ConnectRPC (h2c) by the node binary
+(`cmd/standalone`, which also runs the pipeline data plane):
 
 | Service | Responsibility |
 |---|---|

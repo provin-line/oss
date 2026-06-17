@@ -1,7 +1,7 @@
 # network/ — レジストリ & コーディネーションサーバー
 > 日本語版 — English: [README.md](README.md)
 
-スタンドアロンの単一バイナリ（`network/cmd/standalone`）。ConnectRPC（h2c）を通じて dplaax ネットワークサービスを公開する:
+dplaax ネットワークサービス。ノードバイナリ（`cmd/standalone`。パイプラインのデータプレーンも実行する）が ConnectRPC（h2c）を通じて公開する:
 
 | Service | Responsibility |
 |---|---|

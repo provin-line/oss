@@ -133,6 +133,12 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 	if lc.Issuer.VerificationMethod, err = requireString(cfg, base+".issuer.verification-method"); err != nil {
 		return lc, err
 	}
+	// The verification-method must name the issuer's own signing key: <issuer.did>#<key-id>.
+	// A bare DID, another DID's key, or a different fragment would boot a loop whose
+	// proofs are rejected by the VC verifier or attributed to the wrong key.
+	if expected := lc.Issuer.DID + "#" + lc.Issuer.KeyID; lc.Issuer.VerificationMethod != expected {
+		return lc, fmt.Errorf("pipeline: loop %q: issuer.verification-method %q must be %q (issuer.did#key-id)", name, lc.Issuer.VerificationMethod, expected)
+	}
 
 	if lc.PipelineID, err = requireString(cfg, base+".pipeline-id"); err != nil {
 		return lc, err
@@ -152,13 +158,16 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 	lc.TransformationClaim = claim
 
 	// schema-ref must be empty in slice-17b (ingest does no schema validation; a
-	// single-string -> vc.SchemaRef mapping is deferred to a chained/sink loop).
-	schemaRef, err := cfg.String(base + ".schema-ref")
-	if err != nil {
-		return lc, fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
-	}
-	if schemaRef != "" {
-		return lc, fmt.Errorf("pipeline: loop %q: schema-ref must be empty in slice-17b (got %q)", name, schemaRef)
+	// single-string -> vc.SchemaRef mapping is deferred to a chained/sink loop). An
+	// absent schema-ref is treated as empty — the field is optional, not required.
+	if cfg.Has(base + ".schema-ref") {
+		schemaRef, err := cfg.String(base + ".schema-ref")
+		if err != nil {
+			return lc, fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
+		}
+		if schemaRef != "" {
+			return lc, fmt.Errorf("pipeline: loop %q: schema-ref must be empty in slice-17b (got %q)", name, schemaRef)
+		}
 	}
 
 	return lc, nil

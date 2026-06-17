@@ -101,18 +101,26 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelinec
 // return, then closes the shared connection. A zero-loop runner returns immediately.
 // It returns the first loop error, or the connection close error if the loops were
 // clean.
+//
+// Loops share a child context derived from ctx, so the first loop to fail (e.g. a
+// boot-time Subscribe error) cancels its siblings and Run returns promptly — it does
+// not block until an external cancellation arrives.
 func (d *dataPlane) Run(ctx context.Context) error {
 	if len(d.loops) == 0 {
 		return nil
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	errs := make(chan error, len(d.loops))
 	for _, l := range d.loops {
 		wg.Add(1)
 		go func(l *transport.Loop) {
 			defer wg.Done()
-			if err := l.Run(ctx); err != nil {
+			if err := l.Run(runCtx); err != nil {
 				errs <- err
+				cancel() // a loop failed: drain the siblings instead of blocking on them
 			}
 		}(l)
 	}

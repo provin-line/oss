@@ -50,7 +50,7 @@ func TestChainOperator_NATS(t *testing.T) {
 // (slice-11 D-p2). Mirrors the slice-14 infra/nats dependency guard.
 func TestProdBuild_ExcludesNoop(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps",
-		"github.com/provin-line/oss/network/cmd/standalone").CombinedOutput()
+		"github.com/provin-line/oss/cmd/standalone").CombinedOutput()
 	if err != nil {
 		t.Skipf("go list unavailable: %v\n%s", err, out)
 	}

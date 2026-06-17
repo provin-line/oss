@@ -19,8 +19,9 @@ PoC であることは DID の **レジストリセグメント**（例: `did:dp
 ```text
 api/protobuf/   プロトコル定義（buf; 名前空間 dplaax.*.v1）
 gen/            生成コード（コミット済み — ビルドに buf は不要）
-network/        レジストリ & コーディネーションサーバー（単一バイナリ）
+network/        レジストリ & コーディネーションサービス（コントロールプレーンのライブラリ + ハンドラ）
 pipeline/       Pipeline プロセス ピアカタログ + 共有メカニクス
+cmd/standalone/ ネットワークノードバイナリ（レジストリのコントロールプレーン + パイプラインのデータプレーン）
 cmd/provin/     オペレーター CLI
 conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID
