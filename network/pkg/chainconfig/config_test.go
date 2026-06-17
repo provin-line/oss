@@ -116,6 +116,29 @@ func TestLoad_NATS_InvalidNodeDID(t *testing.T) {
 	}
 }
 
+func TestLoad_NATS_MalformedResolverBaseURL(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	// resolver-base-url set to a number → type mismatch must fail boot, not be
+	// silently ignored (convergent review).
+	conf := `provin.network.chain {
+  transport = "nats"
+  nats {
+    url = "nats://h:4222"
+    account-seed-file = "` + seedFile(t, accSeed) + `"
+    trust-root-seed-file = "` + seedFile(t, opSeed) + `"
+    resolver-dir = "/d"
+    node-did = "` + nodeDID + `"
+    resolver-base-url = 123
+  }
+}`
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, conf)); err == nil {
+		t.Error("malformed resolver-base-url (number) silently accepted")
+	}
+}
+
 func TestLoad_Noop(t *testing.T) {
 	cfg := loadWith(t, `provin.network.chain {
   transport = "noop"

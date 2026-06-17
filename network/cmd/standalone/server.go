@@ -83,6 +83,13 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	if err != nil {
 		return nil, err
 	}
+	// KNOWN LIMITATION (deferred to C2b-2b — operator claim-state persistence):
+	// the nats operator starts with EMPTY in-memory claims and is not rehydrated
+	// from the persisted subscription store / existing account JWT. After a restart
+	// with pre-existing subscriptions, a Remove will no-op and the next Add will
+	// re-publish an account JWT carrying only the new grant (dropping prior live
+	// grants). C2b-2b adds rehydration (replay the store, or load the published
+	// JWT on New) alongside the live-update publisher.
 	// The subscriber-side peer client signs as the node's DID with its keystore
 	// #auth key (composed here — the service layer stays proto-free, slice-13
 	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).

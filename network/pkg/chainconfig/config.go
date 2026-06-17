@@ -120,10 +120,18 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 	if n.TrustRootSeed, err = readSeed(cfg, keyTrustRootSeedFile, true); err != nil {
 		return n, err
 	}
-	// resolver-base-url is optional (empty -> didresolver default).
-	if base, err := cfg.String(keyResolverBaseURL); err == nil {
-		n.ResolverBaseURL = base
+	// resolver-base-url is optional in MEANING (empty -> didresolver default) but
+	// reference.conf always defines the key, so a read error here is a type
+	// mismatch (e.g. a number) — fail closed naming the key, not silently ignore it
+	// (convergent review: Claude + Codex). NOTE: a non-empty value maps EVERY
+	// registry to this one base URL (the override ignores the registry argument),
+	// so it is a single-registry / dev-and-single-tenant seam, not a multi-registry
+	// mapping; multi-registry deployments leave it empty (default https://{registry}).
+	base, err := cfg.String(keyResolverBaseURL)
+	if err != nil {
+		return n, fmt.Errorf("chain: config %s: %w", keyResolverBaseURL, err)
 	}
+	n.ResolverBaseURL = base
 	return n, nil
 }
 
