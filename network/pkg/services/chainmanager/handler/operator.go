@@ -29,19 +29,36 @@ type Service interface {
 }
 
 // OperatorHandler adapts a Service to the generated ChainServiceHandler. It
-// embeds the Unimplemented stub so the two connection-flow RPCs (Subscribe /
-// Unsubscribe, deferred to the last slice) return CodeUnimplemented until they
-// land; only the two operator-local RPCs are implemented here.
+// embeds the Unimplemented stub so the connection-flow RPCs (Subscribe /
+// Unsubscribe) return CodeUnimplemented until a SubscriberService is supplied via
+// WithSubscriber; the two operator-local RPCs are always implemented here.
 type OperatorHandler struct {
 	chainpbconnect.UnimplementedChainServiceHandler
 	svc Service
+	sub SubscriberService // nil → Subscribe/Unsubscribe report Unimplemented
 }
 
 var _ chainpbconnect.ChainServiceHandler = (*OperatorHandler)(nil)
 
-// NewOperator returns an OperatorHandler backed by svc.
-func NewOperator(svc Service) *OperatorHandler {
-	return &OperatorHandler{svc: svc}
+// OperatorOption configures an OperatorHandler at construction.
+type OperatorOption func(*OperatorHandler)
+
+// WithSubscriber enables the connection-flow RPCs (Subscribe / Unsubscribe) by
+// supplying the subscriber-side service. Kept separate from Service (D-s9) so the
+// exported Service interface is not widened — external fakes implementing Service
+// keep compiling.
+func WithSubscriber(sub SubscriberService) OperatorOption {
+	return func(h *OperatorHandler) { h.sub = sub }
+}
+
+// NewOperator returns an OperatorHandler backed by svc. Pass WithSubscriber to
+// enable the connection-flow RPCs.
+func NewOperator(svc Service, opts ...OperatorOption) *OperatorHandler {
+	h := &OperatorHandler{svc: svc}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *OperatorHandler) ListSubscriptions(ctx context.Context, req *connect.Request[chainpb.ListSubscriptionsRequest]) (*connect.Response[chainpb.ListSubscriptionsResponse], error) {
@@ -99,6 +116,16 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrInvalidPipelineDID):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, chainmanager.ErrEndpointNotAllowed):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, chainmanager.ErrNoChainManagerEndpoint):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, chainmanager.ErrSubscriberUnconfigured):
+		return connect.NewError(connect.CodeInternal, err)
+	case errors.Is(err, chainmanager.ErrRemotePeer):
+		return connect.NewError(connect.CodeUnavailable, err)
 	case errors.Is(err, store.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, context.Canceled):
