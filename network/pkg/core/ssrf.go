@@ -235,10 +235,18 @@ func (g *URLGuard) DialContext(ctx context.Context, network, addr string) (net.C
 // HTTPClient returns an *http.Client whose every connection is guarded: the dial
 // is pinned to validated IPs (DialContext) and each redirect hop is re-checked
 // (CheckRedirect). This is the safe way to fetch a data-supplied endpoint; it
-// clones http.DefaultTransport so timeouts / proxy / TLS defaults are preserved.
+// clones http.DefaultTransport so timeouts / TLS defaults are preserved.
+//
+// Proxying is disabled (Proxy = nil): the guard's guarantee is that the dialed
+// target IP is validated and pinned, but an HTTP(S)_PROXY would make Go dial the
+// proxy instead — DialContext would then validate the proxy address, not the
+// attacker-controlled target host, silently bypassing the pin. A proxy is
+// fundamentally incompatible with SSRF target-IP pinning, so a deployment needing
+// a trusted egress proxy must use a separate, non-guarded path.
 func (g *URLGuard) HTTPClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = g.DialContext
+	t.Proxy = nil
 	return &http.Client{
 		Transport:     t,
 		CheckRedirect: g.CheckRedirect,
