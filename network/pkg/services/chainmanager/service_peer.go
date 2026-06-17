@@ -91,6 +91,7 @@ func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publi
 		PayloadDelivery: mode,
 		ConnectionInfo:  connInfo,
 		Created:         time.Now().UTC(),
+		Direction:       directionPublisher,
 	}
 	if err := s.subs.Save(sub); err != nil {
 		// Compensate only the export we just created (don't tear down an export a
@@ -119,6 +120,11 @@ func (s *Service) Disconnect(ctx context.Context, subscriptionID, callerDID stri
 	sub, err := s.subs.Get(subscriptionID)
 	if err != nil {
 		return err // store.ErrNotFound for an absent id
+	}
+	if directionOf(sub) != directionPublisher {
+		// A subscriber-direction record belongs to the operator's Unsubscribe
+		// surface, not the peer Disconnect surface — keep the id-spaces disjoint.
+		return store.ErrNotFound
 	}
 	if sub.SubscriberDID != callerDID {
 		return ErrNotOwner
@@ -179,7 +185,9 @@ func (s *Service) countForPublisher(publisherDID string) (int, error) {
 	}
 	n := 0
 	for _, sub := range all {
-		if sub.PublisherDID == publisherDID {
+		// Only publisher-direction records back an export; subscriber-direction
+		// records (this CM's own subscriptions) must not inflate the ref-count.
+		if directionOf(sub) == directionPublisher && sub.PublisherDID == publisherDID {
 			n++
 		}
 	}

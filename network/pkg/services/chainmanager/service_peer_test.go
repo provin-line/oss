@@ -17,10 +17,14 @@ const (
 // fakeInfra records AddExport/RemoveExport so tests can assert the export
 // lifecycle (and inject an AddExport failure).
 type fakeInfra struct {
-	added     []string
-	removed   []string
-	addErr    error
-	removeErr error
+	added           []string
+	removed         []string
+	addErr          error
+	removeErr       error
+	imported        []string // remote subjects passed to AddImport
+	removedImports  []string // remote subjects passed to RemoveImport
+	importErr       error
+	removeImportErr error
 }
 
 func (f *fakeInfra) PublishType() string { return "noop" }
@@ -38,8 +42,20 @@ func (f *fakeInfra) RemoveExport(s string) error {
 	f.removed = append(f.removed, s)
 	return nil
 }
-func (f *fakeInfra) AddImport(_, _, _ string) error { return nil }
-func (f *fakeInfra) RemoveImport(_, _ string) error { return nil }
+func (f *fakeInfra) AddImport(remoteSubject, _, _ string) error {
+	if f.importErr != nil {
+		return f.importErr
+	}
+	f.imported = append(f.imported, remoteSubject)
+	return nil
+}
+func (f *fakeInfra) RemoveImport(remoteSubject, _ string) error {
+	if f.removeImportErr != nil {
+		return f.removeImportErr
+	}
+	f.removedImports = append(f.removedImports, remoteSubject)
+	return nil
+}
 
 // failingSubStore wraps a real store but forces Save to fail.
 type failingSubStore struct {

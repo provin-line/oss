@@ -33,6 +33,16 @@ type Subscription struct {
 	// returned by the publisher's infra operator.
 	ConnectionInfo map[string]string
 	Created        time.Time
+	// Direction distinguishes the two edges a CM holds: "publisher" (a remote
+	// subscriber registered against a local pipeline — the export side) and
+	// "subscriber" (this CM subscribed a local pipeline to a remote publisher —
+	// the import side). An empty value reads as "publisher" for backward
+	// compatibility with records written before this field existed.
+	Direction string
+	// RemoteID is the publisher-side subscription id, set only on "subscriber"
+	// records: the remote ChainPeerService keys its owner check on this id, so it
+	// is what a teardown Disconnect must carry.
+	RemoteID string
 }
 
 // AllowRule is one allow-list entry: a DID glob pattern

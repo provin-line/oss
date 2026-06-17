@@ -27,6 +27,7 @@ func TestOperatorHandler_ListSubscriptions(t *testing.T) {
 		PublisherDID: "did:dplaax:reg:org:pub",
 		PublishType:  "nats",
 		Created:      time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+		Direction:    "subscriber", // ListSubscriptions returns subscriber-direction records (D-s6 a)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestOperatorHandler_ListSubscriptions(t *testing.T) {
 // year-0001 zero-value sentinel (D-o5 zero handling).
 func TestOperatorHandler_ListSubscriptions_ZeroCreated(t *testing.T) {
 	svc, subs, _ := newSvc(t)
-	if err := subs.Save(&store.Subscription{ID: "sub-1"}); err != nil {
+	if err := subs.Save(&store.Subscription{ID: "sub-1", Direction: "subscriber"}); err != nil {
 		t.Fatal(err)
 	}
 	h := NewOperator(svc)

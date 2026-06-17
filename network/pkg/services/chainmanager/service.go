@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/allowlist"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
@@ -31,10 +32,19 @@ type Service struct {
 	allows store.AllowListStore
 	infra  infra.Operator // nil unless WithInfraOperator was passed
 
+	// Subscriber-side dependencies (the outbound connection flow). All three are
+	// required for Subscribe/Unsubscribe; a Service missing any rejects those
+	// calls with ErrSubscriberUnconfigured. guard defaults to a strict
+	// core.URLGuard so the SSRF preflight fails closed when none is supplied.
+	resolver DIDResolver
+	peer     PeerClient
+	guard    *core.URLGuard
+
 	// mu serializes the infra-touching peer lifecycle (RegisterSubscription /
-	// Disconnect): their export ref-counting is a check-then-act sequence across
-	// several store calls, which the per-method store locks (and the mutex-less
-	// yamlstore) do NOT make atomic. The operator-surface methods are lock-free.
+	// Disconnect / Subscribe / Unsubscribe): their export/import ref-counting is a
+	// check-then-act sequence across several store calls, which the per-method
+	// store locks (and the mutex-less yamlstore) do NOT make atomic. The
+	// operator-surface methods are lock-free.
 	mu sync.Mutex
 }
 
@@ -70,13 +80,26 @@ func requirePipelineDID(didStr string) error {
 	return nil
 }
 
-// ListSubscriptions returns the subscriptions this CM holds. An empty store
-// yields an empty slice, not an error.
+// ListSubscriptions returns the operator's own subscriptions — the
+// subscriber-direction records ("what am I subscribed to"; slice-12 D-s6 option
+// a). Publisher-direction records (who subscribed to a local pipeline) are a
+// separate concern and excluded. An empty result yields an empty slice, not an
+// error.
 func (s *Service) ListSubscriptions(ctx context.Context) ([]*store.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return s.subs.List()
+	all, err := s.subs.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*store.Subscription, 0, len(all))
+	for _, sub := range all {
+		if directionOf(sub) == directionSubscriber {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
 }
 
 // UpdateAllowList replaces the allow-list of pipelineDID with the rules built

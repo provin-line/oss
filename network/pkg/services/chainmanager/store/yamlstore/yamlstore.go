@@ -209,6 +209,8 @@ type subRecord struct {
 	PayloadDelivery string            `yaml:"payloadDelivery"`
 	ConnectionInfo  map[string]string `yaml:"connectionInfo,omitempty"`
 	Created         time.Time         `yaml:"created"`
+	Direction       string            `yaml:"direction,omitempty"`
+	RemoteID        string            `yaml:"remoteID,omitempty"`
 }
 
 func toSubRecord(s *store.Subscription) subRecord {
@@ -220,6 +222,8 @@ func toSubRecord(s *store.Subscription) subRecord {
 		PayloadDelivery: s.PayloadDelivery,
 		ConnectionInfo:  s.ConnectionInfo,
 		Created:         s.Created,
+		Direction:       s.Direction,
+		RemoteID:        s.RemoteID,
 	}
 }
 
@@ -232,6 +236,8 @@ func fromSubRecord(r subRecord) *store.Subscription {
 		PayloadDelivery: r.PayloadDelivery,
 		ConnectionInfo:  r.ConnectionInfo,
 		Created:         r.Created,
+		Direction:       r.Direction,
+		RemoteID:        r.RemoteID,
 	}
 }
 

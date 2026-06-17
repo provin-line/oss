@@ -32,9 +32,16 @@ func TestService_ListSubscriptions_Empty(t *testing.T) {
 	}
 }
 
+// ListSubscriptions returns the operator's subscriber-direction records only
+// ("what am I subscribed to" — slice-12 D-s6 option a); publisher-direction
+// records (who subscribed to me) are excluded.
 func TestService_ListSubscriptions_Returns(t *testing.T) {
 	subStore := memstore.NewSubscriptionStore()
-	if err := subStore.Save(&store.Subscription{ID: "sub-1", PublisherDID: "did:dplaax:reg:org:pub"}); err != nil {
+	if err := subStore.Save(&store.Subscription{ID: "sub-1", PublisherDID: "did:dplaax:reg:org:pub", Direction: "subscriber"}); err != nil {
+		t.Fatal(err)
+	}
+	// a publisher-direction record (default-empty Direction) must be excluded
+	if err := subStore.Save(&store.Subscription{ID: "pub-1", PublisherDID: "did:dplaax:reg:org:pub"}); err != nil {
 		t.Fatal(err)
 	}
 	svc := New(subStore, memstore.NewAllowListStore())
@@ -43,7 +50,7 @@ func TestService_ListSubscriptions_Returns(t *testing.T) {
 		t.Fatalf("ListSubscriptions: %v", err)
 	}
 	if len(subs) != 1 || subs[0].ID != "sub-1" {
-		t.Errorf("ListSubscriptions = %+v, want one sub-1", subs)
+		t.Errorf("ListSubscriptions = %+v, want one sub-1 (subscriber-direction only)", subs)
 	}
 }
 
