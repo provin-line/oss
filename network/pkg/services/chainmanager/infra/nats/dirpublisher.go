@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,4 +65,20 @@ func (p *DirPublisher) Publish(accountPub, accountJWT string) error {
 	}
 	committed = true
 	return nil
+}
+
+// Load reads the account JWT previously written for accountPub. A missing file is
+// the first-boot case, reported as ErrNotPublished (not an I/O error).
+func (p *DirPublisher) Load(accountPub string) (string, error) {
+	if !nkeys.IsValidPublicAccountKey(accountPub) {
+		return "", fmt.Errorf("nats: invalid account public key %q", accountPub)
+	}
+	b, err := os.ReadFile(filepath.Join(p.dir, accountPub+".jwt"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", ErrNotPublished
+	}
+	if err != nil {
+		return "", fmt.Errorf("nats: load JWT: %w", err)
+	}
+	return string(b), nil
 }

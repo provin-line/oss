@@ -31,6 +31,17 @@ func (r *recorder) Publish(accountPub, token string) error {
 	return nil
 }
 
+// Load returns the most recently published token for accountPub (so a second
+// Operator over the same recorder rehydrates), or ErrNotPublished if none.
+func (r *recorder) Load(accountPub string) (string, error) {
+	for i := len(r.calls) - 1; i >= 0; i-- {
+		if r.calls[i].accountPub == accountPub {
+			return r.calls[i].token, nil
+		}
+	}
+	return "", natsop.ErrNotPublished
+}
+
 // last decodes the most recently published account JWT.
 func (r *recorder) last(t *testing.T) *jwt.AccountClaims {
 	t.Helper()
@@ -237,6 +248,8 @@ func (f *flaky) Publish(accountPub, accountJWT string) (err error) {
 	return nil
 }
 
+func (f *flaky) Load(string) (string, error) { return "", natsop.ErrNotPublished }
+
 func newWith(t *testing.T, pub natsop.JWTPublisher) *natsop.Operator {
 	t.Helper()
 	acc, _ := nkeys.CreateAccount()
@@ -289,6 +302,106 @@ func TestRemoveExport_RollsBackOnPublishFailure(t *testing.T) {
 	}
 	if f.ok != before+1 {
 		t.Errorf("retry did not re-publish the removal (ok %d -> %d)", before, f.ok)
+	}
+}
+
+// newOver builds an Operator over fixed seeds + publisher (so a second instance
+// can rehydrate from the same recorder with the same account/trust identity).
+func newOver(t *testing.T, accSeed, opSeed []byte, pub natsop.JWTPublisher) *natsop.Operator {
+	t.Helper()
+	o, err := natsop.New(natsop.Config{
+		AccountSeed:   string(accSeed),
+		TrustRootSeed: string(opSeed),
+		URL:           "nats://localhost:4222",
+		Publisher:     pub,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return o
+}
+
+func TestNew_RehydratesFromPublishedJWT(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	r := &recorder{}
+
+	// First instance publishes an export + an import.
+	o1 := newOver(t, accSeed, opSeed, r)
+	if _, err := o1.AddExport("chain.pub"); err != nil {
+		t.Fatal(err)
+	}
+	remote, _ := nkeys.CreateAccount()
+	remotePub, _ := remote.PublicKey()
+	if err := o1.AddImport("chain.rem", remotePub, "local.rem"); err != nil {
+		t.Fatal(err)
+	}
+	publishes := len(r.calls)
+
+	// A fresh instance over the same identity + recorder rehydrates the grants.
+	o2 := newOver(t, accSeed, opSeed, r)
+	// Re-adding a rehydrated grant is a no-op (proves it was loaded): no new publish.
+	if _, err := o2.AddExport("chain.pub"); err != nil {
+		t.Fatal(err)
+	}
+	if err := o2.AddImport("chain.rem", remotePub, "local.rem"); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != publishes {
+		t.Errorf("rehydrated grants re-published (calls %d -> %d); New did not load prior claims", publishes, len(r.calls))
+	}
+	// Removing a rehydrated grant works (proves it was present): publishes the
+	// reduced claim set.
+	if err := o2.RemoveExport("chain.pub"); err != nil {
+		t.Fatal(err)
+	}
+	ac := r.last(t)
+	for _, e := range ac.Exports {
+		if string(e.Subject) == "chain.pub" {
+			t.Error("RemoveExport of a rehydrated grant did not remove it")
+		}
+	}
+	if len(ac.Imports) != 1 {
+		t.Errorf("rehydrated import lost: imports = %+v", ac.Imports)
+	}
+}
+
+// loadFake returns a fixed token from Load (to exercise corrupt / mismatched
+// rehydration inputs).
+type loadFake struct{ token string }
+
+func (loadFake) Publish(string, string) error  { return nil }
+func (f loadFake) Load(string) (string, error) { return f.token, nil }
+
+func TestNew_RejectsCorruptStoredJWT(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	if _, err := natsop.New(natsop.Config{
+		AccountSeed: string(accSeed), TrustRootSeed: string(opSeed),
+		URL: "nats://h:4222", Publisher: loadFake{token: "not-a-jwt"},
+	}); err == nil {
+		t.Error("New accepted a corrupt stored JWT")
+	}
+}
+
+func TestNew_RejectsForeignSubjectStoredJWT(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	// A valid account JWT, but for a DIFFERENT account (subject mismatch).
+	other, _ := nkeys.CreateAccount()
+	otherPub, _ := other.PublicKey()
+	foreign, _ := jwt.NewAccountClaims(otherPub).Encode(op)
+	if _, err := natsop.New(natsop.Config{
+		AccountSeed: string(accSeed), TrustRootSeed: string(opSeed),
+		URL: "nats://h:4222", Publisher: loadFake{token: foreign},
+	}); err == nil {
+		t.Error("New accepted a stored JWT whose subject is a different account")
 	}
 }
 

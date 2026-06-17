@@ -23,6 +23,10 @@ func (m memPub) Publish(accountPub, accountJWT string) error {
 	return m.mr.Store(accountPub, accountJWT)
 }
 
+// Load is unused by the e2e (operators are created once) but required by the
+// JWTPublisher interface.
+func (m memPub) Load(string) (string, error) { return "", natsop.ErrNotPublished }
+
 // newE2EOperator builds a nats.Operator over a fresh account, all signed by the
 // shared trust-root (single-operator deployment), publishing into mr. It returns
 // the operator, the account key pair (to mint client user JWTs), and the account

@@ -18,6 +18,7 @@
 package nats
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -29,12 +30,24 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 )
 
+// ErrNotPublished is returned by JWTPublisher.Load when no account JWT has been
+// published yet for the account — the first-boot case, distinct from an I/O error.
+var ErrNotPublished = errors.New("nats: account not yet published")
+
 // JWTPublisher delivers a signed account JWT to where the broker's account
-// resolver reads it (keyed by the account public key). The in-memory
-// (MemAccResolver) implementation is a test helper; the production push to a live
-// account resolver lands with the prod nats wiring.
+// resolver reads it (keyed by the account public key), and reads it back. The
+// in-memory (MemAccResolver) implementation is a test helper; the production
+// DirPublisher writes/reads the directory the resolver loads from.
+//
+// Load is the symmetric read of Publish — it lets the operator rehydrate its
+// in-memory claims on restart so removals work and re-publishes do not drop prior
+// grants. It returns ErrNotPublished when nothing has been published yet (first
+// boot). NOTE (slice-16 D-x2): adding Load to this exported interface is
+// source-breaking for any external implementer; all in-repo implementers are
+// updated, and the package is pre-1.0.
 type JWTPublisher interface {
 	Publish(accountPub, accountJWT string) error
+	Load(accountPub string) (accountJWT string, err error)
 }
 
 // Config configures a nats Operator. Seeds are nkey seeds sourced from
@@ -90,13 +103,46 @@ func New(cfg Config) (*Operator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nats: trust-root seed: %w", err)
 	}
-	return &Operator{
+	o := &Operator{
 		accountPub: accPub,
 		trustRoot:  trustRoot,
 		url:        cfg.URL,
 		publisher:  cfg.Publisher,
 		claims:     jwt.NewAccountClaims(accPub),
-	}, nil
+	}
+	if err := o.hydrate(); err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
+// hydrate rebuilds the in-memory claims from the previously published account JWT
+// (slice-16 D-x1), so a restarted operator resumes with its full grant set —
+// otherwise a Remove would no-op and the next Add would re-publish a JWT carrying
+// only the new grant, dropping prior grants. ErrNotPublished is first boot (fresh
+// claims). A present-but-corrupt or wrong-account JWT fails closed: dropping
+// grants silently is worse than refusing to start. The token's signature is
+// verified by DecodeAccountClaims; we additionally bind it to this account by
+// subject (we do not require the issuer be the current trust-root — key rotation
+// re-signs on the next mutation, and the resolver re-validates on serve).
+func (o *Operator) hydrate() error {
+	token, err := o.publisher.Load(o.accountPub)
+	if errors.Is(err, ErrNotPublished) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("nats: load published claims for %s: %w", o.accountPub, err)
+	}
+	ac, err := jwt.DecodeAccountClaims(token)
+	if err != nil {
+		return fmt.Errorf("nats: decode published claims for %s: %w", o.accountPub, err)
+	}
+	if ac.Subject != o.accountPub {
+		return fmt.Errorf("nats: published claims subject %q does not match account %q", ac.Subject, o.accountPub)
+	}
+	o.claims.Exports = ac.Exports
+	o.claims.Imports = ac.Imports
+	return nil
 }
 
 // PublishType names this operator's transport.

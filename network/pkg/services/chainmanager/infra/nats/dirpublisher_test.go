@@ -1,6 +1,7 @@
 package nats_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +43,28 @@ func TestDirPublisher_WritesAndOverwrites(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
 		t.Errorf("dir has %d entries, want 1 (atomic rename leaves no temp)", len(entries))
+	}
+}
+
+func TestDirPublisher_LoadRoundTripAndNotPublished(t *testing.T) {
+	dir := t.TempDir()
+	acc, _ := nkeys.CreateAccount()
+	accPub, _ := acc.PublicKey()
+	p := natsop.NewDirPublisher(dir)
+
+	// not yet published -> typed ErrNotPublished (first boot), not a generic error.
+	if _, err := p.Load(accPub); !errors.Is(err, natsop.ErrNotPublished) {
+		t.Errorf("Load before publish: err = %v, want ErrNotPublished", err)
+	}
+	if err := p.Publish(accPub, "jwt-body"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.Load(accPub)
+	if err != nil {
+		t.Fatalf("Load after publish: %v", err)
+	}
+	if got != "jwt-body" {
+		t.Errorf("Load = %q, want jwt-body", got)
 	}
 }
 
