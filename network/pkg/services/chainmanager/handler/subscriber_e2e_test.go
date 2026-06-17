@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
@@ -37,9 +38,24 @@ func pubEndpointDoc(pub, endpoint string) *did.DIDDocument {
 // resolver maps the publisher DID to its #chain-manager endpoint (the server).
 func subscriberE2E(t *testing.T, rules []store.AllowRule) (*chainmanager.Service, store.SubscriptionStore) {
 	t.Helper()
-	subSigner, subPub := e2eSigner(t, e2eSub)
+	srvURL, subSigner, pubSubs := publisherPeerServer(t, rules)
+	guard := core.NewURLGuard(core.WithAllowLoopback(true)) // httptest is 127.0.0.1
+	pc := peerclient.New(subSigner, e2eSub, guard.HTTPClient())
+	subSvc := chainmanager.New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore(),
+		chainmanager.WithInfraOperator(noop.New()),
+		chainmanager.WithDIDResolver(e2eResolver{e2ePub: pubEndpointDoc(e2ePub, srvURL)}),
+		chainmanager.WithPeerClient(pc),
+		chainmanager.WithEndpointGuard(guard),
+	)
+	return subSvc, pubSubs
+}
 
-	// publisher side
+// publisherPeerServer stands up the publisher peer server (wireauth-verified, noop
+// infra, given allow-list) over httptest and returns its URL, the subscriber's
+// signer (whose #auth key the verifier can resolve), and the publisher's store.
+func publisherPeerServer(t *testing.T, rules []store.AllowRule) (string, crypto.Signer, store.SubscriptionStore) {
+	t.Helper()
+	subSigner, subPub := e2eSigner(t, e2eSub)
 	pubResolver := e2eResolver{e2eSub: e2eAuthDoc(e2eSub, subPub)}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: pubResolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
@@ -57,18 +73,28 @@ func subscriberE2E(t *testing.T, rules []store.AllowRule) (*chainmanager.Service
 	_, h := chainpbconnect.NewChainPeerServiceHandler(handler.NewPeer(pubSvc, v))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
+	return srv.URL, subSigner, pubSubs
+}
 
-	// subscriber side
-	guard := core.NewURLGuard(core.WithAllowLoopback(true)) // httptest is 127.0.0.1
-	pc := peerclient.New(subSigner, e2eSub, guard.HTTPClient())
-	subResolver := e2eResolver{e2ePub: pubEndpointDoc(e2ePub, srv.URL)}
+// The WithSubscriberSigner convenience path (slice-13 D-r5): the Service builds
+// its own peer client from the signer, and the full round-trip still succeeds.
+func TestSubscriberE2E_ViaWithSubscriberSigner(t *testing.T) {
+	ctx := context.Background()
+	srvURL, subSigner, _ := publisherPeerServer(t, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}})
+	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	subSvc := chainmanager.New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore(),
 		chainmanager.WithInfraOperator(noop.New()),
-		chainmanager.WithDIDResolver(subResolver),
-		chainmanager.WithPeerClient(pc),
+		chainmanager.WithDIDResolver(e2eResolver{e2ePub: pubEndpointDoc(e2ePub, srvURL)}),
+		chainmanager.WithSubscriberSigner(subSigner, e2eSub), // convenience: Service builds the client
 		chainmanager.WithEndpointGuard(guard),
 	)
-	return subSvc, pubSubs
+	id, err := subSvc.Subscribe(ctx, e2eSub, e2ePub, "inline")
+	if err != nil {
+		t.Fatalf("Subscribe via WithSubscriberSigner: %v", err)
+	}
+	if err := subSvc.Unsubscribe(ctx, id); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
 }
 
 // The full subscriber-initiated round-trip over a real signature/verify exchange:

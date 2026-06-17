@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
@@ -58,8 +59,20 @@ type PeerClient interface {
 // publisher's #chain-manager endpoint.
 func WithDIDResolver(r DIDResolver) Option { return func(s *Service) { s.resolver = r } }
 
-// WithPeerClient supplies the outbound peer client.
-func WithPeerClient(c PeerClient) Option { return func(s *Service) { s.peer = c } }
+// WithPeerClient supplies the outbound peer client explicitly. An explicit client
+// (even nil) takes precedence over the WithSubscriberSigner convenience build.
+func WithPeerClient(c PeerClient) Option {
+	return func(s *Service) { s.peer = c; s.peerExplicit = true }
+}
+
+// WithSubscriberSigner configures the identity the subscriber signs as; New then
+// assembles the default ConnectRPC peer client from this signer + the Service's
+// guarded HTTP client (slice-13 D-r5). signerDID is the DID the client signs as;
+// the remote enforces signer↔subscriber binding. Ignored if WithPeerClient is
+// also given (explicit client wins).
+func WithSubscriberSigner(signer crypto.Signer, signerDID string) Option {
+	return func(s *Service) { s.subscriberSigner = signer; s.subscriberSignerDID = signerDID }
+}
 
 // WithEndpointGuard supplies the SSRF guard for the endpoint preflight. When
 // unset, the subscriber flow uses a strict default guard (fail-closed).
