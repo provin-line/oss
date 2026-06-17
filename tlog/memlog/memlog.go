@@ -40,6 +40,16 @@ func New() *Log { return &Log{} }
 
 var _ tlog.Log = (*Log)(nil)
 
+// clone returns a deep copy of rec (copied Payload) so that a record handed to a
+// caller shares no mutable state with the committed record. The tlog.Log contract
+// forbids mutating appended records; returning the internal pointer would let a
+// caller corrupt the chain (Payload/Hash/Index) and break audit replay.
+func clone(rec *tlog.Record) *tlog.Record {
+	p := make([]byte, len(rec.Payload))
+	copy(p, rec.Payload)
+	return &tlog.Record{Index: rec.Index, Payload: p, Hash: rec.Hash}
+}
+
 // chainHash is the documented commitment: sha256 over (prev ‖ payload). The genesis
 // record chains from the empty hash, so every record's Hash transitively commits to
 // the full prefix — any retroactive change breaks the chain from that point on.
@@ -71,7 +81,7 @@ func (l *Log) Append(_ context.Context, payload []byte) (*tlog.Record, error) {
 		Hash:    chainHash(prev, stored),
 	}
 	l.records = append(l.records, rec)
-	return rec, nil
+	return clone(rec), nil
 }
 
 // Get returns the record at index, or an error if index is out of range.
@@ -82,7 +92,7 @@ func (l *Log) Get(_ context.Context, index uint64) (*tlog.Record, error) {
 	if index >= uint64(len(l.records)) {
 		return nil, fmt.Errorf("memlog: index %d out of range (size %d)", index, len(l.records))
 	}
-	return l.records[index], nil
+	return clone(l.records[index]), nil
 }
 
 // Size returns the number of committed records.

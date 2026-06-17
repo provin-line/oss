@@ -21,6 +21,13 @@ import (
 // chainmanager's concern (proven in slice-16); this harness isolates the transport's
 // own pub/sub behaviour within one account.
 func newAccountServer(t *testing.T) (url, accountSeed string) {
+	_, url, accountSeed = newAccountServerWithSrv(t)
+	return url, accountSeed
+}
+
+// newAccountServerWithSrv is newAccountServer plus the server handle, so a test can
+// shut the broker down mid-run (outage path).
+func newAccountServerWithSrv(t *testing.T) (srv *server.Server, url, accountSeed string) {
 	t.Helper()
 	op, err := nkeys.CreateOperator()
 	if err != nil {
@@ -49,7 +56,7 @@ func newAccountServer(t *testing.T) (url, accountSeed string) {
 		TrustedKeys: []string{opPub}, AccountResolver: mr,
 	})
 	t.Cleanup(s.Shutdown)
-	return s.ClientURL(), string(accSeed)
+	return s, s.ClientURL(), string(accSeed)
 }
 
 func mustConnect(t *testing.T, url, seed string) *natstransport.Conn {
@@ -90,6 +97,37 @@ func TestConn_PublishSubscribeRoundTrip(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("round-trip: message not delivered")
+	}
+}
+
+// TestPublisher_PublishErrorsWhenServerGone asserts the flush-on-Publish contract
+// (Codex review P2): Publish must surface a delivery failure rather than silently
+// buffering it, so the Loop's emission log cannot record an undelivered message as
+// delivered. With the broker gone, a non-flushing Publish returns nil (the PUB is
+// queued for the reconnect buffer); flush-on-Publish instead waits for broker
+// acknowledgement and returns an error.
+//
+// The distinguishing behaviour is only observable in the reconnect/outage window (a
+// clean Close flushes its buffer, and on loopback the async flusher fires almost
+// immediately). It is usually fast (the dead socket is detected on write), but may
+// wait out the flush timeout if detection lags, so it is gated behind -short.
+func TestPublisher_PublishErrorsWhenServerGone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("outage path may wait out the flush timeout; skipped in -short")
+	}
+	srv, url, seed := newAccountServerWithSrv(t)
+	conn := mustConnect(t, url, seed)
+	pub := conn.Publisher("subj")
+
+	// Confirm the happy path works, then kill the broker.
+	if err := pub.Publish([]byte("pre")); err != nil {
+		t.Fatalf("Publish (server up): %v", err)
+	}
+	srv.Shutdown()
+	srv.WaitForShutdown()
+
+	if err := pub.Publish([]byte("post")); err == nil {
+		t.Fatal("Publish after broker shutdown: want error (undelivered), got nil")
 	}
 }
 

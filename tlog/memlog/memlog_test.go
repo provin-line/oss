@@ -81,6 +81,49 @@ func TestGet_RoundTripAndOutOfRange(t *testing.T) {
 	}
 }
 
+// TestReturnedRecordsAreImmutable asserts the tlog.Log immutability contract: a
+// caller mutating a record returned by Append or Get must NOT corrupt the committed
+// record (independently flagged by Claude + Codex review → convergent must-fix).
+func TestReturnedRecordsAreImmutable(t *testing.T) {
+	ctx := context.Background()
+	l := memlog.New()
+
+	r, err := l.Append(ctx, []byte("original"))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	wantHash := r.Hash
+	// Mutate the Append return.
+	r.Payload[0] = 'X'
+	r.Hash = "tampered"
+	r.Index = 999
+
+	got, err := l.Get(ctx, 0)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(got.Payload) != "original" {
+		t.Fatalf("payload corrupted via Append return: got %q", got.Payload)
+	}
+	if got.Hash != wantHash {
+		t.Fatalf("hash corrupted via Append return: got %q want %q", got.Hash, wantHash)
+	}
+	if got.Index != 0 {
+		t.Fatalf("index corrupted via Append return: got %d want 0", got.Index)
+	}
+
+	// Mutate the Get return; a second Get must be unaffected.
+	got.Payload[0] = 'Y'
+	got.Hash = "tampered2"
+	again, err := l.Get(ctx, 0)
+	if err != nil {
+		t.Fatalf("get again: %v", err)
+	}
+	if string(again.Payload) != "original" || again.Hash != wantHash {
+		t.Fatalf("record corrupted via Get return: payload=%q hash=%q", again.Payload, again.Hash)
+	}
+}
+
 func TestSize(t *testing.T) {
 	ctx := context.Background()
 	l := memlog.New()

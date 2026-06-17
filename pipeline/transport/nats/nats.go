@@ -29,8 +29,10 @@ import (
 )
 
 const (
-	// flushTimeout bounds Publisher.Close's flush round-trip.
-	flushTimeout = 10 * time.Second
+	// flushTimeout bounds the flush round-trip in Publish and Publisher.Close. It
+	// caps how long a Publish blocks confirming broker receipt during an outage
+	// before reporting the message undelivered.
+	flushTimeout = 5 * time.Second
 	// drainTimeout bounds Subscriber.Drain's wait for in-flight handlers to finish.
 	drainTimeout = 30 * time.Second
 )
@@ -133,9 +135,22 @@ type Publisher struct {
 
 var _ transport.Publisher = (*Publisher)(nil)
 
-// Publish sends data on the publisher's subject.
+// Publish sends data on the publisher's subject and flushes, returning only after
+// the server has acknowledged receipt (the PONG to the post-publish PING implies the
+// server processed and routed the PUB). nats.go Publish alone merely buffers the PUB
+// and returns nil, so a message lost during an outage / failed reconnect would be
+// reported as sent; the Loop then advances its sequence and records an emission for a
+// message that never reached the broker. Flushing makes the delivery status honest
+// (the data-plane audit thesis), at the cost of one round-trip per publish.
+//
+// Residual: core NATS is at-most-once — this confirms broker *receipt*, not durable
+// storage or subscriber delivery. Exactly-once / durable delivery is JetStream, a
+// follow-up.
 func (p *Publisher) Publish(data []byte) error {
-	return p.nc.Publish(p.subject, data)
+	if err := p.nc.Publish(p.subject, data); err != nil {
+		return err
+	}
+	return p.nc.FlushTimeout(flushTimeout)
 }
 
 // Healthy reports whether the shared connection can serve traffic.
