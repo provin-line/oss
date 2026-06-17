@@ -19,6 +19,7 @@ package nats
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -74,6 +75,9 @@ func New(cfg Config) (*Operator, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("nats: Config.URL is required")
 	}
+	if u, err := url.Parse(cfg.URL); err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("nats: Config.URL %q is not a valid URL (need scheme://host)", cfg.URL)
+	}
 	accKP, err := nkeys.FromSeed([]byte(cfg.AccountSeed))
 	if err != nil {
 		return nil, fmt.Errorf("nats: account seed: %w", err)
@@ -116,6 +120,11 @@ func (o *Operator) AddExport(outputSubject string) (map[string]string, error) {
 			Type:    jwt.Stream,
 		})
 		if err := o.publishLocked(); err != nil {
+			// Roll back the uncommitted mutation: the resolver may not have the
+			// JWT, so leaving the in-memory export would make a retry no-op
+			// (idempotency skip) and never re-publish. Dropping it lets the retry
+			// re-attempt and converge.
+			o.claims.Exports = o.claims.Exports[:len(o.claims.Exports)-1]
 			return nil, err
 		}
 	}
@@ -136,8 +145,15 @@ func (o *Operator) RemoveExport(outputSubject string) error {
 	if idx < 0 {
 		return nil
 	}
+	removed := o.claims.Exports[idx]
 	o.claims.Exports = append(o.claims.Exports[:idx], o.claims.Exports[idx+1:]...)
-	return o.publishLocked()
+	if err := o.publishLocked(); err != nil {
+		// Roll back so a retry re-removes + re-publishes rather than no-op'ing on
+		// an absent entry while the broker still holds the stale grant.
+		o.claims.Exports = append(o.claims.Exports, removed)
+		return err
+	}
+	return nil
 }
 
 // AddImport adds a Stream import of remoteSubject from remoteAccountKey, mapped to
@@ -160,7 +176,10 @@ func (o *Operator) AddImport(remoteSubject, remoteAccountKey, localSubject strin
 			LocalSubject: jwt.RenamingSubject(localSubject),
 			Type:         jwt.Stream,
 		})
-		return o.publishLocked()
+		if err := o.publishLocked(); err != nil {
+			o.claims.Imports = o.claims.Imports[:len(o.claims.Imports)-1] // roll back (see AddExport)
+			return err
+		}
 	}
 	return nil
 }
@@ -174,8 +193,13 @@ func (o *Operator) RemoveImport(remoteSubject, remoteAccountKey string) error {
 	if idx < 0 {
 		return nil
 	}
+	removed := o.claims.Imports[idx]
 	o.claims.Imports = append(o.claims.Imports[:idx], o.claims.Imports[idx+1:]...)
-	return o.publishLocked()
+	if err := o.publishLocked(); err != nil {
+		o.claims.Imports = append(o.claims.Imports, removed) // roll back (see RemoveExport)
+		return err
+	}
+	return nil
 }
 
 // publishLocked re-encodes the current claims under the trust-root key and
@@ -209,7 +233,10 @@ func (o *Operator) importIndex(subject, account string) int {
 	return -1
 }
 
-// validateSubject rejects an empty subject or one containing whitespace; NATS
+// validateSubject rejects an empty subject, one containing whitespace, or one
+// with an empty token (leading/trailing/doubled dot, e.g. ".a", "a.", "a..b") —
+// all structurally invalid NATS subjects that jwt does not catch at encode time
+// and that would surface only as silent non-delivery at the broker. NATS
 // wildcards (* and >) are allowed.
 func validateSubject(s string) error {
 	if s == "" {
@@ -217,6 +244,11 @@ func validateSubject(s string) error {
 	}
 	if strings.ContainsAny(s, " \t\r\n") {
 		return fmt.Errorf("nats: subject %q contains whitespace", s)
+	}
+	for _, tok := range strings.Split(s, ".") {
+		if tok == "" {
+			return fmt.Errorf("nats: subject %q has an empty token", s)
+		}
 	}
 	return nil
 }

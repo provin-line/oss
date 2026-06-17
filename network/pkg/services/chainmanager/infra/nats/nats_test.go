@@ -1,6 +1,7 @@
 package nats_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/nats-io/jwt/v2"
@@ -94,6 +95,9 @@ func TestNew_RejectsMalformedSeeds(t *testing.T) {
 	}
 	if _, err := natsop.New(natsop.Config{AccountSeed: string(goodSeed), TrustRootSeed: string(opSeed), URL: "", Publisher: r}); err == nil {
 		t.Error("empty URL accepted")
+	}
+	if _, err := natsop.New(natsop.Config{AccountSeed: string(goodSeed), TrustRootSeed: string(opSeed), URL: "not-a-url", Publisher: r}); err == nil {
+		t.Error("malformed URL (no scheme/host) accepted")
 	}
 	if _, err := natsop.New(natsop.Config{AccountSeed: string(goodSeed), TrustRootSeed: string(opSeed), URL: "nats://h:4222", Publisher: nil}); err == nil {
 		t.Error("nil publisher accepted")
@@ -215,6 +219,79 @@ func TestRemoveImport_Symmetric_BySubjectAndAccount(t *testing.T) {
 	}
 }
 
+// flaky is a JWTPublisher that fails the next Publish once, then succeeds,
+// counting successful publishes. It drives the rollback-on-publish-failure
+// contract (Codex P1): a failed publish must not commit the in-memory mutation,
+// so a retry re-attempts and converges.
+type flaky struct {
+	failNext bool
+	ok       int
+}
+
+func (f *flaky) Publish(accountPub, accountJWT string) (err error) {
+	if f.failNext {
+		f.failNext = false
+		return errors.New("publish boom")
+	}
+	f.ok++
+	return nil
+}
+
+func newWith(t *testing.T, pub natsop.JWTPublisher) *natsop.Operator {
+	t.Helper()
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	o, err := natsop.New(natsop.Config{
+		AccountSeed:   string(accSeed),
+		TrustRootSeed: string(opSeed),
+		URL:           "nats://localhost:4222",
+		Publisher:     pub,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return o
+}
+
+func TestAddExport_RollsBackOnPublishFailure(t *testing.T) {
+	f := &flaky{failNext: true}
+	o := newWith(t, f)
+	if _, err := o.AddExport("chain.x"); err == nil {
+		t.Fatal("AddExport: want publish error")
+	}
+	// retry: the mutation must NOT have been committed, so this re-attempts and
+	// converges (publishes once).
+	if _, err := o.AddExport("chain.x"); err != nil {
+		t.Fatalf("AddExport retry: %v", err)
+	}
+	if f.ok != 1 {
+		t.Errorf("successful publishes = %d, want 1 (retry must re-publish after rollback)", f.ok)
+	}
+}
+
+func TestRemoveExport_RollsBackOnPublishFailure(t *testing.T) {
+	f := &flaky{}
+	o := newWith(t, f)
+	if _, err := o.AddExport("chain.y"); err != nil {
+		t.Fatal(err)
+	}
+	f.failNext = true
+	if err := o.RemoveExport("chain.y"); err == nil {
+		t.Fatal("RemoveExport: want publish error")
+	}
+	// retry: the export must still be present (removal rolled back), so the retry
+	// actually removes + publishes rather than no-op'ing on an absent entry.
+	before := f.ok
+	if err := o.RemoveExport("chain.y"); err != nil {
+		t.Fatalf("RemoveExport retry: %v", err)
+	}
+	if f.ok != before+1 {
+		t.Errorf("retry did not re-publish the removal (ok %d -> %d)", before, f.ok)
+	}
+}
+
 func TestMutators_RejectMalformed(t *testing.T) {
 	o, _, _, _ := fixture(t)
 	if _, err := o.AddExport(""); err == nil {
@@ -222,6 +299,11 @@ func TestMutators_RejectMalformed(t *testing.T) {
 	}
 	if _, err := o.AddExport("bad subject with spaces"); err == nil {
 		t.Error("subject with spaces accepted")
+	}
+	for _, bad := range []string{".a", "a.", "a..b", "."} {
+		if _, err := o.AddExport(bad); err == nil {
+			t.Errorf("malformed subject %q accepted (empty token)", bad)
+		}
 	}
 	if err := o.AddImport("chain.s", "not-an-account-key", "local.s"); err == nil {
 		t.Error("malformed remote account key accepted")
