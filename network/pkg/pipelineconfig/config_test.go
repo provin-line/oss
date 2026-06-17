@@ -65,19 +65,19 @@ func TestLoad_ValidSource(t *testing.T) {
 	if l.Name != "src" || l.Role != "source" {
 		t.Fatalf("name/role: got %q/%q", l.Name, l.Role)
 	}
-	if l.IngressSubject != "ingest.src" || l.OutputSubject != "did:dplaax:reg:org:acme:pipeline:pipe" {
-		t.Fatalf("subjects: %q / %q", l.IngressSubject, l.OutputSubject)
+	if l.IngressSubject != "ingest.src" || l.Source.OutputSubject != "did:dplaax:reg:org:acme:pipeline:pipe" {
+		t.Fatalf("subjects: %q / %q", l.IngressSubject, l.Source.OutputSubject)
 	}
-	if l.Issuer.DID != "did:dplaax:reg:org:acme:pipeline:pipe:process:src" ||
-		l.Issuer.KeyID != "signing" ||
-		l.Issuer.VerificationMethod != "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing" {
-		t.Fatalf("issuer: %+v", l.Issuer)
+	if l.Source.Issuer.DID != "did:dplaax:reg:org:acme:pipeline:pipe:process:src" ||
+		l.Source.Issuer.KeyID != "signing" ||
+		l.Source.Issuer.VerificationMethod != "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing" {
+		t.Fatalf("issuer: %+v", l.Source.Issuer)
 	}
-	if l.PipelineID != "pipe" || l.ProcessID != "src" {
-		t.Fatalf("ids: %q / %q", l.PipelineID, l.ProcessID)
+	if l.Source.PipelineID != "pipe" || l.Source.ProcessID != "src" {
+		t.Fatalf("ids: %q / %q", l.Source.PipelineID, l.Source.ProcessID)
 	}
-	if l.TransformationClaim != vc.ClaimConvert {
-		t.Fatalf("claim: got %q want %q", l.TransformationClaim, vc.ClaimConvert)
+	if l.Source.TransformationClaim != vc.ClaimConvert {
+		t.Fatalf("claim: got %q want %q", l.Source.TransformationClaim, vc.ClaimConvert)
 	}
 }
 
@@ -115,7 +115,8 @@ func TestLoad_FailClosed(t *testing.T) {
 		name string
 		body string
 	}{
-		{"unknown role", mut(`role = "source"`, `role = "sink"`)},
+		{"unknown role", mut(`role = "source"`, `role = "frobnicate"`)},
+		{"chained role unsupported", mut(`role = "source"`, `role = "chained"`)},
 		{"missing ingress", mut(`ingress-subject = "ingest.src"`, `ingress-subject = ""`)},
 		{"output not pipeline DID", mut(
 			`output-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
@@ -142,5 +143,95 @@ func TestLoad_FailClosed(t *testing.T) {
 				t.Fatalf("%s: want error, got nil", tc.name)
 			}
 		})
+	}
+}
+
+const validSinkLoop = `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink {
+      kind = "observation-only"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+    }
+  }
+`
+
+func TestLoad_ValidSink(t *testing.T) {
+	cfg := loadWith(t, loopsConf(validSinkLoop))
+	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if len(pc.Loops) != 1 {
+		t.Fatalf("loops: got %d want 1", len(pc.Loops))
+	}
+	l := pc.Loops[0]
+	if l.Name != "archive" || l.Role != pipelineconfig.RoleSink {
+		t.Fatalf("name/role: got %q/%q", l.Name, l.Role)
+	}
+	if l.IngressSubject != "did:dplaax:reg:org:acme:pipeline:pipe" {
+		t.Fatalf("ingress: %q", l.IngressSubject)
+	}
+	if l.Sink.Kind != pipelineconfig.SinkObservationOnly ||
+		l.Sink.VerificationStrategy != pipelineconfig.StrategyAdjacent ||
+		l.Sink.UpstreamEndpoint != "https://acme.example/pipelines/pipe" {
+		t.Fatalf("sink: %+v", l.Sink)
+	}
+	// A sink carries no source identity.
+	if l.Source != (pipelineconfig.SourceConfig{}) {
+		t.Fatalf("sink loop has a non-zero Source: %+v", l.Source)
+	}
+}
+
+func TestLoad_FailClosed_Sink(t *testing.T) {
+	mut := func(field, value string) string {
+		return strings.Replace(validSinkLoop, field, value, 1)
+	}
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"unknown sink kind", mut(`kind = "observation-only"`, `kind = "warehouse"`)},
+		{"missing sink kind", mut(`kind = "observation-only"`, `kind = ""`)},
+		{"verification-strategy full unsupported", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
+		{"unknown verification-strategy", mut(`verification-strategy = "adjacent"`, `verification-strategy = "deep"`)},
+		{"missing upstream-endpoint", mut(`upstream-endpoint = "https://acme.example/pipelines/pipe"`, `upstream-endpoint = ""`)},
+		{"missing ingress", mut(`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`, `ingress-subject = ""`)},
+		// Cross-role rejection: a sink carrying a source-only key fails closed.
+		{"sink with output-subject", `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    output-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink { kind = "observation-only", verification-strategy = "adjacent", upstream-endpoint = "https://x" }
+  }`},
+		{"sink with issuer block", `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    issuer { did = "did:dplaax:reg:org:acme:pipeline:pipe:process:src" }
+    sink { kind = "observation-only", verification-strategy = "adjacent", upstream-endpoint = "https://x" }
+  }`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadWith(t, loopsConf(tc.body))
+			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
+				t.Fatalf("%s: want error, got nil", tc.name)
+			}
+		})
+	}
+}
+
+// TestLoad_SourceWithSinkBlockRejected asserts the mirror cross-role guard: a source
+// loop carrying a sink block fails closed.
+func TestLoad_SourceWithSinkBlockRejected(t *testing.T) {
+	body := strings.Replace(validSourceLoop, `schema-ref = ""`,
+		"schema-ref = \"\"\n    sink { kind = \"observation-only\" }", 1)
+	cfg := loadWith(t, loopsConf(body))
+	if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
+		t.Fatal("source loop with a sink block: want error, got nil")
 	}
 }

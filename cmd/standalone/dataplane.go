@@ -66,14 +66,15 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 // processor (vcdid signer over the keystore) → output Publisher, with a memlog
 // emission log. The config layer has already validated that lc.Role is source.
 func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+	src := lc.Source
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
-		IssuerDID:           lc.Issuer.DID,
-		KeyID:               lc.Issuer.KeyID,
-		VerificationMethod:  lc.Issuer.VerificationMethod,
-		PipelineID:          lc.PipelineID,
-		ProcessID:           lc.ProcessID,
-		TransformationClaim: lc.TransformationClaim,
+		IssuerDID:           src.Issuer.DID,
+		KeyID:               src.Issuer.KeyID,
+		VerificationMethod:  src.Issuer.VerificationMethod,
+		PipelineID:          src.PipelineID,
+		ProcessID:           src.ProcessID,
+		TransformationClaim: src.TransformationClaim,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: source signer: %w", lc.Name, err)
@@ -87,7 +88,7 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelinec
 		Strategy:   contract.VerificationNone,
 		Processor:  proc,
 		Subscriber: conn.Subscriber(lc.IngressSubject),
-		Publisher:  conn.Publisher(lc.OutputSubject),
+		Publisher:  conn.Publisher(src.OutputSubject),
 		Codec:      envelopecodec.New(),
 		Emission:   memlog.New(),
 	})

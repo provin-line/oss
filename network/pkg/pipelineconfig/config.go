@@ -5,8 +5,9 @@
 //
 // Loops are a keyed map (key = loop name) because a node runs zero or more loops of
 // potentially different roles — the layer's responsibility is a SET of loops, not one
-// fixed loop. slice-17b implements role = "source"; other roles are a fail-closed boot
-// error until their assembly lands.
+// fixed loop. slice-17b implements role = "source"; slice-17c adds role = "sink" (a
+// terminating subscriber that verifies and writes out-of-network); role = "chained"
+// remains a fail-closed boot error until its assembly lands (17d).
 package pipelineconfig
 
 import (
@@ -25,8 +26,28 @@ func init() {
 	hoconconfig.RegisterPackageReference("network/pipeline", referenceConf)
 }
 
-// RoleSource is the only loop role implemented in slice-17b.
-const RoleSource = "source"
+// Loop roles. slice-17c implements RoleSource (17b) and RoleSink; RoleChained is a
+// recognized-but-unsupported role (typed boot error) until 17d.
+const (
+	RoleSource  = "source"
+	RoleSink    = "sink"
+	RoleChained = "chained"
+)
+
+// Sink kinds — the verdict policy a terminating sink applies (mirrors contract.SinkKind).
+const (
+	SinkObservationOnly = "observation-only"
+	SinkProduction      = "production"
+	SinkArchival        = "archival"
+)
+
+// Verification strategies a non-source loop may declare. slice-17c implements
+// StrategyAdjacent; StrategyFull is recognized-but-unsupported (typed boot error) until
+// a network credential resolver lands (17d).
+const (
+	StrategyAdjacent = "adjacent"
+	StrategyFull     = "full"
+)
 
 const loopsKey = "provin.network.pipeline.loops"
 
@@ -54,14 +75,26 @@ type IssuerConfig struct {
 	VerificationMethod string
 }
 
-// LoopConfig is one transport loop's typed configuration.
+// LoopConfig is one transport loop's typed configuration: shared fields plus exactly
+// one role sub-struct, selected by Role. The loader populates and validates the
+// sub-struct that matches Role and rejects fields that belong to a different role.
 type LoopConfig struct {
 	// Name is the loop's config key.
 	Name string
-	// Role selects the processor wiring (slice-17b: RoleSource only).
+	// Role selects the processor wiring: RoleSource | RoleSink (RoleChained → 17d).
 	Role string
-	// IngressSubject is the subject the loop subscribes to for inbound events.
+	// IngressSubject is the subject the loop subscribes to for inbound events. For a
+	// sink it is the GRANTED upstream subject (the upstream source's output-subject /
+	// pipeline DID, imported into this node's account).
 	IngressSubject string
+	// Source is populated when Role == RoleSource.
+	Source SourceConfig
+	// Sink is populated when Role == RoleSink.
+	Sink SinkConfig
+}
+
+// SourceConfig is a producing source loop's identity + output (Role == RoleSource).
+type SourceConfig struct {
 	// OutputSubject is the subject the loop publishes to — the node's publisher
 	// subject, a pipeline DID.
 	OutputSubject string
@@ -72,13 +105,28 @@ type LoopConfig struct {
 	ProcessID  string
 	// TransformationClaim is the validated transformation claim of issued credentials.
 	TransformationClaim vc.TransformationClaim
+	// SchemaRef is the (currently empty-only) schema reference; non-empty is rejected.
+	SchemaRef string
+}
+
+// SinkConfig is a terminating sink loop's verification + write policy (Role == RoleSink).
+// A sink produces nothing in-network, so it has no issuer and no output subject.
+type SinkConfig struct {
+	// Kind is the verdict policy: SinkObservationOnly | SinkProduction | SinkArchival.
+	Kind string
+	// VerificationStrategy is the ingress-credential verification depth (17c: adjacent).
+	VerificationStrategy string
+	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
+	// verified ingress VC for audit reachability.
+	UpstreamEndpoint string
 }
 
 // LoadPipelineConfig reads and validates the pipeline block. It fails closed: an
 // unknown role, a missing required field, a malformed output/issuer DID, an unknown
-// transformation-claim, or a non-empty schema-ref (unsupported in 17b) is a boot
-// error naming the loop and key. An absent or empty loops map is valid (zero loops):
-// the node runs the HTTP control plane only.
+// transformation-claim/sink-kind/verification-strategy, a non-empty schema-ref, or a
+// field that does not belong to the loop's role is a boot error naming the loop and key.
+// An absent or empty loops map is valid (zero loops): the node runs the HTTP control
+// plane only.
 func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if !cfg.Has(loopsKey) {
 		return &Config{}, nil
@@ -98,6 +146,14 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	return out, nil
 }
 
+// sourceKeys / sinkKeys are the role-exclusive config keys. The loader rejects a key
+// from the OTHER role's set so a loop cannot silently carry fields it does not use
+// (e.g. an issuer block under a sink, or a sink block under a source).
+var (
+	sourceKeys = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
+	sinkKeys   = []string{"sink"}
+)
+
 func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 	base := loopsKey + "." + name
 	lc := LoopConfig{Name: name}
@@ -106,71 +162,136 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 	if err != nil {
 		return lc, err
 	}
-	if role != RoleSource {
-		return lc, fmt.Errorf("pipeline: loop %q: unsupported role %q (slice-17b implements %q only)", name, role, RoleSource)
-	}
 	lc.Role = role
 
 	if lc.IngressSubject, err = requireString(cfg, base+".ingress-subject"); err != nil {
 		return lc, err
 	}
-	if lc.OutputSubject, err = requireString(cfg, base+".output-subject"); err != nil {
-		return lc, err
+
+	switch role {
+	case RoleSource:
+		if err := rejectKeys(cfg, base, name, role, sinkKeys); err != nil {
+			return lc, err
+		}
+		if lc.Source, err = loadSourceConfig(cfg, base, name); err != nil {
+			return lc, err
+		}
+	case RoleSink:
+		if err := rejectKeys(cfg, base, name, role, sourceKeys); err != nil {
+			return lc, err
+		}
+		if lc.Sink, err = loadSinkConfig(cfg, base, name); err != nil {
+			return lc, err
+		}
+	case RoleChained:
+		return lc, fmt.Errorf("pipeline: loop %q: unsupported role %q (slice-17c implements %q and %q; %q lands in 17d)", name, role, RoleSource, RoleSink, RoleChained)
+	default:
+		return lc, fmt.Errorf("pipeline: loop %q: unknown role %q", name, role)
 	}
-	if err := requirePipelineDID(lc.OutputSubject, name, "output-subject"); err != nil {
-		return lc, err
+	return lc, nil
+}
+
+func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig, error) {
+	var sc SourceConfig
+	var err error
+
+	if sc.OutputSubject, err = requireString(cfg, base+".output-subject"); err != nil {
+		return sc, err
+	}
+	if err := requirePipelineDID(sc.OutputSubject, name, "output-subject"); err != nil {
+		return sc, err
 	}
 
-	if lc.Issuer.DID, err = requireString(cfg, base+".issuer.did"); err != nil {
-		return lc, err
+	if sc.Issuer.DID, err = requireString(cfg, base+".issuer.did"); err != nil {
+		return sc, err
 	}
-	if err := requireProcessDID(lc.Issuer.DID, name, "issuer.did"); err != nil {
-		return lc, err
+	if err := requireProcessDID(sc.Issuer.DID, name, "issuer.did"); err != nil {
+		return sc, err
 	}
-	if lc.Issuer.KeyID, err = requireString(cfg, base+".issuer.key-id"); err != nil {
-		return lc, err
+	if sc.Issuer.KeyID, err = requireString(cfg, base+".issuer.key-id"); err != nil {
+		return sc, err
 	}
-	if lc.Issuer.VerificationMethod, err = requireString(cfg, base+".issuer.verification-method"); err != nil {
-		return lc, err
+	if sc.Issuer.VerificationMethod, err = requireString(cfg, base+".issuer.verification-method"); err != nil {
+		return sc, err
 	}
 	// The verification-method must name the issuer's own signing key: <issuer.did>#<key-id>.
 	// A bare DID, another DID's key, or a different fragment would boot a loop whose
 	// proofs are rejected by the VC verifier or attributed to the wrong key.
-	if expected := lc.Issuer.DID + "#" + lc.Issuer.KeyID; lc.Issuer.VerificationMethod != expected {
-		return lc, fmt.Errorf("pipeline: loop %q: issuer.verification-method %q must be %q (issuer.did#key-id)", name, lc.Issuer.VerificationMethod, expected)
+	if expected := sc.Issuer.DID + "#" + sc.Issuer.KeyID; sc.Issuer.VerificationMethod != expected {
+		return sc, fmt.Errorf("pipeline: loop %q: issuer.verification-method %q must be %q (issuer.did#key-id)", name, sc.Issuer.VerificationMethod, expected)
 	}
 
-	if lc.PipelineID, err = requireString(cfg, base+".pipeline-id"); err != nil {
-		return lc, err
+	if sc.PipelineID, err = requireString(cfg, base+".pipeline-id"); err != nil {
+		return sc, err
 	}
-	if lc.ProcessID, err = requireString(cfg, base+".process-id"); err != nil {
-		return lc, err
+	if sc.ProcessID, err = requireString(cfg, base+".process-id"); err != nil {
+		return sc, err
 	}
 
 	claimToken, err := requireString(cfg, base+".transformation-claim")
 	if err != nil {
-		return lc, err
+		return sc, err
 	}
 	claim, ok := claimByName[claimToken]
 	if !ok {
-		return lc, fmt.Errorf("pipeline: loop %q: unknown transformation-claim %q", name, claimToken)
+		return sc, fmt.Errorf("pipeline: loop %q: unknown transformation-claim %q", name, claimToken)
 	}
-	lc.TransformationClaim = claim
+	sc.TransformationClaim = claim
 
-	// schema-ref must be empty in slice-17b (ingest does no schema validation; a
-	// single-string -> vc.SchemaRef mapping is deferred to a chained/sink loop). An
-	// absent schema-ref is treated as empty — the field is optional, not required.
+	// schema-ref must be empty (ingest does no schema validation; a single-string ->
+	// vc.SchemaRef mapping is deferred to a chained loop). Absent is treated as empty.
 	if cfg.Has(base + ".schema-ref") {
-		schemaRef, err := cfg.String(base + ".schema-ref")
-		if err != nil {
-			return lc, fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
+		if sc.SchemaRef, err = cfg.String(base + ".schema-ref"); err != nil {
+			return sc, fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
 		}
-		if schemaRef != "" {
-			return lc, fmt.Errorf("pipeline: loop %q: schema-ref must be empty in slice-17b (got %q)", name, schemaRef)
+		if sc.SchemaRef != "" {
+			return sc, fmt.Errorf("pipeline: loop %q: schema-ref must be empty (got %q)", name, sc.SchemaRef)
 		}
 	}
 
-	return lc, nil
+	return sc, nil
+}
+
+func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, error) {
+	var sc SinkConfig
+	var err error
+
+	if sc.Kind, err = requireString(cfg, base+".sink.kind"); err != nil {
+		return sc, err
+	}
+	switch sc.Kind {
+	case SinkObservationOnly, SinkProduction, SinkArchival:
+	default:
+		return sc, fmt.Errorf("pipeline: loop %q: unknown sink.kind %q (want %q|%q|%q)", name, sc.Kind, SinkObservationOnly, SinkProduction, SinkArchival)
+	}
+
+	if sc.VerificationStrategy, err = requireString(cfg, base+".sink.verification-strategy"); err != nil {
+		return sc, err
+	}
+	switch sc.VerificationStrategy {
+	case StrategyAdjacent:
+	case StrategyFull:
+		return sc, fmt.Errorf("pipeline: loop %q: verification-strategy %q is unsupported in slice-17c (%q only; %q lands in 17d)", name, sc.VerificationStrategy, StrategyAdjacent, StrategyFull)
+	default:
+		return sc, fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q|%q)", name, sc.VerificationStrategy, StrategyAdjacent, StrategyFull)
+	}
+
+	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
+		return sc, err
+	}
+
+	return sc, nil
+}
+
+// rejectKeys errors if any of the given config keys is present under the loop — used to
+// fail closed when a loop carries fields that belong to a different role.
+func rejectKeys(cfg *hoconconfig.Config, base, name, role string, keys []string) error {
+	for _, k := range keys {
+		if cfg.Has(base + "." + k) {
+			return fmt.Errorf("pipeline: loop %q: key %q does not belong to role %q", name, k, role)
+		}
+	}
+	return nil
 }
 
 func requireString(cfg *hoconconfig.Config, key string) (string, error) {

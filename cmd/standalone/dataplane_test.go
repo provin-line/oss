@@ -72,14 +72,16 @@ func dpPipelineCfg() *pipelineconfig.Config {
 		Name:           "src",
 		Role:           pipelineconfig.RoleSource,
 		IngressSubject: dpIngress,
-		OutputSubject:  dpPipelineDID,
-		Issuer: pipelineconfig.IssuerConfig{
-			DID: dpIssuerDID, KeyID: string(keystore.KeyIDSigning),
-			VerificationMethod: dpIssuerDID + "#signing",
+		Source: pipelineconfig.SourceConfig{
+			OutputSubject: dpPipelineDID,
+			Issuer: pipelineconfig.IssuerConfig{
+				DID: dpIssuerDID, KeyID: string(keystore.KeyIDSigning),
+				VerificationMethod: dpIssuerDID + "#signing",
+			},
+			PipelineID:          "pipe",
+			ProcessID:           "src",
+			TransformationClaim: vc.ClaimConvert,
 		},
-		PipelineID:          "pipe",
-		ProcessID:           "src",
-		TransformationClaim: vc.ClaimConvert,
 	}}}
 }
 
