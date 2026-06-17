@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
@@ -24,8 +25,14 @@ var (
 	// Service built without the resolver/peer-client/infra trio — a server
 	// misconfiguration, distinct from ErrInfraUnavailable.
 	ErrSubscriberUnconfigured = errors.New("chainmanager: subscriber side not configured")
-	// ErrRemotePeer wraps a failure of an outbound ChainPeerService call.
+	// ErrRemotePeer wraps a failure of an outbound ChainPeerService call. The
+	// underlying *connect.Error is preserved in the chain so the handler can pass
+	// the remote code through (D-s8).
 	ErrRemotePeer = errors.New("chainmanager: remote peer call failed")
+	// ErrInvalidSubscriberDID is returned when the subscriber DID is not a
+	// parseable dplaax DID — a fast local fail-closed before any signed round-trip
+	// (D-s7).
+	ErrInvalidSubscriberDID = errors.New("chainmanager: invalid subscriber DID")
 )
 
 // DIDResolver resolves a DID to its DID Document — here, the publisher's, to read
@@ -93,6 +100,11 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	if err := requirePipelineDID(publisherDID); err != nil {
 		return "", err
 	}
+	// Fast local fail-closed on the subscriber DID before any signed round-trip
+	// (D-s7): a malformed DID would only burn a nonce and be rejected remotely.
+	if _, err := dplaax.Parse(subscriberDID); err != nil {
+		return "", fmt.Errorf("%w: %q: %v", ErrInvalidSubscriberDID, subscriberDID, err)
+	}
 
 	endpoint, err := s.resolveEndpoint(ctx, publisherDID)
 	if err != nil {
@@ -104,7 +116,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// by-reference, which every publisher offers.
 	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, subscriberDID, publisherDID)
 	if err != nil {
-		return "", fmt.Errorf("%w: get publisher info: %v", ErrRemotePeer, err)
+		return "", fmt.Errorf("%w: get publisher info: %w", ErrRemotePeer, err)
 	}
 	if err := assertModeOffered(requestedMode, modes); err != nil {
 		return "", err
@@ -117,16 +129,24 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 
 	remoteID, connInfo, publishType, agreedMode, err := s.peer.RegisterSubscription(ctx, endpoint, subscriberDID, publisherDID, requestedMode)
 	if err != nil {
-		return "", fmt.Errorf("%w: register subscription: %v", ErrRemotePeer, err)
+		return "", fmt.Errorf("%w: register subscription: %w", ErrRemotePeer, err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	remoteSubject, remoteAccountKey := importTargets(connInfo)
+	// Ref-count the shared import by remote subject (mirror the publisher export
+	// ref-count): only the first subscriber for a subject creates the import, so
+	// only the first should compensate by removing it.
+	first, err := s.isFirstImportForSubject(remoteSubject)
+	if err != nil {
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		return "", err
+	}
 	if err := s.infra.AddImport(remoteSubject, remoteAccountKey, remoteSubject); err != nil {
-		// the remote already registered → undo it (best-effort).
-		_ = s.peer.Disconnect(ctx, endpoint, remoteID)
+		// the remote already registered → undo it (best-effort, fresh context).
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
 		return "", fmt.Errorf("chainmanager: add import: %w", err)
 	}
 
@@ -142,9 +162,15 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		RemoteID:        remoteID,
 	}
 	if err := s.subs.Save(sub); err != nil {
-		// undo both the local import and the remote registration (best-effort).
-		_ = s.infra.RemoveImport(remoteSubject, remoteAccountKey)
-		_ = s.peer.Disconnect(ctx, endpoint, remoteID)
+		// undo the remote registration always, and the local import only if we
+		// created it (a sibling subscriber still depends on a shared import).
+		// Compensation runs on a fresh context so a canceled caller still reaches
+		// the publisher (D-s5; Codex P2).
+		cctx := compensationCtx(ctx)
+		if first {
+			_ = s.infra.RemoveImport(remoteSubject, remoteAccountKey)
+		}
+		_ = s.peer.Disconnect(cctx, endpoint, remoteID)
 		return "", fmt.Errorf("chainmanager: persist subscription: %w", err)
 	}
 	return id, nil
@@ -182,13 +208,59 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 		return err
 	}
 	if err := s.peer.Disconnect(ctx, endpoint, sub.RemoteID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("%w: remote disconnect: %v", ErrRemotePeer, err)
+		return fmt.Errorf("%w: remote disconnect: %w", ErrRemotePeer, err)
 	}
 	remoteSubject, remoteAccountKey := importTargets(sub.ConnectionInfo)
-	if err := s.infra.RemoveImport(remoteSubject, remoteAccountKey); err != nil {
-		return fmt.Errorf("chainmanager: remove import: %w", err)
+	// Ref-count: tear the shared import down only when this is the last subscriber
+	// for the subject (Codex P2; mirror the publisher export ref-count). This
+	// record is still stored, so count>=1; ==1 means it is the last.
+	count, err := s.countImportsForSubject(remoteSubject)
+	if err != nil {
+		return err
+	}
+	if count <= 1 {
+		if err := s.infra.RemoveImport(remoteSubject, remoteAccountKey); err != nil {
+			return fmt.Errorf("chainmanager: remove import: %w", err)
+		}
 	}
 	return s.subs.Delete(subscriptionID)
+}
+
+// compensationCtx returns a context detached from the caller's cancellation (but
+// preserving its values) for best-effort teardown after a remote side-effect has
+// already happened: a canceled/timed-out caller must not prevent the compensating
+// Disconnect/RemoveImport from reaching the publisher (D-s5; Codex P2). The
+// compensation calls are awaited synchronously, so the detached context needs no
+// explicit deadline here; bounding it belongs with the real (nats) transport in
+// C2, where the calls actually do I/O.
+func compensationCtx(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
+// isFirstImportForSubject reports whether no subscriber-direction record yet
+// references remoteSubject (so this Subscribe is the one creating the import).
+func (s *Service) isFirstImportForSubject(remoteSubject string) (bool, error) {
+	n, err := s.countImportsForSubject(remoteSubject)
+	return n == 0, err
+}
+
+// countImportsForSubject counts subscriber-direction records whose connection
+// targets remoteSubject — the import ref-count.
+func (s *Service) countImportsForSubject(remoteSubject string) (int, error) {
+	all, err := s.subs.List()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, sub := range all {
+		if directionOf(sub) != directionSubscriber {
+			continue
+		}
+		if subj, _ := importTargets(sub.ConnectionInfo); subj == remoteSubject {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // resolveEndpoint resolves publisherDID to its #chain-manager endpoint and runs

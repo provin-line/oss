@@ -26,16 +26,17 @@ func (f *fakeResolver) Resolve(context.Context, string) (*did.DIDDocument, error
 
 // fakePeer records outbound calls and returns scripted responses / errors.
 type fakePeer struct {
-	publishType  string
-	modes        []string
-	remoteID     string
-	connInfo     map[string]string
-	agreedMode   string // "" → echo the requested mode
-	getErr       error
-	registerErr  error
-	disconnErr   error
-	registered   int
-	disconnected []string
+	publishType      string
+	modes            []string
+	remoteID         string
+	connInfo         map[string]string
+	agreedMode       string // "" → echo the requested mode
+	getErr           error
+	registerErr      error
+	disconnErr       error
+	registered       int
+	disconnected     []string
+	cancelOnRegister context.CancelFunc // if set, cancels the caller ctx mid-flight
 }
 
 func (f *fakePeer) GetPublisherInfo(context.Context, string, string, string) (string, []string, error) {
@@ -49,6 +50,9 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 	if f.registerErr != nil {
 		return "", nil, "", "", f.registerErr
 	}
+	if f.cancelOnRegister != nil {
+		f.cancelOnRegister() // simulate the caller's ctx being canceled after the remote side-effect
+	}
 	f.registered++
 	agreed := f.agreedMode
 	if agreed == "" {
@@ -60,7 +64,10 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 	return f.remoteID, f.connInfo, f.publishType, agreed, nil
 }
 
-func (f *fakePeer) Disconnect(_ context.Context, _, remoteID string) error {
+func (f *fakePeer) Disconnect(ctx context.Context, _, remoteID string) error {
+	if err := ctx.Err(); err != nil {
+		return err // a real client respects ctx; compensation must use a fresh one
+	}
 	if f.disconnErr != nil {
 		return f.disconnErr
 	}
@@ -343,6 +350,66 @@ func TestListSubscriptions_SubscriberDirectionOnly(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Direction != "subscriber" {
 		t.Errorf("ListSubscriptions = %+v, want one subscriber-direction record", list)
+	}
+}
+
+func TestSubscribe_InvalidSubscriberDID(t *testing.T) {
+	svc, _ := subSvc(&fakeInfra{}, defaultPeer(), publicGuard())
+	_, err := svc.Subscribe(context.Background(), "not-a-did", pubPipeline, "")
+	if !errors.Is(err, ErrInvalidSubscriberDID) {
+		t.Errorf("err = %v, want ErrInvalidSubscriberDID", err)
+	}
+}
+
+// Unsubscribing one subscriber must NOT tear down the shared import while a
+// sibling subscriber of the same publisher subject remains (Codex P2 ref-count).
+func TestUnsubscribe_SiblingKeepsImport(t *testing.T) {
+	inf, peer := &fakeInfra{}, defaultPeer()
+	svc, _ := subSvc(inf, peer, publicGuard())
+	id1, err := svc.Subscribe(context.Background(), subOwner, pubPipeline, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := svc.Subscribe(context.Background(), "did:dplaax:reg:org:sub2", pubPipeline, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Unsubscribe(context.Background(), id1); err != nil {
+		t.Fatal(err)
+	}
+	if len(inf.removedImports) != 0 {
+		t.Errorf("sibling remains: RemoveImport must not fire, got %v", inf.removedImports)
+	}
+	if err := svc.Unsubscribe(context.Background(), id2); err != nil {
+		t.Fatal(err)
+	}
+	if len(inf.removedImports) != 1 {
+		t.Errorf("last subscriber: RemoveImport must fire once, got %v", inf.removedImports)
+	}
+}
+
+// When the caller's context is canceled after the remote registration but before
+// persist, the compensating Disconnect must still reach the publisher — it runs
+// on a context detached from the caller's cancellation (Codex P2). The fake peer
+// honors ctx, so without the detach the compensation would silently no-op.
+func TestSubscribe_CompensationSurvivesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	inf := &fakeInfra{}
+	peer := defaultPeer()
+	peer.cancelOnRegister = cancel
+	allows := memstore.NewAllowListStore()
+	failing := &failingSubStore{SubscriptionStore: memstore.NewSubscriptionStore(), saveErr: errors.New("disk full")}
+	svc := New(failing, allows,
+		WithInfraOperator(inf),
+		WithDIDResolver(&fakeResolver{doc: pubDoc()}),
+		WithPeerClient(peer),
+		WithEndpointGuard(publicGuard()),
+	)
+	if _, err := svc.Subscribe(ctx, subOwner, pubPipeline, ""); err == nil {
+		t.Fatal("expected persist failure")
+	}
+	if len(peer.disconnected) != 1 {
+		t.Errorf("compensation Disconnect not delivered under a canceled caller ctx: %v", peer.disconnected)
 	}
 }
 

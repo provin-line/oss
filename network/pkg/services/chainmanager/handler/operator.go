@@ -2,8 +2,9 @@
 // converts connect request/response messages to and from the chainmanager domain
 // and maps domain sentinel errors to Connect codes; it holds no business logic.
 //
-// This slice (B1) provides OperatorHandler for the L1 ChainService. The L2
-// ChainPeerService handler (wireauth-verified) is added in B2.
+// OperatorHandler serves the L1 ChainService (operator surface); PeerHandler
+// serves the L2 ChainPeerService (wireauth-verified). The operator's
+// connection-flow RPCs (Subscribe/Unsubscribe) are enabled via WithSubscriber.
 package handler
 
 import (
@@ -116,6 +117,8 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrInvalidPipelineDID):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, chainmanager.ErrInvalidSubscriberDID):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrEndpointNotAllowed):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported):
@@ -125,6 +128,13 @@ func mapError(err error) error {
 	case errors.Is(err, chainmanager.ErrSubscriberUnconfigured):
 		return connect.NewError(connect.CodeInternal, err)
 	case errors.Is(err, chainmanager.ErrRemotePeer):
+		// Pass the remote ConnectRPC code through when present (D-s8): a remote
+		// PermissionDenied/InvalidArgument/etc. is preserved in the error chain
+		// (%w), so the operator gets the right recoverability signal; an opaque
+		// failure (e.g. a resolver error) maps to Unavailable.
+		if code := connect.CodeOf(err); code != connect.CodeUnknown {
+			return connect.NewError(code, err)
+		}
 		return connect.NewError(connect.CodeUnavailable, err)
 	case errors.Is(err, store.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)

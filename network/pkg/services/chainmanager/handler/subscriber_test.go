@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -114,6 +115,21 @@ func TestOperatorHandler_Subscribe_ErrorMapping(t *testing.T) {
 				t.Errorf("Subscribe(%s) code = %v, want %v", tc.name, connect.CodeOf(err), tc.want)
 			}
 		})
+	}
+}
+
+// mapError passes a wrapped remote ConnectRPC code through (D-s8): a remote
+// PermissionDenied surfaces as PermissionDenied, not a misleading Unavailable;
+// an opaque (non-connect) remote failure falls back to Unavailable.
+func TestMapError_RemotePeerPassthrough(t *testing.T) {
+	remote := connect.NewError(connect.CodePermissionDenied, errors.New("denied"))
+	wrapped := fmt.Errorf("%w: get publisher info: %w", chainmanager.ErrRemotePeer, remote)
+	if got := connect.CodeOf(mapError(wrapped)); got != connect.CodePermissionDenied {
+		t.Errorf("passthrough code = %v, want PermissionDenied", got)
+	}
+	opaque := fmt.Errorf("%w: resolve: %v", chainmanager.ErrRemotePeer, errors.New("dns failure"))
+	if got := connect.CodeOf(mapError(opaque)); got != connect.CodeUnavailable {
+		t.Errorf("opaque remote code = %v, want Unavailable", got)
 	}
 }
 
