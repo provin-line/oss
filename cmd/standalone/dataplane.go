@@ -10,14 +10,26 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
+	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/source/ingest"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
+	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
+
+// dataPlaneDeps are the cross-plane dependencies a data plane needs beyond its own
+// keystore: the shared DID resolver (sink loops verify upstream credentials through it)
+// and the sink Writer (where a sink delivers consumed events). They are zero for a
+// source-only node — a source loop uses neither.
+type dataPlaneDeps struct {
+	Resolver   resolver.Resolver
+	SinkWriter sink.Writer
+}
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
 // connection. It owns the connection's lifecycle: Run starts the loops, waits for
@@ -32,8 +44,10 @@ type dataPlane struct {
 // no loops are configured it returns a no-op runner WITHOUT dialing nats, so an
 // empty/absent pipeline config never requires a live broker (it does not regress the
 // HTTP-only deployment). Otherwise it dials once as the node account and builds one
-// loop per config entry over that shared connection.
-func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore) (*dataPlane, error) {
+// loop per config entry over that shared connection, dispatching on role: a source
+// loop signs FirstDrop credentials with keyStore; a sink loop verifies upstream
+// credentials through deps.Resolver and writes consumed events to deps.SinkWriter.
+func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps dataPlaneDeps) (*dataPlane, error) {
 	if len(pipeCfg.Loops) == 0 {
 		return &dataPlane{}, nil
 	}
@@ -51,8 +65,31 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 
 	dp := &dataPlane{conn: conn}
 	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
+	// Sink loops share one verifier (over the node's resolver) and one in-memory ingress
+	// store, built lazily on the first sink loop so a source-only node needs no resolver.
+	var sinkVerifier provenance.Verifier
+	var ingressStore contract.IngressVCStore
 	for _, lc := range pipeCfg.Loops {
-		loop, err := buildSourceLoop(conn, builder, lc)
+		var loop *transport.Loop
+		switch lc.Role {
+		case pipelineconfig.RoleSource:
+			loop, err = buildSourceLoop(conn, builder, lc)
+		case pipelineconfig.RoleSink:
+			if deps.Resolver == nil || deps.SinkWriter == nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("standalone: loop %q: sink role requires a DID resolver and a sink writer", lc.Name)
+			}
+			if sinkVerifier == nil {
+				sinkVerifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
+				ingressStore = newMemIngressStore()
+			}
+			loop, err = buildSinkLoop(conn, sinkVerifier, ingressStore, deps.SinkWriter, lc)
+		default:
+			// The config layer fails closed on unknown/unsupported roles; this guards the
+			// assembly seam against a role string that bypassed validation.
+			_ = conn.Close()
+			return nil, fmt.Errorf("standalone: loop %q: unsupported role %q", lc.Name, lc.Role)
+		}
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
@@ -96,6 +133,87 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelinec
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
 	}
 	return loop, nil
+}
+
+// buildSinkLoop assembles one terminating sink loop: ingress Subscriber → sink
+// processor (verify the upstream credential, enforce payload binding, write
+// out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
+// sink processor holds its own Codec). The config layer has validated lc.Sink.
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
+	}
+	kind, err := sinkKind(lc.Sink.Kind)
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
+	}
+	proc, err := sink.New(sink.Config{
+		Strategy:         strategy,
+		Kind:             kind,
+		Codec:            envelopecodec.New(),
+		Verifier:         verifier,
+		Store:            store,
+		Writer:           writer,
+		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: sink processor: %w", lc.Name, err)
+	}
+	loop, err := transport.NewLoop(transport.LoopConfig{
+		Behavior:   contract.ChainTerminating,
+		Strategy:   strategy,
+		Processor:  proc,
+		Subscriber: conn.Subscriber(lc.IngressSubject),
+		// A terminating sink has no Publisher/Codec/Emission (NewLoop enforces this).
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
+	}
+	return loop, nil
+}
+
+// verificationStrategy maps a (config-validated) strategy token to its contract value.
+// slice-17c admits "adjacent" only; "full" is rejected at config load.
+func verificationStrategy(s string) (contract.VerificationStrategy, error) {
+	switch s {
+	case pipelineconfig.StrategyAdjacent:
+		return contract.VerificationAdjacent, nil
+	case pipelineconfig.StrategyFull:
+		return contract.VerificationUnknown, fmt.Errorf("verification-strategy %q is unsupported in slice-17c", s)
+	default:
+		return contract.VerificationUnknown, fmt.Errorf("unknown verification-strategy %q", s)
+	}
+}
+
+// sinkKind maps a (config-validated) sink-kind token to its contract value.
+func sinkKind(k string) (contract.SinkKind, error) {
+	switch k {
+	case pipelineconfig.SinkObservationOnly:
+		return contract.SinkObservationOnly, nil
+	case pipelineconfig.SinkProduction:
+		return contract.SinkProduction, nil
+	case pipelineconfig.SinkArchival:
+		return contract.SinkArchival, nil
+	default:
+		return contract.SinkKindUnknown, fmt.Errorf("unknown sink.kind %q", k)
+	}
+}
+
+// memIngressStore is the PoC in-memory ingress-VC store (parity with the memlog emission
+// log): it retains verified ingress credentials in memory. A durable store lands later.
+type memIngressStore struct {
+	mu  sync.Mutex
+	vcs []*vc.PipelinePassCredential
+}
+
+func newMemIngressStore() *memIngressStore { return &memIngressStore{} }
+
+func (s *memIngressStore) StoreIngressVC(_ context.Context, cred *vc.PipelinePassCredential, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vcs = append(s.vcs, cred)
+	return nil
 }
 
 // Run runs every loop until ctx is cancelled, waits for all of them to drain and

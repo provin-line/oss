@@ -49,7 +49,25 @@ import (
 //
 // It is the testable seam: the boot e2e exercises the assembled mux over httptest
 // without binding a port; main wraps the returned handler in h2c and serves it.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint) (http.Handler, error) {
+// newDIDResolution builds the SSRF guard and the cross-registry DID resolver shared by
+// the control plane (BuildHandler) and the data plane (sink-loop credential
+// verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
+// e2e) override the default https://{registry} mapping (D-m6).
+func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver) {
+	guard := core.NewURLGuard(core.WithAllowLoopback(coreCfg.AllowLoopback))
+	var resolverOpts []didresolver.Option
+	if chainCfg.Transport == chainconfig.TransportNATS && chainCfg.NATS.ResolverBaseURL != "" {
+		base := chainCfg.NATS.ResolverBaseURL
+		resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
+	}
+	return guard, didresolver.New(guard, resolverOpts...)
+}
+
+// The guard (SSRF policy) and resolver (cross-registry DID resolution) are built by
+// the composition root (main) and passed in, because the data plane's sink loops need
+// the SAME resolver to verify upstream credentials (slice-17c) — building it once in
+// main and sharing it keeps a single DID-resolution policy across both planes.
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -67,17 +85,6 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// and allowlists/ tree under it. C2b-2a mounts BOTH chain surfaces (operator/L1
 	// and peer/L2) from one Service instance with the subscriber side fully wired.
 	chainRoot := filepath.Join(coreCfg.DataDir, "chain")
-	guard := core.NewURLGuard(core.WithAllowLoopback(coreCfg.AllowLoopback))
-	// The cross-registry resolver feeds BOTH the subscriber side (publisher
-	// #chain-manager endpoint) and the peer verifier (signer #auth key). The
-	// base-URL seam lets a deployment (or the boot e2e) override the default
-	// https://{registry} mapping (D-m6).
-	var resolverOpts []didresolver.Option
-	if chainCfg.Transport == chainconfig.TransportNATS && chainCfg.NATS.ResolverBaseURL != "" {
-		base := chainCfg.NATS.ResolverBaseURL
-		resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
-	}
-	resolver := didresolver.New(guard, resolverOpts...)
 
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {

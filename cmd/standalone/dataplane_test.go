@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -12,10 +14,12 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/pipeline/sink/console"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
@@ -96,7 +100,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 
-	dp, err := buildDataPlane(chainCfg, dpPipelineCfg(), dpKeyStore(t))
+	dp, err := buildDataPlane(chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("buildDataPlane: %v", err)
 	}
@@ -231,11 +235,72 @@ func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: "nats://192.0.2.1:4222", AccountSeed: "bogus"},
 	}
-	dp, err := buildDataPlane(chainCfg, &pipelineconfig.Config{}, dpKeyStore(t))
+	dp, err := buildDataPlane(chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("buildDataPlane (zero loops): %v", err)
 	}
 	if err := dp.Run(context.Background()); err != nil {
 		t.Fatalf("zero-loop Run: %v", err)
+	}
+}
+
+// stubResolver satisfies resolver.Resolver for assembly tests; Resolve is never called
+// at build time (only at Run/verify), so its body is irrelevant here.
+type stubResolver struct{}
+
+func (stubResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	return nil, fmt.Errorf("stub resolver")
+}
+
+func dpSinkCfg() *pipelineconfig.Config {
+	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name:           "archive",
+		Role:           pipelineconfig.RoleSink,
+		IngressSubject: dpPipelineDID,
+		Sink: pipelineconfig.SinkConfig{
+			Kind:                 pipelineconfig.SinkObservationOnly,
+			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
+		},
+	}}}
+}
+
+// TestBuildDataPlane_SinkLoopAssembles asserts the role dispatch builds a terminating
+// sink loop (NewLoop accepts it with no Publisher/Codec/Emission) when given a resolver
+// and a writer.
+func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	dp, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+		Resolver:   stubResolver{},
+		SinkWriter: console.New(io.Discard),
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (sink): %v", err)
+	}
+	if len(dp.loops) != 1 {
+		t.Fatalf("loops: got %d want 1", len(dp.loops))
+	}
+	// Drain immediately — assembly is what this test asserts.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("sink Run drain: %v", err)
+	}
+}
+
+// TestBuildDataPlane_SinkRequiresDeps asserts a sink loop without a resolver/writer is a
+// build error (fail closed) rather than a nil-deref at run time.
+func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	if _, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+		t.Fatal("sink loop without resolver/writer: want error, got nil")
 	}
 }

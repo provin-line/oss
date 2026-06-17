@@ -34,6 +34,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/pipeline/sink/console"
 )
 
 // httpShutdownTimeout bounds the graceful HTTP drain on shutdown.
@@ -76,15 +77,23 @@ func main() {
 		log.Fatalf("standalone: %v", err)
 	}
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier)
+	// The SSRF guard + DID resolver are shared across both planes: the control plane's
+	// chain manager and the data plane's sink-loop credential verification (slice-17c).
+	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
 
-	// The data plane signs with the same file-backed keystore the control plane uses
-	// (dataDir/keys). With zero loops configured this dials nothing.
+	// The data plane signs (source loops) with the same file-backed keystore the control
+	// plane uses (dataDir/keys) and verifies (sink loops) through the shared resolver. A
+	// sink delivers consumed events to stdout as NDJSON. With zero loops this dials nothing.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
-	dp, err := buildDataPlane(chainCfg, pipeCfg, keyStore)
+	dp, err := buildDataPlane(chainCfg, pipeCfg, keyStore, dataPlaneDeps{
+		Resolver:   resolver,
+		SinkWriter: console.New(os.Stdout),
+	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}

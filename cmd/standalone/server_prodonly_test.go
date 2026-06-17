@@ -20,8 +20,9 @@ func TestBuildHandler_NoopRequiresDevBuild(t *testing.T) {
 	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint(nil)
-	_, err := BuildHandler(coreCfg, regCfg,
-		&chainconfig.Config{Transport: chainconfig.TransportNoop, AllowNoopTransport: true}, verifier)
+	noop := &chainconfig.Config{Transport: chainconfig.TransportNoop, AllowNoopTransport: true}
+	guard, resolver := newDIDResolution(coreCfg, noop)
+	_, err := BuildHandler(coreCfg, regCfg, noop, verifier, guard, resolver)
 	if err == nil {
 		t.Fatal("BuildHandler accepted noop transport in a production build")
 	}

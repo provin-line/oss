@@ -80,7 +80,9 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 		{Resource: "chain", Action: "read"},
 		{Resource: "chain", Action: "update-allowlist"},
 	})
-	h, err := BuildHandler(coreCfg, regCfg, natsChainCfg(t), verifier)
+	chainCfg := natsChainCfg(t)
+	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
