@@ -9,6 +9,10 @@ import (
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/pipeline/chained"
+	jsonataconv "github.com/provin-line/oss/pipeline/chained/converter/jsonata"
+	"github.com/provin-line/oss/pipeline/chained/filter"
+	jsonatafilter "github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
@@ -65,25 +69,39 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 
 	dp := &dataPlane{conn: conn}
 	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
-	// Sink loops share one verifier (over the node's resolver) and one in-memory ingress
-	// store, built lazily on the first sink loop so a source-only node needs no resolver.
-	var sinkVerifier provenance.Verifier
+	// Consuming loops (sink, chained) share one verifier (over the node's resolver) and one
+	// in-memory ingress store, built lazily on the first such loop so a source-only node
+	// needs no resolver. ensureConsumer builds them once and fails closed without a resolver.
+	var verifier provenance.Verifier
 	var ingressStore contract.IngressVCStore
+	ensureConsumer := func(loopName string) error {
+		if verifier != nil {
+			return nil
+		}
+		if deps.Resolver == nil {
+			return fmt.Errorf("standalone: loop %q: %s role requires a DID resolver", loopName, "consuming")
+		}
+		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
+		ingressStore = newMemIngressStore()
+		return nil
+	}
 	for _, lc := range pipeCfg.Loops {
 		var loop *transport.Loop
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
 			loop, err = buildSourceLoop(conn, builder, lc)
 		case pipelineconfig.RoleSink:
-			if deps.Resolver == nil || deps.SinkWriter == nil {
+			if deps.SinkWriter == nil {
 				_ = conn.Close()
-				return nil, fmt.Errorf("standalone: loop %q: sink role requires a DID resolver and a sink writer", lc.Name)
+				return nil, fmt.Errorf("standalone: loop %q: sink role requires a sink writer", lc.Name)
 			}
-			if sinkVerifier == nil {
-				sinkVerifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
-				ingressStore = newMemIngressStore()
+			if err = ensureConsumer(lc.Name); err == nil {
+				loop, err = buildSinkLoop(conn, verifier, ingressStore, deps.SinkWriter, lc)
 			}
-			loop, err = buildSinkLoop(conn, sinkVerifier, ingressStore, deps.SinkWriter, lc)
+		case pipelineconfig.RoleChained:
+			if err = ensureConsumer(lc.Name); err == nil {
+				loop, err = buildChainedLoop(conn, builder, verifier, ingressStore, lc)
+			}
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
 			// assembly seam against a role string that bypassed validation.
@@ -166,6 +184,72 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 		Processor:  proc,
 		Subscriber: conn.Subscriber(lc.IngressSubject),
 		// A terminating sink has no Publisher/Codec/Emission (NewLoop enforces this).
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
+	}
+	return loop, nil
+}
+
+// buildChainedLoop assembles one chained (relay) loop: ingress Subscriber → chained
+// processor (verify the upstream credential, enforce payload binding, optionally
+// filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
+// Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
+// (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+	cc := lc.Chained
+	signer, err := vcdid.NewSigner(vcdid.Config{
+		Builder:             builder,
+		IssuerDID:           cc.Issuer.DID,
+		KeyID:               cc.Issuer.KeyID,
+		VerificationMethod:  cc.Issuer.VerificationMethod,
+		PipelineID:          cc.PipelineID,
+		ProcessID:           cc.ProcessID,
+		TransformationClaim: cc.TransformationClaim,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: chained signer: %w", lc.Name, err)
+	}
+	strategy, err := verificationStrategy(cc.VerificationStrategy)
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
+	}
+	chainedCfg := chained.Config{
+		Strategy:          strategy,
+		IngressConformant: true,
+		UpstreamEndpoint:  cc.UpstreamEndpoint,
+		Codec:             envelopecodec.New(),
+		Verifier:          verifier,
+		Store:             store,
+		Signer:            signer,
+	}
+	// Converter/filters compile at boot — a malformed JSONata expression fails closed here.
+	if cc.Converter != "" {
+		conv, err := jsonataconv.New(cc.Converter)
+		if err != nil {
+			return nil, fmt.Errorf("standalone: loop %q: converter: %w", lc.Name, err)
+		}
+		chainedCfg.Converter = conv
+	}
+	if len(cc.Filters) > 0 {
+		filt, err := jsonatafilter.New(cc.Filters)
+		if err != nil {
+			return nil, fmt.Errorf("standalone: loop %q: filters: %w", lc.Name, err)
+		}
+		chainedCfg.Filters = []filter.Filter{filt}
+	}
+	proc, err := chained.New(chainedCfg)
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: chained processor: %w", lc.Name, err)
+	}
+	loop, err := transport.NewLoop(transport.LoopConfig{
+		Behavior:   contract.ChainPreserving,
+		Strategy:   strategy,
+		Processor:  proc,
+		Subscriber: conn.Subscriber(lc.IngressSubject),
+		Publisher:  conn.Publisher(cc.OutputSubject),
+		Codec:      envelopecodec.New(),
+		Emission:   memlog.New(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)

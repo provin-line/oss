@@ -304,3 +304,69 @@ func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
 		t.Fatal("sink loop without resolver/writer: want error, got nil")
 	}
 }
+
+const (
+	dpRelayDID  = "did:dplaax:reg:org:beta:pipeline:relay"
+	dpRelayIssr = "did:dplaax:reg:org:beta:pipeline:relay:process:r1"
+)
+
+func dpChainedCfg(converter string) *pipelineconfig.Config {
+	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name:           "relay",
+		Role:           pipelineconfig.RoleChained,
+		IngressSubject: dpPipelineDID,
+		Chained: pipelineconfig.ChainedConfig{
+			OutputSubject: dpRelayDID,
+			Issuer: pipelineconfig.IssuerConfig{
+				DID: dpRelayIssr, KeyID: string(keystore.KeyIDSigning),
+				VerificationMethod: dpRelayIssr + "#signing",
+			},
+			PipelineID:           "relay",
+			ProcessID:            "r1",
+			TransformationClaim:  vc.ClaimConvert,
+			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
+			Converter:            converter,
+		},
+	}}}
+}
+
+// TestBuildDataPlane_ChainedLoopAssembles asserts the role dispatch builds a
+// ChainPreserving relay loop (NewLoop accepts Publisher+Codec+Emission) given a resolver;
+// a chained loop needs no sink writer.
+func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	dp, err := buildDataPlane(chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+		Resolver: stubResolver{},
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (chained): %v", err)
+	}
+	if len(dp.loops) != 1 {
+		t.Fatalf("loops: got %d want 1", len(dp.loops))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("chained Run drain: %v", err)
+	}
+}
+
+// TestBuildDataPlane_ChainedMalformedConverterFails asserts a malformed JSONata converter
+// expression fails closed at build (compiled at loop-build time), not at first event.
+func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	if _, err := buildDataPlane(chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), dataPlaneDeps{
+		Resolver: stubResolver{},
+	}); err == nil {
+		t.Fatal("malformed converter expression: want build error, got nil")
+	}
+}
