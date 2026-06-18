@@ -356,6 +356,20 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 	}
 }
 
+// TestBuildDataPlane_ChainedRequiresResolver asserts a chained loop without a DID resolver
+// is a build error (fail closed via ensureConsumer) rather than a nil-deref at run time. A
+// chained loop needs a resolver (to verify ingress) but no sink writer.
+func TestBuildDataPlane_ChainedRequiresResolver(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	if _, err := buildDataPlane(chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+		t.Fatal("chained loop without resolver: want error, got nil")
+	}
+}
+
 // TestBuildDataPlane_ChainedMalformedConverterFails asserts a malformed JSONata converter
 // expression fails closed at build (compiled at loop-build time), not at first event.
 func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {

@@ -79,7 +79,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 			return nil
 		}
 		if deps.Resolver == nil {
-			return fmt.Errorf("standalone: loop %q: %s role requires a DID resolver", loopName, "consuming")
+			return fmt.Errorf("standalone: loop %q: consuming role requires a DID resolver", loopName)
 		}
 		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
 		ingressStore = newMemIngressStore()
@@ -258,13 +258,14 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier pr
 }
 
 // verificationStrategy maps a (config-validated) strategy token to its contract value.
-// slice-17c admits "adjacent" only; "full" is rejected at config load.
+// The data plane admits "adjacent" only; "full" is rejected at config load (it needs a
+// network credential resolver + VC-store publication, both unbuilt — lands in 17e).
 func verificationStrategy(s string) (contract.VerificationStrategy, error) {
 	switch s {
 	case pipelineconfig.StrategyAdjacent:
 		return contract.VerificationAdjacent, nil
 	case pipelineconfig.StrategyFull:
-		return contract.VerificationUnknown, fmt.Errorf("verification-strategy %q is unsupported in slice-17c", s)
+		return contract.VerificationUnknown, fmt.Errorf("verification-strategy %q is unsupported (full lands in 17e)", s)
 	default:
 		return contract.VerificationUnknown, fmt.Errorf("unknown verification-strategy %q", s)
 	}

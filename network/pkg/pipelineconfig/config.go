@@ -224,6 +224,12 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 		if lc.Chained, err = loadChainedConfig(cfg, base, name); err != nil {
 			return lc, err
 		}
+		// A relay publishing back to its own ingress would consume its own output and
+		// re-sign indefinitely (the nats connection does not suppress self-delivery) — a
+		// message storm. Fail closed on equal ingress/output subjects.
+		if lc.Chained.OutputSubject == lc.IngressSubject {
+			return lc, fmt.Errorf("pipeline: loop %q: chained.output-subject %q must differ from ingress-subject (a relay must not publish back to its own ingress)", name, lc.Chained.OutputSubject)
+		}
 	default:
 		return lc, fmt.Errorf("pipeline: loop %q: unknown role %q", name, role)
 	}

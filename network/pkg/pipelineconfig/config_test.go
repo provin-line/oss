@@ -342,6 +342,9 @@ func TestLoad_FailClosed_Chained(t *testing.T) {
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
 		{"missing ingress", mut(`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`, `ingress-subject = ""`)},
+		{"output equals ingress (self-loop)", mut(
+			`output-subject = "did:dplaax:reg:org:beta:pipeline:relay"`,
+			`output-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -179,19 +179,14 @@ func TestTwoHop_ChainedRelayTransformAndLink(t *testing.T) {
 		t.Fatalf("issuer: got %q want %q", sinkRec.issuer, thRelayIssuer)
 	}
 
-	// 3. The credential chain links back to the source. Capture the source's FirstDrop
-	// from the observer to assert the exact link + data-flow hashes.
-	srcCred := captureSourceCredential(t, th.srcObserved)
+	// 3. The credential chain links back to the source. The chained credential's
+	// PreviousCredential() must be the content address of an actually-observed source
+	// FirstDrop (search the observed stream — startup retries may emit several, and an
+	// early one may not be the event that reached the relay).
+	srcCred := matchingSourceCredential(t, th.srcObserved, sinkRec.prevCredential)
 	srcSubj, err := srcCred.Subject()
 	if err != nil {
 		t.Fatalf("source subject: %v", err)
-	}
-	srcAddr, err := srcCred.Hash()
-	if err != nil {
-		t.Fatalf("source hash: %v", err)
-	}
-	if sinkRec.prevCredential != srcAddr {
-		t.Fatalf("chain link: chained PreviousCredential()=%q want source addr %q", sinkRec.prevCredential, srcAddr)
 	}
 	if srcSubj.OutputHash != sinkRec.inputHash {
 		t.Fatalf("data-flow: source OutputHash=%q != chained InputHash=%q", srcSubj.OutputHash, sinkRec.inputHash)
@@ -255,21 +250,38 @@ func snapshot(t *testing.T, rec sink.Record) *recordSnapshot {
 	return s
 }
 
-func captureSourceCredential(t *testing.T, observed <-chan []byte) *vc.PipelinePassCredential {
+// matchingSourceCredential drains the observed source-output stream for the FirstDrop
+// whose content address equals wantAddr (the chained credential's PreviousCredential).
+// Startup retries may emit several source events and an early one may not be the event
+// that reached the relay, so the match — not the first item — is what proves the link.
+func matchingSourceCredential(t *testing.T, observed <-chan []byte, wantAddr string) *vc.PipelinePassCredential {
 	t.Helper()
-	select {
-	case wire := <-observed:
-		env, err := envelopecodec.New().UnmarshalEnvelope(wire)
-		if err != nil {
-			t.Fatalf("decode source envelope: %v", err)
+	if wantAddr == "" {
+		t.Fatal("chained credential has no PreviousCredential link")
+	}
+	codec := envelopecodec.New()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case wire := <-observed:
+			env, err := codec.UnmarshalEnvelope(wire)
+			if err != nil {
+				t.Fatalf("decode source envelope: %v", err)
+			}
+			if env.Credential == nil {
+				continue
+			}
+			addr, err := env.Credential.Hash()
+			if err != nil {
+				t.Fatalf("source hash: %v", err)
+			}
+			if addr == wantAddr {
+				return env.Credential
+			}
+		case <-deadline:
+			t.Fatalf("no observed source credential matched the chain link %q", wantAddr)
+			return nil
 		}
-		if env.Credential == nil {
-			t.Fatal("source envelope has no credential")
-		}
-		return env.Credential
-	case <-time.After(5 * time.Second):
-		t.Fatal("did not observe the source output")
-		return nil
 	}
 }
 
