@@ -180,6 +180,12 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 		if err := rejectKeys(cfg, base, name, role, sourceKeys); err != nil {
 			return lc, err
 		}
+		// A sink's ingress is the GRANTED upstream subject == an upstream source's
+		// output-subject, which is a pipeline DID. Validate it so a typo or wildcard
+		// (e.g. ">") fails closed instead of subscribing the sink to unintended subjects.
+		if err := requirePipelineDID(lc.IngressSubject, name, "ingress-subject"); err != nil {
+			return lc, err
+		}
 		if lc.Sink, err = loadSinkConfig(cfg, base, name); err != nil {
 			return lc, err
 		}
@@ -260,7 +266,13 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, err
 	}
 	switch sc.Kind {
-	case SinkObservationOnly, SinkProduction, SinkArchival:
+	case SinkObservationOnly:
+	case SinkProduction, SinkArchival:
+		// production/archival carry contract MUST obligations beyond verdict filtering
+		// (mutual allow-list, receipts, audit log — contract.SinkKind) that the sink
+		// runtime does not yet wire. Fail closed until they exist rather than boot a
+		// sink that silently under-delivers its kind's guarantees.
+		return sc, fmt.Errorf("pipeline: loop %q: sink.kind %q is unsupported in slice-17c (%q only; production/archival obligations not yet wired)", name, sc.Kind, SinkObservationOnly)
 	default:
 		return sc, fmt.Errorf("pipeline: loop %q: unknown sink.kind %q (want %q|%q|%q)", name, sc.Kind, SinkObservationOnly, SinkProduction, SinkArchival)
 	}

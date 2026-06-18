@@ -195,6 +195,11 @@ func TestLoad_FailClosed_Sink(t *testing.T) {
 	}{
 		{"unknown sink kind", mut(`kind = "observation-only"`, `kind = "warehouse"`)},
 		{"missing sink kind", mut(`kind = "observation-only"`, `kind = ""`)},
+		{"production kind unsupported in 17c", mut(`kind = "observation-only"`, `kind = "production"`)},
+		{"archival kind unsupported in 17c", mut(`kind = "observation-only"`, `kind = "archival"`)},
+		{"sink ingress not a pipeline DID", mut(
+			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
+			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
 		{"verification-strategy full unsupported", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
 		{"unknown verification-strategy", mut(`verification-strategy = "adjacent"`, `verification-strategy = "deep"`)},
 		{"missing upstream-endpoint", mut(`upstream-endpoint = "https://acme.example/pipelines/pipe"`, `upstream-endpoint = ""`)},
