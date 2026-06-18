@@ -240,3 +240,138 @@ func TestLoad_SourceWithSinkBlockRejected(t *testing.T) {
 		t.Fatal("source loop with a sink block: want error, got nil")
 	}
 }
+
+const validChainedLoop = `
+  relay {
+    role = "chained"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    chained {
+      output-subject = "did:dplaax:reg:org:beta:pipeline:relay"
+      issuer {
+        did = "did:dplaax:reg:org:beta:pipeline:relay:process:r1"
+        key-id = "signing"
+        verification-method = "did:dplaax:reg:org:beta:pipeline:relay:process:r1#signing"
+      }
+      pipeline-id = "relay"
+      process-id = "r1"
+      transformation-claim = "convert"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+      converter = "{ 'reading': reading, 'relayed': true }"
+      filters = ["reading > 0"]
+    }
+  }
+`
+
+func TestLoad_ValidChained(t *testing.T) {
+	cfg := loadWith(t, loopsConf(validChainedLoop))
+	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if len(pc.Loops) != 1 {
+		t.Fatalf("loops: got %d want 1", len(pc.Loops))
+	}
+	l := pc.Loops[0]
+	if l.Name != "relay" || l.Role != pipelineconfig.RoleChained {
+		t.Fatalf("name/role: got %q/%q", l.Name, l.Role)
+	}
+	if l.IngressSubject != "did:dplaax:reg:org:acme:pipeline:pipe" {
+		t.Fatalf("ingress: %q", l.IngressSubject)
+	}
+	c := l.Chained
+	if c.OutputSubject != "did:dplaax:reg:org:beta:pipeline:relay" ||
+		c.Issuer.DID != "did:dplaax:reg:org:beta:pipeline:relay:process:r1" ||
+		c.Issuer.KeyID != "signing" ||
+		c.PipelineID != "relay" || c.ProcessID != "r1" ||
+		c.TransformationClaim != vc.ClaimConvert {
+		t.Fatalf("chained producing fields: %+v", c)
+	}
+	if c.VerificationStrategy != pipelineconfig.StrategyAdjacent ||
+		c.UpstreamEndpoint != "https://acme.example/pipelines/pipe" {
+		t.Fatalf("chained consuming fields: %+v", c)
+	}
+	if c.Converter != "{ 'reading': reading, 'relayed': true }" {
+		t.Fatalf("converter: %q", c.Converter)
+	}
+	if len(c.Filters) != 1 || c.Filters[0] != "reading > 0" {
+		t.Fatalf("filters: %+v", c.Filters)
+	}
+	// A chained loop carries no source/sink identity.
+	if l.Source != (pipelineconfig.SourceConfig{}) || l.Sink != (pipelineconfig.SinkConfig{}) {
+		t.Fatalf("chained loop has non-zero Source/Sink: %+v / %+v", l.Source, l.Sink)
+	}
+}
+
+func TestLoad_ChainedPassthrough(t *testing.T) {
+	// converter + filters omitted = passthrough relay; must load.
+	body := strings.Replace(validChainedLoop,
+		"      converter = \"{ 'reading': reading, 'relayed': true }\"\n      filters = [\"reading > 0\"]\n", "", 1)
+	cfg := loadWith(t, loopsConf(body))
+	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err != nil {
+		t.Fatalf("passthrough chained should load: %v", err)
+	}
+	if len(pc.Loops) != 1 || pc.Loops[0].Chained.Converter != "" || len(pc.Loops[0].Chained.Filters) != 0 {
+		t.Fatalf("passthrough: %+v", pc.Loops[0].Chained)
+	}
+}
+
+func TestLoad_FailClosed_Chained(t *testing.T) {
+	mut := func(field, value string) string {
+		return strings.Replace(validChainedLoop, field, value, 1)
+	}
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"output not pipeline DID", mut(
+			`output-subject = "did:dplaax:reg:org:beta:pipeline:relay"`,
+			`output-subject = "did:dplaax:reg:org:beta:pipeline:relay:process:r1"`)},
+		{"issuer not process DID", mut(
+			`did = "did:dplaax:reg:org:beta:pipeline:relay:process:r1"`,
+			`did = "did:dplaax:reg:org:beta:pipeline:relay"`)},
+		{"VM mismatch", mut(
+			`verification-method = "did:dplaax:reg:org:beta:pipeline:relay:process:r1#signing"`,
+			`verification-method = "did:dplaax:reg:org:beta:pipeline:relay:process:r1#auth"`)},
+		{"unknown claim", mut(`transformation-claim = "convert"`, `transformation-claim = "frobnicate"`)},
+		{"strategy full unsupported in 17d", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
+		{"unknown strategy", mut(`verification-strategy = "adjacent"`, `verification-strategy = "deep"`)},
+		{"missing upstream-endpoint", mut(`upstream-endpoint = "https://acme.example/pipelines/pipe"`, `upstream-endpoint = ""`)},
+		{"ingress not a pipeline DID", mut(
+			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
+			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
+		{"missing ingress", mut(`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`, `ingress-subject = ""`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadWith(t, loopsConf(tc.body))
+			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
+				t.Fatalf("%s: want error, got nil", tc.name)
+			}
+		})
+	}
+}
+
+// TestLoad_CrossRoleChainedBlock asserts a chained block is rejected under a source/sink
+// loop, and source/sink blocks are rejected under a chained loop.
+func TestLoad_CrossRoleChainedBlock(t *testing.T) {
+	cases := map[string]string{
+		"source with chained block": strings.Replace(validSourceLoop, `schema-ref = ""`,
+			"schema-ref = \"\"\n    chained { output-subject = \"x\" }", 1),
+		"sink with chained block": strings.Replace(validSinkLoop, `kind = "observation-only"`,
+			"kind = \"observation-only\"\n    }\n    chained { output-subject = \"x\" }\n    sink {", 1),
+		"chained with sink block": strings.Replace(validChainedLoop, `verification-strategy = "adjacent"`,
+			"verification-strategy = \"adjacent\"\n    }\n    sink { kind = \"observation-only\" }\n    chained {", 1),
+		"chained with top-level issuer": strings.Replace(validChainedLoop, `role = "chained"`,
+			"role = \"chained\"\n    issuer { did = \"x\" }", 1),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := loadWith(t, loopsConf(body))
+			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
+				t.Fatalf("%s: want error, got nil", name)
+			}
+		})
+	}
+}

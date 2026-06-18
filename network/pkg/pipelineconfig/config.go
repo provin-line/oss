@@ -91,6 +91,8 @@ type LoopConfig struct {
 	Source SourceConfig
 	// Sink is populated when Role == RoleSink.
 	Sink SinkConfig
+	// Chained is populated when Role == RoleChained.
+	Chained ChainedConfig
 }
 
 // SourceConfig is a producing source loop's identity + output (Role == RoleSource).
@@ -121,6 +123,26 @@ type SinkConfig struct {
 	UpstreamEndpoint string
 }
 
+// ChainedConfig is a relay loop's producing identity + consuming verification + optional
+// transform (Role == RoleChained). A chained loop both consumes (verifies its ingress,
+// like a sink) and produces (re-signs a ChainPreserving credential, like a source).
+type ChainedConfig struct {
+	// Producing side (mirrors SourceConfig minus SchemaRef).
+	OutputSubject       string
+	Issuer              IssuerConfig
+	PipelineID          string
+	ProcessID           string
+	TransformationClaim vc.TransformationClaim
+	// Consuming side (mirrors SinkConfig minus Kind).
+	VerificationStrategy string
+	UpstreamEndpoint     string
+	// Transform (optional). Converter is a whole-document JSONata expression ("" =
+	// passthrough); Filters are JSONata predicates (empty = no filtering). Both are
+	// compiled at loop-build time — a malformed expression is a boot error there.
+	Converter string
+	Filters   []string
+}
+
 // LoadPipelineConfig reads and validates the pipeline block. It fails closed: an
 // unknown role, a missing required field, a malformed output/issuer DID, an unknown
 // transformation-claim/sink-kind/verification-strategy, a non-empty schema-ref, or a
@@ -146,12 +168,14 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	return out, nil
 }
 
-// sourceKeys / sinkKeys are the role-exclusive config keys. The loader rejects a key
-// from the OTHER role's set so a loop cannot silently carry fields it does not use
-// (e.g. an issuer block under a sink, or a sink block under a source).
+// sourceKeys / sinkKeys / chainedKeys are the role-exclusive config keys. The loader
+// rejects keys from the OTHER roles' sets so a loop cannot silently carry fields it does
+// not use (e.g. an issuer block under a sink, or a sink block under a chained loop).
+// Source fields are top-level (17b shape); sink and chained fields nest under their block.
 var (
-	sourceKeys = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
-	sinkKeys   = []string{"sink"}
+	sourceKeys  = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
+	sinkKeys    = []string{"sink"}
+	chainedKeys = []string{"chained"}
 )
 
 func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
@@ -170,14 +194,14 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 
 	switch role {
 	case RoleSource:
-		if err := rejectKeys(cfg, base, name, role, sinkKeys); err != nil {
+		if err := rejectKeys(cfg, base, name, role, sinkKeys, chainedKeys); err != nil {
 			return lc, err
 		}
 		if lc.Source, err = loadSourceConfig(cfg, base, name); err != nil {
 			return lc, err
 		}
 	case RoleSink:
-		if err := rejectKeys(cfg, base, name, role, sourceKeys); err != nil {
+		if err := rejectKeys(cfg, base, name, role, sourceKeys, chainedKeys); err != nil {
 			return lc, err
 		}
 		// A sink's ingress is the GRANTED upstream subject == an upstream source's
@@ -190,7 +214,16 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 			return lc, err
 		}
 	case RoleChained:
-		return lc, fmt.Errorf("pipeline: loop %q: unsupported role %q (slice-17c implements %q and %q; %q lands in 17d)", name, role, RoleSource, RoleSink, RoleChained)
+		if err := rejectKeys(cfg, base, name, role, sourceKeys, sinkKeys); err != nil {
+			return lc, err
+		}
+		// Like a sink, a chained loop's ingress is the granted upstream pipeline DID.
+		if err := requirePipelineDID(lc.IngressSubject, name, "ingress-subject"); err != nil {
+			return lc, err
+		}
+		if lc.Chained, err = loadChainedConfig(cfg, base, name); err != nil {
+			return lc, err
+		}
 	default:
 		return lc, fmt.Errorf("pipeline: loop %q: unknown role %q", name, role)
 	}
@@ -208,23 +241,8 @@ func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig,
 		return sc, err
 	}
 
-	if sc.Issuer.DID, err = requireString(cfg, base+".issuer.did"); err != nil {
+	if sc.Issuer, err = loadIssuer(cfg, base, name, "issuer"); err != nil {
 		return sc, err
-	}
-	if err := requireProcessDID(sc.Issuer.DID, name, "issuer.did"); err != nil {
-		return sc, err
-	}
-	if sc.Issuer.KeyID, err = requireString(cfg, base+".issuer.key-id"); err != nil {
-		return sc, err
-	}
-	if sc.Issuer.VerificationMethod, err = requireString(cfg, base+".issuer.verification-method"); err != nil {
-		return sc, err
-	}
-	// The verification-method must name the issuer's own signing key: <issuer.did>#<key-id>.
-	// A bare DID, another DID's key, or a different fragment would boot a loop whose
-	// proofs are rejected by the VC verifier or attributed to the wrong key.
-	if expected := sc.Issuer.DID + "#" + sc.Issuer.KeyID; sc.Issuer.VerificationMethod != expected {
-		return sc, fmt.Errorf("pipeline: loop %q: issuer.verification-method %q must be %q (issuer.did#key-id)", name, sc.Issuer.VerificationMethod, expected)
 	}
 
 	if sc.PipelineID, err = requireString(cfg, base+".pipeline-id"); err != nil {
@@ -234,15 +252,9 @@ func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig,
 		return sc, err
 	}
 
-	claimToken, err := requireString(cfg, base+".transformation-claim")
-	if err != nil {
+	if sc.TransformationClaim, err = loadClaim(cfg, base+".transformation-claim", name); err != nil {
 		return sc, err
 	}
-	claim, ok := claimByName[claimToken]
-	if !ok {
-		return sc, fmt.Errorf("pipeline: loop %q: unknown transformation-claim %q", name, claimToken)
-	}
-	sc.TransformationClaim = claim
 
 	// schema-ref must be empty (ingest does no schema validation; a single-string ->
 	// vc.SchemaRef mapping is deferred to a chained loop). Absent is treated as empty.
@@ -277,15 +289,8 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, fmt.Errorf("pipeline: loop %q: unknown sink.kind %q (want %q|%q|%q)", name, sc.Kind, SinkObservationOnly, SinkProduction, SinkArchival)
 	}
 
-	if sc.VerificationStrategy, err = requireString(cfg, base+".sink.verification-strategy"); err != nil {
+	if sc.VerificationStrategy, err = loadAdjacentStrategy(cfg, base+".sink.verification-strategy", name); err != nil {
 		return sc, err
-	}
-	switch sc.VerificationStrategy {
-	case StrategyAdjacent:
-	case StrategyFull:
-		return sc, fmt.Errorf("pipeline: loop %q: verification-strategy %q is unsupported in slice-17c (%q only; %q lands in 17d)", name, sc.VerificationStrategy, StrategyAdjacent, StrategyFull)
-	default:
-		return sc, fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q|%q)", name, sc.VerificationStrategy, StrategyAdjacent, StrategyFull)
 	}
 
 	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
@@ -295,15 +300,123 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 	return sc, nil
 }
 
-// rejectKeys errors if any of the given config keys is present under the loop — used to
+// rejectKeys errors if any key from the given sets is present under the loop — used to
 // fail closed when a loop carries fields that belong to a different role.
-func rejectKeys(cfg *hoconconfig.Config, base, name, role string, keys []string) error {
-	for _, k := range keys {
-		if cfg.Has(base + "." + k) {
-			return fmt.Errorf("pipeline: loop %q: key %q does not belong to role %q", name, k, role)
+func rejectKeys(cfg *hoconconfig.Config, base, name, role string, keySets ...[]string) error {
+	for _, keys := range keySets {
+		for _, k := range keys {
+			if cfg.Has(base + "." + k) {
+				return fmt.Errorf("pipeline: loop %q: key %q does not belong to role %q", name, k, role)
+			}
 		}
 	}
 	return nil
+}
+
+// loadIssuer reads and validates an issuer block at <keyBase>.issuer: the DID must be a
+// process DID and the verification-method must name the issuer's own signing key
+// (<issuer.did>#<key-id>) — a bare DID, another DID's key, or a different fragment would
+// boot a loop whose proofs are rejected by the VC verifier or attributed to the wrong key.
+// fieldPrefix names the block in error messages (e.g. "issuer" or "chained.issuer").
+func loadIssuer(cfg *hoconconfig.Config, keyBase, name, fieldPrefix string) (IssuerConfig, error) {
+	var ic IssuerConfig
+	var err error
+	if ic.DID, err = requireString(cfg, keyBase+".issuer.did"); err != nil {
+		return ic, err
+	}
+	if err := requireProcessDID(ic.DID, name, fieldPrefix+".did"); err != nil {
+		return ic, err
+	}
+	if ic.KeyID, err = requireString(cfg, keyBase+".issuer.key-id"); err != nil {
+		return ic, err
+	}
+	if ic.VerificationMethod, err = requireString(cfg, keyBase+".issuer.verification-method"); err != nil {
+		return ic, err
+	}
+	if expected := ic.DID + "#" + ic.KeyID; ic.VerificationMethod != expected {
+		return ic, fmt.Errorf("pipeline: loop %q: %s.verification-method %q must be %q (issuer.did#key-id)", name, fieldPrefix, ic.VerificationMethod, expected)
+	}
+	return ic, nil
+}
+
+// loadClaim reads and maps a transformation-claim token to its vc constant.
+func loadClaim(cfg *hoconconfig.Config, key, name string) (vc.TransformationClaim, error) {
+	token, err := requireString(cfg, key)
+	if err != nil {
+		return "", err
+	}
+	claim, ok := claimByName[token]
+	if !ok {
+		return "", fmt.Errorf("pipeline: loop %q: unknown transformation-claim %q", name, token)
+	}
+	return claim, nil
+}
+
+// loadAdjacentStrategy reads a verification-strategy that must be "adjacent": "full" is a
+// recognized-but-unsupported boot error (chainwalk needs a network credential resolver +
+// VC-store publication, both unbuilt — lands in 17e); anything else is unknown.
+func loadAdjacentStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
+	s, err := requireString(cfg, key)
+	if err != nil {
+		return "", err
+	}
+	switch s {
+	case StrategyAdjacent:
+		return s, nil
+	case StrategyFull:
+		return "", fmt.Errorf("pipeline: loop %q: verification-strategy %q is unsupported (%q only; %q lands in 17e)", name, s, StrategyAdjacent, StrategyFull)
+	default:
+		return "", fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q|%q)", name, s, StrategyAdjacent, StrategyFull)
+	}
+}
+
+// loadChainedConfig validates a relay loop's producing identity + consuming verification
+// + optional transform. Producing/issuer rules mirror a source; strategy/upstream mirror a
+// sink; the converter (whole-document JSONata) and filters (JSONata predicates) are read
+// as raw expressions here and compiled at loop-build time.
+func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfig, error) {
+	var cc ChainedConfig
+	var err error
+	cbase := base + ".chained"
+
+	if cc.OutputSubject, err = requireString(cfg, cbase+".output-subject"); err != nil {
+		return cc, err
+	}
+	if err := requirePipelineDID(cc.OutputSubject, name, "chained.output-subject"); err != nil {
+		return cc, err
+	}
+	if cc.Issuer, err = loadIssuer(cfg, cbase, name, "chained.issuer"); err != nil {
+		return cc, err
+	}
+	if cc.PipelineID, err = requireString(cfg, cbase+".pipeline-id"); err != nil {
+		return cc, err
+	}
+	if cc.ProcessID, err = requireString(cfg, cbase+".process-id"); err != nil {
+		return cc, err
+	}
+	if cc.TransformationClaim, err = loadClaim(cfg, cbase+".transformation-claim", name); err != nil {
+		return cc, err
+	}
+	if cc.VerificationStrategy, err = loadAdjacentStrategy(cfg, cbase+".verification-strategy", name); err != nil {
+		return cc, err
+	}
+	if cc.UpstreamEndpoint, err = requireString(cfg, cbase+".upstream-endpoint"); err != nil {
+		return cc, err
+	}
+
+	// Transform is optional: an absent converter is a passthrough relay; absent filters
+	// means no filtering.
+	if cfg.Has(cbase + ".converter") {
+		if cc.Converter, err = cfg.String(cbase + ".converter"); err != nil {
+			return cc, fmt.Errorf("pipeline: loop %q: config chained.converter: %w", name, err)
+		}
+	}
+	if cfg.Has(cbase + ".filters") {
+		if cc.Filters, err = cfg.StringList(cbase + ".filters"); err != nil {
+			return cc, fmt.Errorf("pipeline: loop %q: config chained.filters: %w", name, err)
+		}
+	}
+	return cc, nil
 }
 
 func requireString(cfg *hoconconfig.Config, key string) (string, error) {
