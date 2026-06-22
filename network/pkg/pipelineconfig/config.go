@@ -13,6 +13,7 @@ package pipelineconfig
 import (
 	_ "embed"
 	"fmt"
+	"net/url"
 
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
@@ -41,15 +42,20 @@ const (
 	SinkArchival        = "archival"
 )
 
-// Verification strategies a non-source loop may declare. slice-17c implements
-// StrategyAdjacent; StrategyFull is recognized-but-unsupported (typed boot error) until
-// a network credential resolver lands (17d).
+// Verification strategies a non-source loop may declare. StrategyAdjacent verifies the
+// immediately preceding credential; StrategyFull (17e) walks the whole chain via the VC
+// store and requires a node-level vc-store-endpoint.
 const (
 	StrategyAdjacent = "adjacent"
 	StrategyFull     = "full"
 )
 
-const loopsKey = "provin.network.pipeline.loops"
+const (
+	pipelineKey        = "provin.network.pipeline"
+	loopsKey           = pipelineKey + ".loops"
+	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
+	vcStoreBearerKey   = pipelineKey + ".vc-store-bearer"
+)
 
 // claimByName maps the config transformation-claim token to the vc constant. The
 // config uses the bare token (e.g. "convert"); the vc value is the namespaced form
@@ -66,6 +72,14 @@ var claimByName = map[string]vc.TransformationClaim{
 // Config is the typed data-plane config: the loops this node runs.
 type Config struct {
 	Loops []LoopConfig
+	// VCStoreEndpoint is the node-level VCResolverService base URL where producing
+	// loops publish issued credentials and full verifiers resolve predecessors. Empty
+	// when no loop needs it; a "full" loop requires it (LoadPipelineConfig fails closed).
+	VCStoreEndpoint string
+	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
+	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set —
+	// a tokenless client would be rejected at runtime, so LoadPipelineConfig fails closed.
+	VCStoreBearer string
 }
 
 // IssuerConfig is the issuing process identity for a producing loop.
@@ -165,7 +179,67 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		}
 		out.Loops = append(out.Loops, lc)
 	}
+	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Has(vcStoreBearerKey) {
+		if out.VCStoreBearer, err = cfg.String(vcStoreBearerKey); err != nil {
+			return nil, fmt.Errorf("pipeline: config %s: %w", vcStoreBearerKey, err)
+		}
+	}
+	// The VC store sits behind L1 auth, so a configured endpoint needs a bearer — a
+	// tokenless publish/resolve would be rejected at runtime. Fail closed at boot.
+	if out.VCStoreEndpoint != "" && out.VCStoreBearer == "" {
+		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, vcStoreBearerKey)
+	}
+	// A "full" loop walks the chain via the VC store, which the endpoint configures.
+	// Without it, full has no resolver — fail closed naming the loop.
+	if out.VCStoreEndpoint == "" {
+		for _, lc := range out.Loops {
+			if loopStrategy(lc) == StrategyFull {
+				return nil, fmt.Errorf("pipeline: loop %q: verification-strategy %q requires %s", lc.Name, StrategyFull, vcStoreEndpointKey)
+			}
+		}
+	}
 	return out, nil
+}
+
+// loadVCStoreEndpoint reads the optional node-level vc-store-endpoint. Absent is "" (no
+// publication; full unavailable). Present must be a clean http/https base URL: the Connect
+// client appends the RPC procedure to this string verbatim, so a query or fragment would
+// corrupt every request path — reject those at boot rather than fail every RPC at runtime.
+func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
+	if !cfg.Has(vcStoreEndpointKey) {
+		return "", nil
+	}
+	v, err := cfg.String(vcStoreEndpointKey)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: config %s: %w", vcStoreEndpointKey, err)
+	}
+	if v == "" {
+		return "", nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("pipeline: config %s: %q is not an http(s) URL", vcStoreEndpointKey, v)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("pipeline: config %s: %q must be a base URL with no query or fragment", vcStoreEndpointKey, v)
+	}
+	return v, nil
+}
+
+// loopStrategy returns the verification-strategy token of a consuming loop (sink or
+// chained), or "" for a producing source loop.
+func loopStrategy(lc LoopConfig) string {
+	switch lc.Role {
+	case RoleSink:
+		return lc.Sink.VerificationStrategy
+	case RoleChained:
+		return lc.Chained.VerificationStrategy
+	default:
+		return ""
+	}
 }
 
 // sourceKeys / sinkKeys / chainedKeys are the role-exclusive config keys. The loader
@@ -295,7 +369,7 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, fmt.Errorf("pipeline: loop %q: unknown sink.kind %q (want %q|%q|%q)", name, sc.Kind, SinkObservationOnly, SinkProduction, SinkArchival)
 	}
 
-	if sc.VerificationStrategy, err = loadAdjacentStrategy(cfg, base+".sink.verification-strategy", name); err != nil {
+	if sc.VerificationStrategy, err = loadStrategy(cfg, base+".sink.verification-strategy", name); err != nil {
 		return sc, err
 	}
 
@@ -358,19 +432,18 @@ func loadClaim(cfg *hoconconfig.Config, key, name string) (vc.TransformationClai
 	return claim, nil
 }
 
-// loadAdjacentStrategy reads a verification-strategy that must be "adjacent": "full" is a
-// recognized-but-unsupported boot error (chainwalk needs a network credential resolver +
-// VC-store publication, both unbuilt — lands in 17e); anything else is unknown.
-func loadAdjacentStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
+// loadStrategy reads a verification-strategy that must be "adjacent" or "full"; anything
+// else is a typed boot error. "full" is admitted here but additionally requires a
+// node-level vc-store-endpoint, enforced in LoadPipelineConfig (the endpoint is not a
+// per-loop field, so the cross-check lives where the whole Config is assembled).
+func loadStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
 	s, err := requireString(cfg, key)
 	if err != nil {
 		return "", err
 	}
 	switch s {
-	case StrategyAdjacent:
+	case StrategyAdjacent, StrategyFull:
 		return s, nil
-	case StrategyFull:
-		return "", fmt.Errorf("pipeline: loop %q: verification-strategy %q is unsupported (%q only; %q lands in 17e)", name, s, StrategyAdjacent, StrategyFull)
 	default:
 		return "", fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q|%q)", name, s, StrategyAdjacent, StrategyFull)
 	}
@@ -403,7 +476,7 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 	if cc.TransformationClaim, err = loadClaim(cfg, cbase+".transformation-claim", name); err != nil {
 		return cc, err
 	}
-	if cc.VerificationStrategy, err = loadAdjacentStrategy(cfg, cbase+".verification-strategy", name); err != nil {
+	if cc.VerificationStrategy, err = loadStrategy(cfg, cbase+".verification-strategy", name); err != nil {
 		return cc, err
 	}
 	if cc.UpstreamEndpoint, err = requireString(cfg, cbase+".upstream-endpoint"); err != nil {

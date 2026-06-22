@@ -10,12 +10,13 @@
 // depth guards, and ordering. It does NOT own verification semantics: the
 // previousCredential linkage, the outputHash[n] == inputHash[n+1] data-flow
 // invariant, ordering consistency, the origin-has-no-predecessor rule, and
-// source-commitment consistency all live in the injected ChainCore (the real
-// one is vc.Verifier, which additionally resolves issuer DIDs and verifies
-// proofs — both currently pending the resolver/crypto layer, so the core is a
-// stub today and chainwalk is exercised against a fake). Splitting assembly
-// from semantics keeps the chain-structure rules in their single source of
-// truth (vc) rather than duplicated here.
+// source-commitment consistency all live in the injected ChainCore. The real
+// core is vc.Verifier, which additionally resolves issuer DIDs and verifies
+// ed25519 proofs per credential (vc.Verifier.VerifyChain); 17e wires that real
+// core in the standalone, with vcresolver/client as the network resolver. Unit
+// tests still exercise assembly against a fake core. Splitting assembly from
+// semantics keeps the chain-structure rules in their single source of truth
+// (vc) rather than duplicated here.
 //
 // # Error discipline
 //

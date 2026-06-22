@@ -26,7 +26,7 @@ func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	builder := vc.NewBuilder(ed25519.NewSigner(dpKeyStore(t)))
 	badLC := dpPipelineCfg().Loops[0]
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
-	bad, err := buildSourceLoop(conn, builder, badLC)
+	bad, err := buildSourceLoop(conn, builder, nil, badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}

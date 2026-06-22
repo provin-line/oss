@@ -3,18 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 
+	"connectrpc.com/connect"
+
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/pipeline/chained"
 	jsonataconv "github.com/provin-line/oss/pipeline/chained/converter/jsonata"
 	"github.com/provin-line/oss/pipeline/chained/filter"
 	jsonatafilter "github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
+	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/source/ingest"
@@ -26,6 +32,11 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// The vcresolver client is the network credential resolver a full-chain verifier walks.
+// The compile-time CredentialResolver assertion lives here (the consumer that imports
+// both network/ and pipeline/), keeping the client package free of any pipeline/ import.
+var _ chainwalk.CredentialResolver = (*vcresolverclient.Resolver)(nil)
+
 // dataPlaneDeps are the cross-plane dependencies a data plane needs beyond its own
 // keystore: the shared DID resolver (sink loops verify upstream credentials through it)
 // and the sink Writer (where a sink delivers consumed events). They are zero for a
@@ -33,6 +44,11 @@ import (
 type dataPlaneDeps struct {
 	Resolver   resolver.Resolver
 	SinkWriter sink.Writer
+	// VCStoreHTTPClient is the transport for the VC-store client; nil => http.DefaultClient.
+	// Tests inject an embedded server's client here. The VC-store endpoint and bearer are
+	// node config (pipelineconfig.Config), not deps — so main, which loads and passes that
+	// config, wires them without a separate composition step.
+	VCStoreHTTPClient connect.HTTPClient
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -69,10 +85,27 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 
 	dp := &dataPlane{conn: conn}
 	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
+	// When a vc-store-endpoint is configured, build the network VC-store client once:
+	// producing loops publish issued credentials through it, and full verifiers resolve
+	// predecessors through it. Absent => no publication and no full verification (config
+	// rejects "full" without an endpoint, so vcClient is non-nil wherever full is used).
+	var vcClient *vcresolverclient.Resolver
+	if pipeCfg.VCStoreEndpoint != "" {
+		httpClient := deps.VCStoreHTTPClient
+		if httpClient == nil {
+			httpClient = http.DefaultClient
+		}
+		vcClient = vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
+			httpClient, pipeCfg.VCStoreEndpoint, connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+		))
+	}
 	// Consuming loops (sink, chained) share one verifier (over the node's resolver) and one
 	// in-memory ingress store, built lazily on the first such loop so a source-only node
-	// needs no resolver. ensureConsumer builds them once and fails closed without a resolver.
-	var verifier provenance.Verifier
+	// needs no resolver. When a VC-store client exists, they also share one chainwalk
+	// ChainVerifier (full strategy) over that client + the verifier core. ensureConsumer
+	// builds them once and fails closed without a resolver.
+	var verifier *vc.Verifier
+	var chainVerifier provenance.ChainVerifier
 	var ingressStore contract.IngressVCStore
 	ensureConsumer := func(loopName string) error {
 		if verifier != nil {
@@ -83,24 +116,37 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 		}
 		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
 		ingressStore = newMemIngressStore()
+		if vcClient != nil {
+			cv, err := chainwalk.New(vcClient, verifier)
+			if err != nil {
+				return fmt.Errorf("standalone: loop %q: chain verifier: %w", loopName, err)
+			}
+			chainVerifier = cv
+		}
 		return nil
+	}
+	// publisher is non-nil exactly when a vc-store-endpoint is configured; producing loops
+	// wrap their signer with it so issued credentials reach the store (fail-closed).
+	var publisher credentialPublisher
+	if vcClient != nil {
+		publisher = vcClient
 	}
 	for _, lc := range pipeCfg.Loops {
 		var loop *transport.Loop
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
-			loop, err = buildSourceLoop(conn, builder, lc)
+			loop, err = buildSourceLoop(conn, builder, publisher, lc)
 		case pipelineconfig.RoleSink:
 			if deps.SinkWriter == nil {
 				_ = conn.Close()
 				return nil, fmt.Errorf("standalone: loop %q: sink role requires a sink writer", lc.Name)
 			}
 			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildSinkLoop(conn, verifier, ingressStore, deps.SinkWriter, lc)
+				loop, err = buildSinkLoop(conn, verifier, chainVerifier, ingressStore, deps.SinkWriter, lc)
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildChainedLoop(conn, builder, verifier, ingressStore, lc)
+				loop, err = buildChainedLoop(conn, builder, publisher, verifier, chainVerifier, ingressStore, lc)
 			}
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
@@ -120,7 +166,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 // buildSourceLoop assembles one source (FirstDrop) loop: ingress Subscriber → ingest
 // processor (vcdid signer over the keystore) → output Publisher, with a memlog
 // emission log. The config layer has already validated that lc.Role is source.
-func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -134,7 +180,13 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelinec
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: source signer: %w", lc.Name, err)
 	}
-	proc, err := ingest.New(ingest.Config{Signer: signer})
+	// When a VC store is configured, publish each FirstDrop (no predecessor, so no upstream
+	// hint) before it is emitted downstream — fail-closed (D-17e-3).
+	var sourceSigner provenance.SourceSigner = signer
+	if publisher != nil {
+		sourceSigner = &publishingSigner{inner: signer, publisher: publisher}
+	}
+	proc, err := ingest.New(ingest.Config{Signer: sourceSigner})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: ingest processor: %w", lc.Name, err)
 	}
@@ -157,7 +209,7 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, lc pipelinec
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, chainVerifier provenance.ChainVerifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
@@ -166,7 +218,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
 	}
-	proc, err := sink.New(sink.Config{
+	cfg := sink.Config{
 		Strategy:         strategy,
 		Kind:             kind,
 		Codec:            envelopecodec.New(),
@@ -174,7 +226,14 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 		Store:            store,
 		Writer:           writer,
 		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,
-	})
+	}
+	// Full verification walks the chain via the network resolver; nil here makes sink.New
+	// fail closed (ErrMissingChainVerifier), which only happens if a full loop somehow
+	// reached assembly without a vc-store-endpoint (config rejects that earlier).
+	if strategy == contract.VerificationFull {
+		cfg.ChainVerifier = chainVerifier
+	}
+	proc, err := sink.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: sink processor: %w", lc.Name, err)
 	}
@@ -196,7 +255,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, chainVerifier provenance.ChainVerifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -214,6 +273,12 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier pr
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
 	}
+	// When a VC store is configured, publish each ChainPreserving credential (passing the
+	// upstream-endpoint as the predecessor-fetch hint) before downstream emit — fail-closed.
+	var chainedSigner provenance.ChainedSigner = signer
+	if publisher != nil {
+		chainedSigner = &publishingSigner{inner: signer, publisher: publisher, upstreamEndpoint: cc.UpstreamEndpoint}
+	}
 	chainedCfg := chained.Config{
 		Strategy:          strategy,
 		IngressConformant: true,
@@ -221,7 +286,12 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier pr
 		Codec:             envelopecodec.New(),
 		Verifier:          verifier,
 		Store:             store,
-		Signer:            signer,
+		Signer:            chainedSigner,
+	}
+	// Full verification walks the chain via the network resolver (nil => sink.New/chained.New
+	// fail closed); config rejects a full loop without a vc-store-endpoint earlier.
+	if strategy == contract.VerificationFull {
+		chainedCfg.ChainVerifier = chainVerifier
 	}
 	// Converter/filters compile at boot — a malformed JSONata expression fails closed here.
 	if cc.Converter != "" {
@@ -258,17 +328,31 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, verifier pr
 }
 
 // verificationStrategy maps a (config-validated) strategy token to its contract value.
-// The data plane admits "adjacent" only; "full" is rejected at config load (it needs a
-// network credential resolver + VC-store publication, both unbuilt — lands in 17e).
+// "adjacent" verifies the immediately preceding credential; "full" (17e) walks the chain
+// via the network resolver and requires a vc-store-endpoint (enforced at config load).
 func verificationStrategy(s string) (contract.VerificationStrategy, error) {
 	switch s {
 	case pipelineconfig.StrategyAdjacent:
 		return contract.VerificationAdjacent, nil
 	case pipelineconfig.StrategyFull:
-		return contract.VerificationUnknown, fmt.Errorf("verification-strategy %q is unsupported (full lands in 17e)", s)
+		return contract.VerificationFull, nil
 	default:
 		return contract.VerificationUnknown, fmt.Errorf("unknown verification-strategy %q", s)
 	}
+}
+
+// bearerInterceptor sets the L1 PDP Authorization bearer on every outgoing client
+// request to the VC store. An empty token sets no header (an unauthenticated PoC node);
+// the server-side interceptor decides whether that is acceptable.
+func bearerInterceptor(token string) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if token != "" && req.Spec().IsClient {
+				req.Header().Set("Authorization", "Bearer "+token)
+			}
+			return next(ctx, req)
+		}
+	})
 }
 
 // sinkKind maps a (config-validated) sink-kind token to its contract value.
