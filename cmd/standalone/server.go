@@ -69,7 +69,9 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 // vcSvc is the node's local VC resolver service, built in main and shared with the
 // data plane's ingress store so consumed credentials are immediately resolvable over
 // the VCResolverService RPC (D-17f-5). main builds it once before calling BuildHandler.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service) (http.Handler, error) {
+// maxCredentialSize bounds an inbound StoreVC body (D-17g-13): a peer must not OOM the
+// node with a bloated credential.
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, maxCredentialSize int) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -131,7 +133,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), authz)),
 		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
-		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz)),
+		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc)), authz)),
 	} {
 		mux.Handle(p.path, p.h)

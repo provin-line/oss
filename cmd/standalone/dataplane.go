@@ -101,7 +101,9 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 			httpClient = http.DefaultClient
 		}
 		vcClient = vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
-			httpClient, pipeCfg.VCStoreEndpoint, connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+			httpClient, pipeCfg.VCStoreEndpoint,
+			connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+			connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize), // D-17g-13: bound a resolved VC (protects 17e's full walk)
 		))
 	}
 	// Consuming loops (sink, chained) share one verifier (over the node's resolver) and one

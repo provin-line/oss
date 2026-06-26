@@ -37,7 +37,7 @@ func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	srv := &http.Server{Addr: "127.0.0.1:0"}
 
 	done := make(chan error, 1)
-	go func() { done <- runServices(context.Background(), srv, dp) }()
+	go func() { done <- runServices(context.Background(), srv, dp, nil) }()
 	select {
 	case err := <-done:
 		if err == nil {

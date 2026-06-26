@@ -69,6 +69,12 @@ const (
 // granting the rules the e2e exercises, and returns it with an owner signer
 // (CLI-local key) and the owner's signing public key.
 func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
+	return assembledWith(t, 1<<20)
+}
+
+// assembledWith is assembled with an explicit per-credential size cap, so a size-cap
+// test can drive an over-cap StoreVC through the real authenticated stack.
+func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypto.Signer, []byte) {
 	t.Helper()
 	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
 	regCfg := &registry.RegistryConfig{ID: registryID}
@@ -85,7 +91,7 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc)
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, maxCredentialSize)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

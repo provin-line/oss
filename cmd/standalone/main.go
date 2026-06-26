@@ -35,6 +35,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/sink/console"
 )
@@ -86,10 +87,12 @@ func main() {
 	// The VC store is built once in main and shared across both planes (D-17f-5):
 	// BuildHandler mounts it under the VCResolverService RPC; buildDataPlane threads it
 	// into consuming loops' ingress store so every verified ingress credential is
-	// immediately resolvable and its predecessor is enqueued in the one shared pool.
-	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	// immediately resolvable and its predecessor is enqueued in the one shared pool. The
+	// pool is a named var so the batch resolver drains exactly the pool StoreVC feeds (D-17g-1).
+	pool := memstore.NewPool()
+	vcSvc := vcresolver.New(memstore.NewStore(), pool)
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc)
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, pipeCfg.MaxCredentialSize)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -107,6 +110,13 @@ func main() {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}
 
+	// The async chain-audit resolver drains the pool the consuming loops populate. It is
+	// nil for a source-only node (no consuming loop → no holes to drain).
+	batchRunner, err := buildBatchResolver(pool, vcSvc, guard, resolver, pipeCfg)
+	if err != nil {
+		log.Fatalf("standalone: build batch resolver: %v", err)
+	}
+
 	srv := &http.Server{
 		Addr:    coreCfg.ListenAddr,
 		Handler: h2c.NewHandler(handler, &http2.Server{}),
@@ -118,20 +128,22 @@ func main() {
 	// A failed boot (e.g. the HTTP port is already in use) or a data-plane failure is
 	// NOT a clean stop: exit non-zero so a supervisor restarts the node. This preserves
 	// the fatal-on-serve-error behavior the pre-data-plane main had via log.Fatalf.
-	if err := runServices(ctx, srv, dp); err != nil {
+	if err := runServices(ctx, srv, dp, batchRunner); err != nil {
 		log.Printf("standalone: %v", err)
 		os.Exit(1)
 	}
 	log.Printf("standalone: shutdown complete")
 }
 
-// runServices runs the HTTP server and the data plane concurrently under a shared
-// cancellable context, waits for both to drain, and returns the first non-shutdown
-// error (nil on a clean shutdown). The HTTP server is the primary service: if it
-// returns, the context is cancelled so the data plane drains. A data-plane ERROR also
-// cancels (the node cannot do its job); a clean data-plane return (zero loops) does
-// not bring the HTTP server down.
-func runServices(ctx context.Context, srv *http.Server, dp *dataPlane) error {
+// runServices runs the HTTP server, the data plane, and the async batch resolver
+// concurrently under a shared cancellable context, waits for them to drain, and returns
+// the first non-shutdown error (nil on a clean shutdown). The HTTP server is the primary
+// service: if it returns, the context is cancelled so the others drain. A data-plane
+// ERROR also cancels (the node cannot do its job); a clean data-plane return (zero loops)
+// does not bring the HTTP server down. The batch resolver is degraded-tolerant
+// (log-and-continue, D-17g-9): it never cancels its siblings and returns nil on shutdown;
+// batchRunner is nil for a source-only node (no resolver).
+func runServices(ctx context.Context, srv *http.Server, dp *dataPlane, batchRunner *batchresolver.Runner) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -152,6 +164,15 @@ func runServices(ctx context.Context, srv *http.Server, dp *dataPlane) error {
 			errs <- fmt.Errorf("data plane: %w", err)
 		}
 	}()
+	if batchRunner != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Run returns nil on ctx cancellation and otherwise loops, logging per-tick
+			// failures — it neither pushes an error nor cancels its siblings.
+			_ = batchRunner.Run(runCtx)
+		}()
+	}
 
 	wg.Wait()
 	close(errs)
