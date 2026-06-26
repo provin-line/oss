@@ -5,11 +5,42 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/vc"
 )
+
+func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
+	cfg, err := pipelineconfig.LoadPipelineConfig(loadWith(t, ""))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	br := cfg.BatchResolver
+	if br.Interval != 30*time.Second || br.BatchSize != 64 || br.MaxRetries != 5 || br.MaxDepth != 1024 {
+		t.Errorf("batch-resolver defaults = %+v", br)
+	}
+	if cfg.MaxCredentialSize != 1<<20 {
+		t.Errorf("max-credential-size = %d, want %d", cfg.MaxCredentialSize, 1<<20)
+	}
+}
+
+func TestLoad_NonPositiveBatchOrSize_Fails(t *testing.T) {
+	for _, override := range []string{
+		"provin.network.pipeline.batch-resolver.interval = 0",
+		"provin.network.pipeline.batch-resolver.batch-size = 0",
+		"provin.network.pipeline.batch-resolver.max-retries = -1",
+		"provin.network.pipeline.batch-resolver.max-depth = 0",
+		"provin.network.pipeline.max-credential-size = 0",
+	} {
+		t.Run(override, func(t *testing.T) {
+			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, override)); err == nil {
+				t.Errorf("override %q: want error, got nil", override)
+			}
+		})
+	}
+}
 
 func loadWith(t *testing.T, appConf string) *hoconconfig.Config {
 	t.Helper()

@@ -14,6 +14,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
@@ -51,10 +52,16 @@ const (
 )
 
 const (
-	pipelineKey        = "provin.network.pipeline"
-	loopsKey           = pipelineKey + ".loops"
-	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
-	vcStoreBearerKey   = pipelineKey + ".vc-store-bearer"
+	pipelineKey          = "provin.network.pipeline"
+	loopsKey             = pipelineKey + ".loops"
+	vcStoreEndpointKey   = pipelineKey + ".vc-store-endpoint"
+	vcStoreBearerKey     = pipelineKey + ".vc-store-bearer"
+	maxCredentialSizeKey = pipelineKey + ".max-credential-size"
+	batchResolverKey     = pipelineKey + ".batch-resolver"
+	brIntervalKey        = batchResolverKey + ".interval"
+	brBatchSizeKey       = batchResolverKey + ".batch-size"
+	brMaxRetriesKey      = batchResolverKey + ".max-retries"
+	brMaxDepthKey        = batchResolverKey + ".max-depth"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -80,6 +87,30 @@ type Config struct {
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set —
 	// a tokenless client would be rejected at runtime, so LoadPipelineConfig fails closed.
 	VCStoreBearer string
+	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
+	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
+	// bloated body. Node-level: it governs every fetch/store, not just the async resolver.
+	// Sourced from reference.conf (no Go default); a non-positive value fails startup.
+	MaxCredentialSize int
+	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
+	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
+	BatchResolver BatchResolverConfig
+}
+
+// BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
+// All values come from reference.conf (no Go-side defaults) and must be positive; the
+// Runner runs only on a node with a consuming loop (it is the population that accumulates
+// unresolved holes), but the tuning is always loaded.
+type BatchResolverConfig struct {
+	// Interval is the delay between drain ticks.
+	Interval time.Duration
+	// BatchSize is the max number of holes drained per tick.
+	BatchSize int
+	// MaxRetries is the transient-failure retry budget before a hole is dropped.
+	MaxRetries int
+	// MaxDepth bounds assembly: a hole at or beyond this distance from a consumed head is
+	// dropped without fetching (the DoS backstop against an unbounded fabricated chain).
+	MaxDepth int
 }
 
 // IssuerConfig is the issuing process identity for a producing loop.
@@ -201,7 +232,61 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 			}
 		}
 	}
+	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
+		return nil, err
+	}
+	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadMaxCredentialSize reads the node-level per-credential byte cap from the (layered)
+// config. The value lives in reference.conf, so it is always present; a non-positive
+// override fails closed (a zero/negative cap would admit any size or reject everything).
+func loadMaxCredentialSize(cfg *hoconconfig.Config) (int, error) {
+	n, err := cfg.Int(maxCredentialSizeKey)
+	if err != nil {
+		return 0, fmt.Errorf("pipeline: config %s: %w", maxCredentialSizeKey, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("pipeline: config %s must be positive, got %d", maxCredentialSizeKey, n)
+	}
+	return n, nil
+}
+
+// loadBatchResolver reads the async batch-resolver tuning from the (layered) config. All
+// four values live in reference.conf (always present); each must be positive — a
+// non-positive override fails startup (no Go-side defaults).
+func loadBatchResolver(cfg *hoconconfig.Config) (BatchResolverConfig, error) {
+	var br BatchResolverConfig
+	interval, err := cfg.Duration(brIntervalKey)
+	if err != nil {
+		return br, fmt.Errorf("pipeline: config %s: %w", brIntervalKey, err)
+	}
+	ints := []struct {
+		key string
+		dst *int
+	}{
+		{brBatchSizeKey, &br.BatchSize},
+		{brMaxRetriesKey, &br.MaxRetries},
+		{brMaxDepthKey, &br.MaxDepth},
+	}
+	for _, it := range ints {
+		v, err := cfg.Int(it.key)
+		if err != nil {
+			return BatchResolverConfig{}, fmt.Errorf("pipeline: config %s: %w", it.key, err)
+		}
+		if v <= 0 {
+			return BatchResolverConfig{}, fmt.Errorf("pipeline: config %s must be positive, got %d", it.key, v)
+		}
+		*it.dst = v
+	}
+	if interval <= 0 {
+		return BatchResolverConfig{}, fmt.Errorf("pipeline: config %s must be positive, got %s", brIntervalKey, interval)
+	}
+	br.Interval = interval
+	return br, nil
 }
 
 // loadVCStoreEndpoint reads the optional node-level vc-store-endpoint. Absent is "" (no
