@@ -10,6 +10,8 @@ import (
 	"github.com/provin-line/oss/pipeline/sink/console"
 )
 
+// Note: dpVCStore() is defined in dataplane_test.go (same package).
+
 func dpFullSinkCfg(endpoint string) *pipelineconfig.Config {
 	bearer := ""
 	if endpoint != "" {
@@ -43,6 +45,7 @@ func TestBuildDataPlane_FullSinkAssembles(t *testing.T) {
 	dp, err := buildDataPlane(chainCfg, dpFullSinkCfg("http://127.0.0.1:1/"), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (full sink): %v", err)
@@ -69,6 +72,7 @@ func TestBuildDataPlane_FullSinkWithoutEndpoint_FailsClosed(t *testing.T) {
 	if _, err := buildDataPlane(chainCfg, dpFullSinkCfg(""), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
 	}); err == nil {
 		t.Fatal("full sink without vc-store-endpoint: want assembly error, got nil")
 	}

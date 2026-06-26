@@ -34,7 +34,6 @@ import (
 	signerhandler "github.com/provin-line/oss/network/pkg/services/signer/handler"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
@@ -67,7 +66,10 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 // the composition root (main) and passed in, because the data plane's sink loops need
 // the SAME resolver to verify upstream credentials (slice-17c) — building it once in
 // main and sharing it keeps a single DID-resolution policy across both planes.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver) (http.Handler, error) {
+// vcSvc is the node's local VC resolver service, built in main and shared with the
+// data plane's ingress store so consumed credentials are immediately resolvable over
+// the VCResolverService RPC (D-17f-5). main builds it once before calling BuildHandler.
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -78,9 +80,6 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		didStore, keyStore, ed25519.Generator{}, ed25519.Verifier{}, regCfg.ID,
 		didregistry.WithServiceEndpoints(regCfg.Endpoints),
 	)
-	// VC store/pool are in-memory (PoC posture) — no data-dir wiring; the durable
-	// store and the async batch resolver land in a later slice.
-	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 	// Chain stores share a fixed chain/ subdir; each nests its own subscriptions/
 	// and allowlists/ tree under it. C2b-2a mounts BOTH chain surfaces (operator/L1
 	// and peer/L2) from one Service instance with the subscriber side fully wired.

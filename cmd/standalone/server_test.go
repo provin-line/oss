@@ -30,6 +30,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -82,7 +84,8 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 	})
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver)
+	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

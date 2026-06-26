@@ -81,6 +81,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 		Resolver:          res,
 		SinkWriter:        writer,
 		VCStoreHTTPClient: srv.Client(),
+		VCStore:           dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (full chain): %v", err)

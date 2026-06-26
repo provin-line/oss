@@ -34,6 +34,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/sink/console"
 )
 
@@ -81,7 +83,13 @@ func main() {
 	// chain manager and the data plane's sink-loop credential verification (slice-17c).
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver)
+	// The VC store is built once in main and shared across both planes (D-17f-5):
+	// BuildHandler mounts it under the VCResolverService RPC; buildDataPlane threads it
+	// into consuming loops' ingress store so every verified ingress credential is
+	// immediately resolvable and its predecessor is enqueued in the one shared pool.
+	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -93,6 +101,7 @@ func main() {
 	dp, err := buildDataPlane(chainCfg, pipeCfg, keyStore, dataPlaneDeps{
 		Resolver:   resolver,
 		SinkWriter: console.New(os.Stdout),
+		VCStore:    vcSvc,
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)

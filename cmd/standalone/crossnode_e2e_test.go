@@ -182,6 +182,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 	subDP, err := buildDataPlane(subChain, capSinkCfg(), filestore.New(t.TempDir()), dataPlaneDeps{
 		Resolver:   res,
 		SinkWriter: writer,
+		VCStore:    dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("build subscriber data plane: %v", err)

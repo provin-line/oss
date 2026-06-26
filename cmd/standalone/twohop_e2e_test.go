@@ -107,6 +107,7 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 	dp, err := buildDataPlane(chainCfg, twoHopCfg(converter, filters), ks, dataPlaneDeps{
 		Resolver:   res,
 		SinkWriter: writer,
+		VCStore:    dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (two-hop): %v", err)

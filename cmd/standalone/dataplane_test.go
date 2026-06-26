@@ -19,12 +19,20 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/sink/console"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/vc"
 )
+
+// dpVCStore returns a fresh in-memory vcresolver.Service for use in data-plane tests
+// that build consuming loops (slice-17f: all consuming loops require a VCStore).
+func dpVCStore() *vcresolver.Service {
+	return vcresolver.New(memstore.NewStore(), memstore.NewPool())
+}
 
 // dpAccountServer embeds a single-account operator-trusted nats-server and returns
 // its URL plus the account seed (the node's data-plane identity).
@@ -277,6 +285,7 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	dp, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (sink): %v", err)
@@ -342,6 +351,7 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 	}
 	dp, err := buildDataPlane(chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
+		VCStore:  dpVCStore(),
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (chained): %v", err)
@@ -380,6 +390,7 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 	}
 	if _, err := buildDataPlane(chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
+		VCStore:  dpVCStore(),
 	}); err == nil {
 		t.Fatal("malformed converter expression: want build error, got nil")
 	}

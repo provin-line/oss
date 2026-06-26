@@ -44,6 +44,11 @@ var _ chainwalk.CredentialResolver = (*vcresolverclient.Resolver)(nil)
 type dataPlaneDeps struct {
 	Resolver   resolver.Resolver
 	SinkWriter sink.Writer
+	// VCStore is the node's local VC store (the local *vcresolver.Service StoreVC seam).
+	// Consuming loops (sink, chained) store every verified ingress credential through it,
+	// populating the unresolved pool for the async chain-audit path (D-17f-1, D-17f-7).
+	// Nil is a boot error for any consuming loop; a source-only node needs none.
+	VCStore ingressStorer
 	// VCStoreHTTPClient is the transport for the VC-store client; nil => http.DefaultClient.
 	// Tests inject an embedded server's client here. The VC-store endpoint and bearer are
 	// node config (pipelineconfig.Config), not deps — so main, which loads and passes that
@@ -114,8 +119,11 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 		if deps.Resolver == nil {
 			return fmt.Errorf("standalone: loop %q: consuming role requires a DID resolver", loopName)
 		}
+		if deps.VCStore == nil {
+			return fmt.Errorf("standalone: loop %q: consuming role requires a VC store", loopName)
+		}
 		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
-		ingressStore = newMemIngressStore()
+		ingressStore = &serviceIngressStore{store: deps.VCStore}
 		if vcClient != nil {
 			cv, err := chainwalk.New(vcClient, verifier)
 			if err != nil {
@@ -367,22 +375,6 @@ func sinkKind(k string) (contract.SinkKind, error) {
 	default:
 		return contract.SinkKindUnknown, fmt.Errorf("unknown sink.kind %q", k)
 	}
-}
-
-// memIngressStore is the PoC in-memory ingress-VC store (parity with the memlog emission
-// log): it retains verified ingress credentials in memory. A durable store lands later.
-type memIngressStore struct {
-	mu  sync.Mutex
-	vcs []*vc.PipelinePassCredential
-}
-
-func newMemIngressStore() *memIngressStore { return &memIngressStore{} }
-
-func (s *memIngressStore) StoreIngressVC(_ context.Context, cred *vc.PipelinePassCredential, _ string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.vcs = append(s.vcs, cred)
-	return nil
 }
 
 // Run runs every loop until ctx is cancelled, waits for all of them to drain and
