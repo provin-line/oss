@@ -47,6 +47,13 @@ type UnresolvedEntry struct {
 	ReferrerIssuer string
 	// RetryCount is the batch resolver's bounded-retry counter.
 	RetryCount int
+	// AssemblyDepth is this hole's distance from the nearest directly-received
+	// credential (a directly-received credential is depth 0, so a real hole — the
+	// predecessor of some stored credential at depth d — is always >= 1). The batch
+	// resolver enforces a configured max-depth against it to bound assembly of an
+	// adversarial unbounded chain. Pool.Add keeps the minimum when the same hole is
+	// reached from multiple heads (the shortest path wins).
+	AssemblyDepth int
 }
 
 // Pool queues unresolved entries for the batch resolver. Ordering is

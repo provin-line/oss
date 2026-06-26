@@ -9,7 +9,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"connectrpc.com/connect"
@@ -24,7 +23,7 @@ import (
 // on (defined here to keep the dependency pointing inward). *vcresolver.Service
 // satisfies it.
 type Service interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string) (string, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
 	ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassCredential, error)
 }
 
@@ -41,7 +40,10 @@ func New(svc Service) *Handler {
 }
 
 func (h *Handler) StoreVC(ctx context.Context, req *connect.Request[vcpb.StoreVCRequest]) (*connect.Response[vcpb.StoreVCResponse], error) {
-	hash, err := h.svc.StoreVC(ctx, req.Msg.GetCredential(), req.Msg.GetUpstreamEndpoint())
+	// A VC submitted over the wire (a producer publishing, or a peer) is a
+	// directly-received credential — assembly depth 0. Depth is a local-only audit
+	// concept and never crosses the wire (the request carries no depth field).
+	hash, err := h.svc.StoreVC(ctx, req.Msg.GetCredential(), req.Msg.GetUpstreamEndpoint(), 0)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -53,7 +55,12 @@ func (h *Handler) ResolveVC(ctx context.Context, req *connect.Request[vcpb.Resol
 	if err != nil {
 		return nil, mapError(err)
 	}
-	b, err := json.Marshal(cred) // PipelinePassCredential.MarshalJSON emits JCS-canonical form
+	// Serve the JCS-canonical bytes via the credential's own MarshalJSON. NOT
+	// json.Marshal(cred): encoding/json post-processes a json.Marshaler's output with
+	// Go's HTML escaping (< > & → < > &), which would break the wire
+	// contract that a consumer can recompute the content address from the bytes it
+	// receives (issue #1).
+	b, err := cred.MarshalJSON()
 	if err != nil {
 		return nil, mapError(err)
 	}

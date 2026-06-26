@@ -41,7 +41,7 @@ func vcBytes(t *testing.T, issuerDID string, prev any) []byte {
 
 func TestStoreVC_StoreAndResolve(t *testing.T) {
 	svc := newSvc()
-	hash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "")
+	hash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
 	if err != nil {
 		t.Fatalf("StoreVC: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestStoreVC_EnqueuesUnheldPredecessor(t *testing.T) {
 	svc := vcresolver.New(store, pool)
 	prev := "sha256:" + strings.Repeat("a", 64)
 
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "https://up.example/vc"); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "https://up.example/vc", 0); err != nil {
 		t.Fatalf("StoreVC: %v", err)
 	}
 	if pool.Len() != 1 {
@@ -81,11 +81,11 @@ func TestStoreVC_HeldPredecessor_NoEnqueue(t *testing.T) {
 	svc := vcresolver.New(store, pool)
 
 	// Store the predecessor first, then a successor referencing it.
-	prevHash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "")
+	prevHash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prevHash), ""); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prevHash), "", 0); err != nil {
 		t.Fatalf("StoreVC successor: %v", err)
 	}
 	if pool.Len() != 0 {
@@ -102,7 +102,7 @@ func TestStoreVC_RejectsMalformedPrev(t *testing.T) {
 	}
 	for name, prev := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "")
+			_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", 0)
 			if !errors.Is(err, vcresolver.ErrInvalidArgument) {
 				t.Errorf("%s: want ErrInvalidArgument, got %v", name, err)
 			}
@@ -114,8 +114,8 @@ func TestStoreVC_Idempotent(t *testing.T) {
 	store := memstore.NewStore()
 	svc := vcresolver.New(store, memstore.NewPool())
 	b := vcBytes(t, issuer, nil)
-	h1, _ := svc.StoreVC(context.Background(), b, "")
-	h2, err := svc.StoreVC(context.Background(), b, "")
+	h1, _ := svc.StoreVC(context.Background(), b, "", 0)
+	h2, err := svc.StoreVC(context.Background(), b, "", 0)
 	if err != nil || h1 != h2 {
 		t.Fatalf("idempotent: h1=%q h2=%q err=%v", h1, h2, err)
 	}
@@ -151,18 +151,109 @@ func TestStoreVC_OutOfOrder_RemovesResolvedHole(t *testing.T) {
 	}
 
 	// Successor arrives first → P is queued.
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, pHash), ""); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, pHash), "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if pool.Len() != 1 {
 		t.Fatalf("after successor: pool len = %d, want 1", pool.Len())
 	}
 	// P arrives later → its hole is removed.
-	if _, err := svc.StoreVC(context.Background(), pBytes, ""); err != nil {
+	if _, err := svc.StoreVC(context.Background(), pBytes, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if pool.Len() != 0 {
 		t.Fatalf("after predecessor: pool len = %d, want 0", pool.Len())
+	}
+}
+
+// hashOf returns the content address of a VC body without storing it.
+func hashOf(t *testing.T, b []byte) string {
+	t.Helper()
+	var c vc.PipelinePassCredential
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	h, err := c.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// entryFor returns the pool entry for hash, or fails.
+func entryFor(t *testing.T, pool *memstore.Pool, hash string) vcresolver.UnresolvedEntry {
+	t.Helper()
+	list, _ := pool.ListNewest(1 << 30)
+	for _, e := range list {
+		if e.Hash == hash {
+			return e
+		}
+	}
+	t.Fatalf("no pool entry for %s (pool: %+v)", hash, list)
+	return vcresolver.UnresolvedEntry{}
+}
+
+// StoreVC enqueues a missing predecessor at assemblyDepth+1: a directly-received
+// credential (depth 0) queues its predecessor at depth 1; the batch resolver
+// re-submitting a depth-d fill queues the next at d+1.
+func TestStoreVC_EnqueuesPredecessorAtDepthPlusOne(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		depth, want int
+	}{
+		{"head", 0, 1},
+		{"depth-5 fill", 5, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := memstore.NewPool()
+			svc := vcresolver.New(memstore.NewStore(), pool)
+			prev := "sha256:" + strings.Repeat("a", 64)
+			if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", tc.depth); err != nil {
+				t.Fatal(err)
+			}
+			if got := entryFor(t, pool, prev).AssemblyDepth; got != tc.want {
+				t.Errorf("AssemblyDepth = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// CA#3: a credential that is BOTH already queued as a deep predecessor AND then
+// directly received (depth 0) must enqueue its own predecessor at depth 1 — the
+// head depth — not the stale deep-hole depth+1.
+func TestStoreVC_HeadAlsoQueuedHole_UsesHeadDepth(t *testing.T) {
+	pool := memstore.NewPool()
+	svc := vcresolver.New(memstore.NewStore(), pool)
+
+	pAddr := "sha256:" + strings.Repeat("e", 64) // P: H's predecessor, never stored
+	hBytes := vcBytes(t, issuer, pAddr)
+	hAddr := hashOf(t, hBytes)
+
+	// A deep successor (depth 5) references H → H queued at depth 6.
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, hAddr), "", 5); err != nil {
+		t.Fatal(err)
+	}
+	if got := entryFor(t, pool, hAddr).AssemblyDepth; got != 6 {
+		t.Fatalf("precondition: H queued at depth %d, want 6", got)
+	}
+
+	// H itself is directly received (depth 0) → H's hole removed, P queued at depth 1.
+	if _, err := svc.StoreVC(context.Background(), hBytes, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := entryFor(t, pool, pAddr).AssemblyDepth; got != 1 {
+		t.Errorf("P AssemblyDepth = %d, want 1 (head depth, not stale 7)", got)
+	}
+}
+
+// A negative assemblyDepth is a programming error — StoreVC rejects it rather than
+// enqueueing a hole at depth <= 0.
+func TestStoreVC_NegativeDepth_Rejected(t *testing.T) {
+	svc := newSvc()
+	prev := "sha256:" + strings.Repeat("a", 64)
+	_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", -1)
+	if !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("negative depth: want ErrInvalidArgument, got %v", err)
 	}
 }
 
@@ -184,7 +275,7 @@ func TestStoreVC_PropagatesStoreError(t *testing.T) {
 	sentinel := errors.New("boom")
 	svc := vcresolver.New(getErrStore{inner: memstore.NewStore(), err: sentinel}, memstore.NewPool())
 	prev := "sha256:" + strings.Repeat("a", 64)
-	_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "")
+	_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", 0)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("want propagated store error, got %v", err)
 	}
@@ -197,12 +288,12 @@ func TestStoreVC_UpsertRepairsHint(t *testing.T) {
 	prev := "sha256:" + strings.Repeat("c", 64)
 
 	// First referrer supplies no upstream hint.
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), ""); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", 0); err != nil {
 		t.Fatal(err)
 	}
 	// A second, distinct referrer of the same hole supplies the hint.
 	other := issuer + "x"
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, other, prev), "https://up.example/vc"); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, other, prev), "https://up.example/vc", 0); err != nil {
 		t.Fatal(err)
 	}
 	if pool.Len() != 1 {

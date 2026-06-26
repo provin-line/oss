@@ -4,6 +4,7 @@
 package memstore
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -60,8 +61,14 @@ func NewPool() *Pool {
 // Add upserts e keyed by Hash: a new hole is prepended (newest-first); a
 // re-added hole is not duplicated but has its empty UpstreamEndpoint /
 // ReferrerIssuer filled from e (a non-empty hint is never clobbered with an
-// empty one), preserving RetryCount.
+// empty one), preserving RetryCount and keeping the MINIMUM AssemblyDepth (the
+// shortest path to any head wins). A non-positive AssemblyDepth is rejected: a
+// real hole is always >= 1 (StoreVC enqueues at assemblyDepth+1), so a 0 from a
+// misconstructed entry must not be admitted and win keep-min.
 func (p *Pool) Add(e vcresolver.UnresolvedEntry) error {
+	if e.AssemblyDepth < 1 {
+		return fmt.Errorf("%w: AssemblyDepth %d must be >= 1", vcresolver.ErrInvalidArgument, e.AssemblyDepth)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing, ok := p.byHash[e.Hash]; ok {
@@ -71,12 +78,25 @@ func (p *Pool) Add(e vcresolver.UnresolvedEntry) error {
 		if existing.ReferrerIssuer == "" {
 			existing.ReferrerIssuer = e.ReferrerIssuer
 		}
+		if e.AssemblyDepth < existing.AssemblyDepth {
+			existing.AssemblyDepth = e.AssemblyDepth
+		}
 		p.byHash[e.Hash] = existing
 		return nil
 	}
 	p.byHash[e.Hash] = e
 	p.order = append([]string{e.Hash}, p.order...)
 	return nil
+}
+
+// Get returns the entry at hash and whether it is present. The batch resolver re-reads
+// the live entry before acting, since an earlier entry in the same drain may have lowered
+// this one's AssemblyDepth (keep-min) or resolved it.
+func (p *Pool) Get(hash string) (vcresolver.UnresolvedEntry, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byHash[hash]
+	return e, ok
 }
 
 // ListNewest returns up to n entries, newest first.

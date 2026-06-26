@@ -12,7 +12,7 @@ import (
 // satisfied by *vcresolver.Service. cmd/standalone owns this local interface so the data
 // plane depends on the capability, not the concrete service.
 type ingressStorer interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string) (string, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
 }
 
 // Compile-time assertion: serviceIngressStore satisfies contract.IngressVCStore.
@@ -36,7 +36,9 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	if err != nil {
 		return fmt.Errorf("ingressstore: marshal credential: %w", err)
 	}
-	if _, err := s.store.StoreVC(ctx, b, upstreamEndpoint); err != nil {
+	// A consumed ingress credential is directly received — assembly depth 0; its
+	// missing predecessor enqueues at depth 1.
+	if _, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0); err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
 	}
 	return nil

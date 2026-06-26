@@ -34,9 +34,20 @@ func New(store Store, pool Pool) *Service {
 // typed accessor would otherwise silently coerce a malformed link to "" and
 // admit a linked credential as a chain origin. The cryptographic proof is NOT
 // verified here (content-addressed storage; verification is the auditor's job).
-func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string) (string, error) {
+//
+// assemblyDepth is the depth of THIS credential (the one being stored): 0 for a
+// directly-received credential (ingress, or a wire submission), or the drained
+// hole's depth when the batch resolver re-submits a fetched predecessor. A missing
+// predecessor is enqueued at assemblyDepth+1, so a real hole is always >= 1; the
+// resolver enforces a max-depth against it to bound assembly. A directly-received
+// credential at depth 0 therefore resets its predecessor to depth 1 even if the
+// credential was itself previously queued as a deeper hole.
+func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if assemblyDepth < 0 {
+		return "", fmt.Errorf("%w: assemblyDepth %d is negative", ErrInvalidArgument, assemblyDepth)
 	}
 	var cred vc.PipelinePassCredential
 	if err := json.Unmarshal(credential, &cred); err != nil {
@@ -71,6 +82,7 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 				Hash:             prev,
 				UpstreamEndpoint: upstreamEndpoint,
 				ReferrerIssuer:   cred.Issuer(),
+				AssemblyDepth:    assemblyDepth + 1,
 			}); err != nil {
 				return "", err
 			}
