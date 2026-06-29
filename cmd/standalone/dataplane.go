@@ -54,6 +54,9 @@ type dataPlaneDeps struct {
 	// node config (pipelineconfig.Config), not deps — so main, which loads and passes that
 	// config, wires them without a separate composition step.
 	VCStoreHTTPClient connect.HTTPClient
+	// AuditQueue registers each consumed head for async audit (slice-17h, D-17h-2). Nil
+	// disables registration (a node/test without the audit runner); main always wires it.
+	AuditQueue auditRegistrar
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -125,7 +128,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 			return fmt.Errorf("standalone: loop %q: consuming role requires a VC store", loopName)
 		}
 		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
-		ingressStore = &serviceIngressStore{store: deps.VCStore}
+		ingressStore = &serviceIngressStore{store: deps.VCStore, audit: deps.AuditQueue}
 		if vcClient != nil {
 			cv, err := chainwalk.New(vcClient, verifier)
 			if err != nil {

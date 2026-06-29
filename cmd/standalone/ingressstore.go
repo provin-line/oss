@@ -15,6 +15,12 @@ type ingressStorer interface {
 	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
 }
 
+// auditRegistrar registers a consumed head's content address for async audit (slice-17h).
+// cmd/standalone owns this local interface; *auditor.MemQueue satisfies it.
+type auditRegistrar interface {
+	Add(headHash string) error
+}
+
 // Compile-time assertion: serviceIngressStore satisfies contract.IngressVCStore.
 var _ contract.IngressVCStore = (*serviceIngressStore)(nil)
 
@@ -25,6 +31,10 @@ var _ contract.IngressVCStore = (*serviceIngressStore)(nil)
 // into the unresolved pool (D-17f-1).
 type serviceIngressStore struct {
 	store ingressStorer
+	// audit registers the stored head for async audit (slice-17h, D-17h-2). When nil, no
+	// registration happens (a node without the audit runner — e.g. a unit test that does not
+	// exercise the audit path).
+	audit auditRegistrar
 }
 
 // StoreIngressVC implements contract.IngressVCStore. It marshals cred using
@@ -38,8 +48,17 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	}
 	// A consumed ingress credential is directly received — assembly depth 0; its
 	// missing predecessor enqueues at depth 1.
-	if _, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0); err != nil {
+	headHash, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
+	if err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
+	}
+	// Register the consumed head for async audit (slice-17h, D-17h-2). Fail-closed, like the
+	// store above: losing the registration would drop this credential from the audit trail,
+	// the failure 17f's "never continue without the audit trail" contract guards against.
+	if s.audit != nil {
+		if err := s.audit.Add(headHash); err != nil {
+			return fmt.Errorf("ingressstore: register audit head: %w", err)
+		}
 	}
 	return nil
 }

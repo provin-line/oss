@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/vc"
 )
@@ -39,19 +41,58 @@ func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 }
 
 // newTestIngressSetup returns a serviceIngressStore backed by a real vcresolver.Service
-// together with the underlying memstore Pool so tests can inspect the pool directly.
-func newTestIngressSetup() (*serviceIngressStore, *vcresolver.Service, *memstore.Pool) {
+// together with the underlying memstore Pool and the audit queue so tests can inspect both.
+func newTestIngressSetup() (*serviceIngressStore, *vcresolver.Service, *memstore.Pool, *auditor.MemQueue) {
 	pool := memstore.NewPool()
 	svc := vcresolver.New(memstore.NewStore(), pool)
-	store := &serviceIngressStore{store: svc}
-	return store, svc, pool
+	queue := auditor.NewMemQueue()
+	store := &serviceIngressStore{store: svc, audit: queue}
+	return store, svc, pool, queue
 }
+
+// TestServiceIngressStore_RegistersHeadForAudit asserts the stored head's content address
+// is registered in the audit queue (slice-17h, D-17h-2).
+func TestServiceIngressStore_RegistersHeadForAudit(t *testing.T) {
+	store, _, _, queue := newTestIngressSetup()
+
+	cred := makeIngressCred(t, nil)
+	want, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if err := store.StoreIngressVC(context.Background(), cred, ""); err != nil {
+		t.Fatalf("StoreIngressVC: %v", err)
+	}
+	cands, _ := queue.ListNewest(10)
+	if len(cands) != 1 || cands[0].HeadHash != want {
+		t.Errorf("audit queue = %+v, want one entry for %q", cands, want)
+	}
+}
+
+// TestServiceIngressStore_AuditRegisterFailsClosed asserts a registration failure makes
+// StoreIngressVC fail (fail-closed — never continue without the audit trail).
+func TestServiceIngressStore_AuditRegisterFailsClosed(t *testing.T) {
+	pool := memstore.NewPool()
+	svc := vcresolver.New(memstore.NewStore(), pool)
+	store := &serviceIngressStore{store: svc, audit: failingRegistrar{}}
+
+	cred := makeIngressCred(t, nil)
+	if err := store.StoreIngressVC(context.Background(), cred, ""); err == nil {
+		t.Fatal("StoreIngressVC: want error on audit registration failure, got nil")
+	}
+}
+
+type failingRegistrar struct{}
+
+func (failingRegistrar) Add(string) error { return errRegister }
+
+var errRegister = fmt.Errorf("register boom")
 
 // TestServiceIngressStore_AbsentPredecessorEnqueuesPoolEntry asserts that storing
 // an ingress VC whose predecessor is absent leaves exactly one pool entry for that
 // predecessor, carrying the passed upstream-endpoint and the VC's issuer as ReferrerIssuer.
 func TestServiceIngressStore_AbsentPredecessorEnqueuesPoolEntry(t *testing.T) {
-	store, _, pool := newTestIngressSetup()
+	store, _, pool, _ := newTestIngressSetup()
 
 	prevAddr := "sha256:" + strings.Repeat("a", 64)
 	cred := makeIngressCred(t, prevAddr)
@@ -86,7 +127,7 @@ func TestServiceIngressStore_AbsentPredecessorEnqueuesPoolEntry(t *testing.T) {
 // TestServiceIngressStore_OriginVCEnqueuesNothing asserts that an origin VC (no
 // previousCredential) does not enqueue anything — pool stays empty.
 func TestServiceIngressStore_OriginVCEnqueuesNothing(t *testing.T) {
-	store, _, pool := newTestIngressSetup()
+	store, _, pool, _ := newTestIngressSetup()
 
 	cred := makeIngressCred(t, nil)
 	if err := store.StoreIngressVC(context.Background(), cred, ""); err != nil {
@@ -100,7 +141,7 @@ func TestServiceIngressStore_OriginVCEnqueuesNothing(t *testing.T) {
 // TestServiceIngressStore_StoredVCIsResolvable asserts the ingress VC is retrievable
 // via svc.ResolveVC at the content address returned by cred.Hash().
 func TestServiceIngressStore_StoredVCIsResolvable(t *testing.T) {
-	store, svc, _ := newTestIngressSetup()
+	store, svc, _, _ := newTestIngressSetup()
 
 	cred := makeIngressCred(t, nil)
 	want, err := cred.Hash()
@@ -128,7 +169,7 @@ func TestServiceIngressStore_StoredVCIsResolvable(t *testing.T) {
 // TestServiceIngressStore_OutOfOrder asserts that storing a successor before its
 // predecessor enqueues the hole, and then storing the predecessor removes it.
 func TestServiceIngressStore_OutOfOrder(t *testing.T) {
-	store, _, pool := newTestIngressSetup()
+	store, _, pool, _ := newTestIngressSetup()
 	ctx := context.Background()
 
 	// Build predecessor and successor credentials.
@@ -160,7 +201,7 @@ func TestServiceIngressStore_OutOfOrder(t *testing.T) {
 // a non-content-address previousCredential string is rejected by StoreVC, so
 // StoreIngressVC returns an error (fail-closed).
 func TestServiceIngressStore_MalformedPreviousCredential(t *testing.T) {
-	store, _, _ := newTestIngressSetup()
+	store, _, _, _ := newTestIngressSetup()
 
 	cred := makeIngressCred(t, "not-a-hash")
 	err := store.StoreIngressVC(context.Background(), cred, "https://up.example")
