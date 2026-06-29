@@ -1,0 +1,83 @@
+// dplaax.audit.v1 is the read surface for the async chain auditor's per-head
+// verdicts: a consumer fetches the latest recorded audit status for a consumed
+// chain head (by content address). The verdict-producing runner is slice-17h;
+// this is the read API (slice-17i).
+//
+// Coverage principle (load-bearing, slice-17i D-17i-2): the response carries a
+// per-scope verdict, never a bare "overall" and never a top-level axes block. A
+// linear-chain-only verdict can therefore never be read as a full aggregate
+// (consumed-set) verdict — message presence of source_commitment IS the coverage
+// signal (absent == not evaluated). A conforming aggregate consumer computes
+// glb(linear_chain, source_commitment) and treats an absent source_commitment as
+// not evaluated.
+syntax = "proto3";
+
+package dplaax.audit.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/audit/v1;auditpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// AuditService serves the per-head audit verdict the async runner records. Its
+// RPC declares its authorization policy (resource + action) via the
+// o3co.authz.v1 method option; the network layer's interceptor enforces it. An
+// absent option would silently disable the check, so the RPC carries one —
+// asserted by a descriptor test.
+service AuditService {
+  // GetAuditStatus returns the latest recorded audit verdict for a consumed chain
+  // head (by content address), or NotFound when no verdict has been recorded yet
+  // (a well-formed head that has not been audited), or InvalidArgument for a
+  // malformed content address. Audit verdicts are provenance metadata, L1-gated
+  // like a VC read.
+  rpc GetAuditStatus(GetAuditStatusRequest) returns (GetAuditStatusResponse) {
+    option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
+  }
+}
+
+// Confidence is the wire projection of the verifier's three-state domain
+// (vc.ConfidenceState). CONFIDENCE_UNSPECIFIED is the proto3 zero and the
+// fail-closed sink: it is never emitted for a real linear-chain verdict, and a
+// consumer treats it as not-verified. The domain's own zero is Failed, so the
+// handler maps domain→proto with an explicit shift (Failed→FAILED), never a cast.
+enum Confidence {
+  CONFIDENCE_UNSPECIFIED = 0;
+  CONFIDENCE_FAILED = 1;
+  CONFIDENCE_INDETERMINATE = 2;
+  CONFIDENCE_VERIFIED = 3;
+}
+
+// AxisVerdict carries the three normative confidence axes (mirrors vc.AxisResult).
+message AxisVerdict {
+  Confidence data_integrity = 1;
+  Confidence signer_authenticity = 2;
+  Confidence chain_consistency = 3;
+}
+
+// ScopeVerdict is one audited scope's verdict. axes is populated for scopes with
+// sub-axis structure (the linear chain); a scope whose verifier yields a single
+// state (source_commitment) leaves axes empty.
+message ScopeVerdict {
+  Confidence confidence = 1;
+  AxisVerdict axes = 2;
+  repeated string notations = 3;
+}
+
+message GetAuditStatusRequest {
+  // head_hash is the consumed head's content address ("sha256:<hex>").
+  string head_hash = 1;
+}
+
+message GetAuditStatusResponse {
+  // linear_chain is the verdict over the previousCredential spine — always present
+  // (every recorded audit walked the spine). Named by coverage so a reader can
+  // never mistake it for a full aggregate verdict.
+  ScopeVerdict linear_chain = 1;
+  // source_commitment is the consumed-set (SourceCommitment) verdict. ABSENT until
+  // the aggregate-audit slice — message presence IS the coverage signal (unset ==
+  // not evaluated). A full aggregate "verified" requires this present AND VERIFIED;
+  // a client reading only linear_chain can never mint one.
+  ScopeVerdict source_commitment = 2;
+  // audited_at is an RFC 3339 UTC timestamp string (display field; codebase
+  // convention — dplaax.chain.v1 deliberately avoids google.protobuf.Timestamp).
+  string audited_at = 3;
+}
