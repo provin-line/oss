@@ -114,6 +114,26 @@ func TestPool_Add_RejectsNonPositiveDepth(t *testing.T) {
 	}
 }
 
+// Has reports queued membership (the audit runner's liveness signal, slice-17h).
+func TestPool_Has(t *testing.T) {
+	p := memstore.NewPool()
+	if p.Has("h") {
+		t.Error("empty pool: Has = true, want false")
+	}
+	if err := p.Add(vcresolver.UnresolvedEntry{Hash: "h", AssemblyDepth: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.Has("h") {
+		t.Error("after Add: Has = false, want true")
+	}
+	if err := p.Remove("h"); err != nil {
+		t.Fatal(err)
+	}
+	if p.Has("h") {
+		t.Error("after Remove: Has = true, want false")
+	}
+}
+
 func depthOf(t *testing.T, p *memstore.Pool, hash string) int {
 	t.Helper()
 	for _, e := range mustList(t, p) {

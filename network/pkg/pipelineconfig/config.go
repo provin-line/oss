@@ -62,6 +62,10 @@ const (
 	brBatchSizeKey       = batchResolverKey + ".batch-size"
 	brMaxRetriesKey      = batchResolverKey + ".max-retries"
 	brMaxDepthKey        = batchResolverKey + ".max-depth"
+	auditRunnerKey       = pipelineKey + ".audit-runner"
+	arIntervalKey        = auditRunnerKey + ".interval"
+	arBatchSizeKey       = auditRunnerKey + ".batch-size"
+	arMaxAttemptsKey     = auditRunnerKey + ".max-attempts"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -95,6 +99,22 @@ type Config struct {
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
+	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
+	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
+	AuditRunner AuditRunnerConfig
+}
+
+// AuditRunnerConfig is the node-level tuning for the async audit runner (slice-17h). All
+// values come from reference.conf (no Go defaults) and must be positive; the runner runs
+// only on a node with a consuming loop (the population that registers audit heads).
+type AuditRunnerConfig struct {
+	// Interval is the delay between audit ticks.
+	Interval time.Duration
+	// BatchSize is the max number of heads audited per tick.
+	BatchSize int
+	// MaxAttempts bounds a persistently-indeterminate NON-hole verdict before it is dropped
+	// (a hole's liveness is governed by the unresolved pool, not this count).
+	MaxAttempts int
 }
 
 // BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
@@ -238,7 +258,43 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
+	if out.AuditRunner, err = loadAuditRunner(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadAuditRunner reads the async audit-runner tuning from the (layered) config. All three
+// values live in reference.conf (always present); each must be positive — a non-positive
+// override fails startup (no Go-side defaults).
+func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
+	var ar AuditRunnerConfig
+	interval, err := cfg.Duration(arIntervalKey)
+	if err != nil {
+		return ar, fmt.Errorf("pipeline: config %s: %w", arIntervalKey, err)
+	}
+	ints := []struct {
+		key string
+		dst *int
+	}{
+		{arBatchSizeKey, &ar.BatchSize},
+		{arMaxAttemptsKey, &ar.MaxAttempts},
+	}
+	for _, it := range ints {
+		v, err := cfg.Int(it.key)
+		if err != nil {
+			return AuditRunnerConfig{}, fmt.Errorf("pipeline: config %s: %w", it.key, err)
+		}
+		if v <= 0 {
+			return AuditRunnerConfig{}, fmt.Errorf("pipeline: config %s must be positive, got %d", it.key, v)
+		}
+		*it.dst = v
+	}
+	if interval <= 0 {
+		return AuditRunnerConfig{}, fmt.Errorf("pipeline: config %s must be positive, got %s", arIntervalKey, interval)
+	}
+	ar.Interval = interval
+	return ar, nil
 }
 
 // loadMaxCredentialSize reads the node-level per-credential byte cap from the (layered)

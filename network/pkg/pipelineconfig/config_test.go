@@ -26,6 +26,17 @@ func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_AuditRunnerDefaults(t *testing.T) {
+	cfg, err := pipelineconfig.LoadPipelineConfig(loadWith(t, ""))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	ar := cfg.AuditRunner
+	if ar.Interval != 30*time.Second || ar.BatchSize != 64 || ar.MaxAttempts != 10 {
+		t.Errorf("audit-runner defaults = %+v", ar)
+	}
+}
+
 func TestLoad_NonPositiveBatchOrSize_Fails(t *testing.T) {
 	for _, override := range []string{
 		"provin.network.pipeline.batch-resolver.interval = 0",
@@ -33,6 +44,9 @@ func TestLoad_NonPositiveBatchOrSize_Fails(t *testing.T) {
 		"provin.network.pipeline.batch-resolver.max-retries = -1",
 		"provin.network.pipeline.batch-resolver.max-depth = 0",
 		"provin.network.pipeline.max-credential-size = 0",
+		"provin.network.pipeline.audit-runner.interval = 0",
+		"provin.network.pipeline.audit-runner.batch-size = 0",
+		"provin.network.pipeline.audit-runner.max-attempts = -1",
 	} {
 		t.Run(override, func(t *testing.T) {
 			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, override)); err == nil {

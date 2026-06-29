@@ -143,6 +143,15 @@ func (p *Pool) IncrementRetry(hash string) error {
 	return nil
 }
 
+// Has reports whether a hole is currently queued — the read-only liveness signal the audit
+// runner consults before finalizing an Indeterminate verdict (slice-17h, D-17h-4).
+func (p *Pool) Has(hash string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.byHash[hash]
+	return ok
+}
+
 // Len reports the number of queued holes.
 func (p *Pool) Len() int {
 	p.mu.Lock()
