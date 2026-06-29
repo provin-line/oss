@@ -98,7 +98,7 @@ func main() {
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, pipeCfg.MaxCredentialSize)
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, auditStatus, pipeCfg.MaxCredentialSize)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}

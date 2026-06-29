@@ -19,6 +19,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
+	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
@@ -35,6 +37,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 
+	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
 
@@ -71,7 +74,10 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 // the VCResolverService RPC (D-17f-5). main builds it once before calling BuildHandler.
 // maxCredentialSize bounds an inbound StoreVC body (D-17g-13): a peer must not OOM the
 // node with a bloated credential.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, maxCredentialSize int) (http.Handler, error) {
+// auditStatus is the audit-verdict store the async runner writes (slice-17h) and the
+// AuditService reads (slice-17i, D-17i-7); main builds it once and shares the one instance
+// across both. A read-only surface — the API never mutates it.
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, maxCredentialSize int) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -134,6 +140,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
+		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus)), authz)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc)), authz)),
 	} {
 		mux.Handle(p.path, p.h)

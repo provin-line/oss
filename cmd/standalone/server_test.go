@@ -30,6 +30,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/vc"
@@ -91,7 +92,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, maxCredentialSize)
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), maxCredentialSize)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

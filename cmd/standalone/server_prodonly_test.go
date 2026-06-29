@@ -10,6 +10,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 )
@@ -25,7 +26,7 @@ func TestBuildHandler_NoopRequiresDevBuild(t *testing.T) {
 	noop := &chainconfig.Config{Transport: chainconfig.TransportNoop, AllowNoopTransport: true}
 	guard, resolver := newDIDResolution(coreCfg, noop)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	_, err := BuildHandler(coreCfg, regCfg, noop, verifier, guard, resolver, vcSvc, 1<<20)
+	_, err := BuildHandler(coreCfg, regCfg, noop, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), 1<<20)
 	if err == nil {
 		t.Fatal("BuildHandler accepted noop transport in a production build")
 	}

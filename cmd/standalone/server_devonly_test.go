@@ -10,6 +10,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 )
@@ -26,13 +27,13 @@ func TestBuildHandler_DevNoop(t *testing.T) {
 	enabled := &chainconfig.Config{Transport: chainconfig.TransportNoop, AllowNoopTransport: true}
 	gEn, rEn := newDIDResolution(coreCfg, enabled)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	if _, err := BuildHandler(coreCfg, regCfg, enabled, verifier, gEn, rEn, vcSvc, 1<<20); err != nil {
+	if _, err := BuildHandler(coreCfg, regCfg, enabled, verifier, gEn, rEn, vcSvc, auditor.NewMemStatusStore(), 1<<20); err != nil {
 		t.Fatalf("dev build rejected enabled noop: %v", err)
 	}
 	// disabled -> refused even in a dev build.
 	disabled := &chainconfig.Config{Transport: chainconfig.TransportNoop, AllowNoopTransport: false}
 	gDis, rDis := newDIDResolution(coreCfg, disabled)
-	if _, err := BuildHandler(coreCfg, regCfg, disabled, verifier, gDis, rDis, vcSvc, 1<<20); err == nil {
+	if _, err := BuildHandler(coreCfg, regCfg, disabled, verifier, gDis, rDis, vcSvc, auditor.NewMemStatusStore(), 1<<20); err == nil {
 		t.Fatal("dev build accepted noop without allow-noop-transport")
 	}
 }
