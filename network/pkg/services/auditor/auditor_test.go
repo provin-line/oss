@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/vc"
 )
 

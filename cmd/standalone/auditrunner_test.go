@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"

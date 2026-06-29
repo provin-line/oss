@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 )
 
 func candidates(t *testing.T, q *auditor.MemQueue) map[string]int {

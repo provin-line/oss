@@ -6,8 +6,8 @@ import (
 
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/resolver"
