@@ -234,6 +234,25 @@ func TestVerifyChain_Hole_GoError(t *testing.T) {
 // Resolver context cancellation propagates as a Go error
 // ---------------------------------------------------------------------------
 
+// A chain hole returns a typed *UnresolvedPredecessorError carrying the unresolved hash,
+// so an async auditor can check whether that hole is still being worked before finalizing.
+func TestVerifyChain_Hole_ReturnsTypedUnresolvedError(t *testing.T) {
+	origin := firstDrop(t)
+	head := linkedTo(t, origin, "head")
+
+	res := &fakeResolver{byAddr: map[string]*vc.PipelinePassCredential{}} // holds nothing → origin is a hole
+	cv, _ := chainwalk.New(res, &fakeCore{result: verified()})
+
+	_, err := cv.VerifyChain(context.Background(), head)
+	var ue *chainwalk.UnresolvedPredecessorError
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v, want *chainwalk.UnresolvedPredecessorError", err)
+	}
+	if ue.Hash != head.PreviousCredential() {
+		t.Errorf("hole hash = %q, want %q", ue.Hash, head.PreviousCredential())
+	}
+}
+
 func TestVerifyChain_ResolverCancellation_PropagatesGoError(t *testing.T) {
 	origin := firstDrop(t)
 	head := linkedTo(t, origin, "head")

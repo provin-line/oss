@@ -72,6 +72,26 @@ var (
 	ErrNonPositiveMaxDepth = errors.New("chainwalk: MaxDepth must be >= 1")
 )
 
+// UnresolvedPredecessorError reports a chain hole: a previousCredential that could not be
+// resolved during assembly (not a context cancellation). The caller maps it to an
+// indeterminate verdict; an async auditor reads Hash to check whether the hole is still
+// being worked (e.g. queued in the unresolved pool) before finalizing that verdict.
+type UnresolvedPredecessorError struct {
+	Hash string
+	Err  error
+}
+
+func (e *UnresolvedPredecessorError) Error() string {
+	return fmt.Sprintf("chainwalk: resolve predecessor %s: %v", e.Hash, e.Err)
+}
+
+func (e *UnresolvedPredecessorError) Unwrap() error { return e.Err }
+
+// UnresolvedHash returns the content address of the unresolved predecessor. It lets a
+// consumer match this error through a capability interface (e.g. an async auditor's hole
+// signal) without importing this package — keeping the layer dependency pointing inward.
+func (e *UnresolvedPredecessorError) UnresolvedHash() string { return e.Hash }
+
 // ChainVerifier implements provenance.ChainVerifier by resolver-walk. Construct
 // with New.
 type ChainVerifier struct {
@@ -146,8 +166,10 @@ func (cv *ChainVerifier) VerifyChain(ctx context.Context, head *vc.PipelinePassC
 				return nil, err
 			}
 			// Unresolvable predecessor = a chain hole. Refuse to verify an
-			// incomplete chain; the caller maps this to indeterminate.
-			return nil, fmt.Errorf("chainwalk: resolve predecessor %s: %w", prevAddr, err)
+			// incomplete chain; the caller maps this to indeterminate. The hole's
+			// content address is carried in a typed error so an async auditor can
+			// check whether it is still being resolved before finalizing a verdict.
+			return nil, &UnresolvedPredecessorError{Hash: prevAddr, Err: err}
 		}
 		if prev == nil {
 			return nil, fmt.Errorf("chainwalk: resolver returned nil credential for %s", prevAddr)
