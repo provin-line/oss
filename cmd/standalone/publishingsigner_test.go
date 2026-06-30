@@ -15,6 +15,7 @@ type fakeFullSigner struct {
 	cred         *vc.PipelinePassCredential
 	firstDropHit int
 	chainHit     int
+	aggregateHit int
 }
 
 func (f *fakeFullSigner) SignFirstDrop(_ context.Context, _ []byte, _, _ string) (*vc.PipelinePassCredential, error) {
@@ -24,6 +25,11 @@ func (f *fakeFullSigner) SignFirstDrop(_ context.Context, _ []byte, _, _ string)
 
 func (f *fakeFullSigner) SignChainPreserving(_ context.Context, _ []byte, _, _ string, _ *vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
 	f.chainHit++
+	return f.cred, nil
+}
+
+func (f *fakeFullSigner) SignAggregateFirstDrop(_ context.Context, _ []byte, _ string, _ []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
+	f.aggregateHit++
 	return f.cred, nil
 }
 
@@ -95,6 +101,29 @@ func TestPublishingSigner_ChainPreserving_PassesUpstreamHint(t *testing.T) {
 	}
 	if pub.gotEnd != "https://up.example/" {
 		t.Fatalf("upstream hint = %q, want %q", pub.gotEnd, "https://up.example/")
+	}
+}
+
+// An aggregate sign tees the issued credential to the store like the other paths, so
+// an aggregate FirstDrop is published before emit (D-17k-6).
+func TestPublishingSigner_AggregateFirstDrop_PublishesAndReturns(t *testing.T) {
+	cred := testCred(t)
+	inner := &fakeFullSigner{cred: cred}
+	pub := &fakePublisher{}
+	ps := &publishingSigner{inner: inner, publisher: pub}
+
+	got, err := ps.SignAggregateFirstDrop(context.Background(), []byte("x"), "oh", nil)
+	if err != nil {
+		t.Fatalf("SignAggregateFirstDrop: %v", err)
+	}
+	if got != cred {
+		t.Fatal("returned credential is not the signed one")
+	}
+	if inner.aggregateHit != 1 {
+		t.Fatalf("inner aggregate calls = %d, want 1", inner.aggregateHit)
+	}
+	if pub.calls != 1 {
+		t.Fatalf("StoreCredential calls = %d, want 1", pub.calls)
 	}
 }
 

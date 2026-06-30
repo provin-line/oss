@@ -46,10 +46,13 @@ type Config struct {
 	// AuditReachable, when set, makes SignChainPreserving attach a source
 	// commitment over the consumed conformant set (the audit-reachable
 	// conformance class). For a stateless 1:1 chained process that set is
-	// exactly {predecessor} (all-consumed semantics). SourceRootCanonical names
-	// the canonical-JSON spec for the commitment root (e.g.
-	// vc.SourceRootCanonicalJCS) and is required when AuditReachable is set.
-	AuditReachable      bool
+	// exactly {predecessor} (all-consumed semantics).
+	AuditReachable bool
+	// SourceRootCanonical names the canonical-JSON spec for the commitment root
+	// (e.g. vc.SourceRootCanonicalJCS). It is required when AuditReachable is set
+	// (the chained commitment path) and, independently, when TransformationClaim
+	// is vc.ClaimAggregate (the aggregate path is always commitment-bearing via
+	// SignAggregateFirstDrop).
 	SourceRootCanonical string
 }
 
@@ -80,6 +83,11 @@ func NewSigner(cfg Config) (*Signer, error) {
 		return nil, fmt.Errorf("vcdid: empty TransformationClaim")
 	case cfg.AuditReachable && cfg.SourceRootCanonical == "":
 		return nil, fmt.Errorf("vcdid: AuditReachable set without SourceRootCanonical")
+	case cfg.TransformationClaim == vc.ClaimAggregate && cfg.SourceRootCanonical == "":
+		// The aggregate path is always commitment-bearing (SignAggregateFirstDrop),
+		// so it requires SourceRootCanonical independently of the chained
+		// AuditReachable flag.
+		return nil, fmt.Errorf("vcdid: aggregate signer (ClaimAggregate) requires SourceRootCanonical")
 	}
 	// Validate static config fully at construction, not at first sign: a
 	// malformed claim token or an unknown commitment canonicalization is a
@@ -87,7 +95,7 @@ func NewSigner(cfg Config) (*Signer, error) {
 	if err := cfg.TransformationClaim.Validate(); err != nil {
 		return nil, fmt.Errorf("vcdid: invalid TransformationClaim: %w", err)
 	}
-	if cfg.AuditReachable {
+	if cfg.AuditReachable || cfg.TransformationClaim == vc.ClaimAggregate {
 		// Probe the canonicalization via the authoritative root computation
 		// (empty set) — errors on an unknown identifier without vcdid having to
 		// enumerate the canonical registry.
@@ -106,6 +114,13 @@ func (s *Signer) SignFirstDrop(ctx context.Context, payload []byte, inputHash, o
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.cfg.TransformationClaim == vc.ClaimAggregate {
+		// Fail closed: an aggregate signer must mint only through
+		// SignAggregateFirstDrop. The ingest path would otherwise emit a
+		// provin:aggregate FirstDrop with inputHash present and no source
+		// commitment — a malformed aggregate. Binds claim↔method both ways.
+		return nil, fmt.Errorf("vcdid: SignFirstDrop is not valid for an aggregate signer (TransformationClaim %q); use SignAggregateFirstDrop", vc.ClaimAggregate)
+	}
 	return s.cfg.Builder.BuildFirstDrop(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.subject(inputHash, outputHash), nil)
 }
 
@@ -116,6 +131,12 @@ func (s *Signer) SignFirstDrop(ctx context.Context, payload []byte, inputHash, o
 func (s *Signer) SignChainPreserving(ctx context.Context, payload []byte, inputHash, outputHash string, predecessor *vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if s.cfg.TransformationClaim == vc.ClaimAggregate {
+		// Fail closed: an aggregate signer must not emit a chain-preserving
+		// credential — that would carry previousCredential on a claim that means
+		// "fresh aggregation origin". Binds claim↔method both ways.
+		return nil, fmt.Errorf("vcdid: SignChainPreserving is not valid for an aggregate signer (TransformationClaim %q); use SignAggregateFirstDrop", vc.ClaimAggregate)
 	}
 	if predecessor == nil {
 		// Guard before the commitment path — NewSourceCommitment would deref a
@@ -134,6 +155,41 @@ func (s *Signer) SignChainPreserving(ctx context.Context, payload []byte, inputH
 	return s.cfg.Builder.BuildChainPreserving(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.subject(inputHash, outputHash), predecessor, commitment)
 }
 
+// SignAggregateFirstDrop issues an aggregate Source Process FirstDrop over the
+// consumed set of Pipeline-conformant source credentials (timer/window mechanics,
+// transformationClaim provin:aggregate). It is always commitment-bearing: it commits
+// to the full set — the sources AS RECEIVED (signed wire form), which is what a
+// verifier recomputes against — via vc.NewSourceCommitment, and attaches it to a
+// FirstDrop whose InputHash is structurally absent (no single input exists) and whose
+// previousCredential is empty (a chain origin; the commitment is an audit attribute,
+// never a parent link).
+//
+// The signer never silently repairs its input: a nil source element, a
+// duplicate-content source, or an unknown canonical fails closed (dedup is the
+// pool/window's job). Only a signer configured with TransformationClaim ==
+// vc.ClaimAggregate may call it — so the commitment-bearing aggregate shape cannot be
+// minted under a convert/enrich claim.
+func (s *Signer) SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.cfg.TransformationClaim != vc.ClaimAggregate {
+		return nil, fmt.Errorf("vcdid: SignAggregateFirstDrop requires an aggregate signer (TransformationClaim %q, want %q)", s.cfg.TransformationClaim, vc.ClaimAggregate)
+	}
+	for i, src := range sources {
+		if src == nil {
+			// Fail closed before NewSourceCommitment, which would deref the nil
+			// (MarshalJSON / Issuer) and panic.
+			return nil, fmt.Errorf("vcdid: nil source credential at index %d", i)
+		}
+	}
+	commitment, err := vc.NewSourceCommitment(sources, s.cfg.SourceRootCanonical)
+	if err != nil {
+		return nil, fmt.Errorf("vcdid: source commitment: %w", err)
+	}
+	return s.cfg.Builder.BuildFirstDrop(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.aggregateSubject(outputHash), commitment)
+}
+
 // subject assembles the credential subject from the process's constant metadata
 // and the per-event hashes.
 func (s *Signer) subject(inputHash, outputHash string) vc.CredentialSubjectFields {
@@ -143,6 +199,20 @@ func (s *Signer) subject(inputHash, outputHash string) vc.CredentialSubjectField
 		TransformationClaim: s.cfg.TransformationClaim,
 		Schema:              s.cfg.Schema,
 		InputHash:           inputHash,
+		OutputHash:          outputHash,
+	}
+}
+
+// aggregateSubject assembles the subject for an aggregate FirstDrop: InputHash is
+// deliberately left empty — an aggregate folds a consumed set, so there is no single
+// input, and vc.New omits an empty InputHash from the wire body. OutputHash is the
+// digest of the aggregate output.
+func (s *Signer) aggregateSubject(outputHash string) vc.CredentialSubjectFields {
+	return vc.CredentialSubjectFields{
+		PipelineID:          s.cfg.PipelineID,
+		ProcessID:           s.cfg.ProcessID,
+		TransformationClaim: s.cfg.TransformationClaim,
+		Schema:              s.cfg.Schema,
 		OutputHash:          outputHash,
 	}
 }

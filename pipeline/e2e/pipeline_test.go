@@ -200,6 +200,63 @@ func (r *registeringSigner) SignChainPreserving(ctx context.Context, payload []b
 	return c, err
 }
 
+// SignAggregateFirstDrop MUST be overridden explicitly: the embedded *vcdid.Signer
+// now carries this method, and Go method promotion would otherwise expose it directly
+// — bypassing the resolver registration this decorator exists to perform (D-17k-6).
+func (r *registeringSigner) SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
+	c, err := r.Signer.SignAggregateFirstDrop(ctx, payload, outputHash, sources)
+	if err == nil {
+		r.res.register(r.t, c)
+	}
+	return c, err
+}
+
+// TestRegisteringSigner_AggregateOverridden guards D-17k-6: because registeringSigner
+// EMBEDS *vcdid.Signer, the newly added SignAggregateFirstDrop would be promoted and
+// expose the embedded method directly — bypassing res.register. The explicit override
+// above prevents that; this test fails if the override is removed (the issued
+// aggregate credential would not be resolvable).
+func TestRegisteringSigner_AggregateOverridden(t *testing.T) {
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	ks := newMemKeyStore()
+	if err := ks.SaveKeyPair(sourceDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatalf("save key: %v", err)
+	}
+	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	aggSig, err := vcdid.NewSigner(vcdid.Config{
+		Builder: builder, IssuerDID: sourceDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: sourceDID + "#signing", PipelineID: "pipe", ProcessID: "agg",
+		TransformationClaim: vc.ClaimAggregate, SourceRootCanonical: vc.SourceRootCanonicalJCS,
+	})
+	if err != nil {
+		t.Fatalf("aggregate vcdid.NewSigner: %v", err)
+	}
+	res := newMemResolver()
+	rs := &registeringSigner{Signer: aggSig, res: res, t: t}
+
+	// One signed source to fold (its own issuer); register it so the consumed set is
+	// resolvable, then aggregate over it.
+	src, err := aggSig.SignAggregateFirstDrop(context.Background(), []byte(`{"s":1}`), "sha256:src", nil)
+	if err != nil {
+		t.Fatalf("source aggregate sign: %v", err)
+	}
+	cred, err := rs.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":1}`), "sha256:out",
+		[]*vc.PipelinePassCredential{src})
+	if err != nil {
+		t.Fatalf("registeringSigner.SignAggregateFirstDrop: %v", err)
+	}
+	addr, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if _, err := res.ResolveCredential(context.Background(), addr); err != nil {
+		t.Fatalf("aggregate credential was not registered (promotion bypassed the decorator?): %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DID documents: each process's #signing assertion key, controlled by the
 // process and the process controlled by the owner; the owner self-controlled.

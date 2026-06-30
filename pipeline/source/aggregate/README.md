@@ -51,4 +51,9 @@ accountability for non-federation inputs terminates at the ingesting owner.
 
 ## Status
 
-Interface + conventions only in this PoC phase. No reference implementation yet.
+The **signer capability** has landed (slice-17k): `provenance.SourceSigner.SignAggregateFirstDrop`
+(implemented by `vcdid.Signer`) signs an aggregate FirstDrop over a caller-supplied consumed set,
+attaching the `vc.SourceCommitment` and structurally omitting `inputHash`. The **pool/window
+runtime** that assembles that consumed set (timer trigger, per-input ingress verification +
+ingress-VC storage, dedup, empty-window policy) is a later slice — conventions only, no reference
+implementation yet.

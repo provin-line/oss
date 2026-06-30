@@ -118,6 +118,10 @@ func ComputeSourceRoot(sources []*PipelinePassCredential, canonical string) (str
 	leaves := make([]leaf, len(sources))
 	seen := make(map[[sha256.Size]byte]bool, len(sources))
 	for i, s := range sources {
+		if s == nil {
+			// Fail closed: a nil element would panic on MarshalJSON/Issuer.
+			return "", fmt.Errorf("vc: nil source credential at index %d", i)
+		}
 		wire, err := s.MarshalJSON()
 		if err != nil {
 			return "", fmt.Errorf("vc: canonicalizing source %d: %w", i, err)

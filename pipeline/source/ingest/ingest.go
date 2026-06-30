@@ -75,18 +75,28 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
-	"github.com/provin-line/oss/pipeline/provenance"
+	"github.com/provin-line/oss/vc"
 )
 
 // ErrMissingSigner is returned when Config.Signer is nil.
 var ErrMissingSigner = errors.New("ingest: Signer is required")
+
+// firstDropSigner is the narrow signing capability the ingest (N=0) runtime
+// exercises — only the FirstDrop path. Depending on this consumer-defined interface
+// rather than the wider provenance.SourceSigner keeps the aggregate signing method
+// (SignAggregateFirstDrop) off the ingest runtime's surface, so the N=0 origin cannot
+// call a path it never uses (interface segregation). A *vcdid.Signer and the
+// publishing decorator both satisfy it.
+type firstDropSigner interface {
+	SignFirstDrop(ctx context.Context, payload []byte, inputHash, outputHash string) (*vc.PipelinePassCredential, error)
+}
 
 // Config holds all construction-time configuration for a Source ingest event
 // processor. It is deliberately minimal: a Source origin verifies nothing,
 // stores nothing, and transforms nothing.
 type Config struct {
 	// Signer issues the FirstDrop output credential. Required.
-	Signer provenance.SourceSigner
+	Signer firstDropSigner
 
 	// Observers are notified after every outcome (passed/errored).
 	// Fire-and-forget: observer errors are logged and never propagated.

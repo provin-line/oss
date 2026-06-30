@@ -62,6 +62,21 @@ func (p *publishingSigner) SignChainPreserving(ctx context.Context, payload []by
 	return cred, nil
 }
 
+// SignAggregateFirstDrop forwards to the inner aggregate signer, then publishes the
+// issued credential like the other two paths (an aggregate FirstDrop has no
+// predecessor, so its publish hint is the configured upstreamEndpoint, same as a
+// source FirstDrop).
+func (p *publishingSigner) SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
+	cred, err := p.inner.SignAggregateFirstDrop(ctx, payload, outputHash, sources)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.publish(ctx, cred); err != nil {
+		return nil, err
+	}
+	return cred, nil
+}
+
 // publish stores cred and verifies the round-trip: the server-recomputed content address
 // must equal the credential's own Hash(), else the store holds something other than what
 // was signed and a full verifier would resolve the wrong (or no) credential.

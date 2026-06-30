@@ -171,6 +171,13 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 // emission log. The config layer has already validated that lc.Role is source.
 func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
+	if src.TransformationClaim == vc.ClaimAggregate {
+		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
+		// aggregate Source Process (pool/window + SignAggregateFirstDrop) is a later
+		// slice with its own role/wiring. Fail with a legible boot error rather than
+		// the raw vcdid "aggregate requires SourceRootCanonical" construction error.
+		return nil, fmt.Errorf("standalone: loop %q: transformation-claim %q is not valid on an ingest source loop (the aggregate Source Process runtime is a separate slice)", lc.Name, vc.ClaimAggregate)
+	}
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
 		IssuerDID:           src.Issuer.DID,

@@ -23,4 +23,8 @@
 
 ## ステータス
 
-この PoC フェーズではインターフェース + 規約のみ。参照実装はまだ存在しない。
+**signer capability** は実装済み（slice-17k）: `provenance.SourceSigner.SignAggregateFirstDrop`
+（`vcdid.Signer` が実装）が、呼び出し側から渡された consumed set 上で aggregate FirstDrop に署名し、
+`vc.SourceCommitment` を付与し、`inputHash` を構造的に省く。その consumed set を組み立てる
+**pool/window ランタイム**（timer トリガ、入力ごとの ingress 検証 + ingress-VC ストア、重複排除、
+空ウィンドウ方針）は後続スライス — 規約のみで参照実装はまだ存在しない。
