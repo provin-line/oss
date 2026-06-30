@@ -46,20 +46,6 @@ func (f *fakeVerifier) Verify(_ context.Context, cred *vc.PipelinePassCredential
 	return f.result, nil
 }
 
-type fakeChainVerifier struct {
-	calls  []*vc.PipelinePassCredential
-	result *vc.VerifyResult
-	err    error
-}
-
-func (f *fakeChainVerifier) VerifyChain(_ context.Context, head *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
-	f.calls = append(f.calls, head)
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.result, nil
-}
-
 type storageCall struct {
 	cred             *vc.PipelinePassCredential
 	upstreamEndpoint string
@@ -263,7 +249,6 @@ func baseAdjacentConfig(v *fakeVerifier, s *fakeStore, sig *fakeSigner) chained.
 func TestNew_Validation(t *testing.T) {
 	codec := envelopecodec.New()
 	verifier := &fakeVerifier{result: verifiedResult()}
-	chainVerifier := &fakeChainVerifier{result: verifiedResult()}
 	store := &fakeStore{}
 	signer := &fakeSigner{}
 
@@ -373,18 +358,6 @@ func TestNew_Validation(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "full with missing ChainVerifier rejected",
-			cfg: chained.Config{
-				Strategy:          contract.VerificationFull,
-				IngressConformant: true,
-				UpstreamEndpoint:  "https://example.com",
-				Codec:             codec,
-				Store:             store,
-				Signer:            signer,
-			},
-			wantErr: true,
-		},
-		{
 			name: "InputValidator without InputSchemaRef rejected",
 			cfg: chained.Config{
 				Strategy:          contract.VerificationAdjacent,
@@ -422,19 +395,6 @@ func TestNew_Validation(t *testing.T) {
 				UpstreamEndpoint:  "https://example.com",
 				Codec:             codec,
 				Verifier:          verifier,
-				Store:             store,
-				Signer:            signer,
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid full config accepted",
-			cfg: chained.Config{
-				Strategy:          contract.VerificationFull,
-				IngressConformant: true,
-				UpstreamEndpoint:  "https://example.com",
-				Codec:             codec,
-				ChainVerifier:     chainVerifier,
 				Store:             store,
 				Signer:            signer,
 			},
@@ -575,52 +535,6 @@ func TestProcess_HappyPath_Adjacent(t *testing.T) {
 	}
 	if obs.calls[0].IssuedVCRef == "" {
 		t.Error("Observer ProcessEvent.IssuedVCRef is empty on passed result")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Happy path — VerificationFull
-// ---------------------------------------------------------------------------
-
-func TestProcess_HappyPath_Full(t *testing.T) {
-	payload := []byte(`{"msg":"full"}`)
-	cred := newIngressCred(t, payload)
-	wire := encodeEnvelope(t, cred, payload)
-
-	chainVerifier := &fakeChainVerifier{result: verifiedResult()}
-	verifier := &fakeVerifier{result: verifiedResult()} // must NOT be called for VerificationFull
-	store := &fakeStore{}
-	signer := &fakeSigner{}
-
-	cfg := chained.Config{
-		Strategy:          contract.VerificationFull,
-		IngressConformant: true,
-		UpstreamEndpoint:  "https://example.com/upstream",
-		Codec:             envelopecodec.New(),
-		ChainVerifier:     chainVerifier,
-		Verifier:          verifier,
-		Store:             store,
-		Signer:            signer,
-	}
-	p, err := chained.New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	result, goErr := p.Process(context.Background(), wire)
-	if goErr != nil {
-		t.Fatalf("Process returned Go error: %v", goErr)
-	}
-	if result.Status != contract.StatusPassed {
-		t.Errorf("Status=%v, want StatusPassed", result.Status)
-	}
-
-	// ChainVerifier called; Verifier NOT called
-	if len(chainVerifier.calls) != 1 {
-		t.Errorf("ChainVerifier.VerifyChain calls=%d, want 1", len(chainVerifier.calls))
-	}
-	if len(verifier.calls) != 0 {
-		t.Errorf("Verifier.Verify must not be called for VerificationFull, got %d calls", len(verifier.calls))
 	}
 }
 
@@ -1466,65 +1380,6 @@ func TestProcess_VerifierError_IndeterminateErrored(t *testing.T) {
 	}
 	if len(store.calls) != 0 || len(signer.calls) != 0 {
 		t.Error("store/sign must not run after a verification error")
-	}
-}
-
-func TestProcess_FullStrategy_FailedVerdict_Errored(t *testing.T) {
-	payload := []byte(`{"x":1}`)
-	cred := newIngressCred(t, payload)
-	wire := encodeEnvelope(t, cred, payload)
-
-	failed := vc.ConfidenceFailed
-	chainVerifier := &fakeChainVerifier{result: &vc.VerifyResult{Overall: failed}}
-	store := &fakeStore{}
-	signer := &fakeSigner{}
-
-	cfg := baseAdjacentConfig(nil, store, signer)
-	cfg.Strategy = contract.VerificationFull
-	cfg.Verifier = nil
-	cfg.ChainVerifier = chainVerifier
-	p, err := chained.New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	result, goErr := p.Process(context.Background(), wire)
-	if goErr != nil {
-		t.Fatalf("unexpected Go error: %v", goErr)
-	}
-	if result.Status != contract.StatusErrored {
-		t.Errorf("Status=%v, want StatusErrored", result.Status)
-	}
-	if result.Confidence == nil || *result.Confidence != vc.ConfidenceFailed {
-		t.Errorf("Confidence=%v, want ConfidenceFailed", result.Confidence)
-	}
-}
-
-func TestProcess_FullStrategy_ChainVerifyError_IndeterminateErrored(t *testing.T) {
-	payload := []byte(`{"x":1}`)
-	cred := newIngressCred(t, payload)
-	wire := encodeEnvelope(t, cred, payload)
-
-	chainVerifier := &fakeChainVerifier{err: errors.New("chain hole: upstream unreachable")}
-	store := &fakeStore{}
-	signer := &fakeSigner{}
-
-	cfg := baseAdjacentConfig(nil, store, signer)
-	cfg.Strategy = contract.VerificationFull
-	cfg.Verifier = nil
-	cfg.ChainVerifier = chainVerifier
-	p, err := chained.New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	result, goErr := p.Process(context.Background(), wire)
-	if goErr != nil {
-		t.Fatalf("unexpected Go error: %v", goErr)
-	}
-	if result.Status != contract.StatusErrored {
-		t.Errorf("Status=%v, want StatusErrored", result.Status)
-	}
-	if result.Confidence == nil || *result.Confidence != vc.ConfidenceIndeterminate {
-		t.Errorf("Confidence=%v, want ConfidenceIndeterminate", result.Confidence)
 	}
 }
 

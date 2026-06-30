@@ -41,20 +41,6 @@ func (f *fakeVerifier) Verify(_ context.Context, _ *vc.PipelinePassCredential) (
 	return f.result, nil
 }
 
-type fakeChainVerifier struct {
-	calls  int
-	result *vc.VerifyResult
-	err    error
-}
-
-func (f *fakeChainVerifier) VerifyChain(_ context.Context, _ *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
-	f.calls++
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.result, nil
-}
-
 type fakeStore struct {
 	calls     int
 	returnErr error
@@ -148,7 +134,6 @@ func baseConfig(v *fakeVerifier, s *fakeStore, w *fakeWriter) sink.Config {
 func TestNew_Validation(t *testing.T) {
 	codec := envelopecodec.New()
 	v := &fakeVerifier{result: verified()}
-	cvf := &fakeChainVerifier{result: verified()}
 	s := &fakeStore{}
 	w := &fakeWriter{}
 	full := func() sink.Config {
@@ -169,18 +154,6 @@ func TestNew_Validation(t *testing.T) {
 		{"missing writer rejected", func(c sink.Config) sink.Config { c.Writer = nil; return c }, true},
 		{"missing upstream rejected", func(c sink.Config) sink.Config { c.UpstreamEndpoint = ""; return c }, true},
 		{"adjacent missing verifier rejected", func(c sink.Config) sink.Config { c.Verifier = nil; return c }, true},
-		{"full missing chainverifier rejected", func(c sink.Config) sink.Config {
-			c.Strategy = contract.VerificationFull
-			c.Verifier = nil
-			c.ChainVerifier = nil
-			return c
-		}, true},
-		{"valid full with chainverifier", func(c sink.Config) sink.Config {
-			c.Strategy = contract.VerificationFull
-			c.Verifier = nil
-			c.ChainVerifier = cvf
-			return c
-		}, false},
 		{"valid production", func(c sink.Config) sink.Config { c.Kind = contract.SinkProduction; return c }, false},
 		{"valid archival", func(c sink.Config) sink.Config { c.Kind = contract.SinkArchival; return c }, false},
 	}
@@ -452,43 +425,6 @@ func TestProcess_PredecessorNoOutputHash_Errored(t *testing.T) {
 	}
 	if len(w.records) != 0 {
 		t.Error("Writer must not run without a decidable binding")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Full strategy uses ChainVerifier
-// ---------------------------------------------------------------------------
-
-func TestProcess_FullStrategy_UsesChainVerifier(t *testing.T) {
-	payload := []byte(`{"x":1}`)
-	cred := boundCred(t, payload)
-	wire := encode(t, cred, payload)
-
-	cvf := &fakeChainVerifier{result: verified()}
-	v := &fakeVerifier{result: verified()} // must NOT be called
-	s := &fakeStore{}
-	w := &fakeWriter{}
-
-	cfg := baseConfig(v, s, w)
-	cfg.Strategy = contract.VerificationFull
-	cfg.ChainVerifier = cvf
-	p, err := sink.New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	result, goErr := p.Process(context.Background(), wire)
-	if goErr != nil {
-		t.Fatalf("Process: %v", goErr)
-	}
-	if result.Status != contract.StatusPassed {
-		t.Errorf("Status=%v, want StatusPassed", result.Status)
-	}
-	if cvf.calls != 1 {
-		t.Errorf("ChainVerifier calls=%d, want 1", cvf.calls)
-	}
-	if v.calls != 0 {
-		t.Errorf("Verifier must not be called for Full strategy, got %d", v.calls)
 	}
 }
 

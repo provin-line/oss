@@ -245,7 +245,7 @@ func TestLoad_FailClosed_Sink(t *testing.T) {
 		{"sink ingress not a pipeline DID", mut(
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
-		{"full strategy without vc-store-endpoint", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
+		{"retired full strategy rejected", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
 		{"unknown verification-strategy", mut(`verification-strategy = "adjacent"`, `verification-strategy = "deep"`)},
 		{"missing upstream-endpoint", mut(`upstream-endpoint = "https://acme.example/pipelines/pipe"`, `upstream-endpoint = ""`)},
 		{"missing ingress", mut(`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`, `ingress-subject = ""`)},
@@ -380,7 +380,7 @@ func TestLoad_FailClosed_Chained(t *testing.T) {
 			`verification-method = "did:dplaax:reg:org:beta:pipeline:relay:process:r1#signing"`,
 			`verification-method = "did:dplaax:reg:org:beta:pipeline:relay:process:r1#auth"`)},
 		{"unknown claim", mut(`transformation-claim = "convert"`, `transformation-claim = "frobnicate"`)},
-		{"full strategy without vc-store-endpoint", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
+		{"retired full strategy rejected", mut(`verification-strategy = "adjacent"`, `verification-strategy = "full"`)},
 		{"unknown strategy", mut(`verification-strategy = "adjacent"`, `verification-strategy = "deep"`)},
 		{"missing upstream-endpoint", mut(`upstream-endpoint = "https://acme.example/pipelines/pipe"`, `upstream-endpoint = ""`)},
 		{"ingress not a pipeline DID", mut(

@@ -16,8 +16,9 @@ Process-facing interfaces over the VC machinery in `vc`:
 - `Verifier` — `Verify(ctx, *Credential) (*VerifyResult, error)`; returns the
   confidence verdict (weakest-link over axes).
 - `ChainVerifier` — `VerifyChain(ctx, head) (*VerifyResult, error)`; full-chain
-  verification for `VerificationFull` processes (sinks, observation tooling).
-  Chain retrieval by content address is the implementation's concern.
+  verification — the engine of the async audit runner (slice-17h). (Real-time "full"
+  ingress verification was retired in slice-17j; chains are audited out of band, not on
+  the consume path.) Chain retrieval by content address is the implementation's concern.
 
 Signing capabilities are split by chain behaviour, mirroring `vc.Builder`'s
 explicit method split: a process is constructed with exactly the capability

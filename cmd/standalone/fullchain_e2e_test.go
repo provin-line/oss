@@ -15,6 +15,7 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
@@ -23,14 +24,18 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// fullChainCfg is the two-hop lineage with the sink on verification-strategy = "full":
-// the sink walks the chain via the network resolver instead of adjacent-verifying only
-// the immediately preceding credential. endpoint is the node-level vc-store-endpoint.
+// fullChainCfg is the two-hop lineage (source → chained → sink) configured for the async
+// audit path (slice-17j retired real-time "full"): the sink adjacent-verifies its ingress,
+// and the async audit runner walks the WHOLE chain from the local store out of band. The
+// AuditRunner/BatchResolver knobs are set so buildAuditRunner constructs (it reads the
+// interval/batch/attempts + the max-depth). endpoint is the node-level vc-store-endpoint
+// (publication target for the producing loops).
 func fullChainCfg(endpoint string) *pipelineconfig.Config {
 	cfg := twoHopCfg("{ 'reading': reading, 'relayed': true }", nil)
 	cfg.VCStoreEndpoint = endpoint
 	cfg.VCStoreBearer = "dummy"
-	cfg.Loops[2].Sink.VerificationStrategy = pipelineconfig.StrategyFull
+	cfg.AuditRunner = pipelineconfig.AuditRunnerConfig{Interval: 5 * time.Millisecond, BatchSize: 16, MaxAttempts: 5}
+	cfg.BatchResolver = pipelineconfig.BatchResolverConfig{Interval: time.Second, BatchSize: 16, MaxRetries: 3, MaxDepth: 1024}
 	return cfg
 }
 
@@ -38,8 +43,9 @@ func fullChainCfg(endpoint string) *pipelineconfig.Config {
 // embedded VCResolverService backed by store. Producing loops publish their issued
 // credentials to that store; the full sink resolves predecessors from it.
 type fullChain struct {
-	inject func([]byte)
-	writer *captureWriter
+	inject      func([]byte)
+	writer      *captureWriter
+	auditStatus *auditor.MemStatusStore
 }
 
 func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler) http.Handler) fullChain {
@@ -77,18 +83,34 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, fullChainCfg(srv.URL), ks, dataPlaneDeps{
+	// The node's local VC store + audit substrate, shared between the data plane (ingress
+	// writes consumed credentials here and registers consumed heads) and the async audit
+	// runner (which assembles each head's chain from this store and records a verdict).
+	localPool := memstore.NewPool()
+	localSvc := vcresolver.New(memstore.NewStore(), localPool)
+	auditQueue := auditor.NewMemQueue()
+	auditStatus := auditor.NewMemStatusStore()
+	cfg := fullChainCfg(srv.URL)
+	dp, err := buildDataPlane(chainCfg, cfg, ks, dataPlaneDeps{
 		Resolver:          res,
 		SinkWriter:        writer,
 		VCStoreHTTPClient: srv.Client(),
-		VCStore:           dpVCStore(),
+		VCStore:           localSvc,
+		AuditQueue:        auditQueue,
 	})
 	if err != nil {
 		t.Fatalf("buildDataPlane (full chain): %v", err)
 	}
+	// The async audit runner walks the full chain from localSvc and records the verdict —
+	// the coverage that replaces real-time full (slice-17j). It resolves issuer DIDs via res.
+	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, localSvc, localPool, res, cfg)
+	if err != nil || auditRunner == nil {
+		t.Fatalf("buildAuditRunner: r=%v err=%v", auditRunner, err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- dp.Run(ctx) }()
+	go func() { _ = auditRunner.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
 	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
@@ -97,7 +119,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 	}
 	t.Cleanup(func() { _ = inj.Close() })
 	pub := inj.Publisher(thIngress)
-	return fullChain{inject: func(p []byte) { _ = pub.Publish(p) }, writer: writer}
+	return fullChain{inject: func(p []byte) { _ = pub.Publish(p) }, writer: writer, auditStatus: auditStatus}
 }
 
 // awaitRecord injects raw until the sink writes a record (or fails on timeout).
@@ -125,10 +147,14 @@ func (fc fullChain) awaitRecord(t *testing.T, raw string) *recordSnapshot {
 	}
 }
 
-// TestFullChain_VerifiedByWalk is the slice-17e capstone: the sink on full verification
-// resolves the chained credential's predecessor (the source FirstDrop) by content address
-// over the network resolver and verifies the WHOLE chain — yielding ConfidenceVerified.
-func TestFullChain_VerifiedByWalk(t *testing.T) {
+// TestFullChain_AsyncAuditRecordsVerified is the slice-17j capstone (re-pointed from the
+// retired real-time-full capstone): a real signed two-hop chain (source FirstDrop →
+// chained relay → sink) is consumed with an ADJACENT sink, and the async audit runner —
+// assembling the WHOLE chain from the local store and running the real vc.VerifyChain over
+// the real DID graph — records ConfidenceVerified for the consumed head. This closes the
+// Verified-path gap 17h deferred (its runner Verified test used a fake ChainVerifier); the
+// batch-resolver fetch path is covered separately by TestBatchResolver_Integration_DrainsFromPeer.
+func TestFullChain_AsyncAuditRecordsVerified(t *testing.T) {
 	fc := setupFullChain(t, memstore.NewStore(), nil)
 	rec := fc.awaitRecord(t, `{"reading":42}`)
 
@@ -140,53 +166,33 @@ func TestFullChain_VerifiedByWalk(t *testing.T) {
 	if got["relayed"] != true {
 		t.Fatalf("payload not transformed: %v", got)
 	}
-	// The verdict came from walking the chain: the head (chained) links to a resolved
-	// predecessor (source FirstDrop), and the full verifier passed the whole chain.
-	if rec.verdict == nil || rec.verdict.Overall != vc.ConfidenceVerified {
-		t.Fatalf("verdict: got %+v want ConfidenceVerified", rec.verdict)
-	}
 	if rec.prevCredential == "" {
-		t.Fatal("chained head has no predecessor link — nothing was walked")
+		t.Fatal("chained head has no predecessor link — nothing for the auditor to walk")
 	}
 	if rec.issuer != thRelayIssuer {
 		t.Fatalf("issuer: got %q want %q", rec.issuer, thRelayIssuer)
 	}
-}
-
-// holeStore wraps a Store but silently drops the source FirstDrop (pipelineId "src"),
-// injecting a REAL chain hole: the source still signs+emits over NATS (its publish
-// returns the correct hash), the chained head still reaches the sink, but the sink's
-// chainwalk cannot resolve the source predecessor. This is NOT "make StoreCredential
-// fail" (that would fail-close the source and emit nothing) — the source emits; only the
-// predecessor is unresolvable.
-type holeStore struct {
-	inner vcresolver.Store
-}
-
-func (h holeStore) Put(hash string, cred *vc.PipelinePassCredential) error {
-	if subj, err := cred.Subject(); err == nil && subj.PipelineID == "src" {
-		return nil // accept the write (correct hash returned) but do not retain it
+	if rec.headHash == "" {
+		t.Fatal("no head hash captured from the sink record")
 	}
-	return h.inner.Put(hash, cred)
-}
 
-func (h holeStore) Get(hash string) (*vc.PipelinePassCredential, error) {
-	return h.inner.Get(hash)
-}
-
-// TestFullChain_HoleIsIndeterminate is the slice-17e negative: with the source FirstDrop
-// absent from the store, the full sink's chainwalk hits a hole. The observation-only sink
-// writes a ConfidenceIndeterminate verdict — not ConfidenceFailed (a computed rejection)
-// and not a pass. The verdict could not be COMPUTED; it was not computed-as-wrong.
-func TestFullChain_HoleIsIndeterminate(t *testing.T) {
-	fc := setupFullChain(t, holeStore{inner: memstore.NewStore()}, nil)
-	rec := fc.awaitRecord(t, `{"reading":42}`)
-
-	if rec.verdict == nil {
-		t.Fatal("sink wrote no verdict")
-	}
-	if rec.verdict.Overall != vc.ConfidenceIndeterminate {
-		t.Fatalf("verdict: got %v want ConfidenceIndeterminate (chain hole)", rec.verdict.Overall)
+	// The async audit runner walks head → source from the local store and records Verified.
+	deadline := time.After(15 * time.Second)
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if r, ok := fc.auditStatus.Get(rec.headHash); ok && r.Overall == vc.ConfidenceVerified {
+			if !r.Scope.LinearChain || r.Scope.SourceCommitmentEvaluated {
+				t.Fatalf("audit scope = %+v, want linear-only", r.Scope)
+			}
+			return // the full chain was audited Verified out of band
+		}
+		select {
+		case <-tick.C:
+		case <-deadline:
+			r, ok := fc.auditStatus.Get(rec.headHash)
+			t.Fatalf("audit runner did not record Verified for head %q (got ok=%v rec=%+v)", rec.headHash, ok, r)
+		}
 	}
 }
 

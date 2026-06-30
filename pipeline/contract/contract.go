@@ -50,10 +50,10 @@ const (
 	// (consuming raw external input only).
 	VerificationNone
 	// VerificationAdjacent — verify the immediately preceding VC (mandatory
-	// at every Pipeline-conformant ingress boundary).
+	// at every Pipeline-conformant ingress boundary). Full-chain verification is
+	// the async audit runner's job (slice-17h), not a real-time ingress strategy
+	// (slice-17j retired the real-time "full" strategy).
 	VerificationAdjacent
-	// VerificationFull — verify the full chain (observation tooling, sinks).
-	VerificationFull
 )
 
 // StepKind names a step type composable inside a Chained Process (the

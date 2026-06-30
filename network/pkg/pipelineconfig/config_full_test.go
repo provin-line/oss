@@ -24,6 +24,23 @@ func pipelineConf(endpoint, bearer, body string) string {
 	return b.String()
 }
 
+// adjacentSinkLoop is a valid consuming (sink) loop. The node-level vc-store-endpoint /
+// vc-store-bearer validation below is independent of the loop's verification strategy
+// (it gates publication, not the per-loop check), so these tests drive it through an
+// adjacent loop — slice-17j retired "full", which is now rejected (see below).
+const adjacentSinkLoop = `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink {
+      kind = "observation-only"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+    }
+  }
+`
+
+// fullSinkLoop declares the retired "full" strategy — used only to assert it is rejected.
 const fullSinkLoop = `
   archive {
     role = "sink"
@@ -36,43 +53,25 @@ const fullSinkLoop = `
   }
 `
 
-// 17e: a "full" sink loads when a vc-store-endpoint + vc-store-bearer are configured,
-// and both are captured on the Config.
-func TestLoad_ValidFullSink_WithEndpoint(t *testing.T) {
-	const endpoint, bearer = "https://node.example/", "tok-abc"
-	cfg := loadWith(t, pipelineConf(endpoint, bearer, fullSinkLoop))
-	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
-	if err != nil {
-		t.Fatalf("LoadPipelineConfig: %v", err)
+// slice-17j: "full" is retired. A loop declaring it is rejected as an unknown
+// verification-strategy at config load — and rejected for THAT reason (not for a missing
+// endpoint/bearer, which load later), so endpoint + bearer are supplied to isolate the cause.
+func TestLoad_FullStrategy_Rejected(t *testing.T) {
+	cfg := loadWith(t, pipelineConf("https://node.example/", "tok-abc", fullSinkLoop))
+	_, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err == nil {
+		t.Fatal("verification-strategy \"full\": want error, got nil")
 	}
-	if pc.VCStoreEndpoint != endpoint {
-		t.Fatalf("VCStoreEndpoint = %q, want %q", pc.VCStoreEndpoint, endpoint)
-	}
-	if pc.VCStoreBearer != bearer {
-		t.Fatalf("VCStoreBearer = %q, want %q", pc.VCStoreBearer, bearer)
-	}
-	if len(pc.Loops) != 1 {
-		t.Fatalf("loops: got %d want 1", len(pc.Loops))
-	}
-	if got := pc.Loops[0].Sink.VerificationStrategy; got != pipelineconfig.StrategyFull {
-		t.Fatalf("sink strategy = %q, want %q", got, pipelineconfig.StrategyFull)
+	if !strings.Contains(err.Error(), "unknown verification-strategy") || !strings.Contains(err.Error(), "full") {
+		t.Fatalf("error = %q, want an unknown-verification-strategy rejection naming %q", err, "full")
 	}
 }
 
-// 17e: a "full" loop WITHOUT a vc-store-endpoint is a boot error — full needs a
-// network credential resolver, which the endpoint configures (fail closed).
-func TestLoad_FullStrategy_RequiresEndpoint(t *testing.T) {
-	cfg := loadWith(t, pipelineConf("", "", fullSinkLoop))
-	if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
-		t.Fatal("full strategy without vc-store-endpoint: want error, got nil")
-	}
-}
-
-// 17e: a vc-store-endpoint WITHOUT a vc-store-bearer is a boot error — the VC store is
+// A vc-store-endpoint WITHOUT a vc-store-bearer is a boot error — the VC store is
 // L1-protected, so a tokenless client's publish/resolve would be rejected at runtime.
-// Fail closed at boot rather than ship a node whose publication silently fails.
+// (Independent of the loop strategy; driven through an adjacent loop.)
 func TestLoad_VCStoreEndpoint_RequiresBearer(t *testing.T) {
-	cfg := loadWith(t, pipelineConf("https://node.example/", "", fullSinkLoop))
+	cfg := loadWith(t, pipelineConf("https://node.example/", "", adjacentSinkLoop))
 	if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 		t.Fatal("vc-store-endpoint without vc-store-bearer: want error, got nil")
 	}
@@ -80,7 +79,7 @@ func TestLoad_VCStoreEndpoint_RequiresBearer(t *testing.T) {
 
 // A malformed vc-store-endpoint (not an http/https URL) is a boot error.
 func TestLoad_MalformedVCStoreEndpoint(t *testing.T) {
-	cfg := loadWith(t, pipelineConf("not-a-url", "tok", fullSinkLoop))
+	cfg := loadWith(t, pipelineConf("not-a-url", "tok", adjacentSinkLoop))
 	if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 		t.Fatal("malformed vc-store-endpoint: want error, got nil")
 	}
@@ -91,7 +90,7 @@ func TestLoad_MalformedVCStoreEndpoint(t *testing.T) {
 // request path. Reject it at boot rather than fail every RPC at runtime.
 func TestLoad_VCStoreEndpoint_RejectsQueryFragment(t *testing.T) {
 	for _, ep := range []string{"https://node.example/?x=1", "https://node.example/#frag"} {
-		cfg := loadWith(t, pipelineConf(ep, "tok", fullSinkLoop))
+		cfg := loadWith(t, pipelineConf(ep, "tok", adjacentSinkLoop))
 		if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 			t.Fatalf("endpoint %q with query/fragment: want error, got nil", ep)
 		}

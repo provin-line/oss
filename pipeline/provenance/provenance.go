@@ -52,12 +52,12 @@ type Verifier interface {
 	Verify(ctx context.Context, cred *vc.PipelinePassCredential) (*vc.VerifyResult, error)
 }
 
-// ChainVerifier verifies a full credential chain from its head, for
-// processes declaring contract.VerificationFull (sinks, observation
-// tooling). Chain retrieval — walking previousCredential by content
-// address, typically against the network's VC resolver — is the
-// implementation's concern; the verification semantics are
-// vc.Verifier.VerifyChain's.
+// ChainVerifier verifies a full credential chain from its head — the engine of the
+// async chain-audit runner (slice-17h), which assembles each consumed head's chain
+// from the local store and records a verdict out of band. (Real-time full ingress
+// verification was retired in slice-17j; chains are no longer walked synchronously on
+// the consume path.) Chain retrieval — walking previousCredential by content address —
+// is the implementation's concern; the verification semantics are vc.Verifier.VerifyChain's.
 type ChainVerifier interface {
 	VerifyChain(ctx context.Context, head *vc.PipelinePassCredential) (*vc.VerifyResult, error)
 }

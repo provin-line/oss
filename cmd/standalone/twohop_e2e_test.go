@@ -233,6 +233,7 @@ type recordSnapshot struct {
 	prevCredential string
 	inputHash      string
 	outputHash     string
+	headHash       string // content address of the consumed (head) credential
 }
 
 func snapshot(t *testing.T, rec sink.Record) *recordSnapshot {
@@ -241,6 +242,9 @@ func snapshot(t *testing.T, rec sink.Record) *recordSnapshot {
 	if rec.Credential != nil {
 		s.issuer = rec.Credential.Issuer()
 		s.prevCredential = rec.Credential.PreviousCredential()
+		if h, err := rec.Credential.Hash(); err == nil {
+			s.headHash = h
+		}
 		subj, err := rec.Credential.Subject()
 		if err != nil {
 			t.Fatalf("sink credential subject: %v", err)

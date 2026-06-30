@@ -3,12 +3,12 @@
 // A Chained Process receives a pipeline-conformant envelope, verifies the
 // ingress credential, transforms the payload, signs a chain-preserving output
 // credential, and notifies observers. It is the runtime embodiment of
-// contract.ChainPreserving + the VerificationAdjacent or VerificationFull
-// strategy.
+// contract.ChainPreserving + the VerificationAdjacent strategy (full-chain audit
+// is the async audit runner's job, slice-17h).
 //
 // # Strategy constraint
 //
-// Config.Strategy must be VerificationAdjacent or VerificationFull. None (and
+// Config.Strategy must be VerificationAdjacent. None (and
 // Unknown) are rejected with a typed error that explains the TYPE-SPECIFIC
 // constraint: a Chained Process issues chain-preserving credentials, which
 // require a verified predecessor per event. A run that cannot identify its
@@ -65,7 +65,7 @@ import (
 // VerificationUnknown. A Chained Process signs chain-preserving credentials
 // and requires a verified predecessor for every event; None belongs to Source
 // Process runtimes.
-var ErrInvalidStrategy = errors.New("chained: strategy must be VerificationAdjacent or VerificationFull — " +
+var ErrInvalidStrategy = errors.New("chained: strategy must be VerificationAdjacent — " +
 	"a Chained Process signs chain-preserving credentials and requires a verified predecessor per event; " +
 	"a run without conformant ingress is a FirstDrop and belongs to a Source Process runtime")
 
@@ -87,13 +87,8 @@ var ErrMissingStore = errors.New("chained: Store is required — verifying witho
 // ErrMissingSigner is returned when Config.Signer is nil.
 var ErrMissingSigner = errors.New("chained: Signer is required")
 
-// ErrMissingVerifier is returned when VerificationAdjacent is declared but
-// Config.Verifier is nil.
-var ErrMissingVerifier = errors.New("chained: Verifier is required when Strategy is VerificationAdjacent")
-
-// ErrMissingChainVerifier is returned when VerificationFull is declared but
-// Config.ChainVerifier is nil.
-var ErrMissingChainVerifier = errors.New("chained: ChainVerifier is required when Strategy is VerificationFull")
+// ErrMissingVerifier is returned when Config.Verifier is nil.
+var ErrMissingVerifier = errors.New("chained: Verifier is required")
 
 // ErrInputValidatorWithoutRef is returned when InputValidator is set but
 // InputSchemaRef is the zero value.
@@ -110,7 +105,8 @@ var ErrOutputValidatorWithoutRef = errors.New("chained: OutputSchemaRef is requi
 // Config holds all construction-time configuration for a Chained Process
 // event processor.
 type Config struct {
-	// Strategy must be VerificationAdjacent or VerificationFull.
+	// Strategy must be VerificationAdjacent (the only ingress verification a chained
+	// process runs; full-chain audit is the async audit runner's job, slice-17h).
 	// VerificationNone and VerificationUnknown are rejected; see ErrInvalidStrategy.
 	Strategy contract.VerificationStrategy
 
@@ -125,13 +121,8 @@ type Config struct {
 	// Codec decodes the wire-form input envelope. Required.
 	Codec contract.EnvelopeCodec
 
-	// Verifier verifies a single ingress credential.
-	// Required when Strategy == VerificationAdjacent.
+	// Verifier verifies the single immediately-preceding ingress credential. Required.
 	Verifier provenance.Verifier
-
-	// ChainVerifier verifies the full credential chain from the ingress head.
-	// Required when Strategy == VerificationFull.
-	ChainVerifier provenance.ChainVerifier
 
 	// Store persists the verified ingress VC before transformation begins.
 	// Required (strategy is never None here).
@@ -184,8 +175,8 @@ type Processor struct {
 // construction error if any required field is missing or any constraint is
 // violated.
 func New(cfg Config) (*Processor, error) {
-	// Strategy constraint: only Adjacent and Full are valid.
-	if cfg.Strategy != contract.VerificationAdjacent && cfg.Strategy != contract.VerificationFull {
+	// Strategy constraint: only Adjacent is valid (full-chain audit is the async runner's job).
+	if cfg.Strategy != contract.VerificationAdjacent {
 		return nil, ErrInvalidStrategy
 	}
 	// Ingress-conformant: must be true for a Chained Process.
@@ -205,12 +196,9 @@ func New(cfg Config) (*Processor, error) {
 	if cfg.Signer == nil {
 		return nil, ErrMissingSigner
 	}
-	// Verifier matching declared strategy.
-	if cfg.Strategy == contract.VerificationAdjacent && cfg.Verifier == nil {
+	// Verifier is required (adjacent verification of the preceding credential).
+	if cfg.Verifier == nil {
 		return nil, ErrMissingVerifier
-	}
-	if cfg.Strategy == contract.VerificationFull && cfg.ChainVerifier == nil {
-		return nil, ErrMissingChainVerifier
 	}
 	// Validator/ref pairs.
 	if cfg.InputValidator != nil && cfg.InputSchemaRef == (vc.SchemaRef{}) {
@@ -254,15 +242,10 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	}
 	cred := envelope.Credential
 
-	// Stage 2 — Ingress VC verification.
-	// Fail-closed: only ConfidenceVerified proceeds.
-	var verifyResult *vc.VerifyResult
-	switch p.cfg.Strategy {
-	case contract.VerificationAdjacent:
-		verifyResult, err = p.cfg.Verifier.Verify(ctx, cred)
-	case contract.VerificationFull:
-		verifyResult, err = p.cfg.ChainVerifier.VerifyChain(ctx, cred)
-	}
+	// Stage 2 — Ingress VC verification (adjacent: the immediately-preceding credential).
+	// Fail-closed: only ConfidenceVerified proceeds. Full-chain audit is the async audit
+	// runner's job (slice-17h), not the real-time relay path.
+	verifyResult, err := p.cfg.Verifier.Verify(ctx, cred)
 	if err != nil {
 		if isCtxErr(err) {
 			return nil, err

@@ -373,7 +373,7 @@ func TestNewLoop_Validation(t *testing.T) {
 			name: "valid Terminating config",
 			cfg: transport.LoopConfig{
 				Behavior:   contract.ChainTerminating,
-				Strategy:   contract.VerificationFull,
+				Strategy:   contract.VerificationAdjacent,
 				Processor:  &fakeProcessor{},
 				Subscriber: baseSubFn(),
 			},
@@ -847,7 +847,7 @@ func TestLoop_Terminating_NothingPublished(t *testing.T) {
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainTerminating,
-		Strategy:   contract.VerificationFull,
+		Strategy:   contract.VerificationAdjacent,
 		Processor:  proc,
 		Subscriber: sub,
 	}
@@ -951,7 +951,7 @@ func TestLoop_SubscribeError_RunReturnsIt(t *testing.T) {
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainTerminating,
-		Strategy:   contract.VerificationFull,
+		Strategy:   contract.VerificationAdjacent,
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 	}

@@ -43,13 +43,10 @@ const (
 	SinkArchival        = "archival"
 )
 
-// Verification strategies a non-source loop may declare. StrategyAdjacent verifies the
-// immediately preceding credential; StrategyFull (17e) walks the whole chain via the VC
-// store and requires a node-level vc-store-endpoint.
-const (
-	StrategyAdjacent = "adjacent"
-	StrategyFull     = "full"
-)
+// StrategyAdjacent is the only verification strategy a non-source loop may declare: verify
+// the immediately preceding credential. Full-chain verification is the async audit runner's
+// job (slice-17h); the real-time "full" strategy was retired in slice-17j.
+const StrategyAdjacent = "adjacent"
 
 const (
 	pipelineKey          = "provin.network.pipeline"
@@ -84,8 +81,9 @@ var claimByName = map[string]vc.TransformationClaim{
 type Config struct {
 	Loops []LoopConfig
 	// VCStoreEndpoint is the node-level VCResolverService base URL where producing
-	// loops publish issued credentials and full verifiers resolve predecessors. Empty
-	// when no loop needs it; a "full" loop requires it (LoadPipelineConfig fails closed).
+	// loops publish issued credentials. Empty when the node publishes nothing.
+	// (Full-chain coverage is the async audit runner's job — slice-17h — which resolves
+	// over the local store, not this endpoint; slice-17j retired real-time "full".)
 	VCStoreEndpoint string
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set —
@@ -243,15 +241,6 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.VCStoreEndpoint != "" && out.VCStoreBearer == "" {
 		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, vcStoreBearerKey)
 	}
-	// A "full" loop walks the chain via the VC store, which the endpoint configures.
-	// Without it, full has no resolver — fail closed naming the loop.
-	if out.VCStoreEndpoint == "" {
-		for _, lc := range out.Loops {
-			if loopStrategy(lc) == StrategyFull {
-				return nil, fmt.Errorf("pipeline: loop %q: verification-strategy %q requires %s", lc.Name, StrategyFull, vcStoreEndpointKey)
-			}
-		}
-	}
 	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
 		return nil, err
 	}
@@ -368,19 +357,6 @@ func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
 		return "", fmt.Errorf("pipeline: config %s: %q must be a base URL with no query or fragment", vcStoreEndpointKey, v)
 	}
 	return v, nil
-}
-
-// loopStrategy returns the verification-strategy token of a consuming loop (sink or
-// chained), or "" for a producing source loop.
-func loopStrategy(lc LoopConfig) string {
-	switch lc.Role {
-	case RoleSink:
-		return lc.Sink.VerificationStrategy
-	case RoleChained:
-		return lc.Chained.VerificationStrategy
-	default:
-		return ""
-	}
 }
 
 // sourceKeys / sinkKeys / chainedKeys are the role-exclusive config keys. The loader
@@ -573,20 +549,19 @@ func loadClaim(cfg *hoconconfig.Config, key, name string) (vc.TransformationClai
 	return claim, nil
 }
 
-// loadStrategy reads a verification-strategy that must be "adjacent" or "full"; anything
-// else is a typed boot error. "full" is admitted here but additionally requires a
-// node-level vc-store-endpoint, enforced in LoadPipelineConfig (the endpoint is not a
-// per-loop field, so the cross-check lives where the whole Config is assembled).
+// loadStrategy reads a verification-strategy that must be "adjacent"; anything else
+// (including the retired "full", slice-17j) is a typed boot error. Full-chain coverage is
+// the async audit runner's job, not a real-time ingress strategy.
 func loadStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
 	s, err := requireString(cfg, key)
 	if err != nil {
 		return "", err
 	}
 	switch s {
-	case StrategyAdjacent, StrategyFull:
+	case StrategyAdjacent:
 		return s, nil
 	default:
-		return "", fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q|%q)", name, s, StrategyAdjacent, StrategyFull)
+		return "", fmt.Errorf("pipeline: loop %q: unknown verification-strategy %q (want %q)", name, s, StrategyAdjacent)
 	}
 }
 

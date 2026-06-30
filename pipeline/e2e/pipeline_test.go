@@ -1,7 +1,7 @@
 // Package e2e is an in-memory integration test wiring all three process-type
 // runtimes through real transport.Loops: a raw external push becomes a Source
 // FirstDrop, a Chained Process verifies + transforms + re-signs chain-preserving,
-// and a Sink Process verifies the full chain and writes an NDJSON record.
+// and a Sink Process verifies the adjacent credential and writes an NDJSON record.
 //
 // Everything on this path is REAL: real Ed25519 Data Integrity signing through
 // vcdid.Signer (over a keystore-backed vc.Builder), real credential
@@ -9,11 +9,10 @@
 // resolver — the three confidence axes, the controller-chain walk to the owner,
 // the previousCredential linkage, the outputHash[n] == inputHash[n+1] data-flow
 // invariant, and proof.created monotonicity. Around the crypto: the envelope
-// codec round-trip, the payload↔credential binding gates, the chainwalk
-// resolver walk assembling the 2-hop chain, the transport loop's sequence
-// numbering and emission logging, the ingress-VC stores, and the console NDJSON
-// output. A genuine source→chained→sink flow ends in a cryptographically
-// verified sink record.
+// codec round-trip, the payload↔credential binding gates, the transport loop's
+// sequence numbering and emission logging, the ingress-VC stores, and the
+// console NDJSON output. A genuine source→chained→sink flow ends in a
+// cryptographically verified sink record.
 package e2e
 
 import (
@@ -34,7 +33,6 @@ import (
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/pipeline/chained"
 	"github.com/provin-line/oss/pipeline/contract"
-	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/sink/console"
@@ -229,19 +227,6 @@ func ownerDoc(owner string) *did.DIDDocument {
 	return did.New(did.DocumentFields{ID: owner, Controller: owner})
 }
 
-// countingChainCore wraps the real chain verifier to record the assembled chain
-// length, so the test can assert the walk reached the origin while still using
-// genuine VerifyChain semantics.
-type countingChainCore struct {
-	inner  *vc.Verifier
-	gotLen int
-}
-
-func (c *countingChainCore) VerifyChain(ctx context.Context, chain []*vc.PipelinePassCredential) (*vc.VerifyResult, error) {
-	c.gotLen = len(chain)
-	return c.inner.VerifyChain(ctx, chain)
-}
-
 // ---------------------------------------------------------------------------
 // In-memory ingress store and emission log.
 // ---------------------------------------------------------------------------
@@ -315,7 +300,6 @@ func sha256Sum(b []byte) []byte {
 // e2eOutcome is what one pipeline run produced, for the test to assert over.
 type e2eOutcome struct {
 	out          *bytes.Buffer
-	core         *countingChainCore
 	res          *memResolver
 	srcLog       *memLog
 	chLog        *memLog
@@ -430,19 +414,14 @@ func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resol
 		t.Fatalf("chained NewLoop: %v", err)
 	}
 
-	// --- Sink (verify full via chainwalk, console NDJSON) ---
-	core := &countingChainCore{inner: verifier}
-	chainVerifier, err := chainwalk.New(res, core)
-	if err != nil {
-		t.Fatalf("chainwalk.New: %v", err)
-	}
+	// --- Sink (verify adjacent, console NDJSON) ---
 	var out bytes.Buffer
 	sinkStore := &memStore{}
 	skProc, err := sink.New(sink.Config{
-		Strategy:         contract.VerificationFull,
+		Strategy:         contract.VerificationAdjacent,
 		Kind:             contract.SinkObservationOnly,
 		Codec:            codec,
-		ChainVerifier:    chainVerifier,
+		Verifier:         verifier,
 		Store:            sinkStore,
 		Writer:           console.New(&out),
 		UpstreamEndpoint: "mem://chained",
@@ -452,7 +431,7 @@ func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resol
 	}
 	skLoop, err := transport.NewLoop(transport.LoopConfig{
 		Behavior:   contract.ChainTerminating,
-		Strategy:   contract.VerificationFull,
+		Strategy:   contract.VerificationAdjacent,
 		Processor:  skProc,
 		Subscriber: bChainedSink,
 		// ChainTerminating: no Publisher/Codec/Emission.
@@ -481,7 +460,7 @@ func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resol
 	cancel()
 	wg.Wait()
 	return e2eOutcome{
-		out: &out, core: core, res: res,
+		out: &out, res: res,
 		srcLog: srcLog, chLog: chLog,
 		chainedStore: chainedStore, sinkStore: sinkStore,
 		payload: payload,
@@ -530,16 +509,6 @@ func TestPipeline_SourceChainedSink_EndToEnd(t *testing.T) {
 	// The payload survived source (verbatim) and chained (passthrough) intact.
 	if string(payload) != string(o.payload) {
 		t.Errorf("sink payload=%q, want %q", payload, o.payload)
-	}
-
-	// The sink's chainwalk assembled the full 2-hop chain (chained head + source
-	// origin) — proving the resolver walk followed previousCredential to the
-	// FirstDrop.
-	if o.core.gotLen != 2 {
-		t.Errorf("chainwalk assembled chain length=%d, want 2 (chained + source origin)", o.core.gotLen)
-	}
-	if len(o.res.resolns) != 1 {
-		t.Errorf("resolver resolutions=%d, want 1 (the source origin)", len(o.res.resolns))
 	}
 
 	// Both producing processes recorded an emission; both consuming boundaries

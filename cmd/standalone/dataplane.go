@@ -94,9 +94,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 	dp := &dataPlane{conn: conn}
 	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
 	// When a vc-store-endpoint is configured, build the network VC-store client once:
-	// producing loops publish issued credentials through it, and full verifiers resolve
-	// predecessors through it. Absent => no publication and no full verification (config
-	// rejects "full" without an endpoint, so vcClient is non-nil wherever full is used).
+	// producing loops publish issued credentials through it. Absent => no publication.
 	var vcClient *vcresolverclient.Resolver
 	if pipeCfg.VCStoreEndpoint != "" {
 		httpClient := deps.VCStoreHTTPClient
@@ -111,11 +109,10 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 	}
 	// Consuming loops (sink, chained) share one verifier (over the node's resolver) and one
 	// in-memory ingress store, built lazily on the first such loop so a source-only node
-	// needs no resolver. When a VC-store client exists, they also share one chainwalk
-	// ChainVerifier (full strategy) over that client + the verifier core. ensureConsumer
-	// builds them once and fails closed without a resolver.
+	// needs no resolver. ensureConsumer builds them once and fails closed without a resolver.
+	// Full-chain verification is the async audit runner's job (slice-17h), not a real-time
+	// per-loop verifier (slice-17j retired "full").
 	var verifier *vc.Verifier
-	var chainVerifier provenance.ChainVerifier
 	var ingressStore contract.IngressVCStore
 	ensureConsumer := func(loopName string) error {
 		if verifier != nil {
@@ -129,13 +126,6 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 		}
 		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
 		ingressStore = &serviceIngressStore{store: deps.VCStore, audit: deps.AuditQueue}
-		if vcClient != nil {
-			cv, err := chainwalk.New(vcClient, verifier)
-			if err != nil {
-				return fmt.Errorf("standalone: loop %q: chain verifier: %w", loopName, err)
-			}
-			chainVerifier = cv
-		}
 		return nil
 	}
 	// publisher is non-nil exactly when a vc-store-endpoint is configured; producing loops
@@ -155,11 +145,11 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 				return nil, fmt.Errorf("standalone: loop %q: sink role requires a sink writer", lc.Name)
 			}
 			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildSinkLoop(conn, verifier, chainVerifier, ingressStore, deps.SinkWriter, lc)
+				loop, err = buildSinkLoop(conn, verifier, ingressStore, deps.SinkWriter, lc)
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildChainedLoop(conn, builder, publisher, verifier, chainVerifier, ingressStore, lc)
+				loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, lc)
 			}
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
@@ -222,7 +212,7 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, publisher cr
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, chainVerifier provenance.ChainVerifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
@@ -239,12 +229,6 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, chain
 		Store:            store,
 		Writer:           writer,
 		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,
-	}
-	// Full verification walks the chain via the network resolver; nil here makes sink.New
-	// fail closed (ErrMissingChainVerifier), which only happens if a full loop somehow
-	// reached assembly without a vc-store-endpoint (config rejects that earlier).
-	if strategy == contract.VerificationFull {
-		cfg.ChainVerifier = chainVerifier
 	}
 	proc, err := sink.New(cfg)
 	if err != nil {
@@ -268,7 +252,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, chain
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, chainVerifier provenance.ChainVerifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -300,11 +284,6 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		Verifier:          verifier,
 		Store:             store,
 		Signer:            chainedSigner,
-	}
-	// Full verification walks the chain via the network resolver (nil => sink.New/chained.New
-	// fail closed); config rejects a full loop without a vc-store-endpoint earlier.
-	if strategy == contract.VerificationFull {
-		chainedCfg.ChainVerifier = chainVerifier
 	}
 	// Converter/filters compile at boot — a malformed JSONata expression fails closed here.
 	if cc.Converter != "" {
@@ -341,14 +320,12 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 }
 
 // verificationStrategy maps a (config-validated) strategy token to its contract value.
-// "adjacent" verifies the immediately preceding credential; "full" (17e) walks the chain
-// via the network resolver and requires a vc-store-endpoint (enforced at config load).
+// "adjacent" verifies the immediately preceding credential — the only ingress strategy
+// (full-chain audit is the async audit runner's job, slice-17h; "full" was retired in 17j).
 func verificationStrategy(s string) (contract.VerificationStrategy, error) {
 	switch s {
 	case pipelineconfig.StrategyAdjacent:
 		return contract.VerificationAdjacent, nil
-	case pipelineconfig.StrategyFull:
-		return contract.VerificationFull, nil
 	default:
 		return contract.VerificationUnknown, fmt.Errorf("unknown verification-strategy %q", s)
 	}

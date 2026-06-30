@@ -83,29 +83,26 @@ type Writer interface {
 
 // Typed construction errors.
 var (
-	ErrInvalidStrategy      = errors.New("sink: Strategy must be VerificationAdjacent or VerificationFull — a sink verifies what it consumes")
-	ErrInvalidKind          = errors.New("sink: Kind must be a known SinkKind (observation-only / production / archival)")
-	ErrMissingCodec         = errors.New("sink: Codec is required")
-	ErrMissingStore         = errors.New("sink: Store is required — verifying without storing breaks chain audits")
-	ErrMissingWriter        = errors.New("sink: Writer is required")
-	ErrMissingUpstream      = errors.New("sink: UpstreamEndpoint is required")
-	ErrMissingVerifier      = errors.New("sink: Verifier is required when Strategy is VerificationAdjacent")
-	ErrMissingChainVerifier = errors.New("sink: ChainVerifier is required when Strategy is VerificationFull")
+	ErrInvalidStrategy = errors.New("sink: Strategy must be VerificationAdjacent — a sink verifies the immediately preceding credential it consumes")
+	ErrInvalidKind     = errors.New("sink: Kind must be a known SinkKind (observation-only / production / archival)")
+	ErrMissingCodec    = errors.New("sink: Codec is required")
+	ErrMissingStore    = errors.New("sink: Store is required — verifying without storing breaks chain audits")
+	ErrMissingWriter   = errors.New("sink: Writer is required")
+	ErrMissingUpstream = errors.New("sink: UpstreamEndpoint is required")
+	ErrMissingVerifier = errors.New("sink: Verifier is required")
 )
 
 // Config holds construction-time configuration for a Sink Process runtime.
 type Config struct {
-	// Strategy must be VerificationAdjacent or VerificationFull.
+	// Strategy must be VerificationAdjacent (the only ingress verification a sink runs;
+	// full-chain audit is the async audit runner's job, slice-17h).
 	Strategy contract.VerificationStrategy
 	// Kind is the deployed sink's handling discipline. Must be non-Unknown.
 	Kind contract.SinkKind
 	// Codec decodes the wire-form input envelope. Required.
 	Codec contract.EnvelopeCodec
-	// Verifier verifies a single credential. Required for VerificationAdjacent.
+	// Verifier verifies the single immediately-preceding credential. Required.
 	Verifier provenance.Verifier
-	// ChainVerifier verifies the full chain from the head. Required for
-	// VerificationFull.
-	ChainVerifier provenance.ChainVerifier
 	// Store persists the verified ingress VC. Required.
 	Store contract.IngressVCStore
 	// Writer delivers the consumed event externally. Required.
@@ -130,7 +127,7 @@ type Processor struct {
 
 // New validates cfg and returns a ready Processor.
 func New(cfg Config) (*Processor, error) {
-	if cfg.Strategy != contract.VerificationAdjacent && cfg.Strategy != contract.VerificationFull {
+	if cfg.Strategy != contract.VerificationAdjacent {
 		return nil, ErrInvalidStrategy
 	}
 	switch cfg.Kind {
@@ -151,11 +148,8 @@ func New(cfg Config) (*Processor, error) {
 	if cfg.UpstreamEndpoint == "" {
 		return nil, ErrMissingUpstream
 	}
-	if cfg.Strategy == contract.VerificationAdjacent && cfg.Verifier == nil {
+	if cfg.Verifier == nil {
 		return nil, ErrMissingVerifier
-	}
-	if cfg.Strategy == contract.VerificationFull && cfg.ChainVerifier == nil {
-		return nil, ErrMissingChainVerifier
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -194,14 +188,9 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		}
 	}
 
-	// Stage 2 — Verify (strategy-driven).
-	var verifyResult *vc.VerifyResult
-	switch p.cfg.Strategy {
-	case contract.VerificationAdjacent:
-		verifyResult, err = p.cfg.Verifier.Verify(ctx, cred)
-	case contract.VerificationFull:
-		verifyResult, err = p.cfg.ChainVerifier.VerifyChain(ctx, cred)
-	}
+	// Stage 2 — Verify the immediately-preceding credential (adjacent). Full-chain
+	// verification is the async audit runner's job (slice-17h), not the real-time path.
+	verifyResult, err := p.cfg.Verifier.Verify(ctx, cred)
 	if err != nil {
 		if isCtxErr(err) {
 			return nil, err
