@@ -26,20 +26,29 @@ import (
 // exercising the same instance both planes share (D-17i-7).
 func auditServer(t *testing.T) (*httptest.Server, *auditor.MemStatusStore) {
 	t.Helper()
+	status := auditor.NewMemStatusStore()
+	return auditServerWith(t, status), status
+}
+
+// auditServerWith mounts BuildHandler behind the {audit, read} authorizer over the GIVEN
+// status store, so a caller that shares the store with a live audit runner (slice-17r) can
+// read a runner-produced verdict back over the RPC. The resolver/vcSvc are BuildHandler's own
+// (GetAuditStatus reads only the status store).
+func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Server {
+	t.Helper()
 	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "audit", Action: "read"}})
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	status := auditor.NewMemStatusStore()
 	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, status, 1<<20)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return srv, status
+	return srv
 }
 
 // A verdict recorded by the runner is served over the mounted AuditService with its
