@@ -30,6 +30,7 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 func buildAuditRunner(
 	queue *auditor.MemQueue,
 	status *auditor.MemStatusStore,
+	receipts *auditor.MemReceiptStore,
 	vcSvc *vcresolver.Service,
 	pool *memstore.Pool,
 	didResolver resolver.Resolver,
@@ -43,9 +44,12 @@ func buildAuditRunner(
 	if err != nil {
 		return nil, fmt.Errorf("standalone: audit chain verifier: %w", err)
 	}
+	// WithSourceCommitment enables emit-locus consumed-set self-audit (slice-17o): for an
+	// aggregate head with a local receipt, the runner gathers the consumed sources from the
+	// local store and records a distinct source-commitment verdict via the same verifier.
 	return auditor.New(queue, vcSvc, cv, status, pool, auditor.Config{
 		Interval:    pipeCfg.AuditRunner.Interval,
 		BatchSize:   pipeCfg.AuditRunner.BatchSize,
 		MaxAttempts: pipeCfg.AuditRunner.MaxAttempts,
-	})
+	}, auditor.WithSourceCommitment(receipts, verifier))
 }

@@ -58,6 +58,10 @@ type dataPlaneDeps struct {
 	// AuditQueue registers each consumed head for async audit (slice-17h, D-17h-2). Nil
 	// disables registration (a node/test without the audit runner); main always wires it.
 	AuditQueue auditRegistrar
+	// Receipts records the emit-time consumed-set receipt for an aggregate's own emission
+	// (slice-17o), enabling emit-locus source-commitment self-audit. Nil (with AuditQueue)
+	// leaves an aggregate broadcast-only (no self-audit); main always wires it.
+	Receipts receiptWriter
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -159,7 +163,19 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 			// window timer), so it is tracked in dp.aggregates, not dp.loops.
 			var agg *aggregate.Process
 			if err = ensureConsumer(lc.Name); err == nil {
-				agg, err = buildAggregateProcess(conn, builder, publisher, verifier, ingressStore, lc)
+				// Emit-locus self-audit (slice-17o): the aggregate registers each emitted head
+				// (local store + receipt + queue + optional remote publish) BEFORE broadcasting.
+				// Wired only when the audit substrate is present; nil leaves it broadcast-only.
+				var registrar aggregate.EmissionRegistrar
+				if deps.Receipts != nil && deps.AuditQueue != nil {
+					registrar = &emissionRegistrar{
+						local:     deps.VCStore,
+						receipts:  deps.Receipts,
+						audit:     deps.AuditQueue,
+						publisher: publisher,
+					}
+				}
+				agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, lc)
 			}
 			if err != nil {
 				_ = conn.Close()
@@ -348,7 +364,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
 // wired. When a VC store is configured the signer publishes each issued FirstDrop
 // (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
-func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
+func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
 	ac := lc.Aggregate
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -372,14 +388,14 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, publis
 		Emission:  memlog.New(),
 		Fold:      aggregate.ManifestFold{},
 		Window:    ac.Window,
+		// SelfAudit registers each emitted head (local store + receipt + queue + optional
+		// remote publish) BEFORE broadcast (slice-17o). It subsumes the issued-VC remote
+		// publish that source/chained loops do via publishingSigner — so the aggregate uses
+		// the PLAIN signer and does not wrap it (the publish must follow self-audit, D-17o-3).
+		SelfAudit: registrar,
 	}
 	// ac.VerificationStrategy is config-validated to "adjacent"; the aggregate runtime
 	// declares VerificationAdjacent intrinsically, so it takes no strategy field.
-	// Publish each issued aggregate FirstDrop to the VC store before emit when a store is
-	// configured — a FirstDrop has no predecessor, so no upstream-endpoint hint (like source).
-	if publisher != nil {
-		cfg.Signer = &publishingSigner{inner: signer, publisher: publisher}
-	}
 	for _, ing := range ac.Ingresses {
 		cfg.Ingress = append(cfg.Ingress, aggregate.Ingress{
 			Subscriber:       conn.Subscriber(ing.Subject),

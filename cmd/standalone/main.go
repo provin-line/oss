@@ -97,6 +97,9 @@ func main() {
 	// verdict store, both shared between the ingress path and the audit runner.
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
+	// The emit-time consumed-set receipt store (slice-17o), shared between an aggregate's
+	// self-audit registration (emit path) and the audit runner's source-commitment step.
+	auditReceipts := auditor.NewMemReceiptStore()
 
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, auditStatus, pipeCfg.MaxCredentialSize)
 	if err != nil {
@@ -112,6 +115,7 @@ func main() {
 		SinkWriter: console.New(os.Stdout),
 		VCStore:    vcSvc,
 		AuditQueue: auditQueue,
+		Receipts:   auditReceipts,
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
@@ -126,7 +130,7 @@ func main() {
 
 	// The async audit runner verifies the assembled chains and records per-head verdicts.
 	// Also nil for a source-only node (no consumed heads register).
-	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, vcSvc, pool, resolver, pipeCfg)
+	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditReceipts, vcSvc, pool, resolver, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build audit runner: %v", err)
 	}

@@ -94,6 +94,18 @@ type aggregateFirstDropSigner interface {
 	SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error)
 }
 
+// EmissionRegistrar makes an emitted aggregate credential durable and auditable BEFORE it is
+// broadcast (slice-17o D-17o-3/4): the composition-root impl persists the credential to the
+// node's local store (so the audit runner can resolve the head), records the consumed-source
+// content addresses as the audit receipt, enqueues the head, and (if a remote VC store is
+// configured) publishes it there — all fail-closed and ordered, so the credential is never
+// broadcast without a local audit trail. Optional: nil leaves the runtime broadcast-only
+// (the pre-17o behavior). Consumer-defined here (pointing inward) — the concrete impl lives
+// in the composition root, honoring the network/↔pipeline/ layer rule (D-17o-8).
+type EmissionRegistrar interface {
+	RegisterEmission(ctx context.Context, cred *vc.PipelinePassCredential, consumedHashes []string) error
+}
+
 // Ingress is one upstream subscription the aggregate pools from. UpstreamEndpoint
 // names where each consumed credential can later be fetched (the StoreIngressVC
 // hint). Subscribers are injected — mapping subjects→Subscriber is the dataplane
@@ -114,6 +126,9 @@ type Config struct {
 	Codec     contract.EnvelopeCodec
 	Emission  tlog.Log
 	Fold      Fold
+	// SelfAudit registers each emitted aggregate head for consumed-set self-audit before it
+	// is broadcast (slice-17o). Optional: nil leaves the runtime broadcast-only.
+	SelfAudit EmissionRegistrar
 	// Observers are notified after each window emit (fire-and-forget). Optional.
 	Observers []contract.ProcessObserver
 	// Logger defaults to slog.Default(); Now defaults to time.Now.
@@ -352,18 +367,47 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 		p.notifyErr(ctx)
 		return false
 	}
+
+	// Hash the issued credential BEFORE publishing (slice-17o): the head content address is
+	// the observer ref AND the self-audit receipt/queue key, so a hash failure must abort the
+	// emit (it is an internal invariant violation, and we never broadcast an un-referenceable
+	// credential).
+	ref, err := cred.Hash()
+	if err != nil {
+		p.logger.Error("aggregate: hash issued aggregate credential", "err", err)
+		p.notifyErr(ctx)
+		return false
+	}
+
+	// Register the emission for consumed-set self-audit BEFORE broadcasting (slice-17o
+	// D-17o-3): local store + receipt + enqueue (+ optional remote publish), fail-closed. A
+	// failure aborts the emit — the credential is never broadcast without a local audit trail
+	// (the StoreIngressVC precedent). The consumed set is the pooled inputs' content
+	// addresses, captured from the exact set that computed SourceRoot.
+	if p.cfg.SelfAudit != nil {
+		consumed := make([]string, 0, len(inputs))
+		for _, in := range inputs {
+			ch, err := in.Credential.Hash()
+			if err != nil {
+				p.logger.Error("aggregate: hash consumed source for receipt", "err", err)
+				p.notifyErr(ctx)
+				return false
+			}
+			consumed = append(consumed, ch)
+		}
+		if err := p.cfg.SelfAudit.RegisterEmission(ctx, cred, consumed); err != nil {
+			p.logger.Error("aggregate: register emission for self-audit — dropping", "err", err)
+			p.notifyErr(ctx)
+			return false
+		}
+	}
+
 	if err := p.emitter.Emit(ctx, cred, output); err != nil {
 		p.logger.Error("aggregate: emit aggregate FirstDrop — dropping", "err", err)
 		p.notifyErr(ctx)
 		return false
 	}
 
-	ref, err := cred.Hash()
-	if err != nil {
-		// A just-signed credential that cannot be hashed is an internal invariant
-		// violation; the event was already emitted, so only the observer ref is lost.
-		p.logger.Error("aggregate: hash issued aggregate credential", "err", err)
-	}
 	// Every pooled input passed adjacent verification (VerificationAdjacent), so
 	// the aggregate output carries a Verified confidence — matching chained/sink,
 	// so observers don't read it as "no verification ran".

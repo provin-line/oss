@@ -90,6 +90,27 @@ func (s *recordSigner) SignAggregateFirstDrop(_ context.Context, _ []byte, outpu
 	})
 }
 
+type registrarCall struct {
+	headHash string
+	consumed []string
+}
+
+// recordRegistrar is a fake EmissionRegistrar (slice-17o): it records the emitted head hash
+// and the consumed-source hashes it was handed, or fails to exercise the fail-closed path.
+type recordRegistrar struct {
+	calls   []registrarCall
+	failErr error
+}
+
+func (r *recordRegistrar) RegisterEmission(_ context.Context, cred *vc.PipelinePassCredential, consumed []string) error {
+	if r.failErr != nil {
+		return r.failErr
+	}
+	h, _ := cred.Hash()
+	r.calls = append(r.calls, registrarCall{headHash: h, consumed: consumed})
+	return nil
+}
+
 type recordObserver struct{ events []contract.ProcessEvent }
 
 func (o *recordObserver) OnProcessComplete(_ context.Context, ev contract.ProcessEvent) error {
@@ -237,6 +258,60 @@ func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 	}
 	if ev.Result == nil || ev.Result.Confidence == nil || *ev.Result.Confidence != vc.ConfidenceVerified {
 		t.Errorf("observer Confidence = %v, want Verified (inputs were adjacent-verified)", ev.Result)
+	}
+}
+
+// slice-17o: when a SelfAudit registrar is wired, foldOnce registers the emitted head for
+// self-audit — with the emitted head hash and the exact consumed-source content hashes —
+// BEFORE publishing (fail-closed ordering). The registrar's consumed set matches the pooled
+// inputs' content addresses.
+func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
+	reg := &recordRegistrar{}
+	h := newHarness(t, func(c *Config) { c.SelfAudit = reg })
+	waA := ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`))
+	wbB := ingressEnvelope(t, "did:example:b", []byte(`{"v":2}`))
+	h.feed(waA)
+	h.feed(wbB)
+
+	if !h.p.foldOnce(context.Background()) {
+		t.Fatal("foldOnce returned false, want emitted")
+	}
+	if len(reg.calls) != 1 {
+		t.Fatalf("registrar calls = %d, want 1", len(reg.calls))
+	}
+	call := reg.calls[0]
+	// The registered head hash is the emitted credential's content address.
+	env, _ := envelopecodec.New().UnmarshalEnvelope(h.pub.calls[0])
+	wantHead, _ := env.Credential.Hash()
+	if call.headHash != wantHead {
+		t.Errorf("registered head = %q, want emitted head %q", call.headHash, wantHead)
+	}
+	// The consumed set is the two pooled inputs' content addresses.
+	if len(call.consumed) != 2 {
+		t.Fatalf("registered consumed = %v, want 2 hashes", call.consumed)
+	}
+	for _, ch := range call.consumed {
+		if len(ch) != len("sha256:")+64 {
+			t.Errorf("consumed hash %q is not a content address", ch)
+		}
+	}
+}
+
+// slice-17o: a registrar failure aborts emission (fail-closed) — the credential is never
+// published without a local audit trail; an errored observer event fires.
+func TestProcess_SelfAudit_FailClosed(t *testing.T) {
+	reg := &recordRegistrar{failErr: errors.New("audit substrate down")}
+	h := newHarness(t, func(c *Config) { c.SelfAudit = reg })
+	h.feed(ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`)))
+
+	if h.p.foldOnce(context.Background()) {
+		t.Error("foldOnce emitted despite registrar failure, want abort (fail-closed)")
+	}
+	if len(h.pub.calls) != 0 {
+		t.Errorf("published %d, want 0 (emission must not proceed without self-audit)", len(h.pub.calls))
+	}
+	if len(h.obs.events) != 1 || h.obs.events[0].Result.Status != contract.StatusErrored {
+		t.Errorf("want one errored observer event, got %+v", h.obs.events)
 	}
 }
 

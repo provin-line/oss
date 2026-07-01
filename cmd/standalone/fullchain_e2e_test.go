@@ -103,7 +103,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 	}
 	// The async audit runner walks the full chain from localSvc and records the verdict —
 	// the coverage that replaces real-time full (slice-17j). It resolves issuer DIDs via res.
-	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, localSvc, localPool, res, cfg)
+	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditor.NewMemReceiptStore(), localSvc, localPool, res, cfg)
 	if err != nil || auditRunner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", auditRunner, err)
 	}

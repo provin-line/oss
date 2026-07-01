@@ -81,7 +81,16 @@ func (p *publishingSigner) SignAggregateFirstDrop(ctx context.Context, payload [
 // must equal the credential's own Hash(), else the store holds something other than what
 // was signed and a full verifier would resolve the wrong (or no) credential.
 func (p *publishingSigner) publish(ctx context.Context, cred *vc.PipelinePassCredential) error {
-	addr, err := p.publisher.StoreCredential(ctx, cred, p.upstreamEndpoint)
+	return publishIssuedCredential(ctx, p.publisher, cred, p.upstreamEndpoint)
+}
+
+// publishIssuedCredential stores cred to the remote VC store and verifies the round-trip:
+// the server-recomputed content address must equal the credential's own Hash(), else the
+// store holds something other than what was signed. Shared by publishingSigner and the
+// aggregate emissionRegistrar (slice-17o, which reorders this publish to AFTER local
+// self-audit registration — D-17o-3).
+func publishIssuedCredential(ctx context.Context, publisher credentialPublisher, cred *vc.PipelinePassCredential, upstreamEndpoint string) error {
+	addr, err := publisher.StoreCredential(ctx, cred, upstreamEndpoint)
 	if err != nil {
 		return fmt.Errorf("publish issued credential to vc store: %w", err)
 	}
