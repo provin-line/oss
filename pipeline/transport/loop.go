@@ -2,10 +2,8 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
-	"strconv"
 
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/tlog"
@@ -135,14 +133,18 @@ func (l *Loop) VerificationStrategy() contract.VerificationStrategy { return l.c
 //
 // Implements contract.Process.
 func (l *Loop) Run(ctx context.Context) error {
-	// seq is the next sequence number to assign.
-	// ONLY advanced after a successful Publish (see publishPassed).
-	// Handlers are sequential per subscription (Subscriber contract),
-	// so this pointer is race-free without a mutex.
-	var seq uint64 = 1
+	// emitter owns the sequence counter and the emission discipline. It is
+	// created per Run (seq starts at 1) and used only for producing behaviors;
+	// for ChainTerminating it stays nil (handle never reaches Emit). Handlers
+	// are sequential per subscription (Subscriber contract), so the emitter's
+	// counter is race-free without a mutex.
+	var emitter *Emitter
+	if isProducing(l.cfg.Behavior) {
+		emitter = NewEmitter(l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger)
+	}
 
 	if err := l.cfg.Subscriber.Subscribe(func(data []byte) {
-		l.handle(ctx, data, &seq)
+		l.handle(ctx, data, emitter)
 	}); err != nil {
 		return err
 	}
@@ -170,7 +172,7 @@ func (l *Loop) Run(ctx context.Context) error {
 
 // handle dispatches one inbound message through the EventProcessor and routes
 // the result to the appropriate output path.
-func (l *Loop) handle(ctx context.Context, data []byte, seq *uint64) {
+func (l *Loop) handle(ctx context.Context, data []byte, emitter *Emitter) {
 	result, err := l.cfg.Processor.Process(ctx, data)
 	if err != nil {
 		// Go error = context cancellation or internal invariant violation.
@@ -198,105 +200,13 @@ func (l *Loop) handle(ctx context.Context, data []byte, seq *uint64) {
 			// ChainTerminating: the process wrote externally. Publish nothing.
 			return
 		}
-		l.publishPassed(ctx, result, seq)
+		// Emit via the shared emitter. A pre-publish/publish failure is logged
+		// and dropped (the sequence is not advanced — reused next attempt); an
+		// append-after-publish failure is logged inside Emit and returns nil.
+		if err := emitter.Emit(ctx, result.VC, result.Payload); err != nil {
+			l.logger.Error("transport: emit failed — dropping", "err", err)
+		}
 	default:
 		l.logger.Error("transport: processor returned invalid status — dropping", "status", result.Status)
-	}
-}
-
-// emissionRecord is the JSON-serializable emission log entry.
-// Field order is fixed by the struct declaration — json.Marshal serializes
-// fields in declaration order, making the wire representation deterministic.
-//
-// SequenceNo is string-encoded uint64 — survives IEEE-754 JSON consumers
-// whose integer precision is limited to 2^53.
-type emissionRecord struct {
-	CredentialHash string `json:"credentialHash"`
-	SequenceNo     string `json:"sequenceNo"`
-}
-
-// publishPassed handles the StatusPassed path for producing behaviors
-// (ChainPreserving, ChainFirstDrop).
-//
-// Contract: result must be non-nil with non-nil VC and non-nil Payload.
-// Violations are rejected loudly; no publish, counter NOT advanced.
-//
-// Sequence-number discipline: the counter (*seq) is advanced ONLY after a
-// successful Publish call. A failed pre-publish step (nil guard, hash,
-// emission-record marshal, codec marshal) or a failed Publish reuses the same
-// number on the next attempt — a gap in the subscriber's view is protocol
-// evidence of foul play; the publisher must never create one by its own failure.
-//
-// Ordering: VC.Hash() and the emission record are computed BEFORE Publish so
-// that a hash or marshal failure aborts the attempt without any delivery. Only
-// Append remains after Publish.
-//
-// Emission append-after-publish: the emission record is appended to the tlog
-// AFTER a successful Publish, using a detached context (context.WithoutCancel)
-// so that ctx cancellation at shutdown cannot abort recording an event that
-// was already delivered. If Append fails the event was delivered — the gap is
-// our audit-defense loss and the counter still advances. A crash between
-// Publish and Append creates an un-recorded delivery window (PoC posture —
-// persistent WAL is the follow-up).
-func (l *Loop) publishPassed(ctx context.Context, result *contract.Result, seq *uint64) {
-	next := *seq
-
-	// Finding 2: in-org processes always produce the full inline form
-	// (contract.Envelope doc). Nil VC or nil Payload indicates a processor
-	// contract violation — reject loudly before any publish attempt.
-	if result.VC == nil {
-		l.logger.Error("transport: StatusPassed result has nil VC — dropping", "sequenceNo", next)
-		return
-	}
-	if result.Payload == nil {
-		l.logger.Error("transport: StatusPassed result has nil Payload — dropping", "sequenceNo", next)
-		return
-	}
-
-	// Finding 4: compute credential hash and marshal the emission record
-	// BEFORE Publish so that a failure in either step aborts without delivery.
-	hash, err := result.VC.Hash()
-	if err != nil {
-		l.logger.Error("transport: credential hash failed", "err", err, "sequenceNo", next)
-		// Counter NOT advanced: event not published.
-		return
-	}
-
-	rec, err := json.Marshal(emissionRecord{
-		CredentialHash: hash,
-		SequenceNo:     strconv.FormatUint(next, 10),
-	})
-	if err != nil {
-		l.logger.Error("transport: marshal emission record failed", "err", err, "sequenceNo", next)
-		// Counter NOT advanced: event not published.
-		return
-	}
-
-	wire, err := l.cfg.Codec.MarshalEnvelope(&contract.Envelope{
-		Credential: result.VC,
-		Payload:    result.Payload,
-		SequenceNo: next,
-	})
-	if err != nil {
-		l.logger.Error("transport: marshal envelope failed", "err", err, "sequenceNo", next)
-		// Counter NOT advanced: event not published; reuse on next attempt.
-		return
-	}
-
-	if err := l.cfg.Publisher.Publish(wire); err != nil {
-		l.logger.Error("transport: publish failed", "err", err, "sequenceNo", next)
-		// Counter NOT advanced: event not delivered; reuse on next attempt.
-		return
-	}
-
-	// Advance ONLY after successful publish.
-	*seq = next + 1
-
-	// Append the pre-computed emission record. Use a detached context so that
-	// ctx cancellation at shutdown cannot abort recording a delivered event.
-	if _, err := l.cfg.Emission.Append(context.WithoutCancel(ctx), rec); err != nil {
-		l.logger.Error("transport: emission log append failed", "err", err, "sequenceNo", next)
-		// Counter already advanced: event was delivered. The gap is our
-		// audit-defense loss. Log loudly; do not re-attempt (PoC posture).
 	}
 }

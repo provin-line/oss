@@ -51,9 +51,12 @@ accountability for non-federation inputs terminates at the ingesting owner.
 
 ## Status
 
-The **signer capability** has landed (slice-17k): `provenance.SourceSigner.SignAggregateFirstDrop`
-(implemented by `vcdid.Signer`) signs an aggregate FirstDrop over a caller-supplied consumed set,
-attaching the `vc.SourceCommitment` and structurally omitting `inputHash`. The **pool/window
-runtime** that assembles that consumed set (timer trigger, per-input ingress verification +
-ingress-VC storage, dedup, empty-window policy) is a later slice — conventions only, no reference
-implementation yet.
+The **signer capability** (slice-17k) and the **pool/window runtime** (slice-17l) have landed.
+`aggregate.Process` is a `contract.Process` that pools verified ingress (per-input adjacent verify →
+payload↔credential binding → `StoreIngressVC`, all fail-closed), and on each window tick folds the
+pool via a pluggable `Fold` seam (`ManifestFold` is the reference), strict-JSON-gates the output,
+and emits a `provin:aggregate` FirstDrop through `SignAggregateFirstDrop` + the shared
+`transport.Emitter`. Dedup is by content address; empty windows are skipped. The remaining work is
+**wiring**: a config `aggregate` role + `buildAggregateProcess` in the standalone data plane, and a
+NATS end-to-end test — those are follow-up slices; `Config` takes injected `transport.Subscriber`s
+so the runtime itself is broker-free.

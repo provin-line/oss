@@ -23,8 +23,11 @@
 
 ## ステータス
 
-**signer capability** は実装済み（slice-17k）: `provenance.SourceSigner.SignAggregateFirstDrop`
-（`vcdid.Signer` が実装）が、呼び出し側から渡された consumed set 上で aggregate FirstDrop に署名し、
-`vc.SourceCommitment` を付与し、`inputHash` を構造的に省く。その consumed set を組み立てる
-**pool/window ランタイム**（timer トリガ、入力ごとの ingress 検証 + ingress-VC ストア、重複排除、
-空ウィンドウ方針）は後続スライス — 規約のみで参照実装はまだ存在しない。
+**signer capability**（slice-17k）と **pool/window ランタイム**（slice-17l）は実装済み。
+`aggregate.Process` は `contract.Process` で、verified ingress を pool し（入力ごとに adjacent verify
+→ payload↔credential binding → `StoreIngressVC`、いずれも fail-closed）、各 window tick で pluggable
+`Fold` seam（参照実装 `ManifestFold`）により fold → strict-JSON gate → `SignAggregateFirstDrop` +
+共有 `transport.Emitter` で `provin:aggregate` FirstDrop を emit する。dedup は content address 単位、
+空 window は skip。残りは **配線**：config の `aggregate` role + standalone data plane の
+`buildAggregateProcess`、および NATS end-to-end テスト（後続スライス）。`Config` は
+`transport.Subscriber` を注入で受け取るため、ランタイム自体は broker 非依存。
