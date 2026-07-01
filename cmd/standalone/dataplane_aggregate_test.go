@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/vc"
 )
@@ -31,5 +35,83 @@ func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "aggregate") {
 		t.Fatalf("boot error %q should name the aggregate claim", err)
+	}
+}
+
+const (
+	dpAggDID  = "did:dplaax:reg:org:acme:pipeline:agg"
+	dpAggIssr = "did:dplaax:reg:org:acme:pipeline:agg:process:a1"
+)
+
+// dpAggregateCfg is one aggregate loop consuming the shared pipeline DID as its single
+// ingress (a valid N=1 aggregate) and emitting on its own output subject.
+func dpAggregateCfg() *pipelineconfig.Config {
+	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name: "agg",
+		Role: pipelineconfig.RoleAggregate,
+		Aggregate: pipelineconfig.AggregateConfig{
+			OutputSubject: dpAggDID,
+			Issuer: pipelineconfig.IssuerConfig{
+				DID: dpAggIssr, KeyID: string(keystore.KeyIDSigning),
+				VerificationMethod: dpAggIssr + "#signing",
+			},
+			PipelineID:           "agg",
+			ProcessID:            "a1",
+			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			Window:               time.Second,
+			Ingresses: []pipelineconfig.AggregateIngress{
+				{Subject: dpPipelineDID, UpstreamEndpoint: "https://acme.example/pipelines/pipe"},
+			},
+		},
+	}}}
+}
+
+// TestBuildDataPlane_AggregateProcessAssembles asserts the role dispatch builds an
+// aggregate contract.Process (tracked in dp.aggregates, not dp.loops) given a resolver +
+// VC store, and that dp.Run drains it cleanly.
+func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	dp, err := buildDataPlane(chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{
+		Resolver: stubResolver{},
+		VCStore:  dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (aggregate): %v", err)
+	}
+	if len(dp.aggregates) != 1 {
+		t.Fatalf("aggregates: got %d want 1", len(dp.aggregates))
+	}
+	if len(dp.loops) != 0 {
+		t.Fatalf("loops: got %d want 0 (aggregate is not a loop)", len(dp.loops))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("aggregate Run drain: %v", err)
+	}
+}
+
+// TestBuildDataPlane_AggregateRequiresConsumerDeps asserts an aggregate loop without a
+// resolver/VC store is a build error (it verifies+stores ingress, like sink/chained).
+func TestBuildDataPlane_AggregateRequiresConsumerDeps(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	if _, err := buildDataPlane(chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+		t.Fatal("aggregate without resolver/VC store: want error, got nil")
+	}
+}
+
+// TestHasConsumingLoop_Aggregate: an aggregate node accumulates ingress holes, so it must
+// run the async batch resolver / audit runner.
+func TestHasConsumingLoop_Aggregate(t *testing.T) {
+	if !hasConsumingLoop(dpAggregateCfg()) {
+		t.Error("hasConsumingLoop(aggregate) = false, want true")
 	}
 }

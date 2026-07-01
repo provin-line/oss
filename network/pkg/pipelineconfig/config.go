@@ -14,6 +14,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net/url"
+	"sort"
 	"time"
 
 	"github.com/provin-line/oss/did/dplaax"
@@ -31,9 +32,10 @@ func init() {
 // Loop roles. slice-17c implements RoleSource (17b) and RoleSink; RoleChained is a
 // recognized-but-unsupported role (typed boot error) until 17d.
 const (
-	RoleSource  = "source"
-	RoleSink    = "sink"
-	RoleChained = "chained"
+	RoleSource    = "source"
+	RoleSink      = "sink"
+	RoleChained   = "chained"
+	RoleAggregate = "aggregate"
 )
 
 // Sink kinds — the verdict policy a terminating sink applies (mirrors contract.SinkKind).
@@ -156,6 +158,10 @@ type LoopConfig struct {
 	Sink SinkConfig
 	// Chained is populated when Role == RoleChained.
 	Chained ChainedConfig
+	// Aggregate is populated when Role == RoleAggregate. Unlike the other roles it
+	// consumes N upstream subjects (its own Ingresses list), so IngressSubject is
+	// not read for the aggregate role.
+	Aggregate AggregateConfig
 }
 
 // SourceConfig is a producing source loop's identity + output (Role == RoleSource).
@@ -204,6 +210,35 @@ type ChainedConfig struct {
 	// compiled at loop-build time — a malformed expression is a boot error there.
 	Converter string
 	Filters   []string
+}
+
+// AggregateIngress is one upstream the aggregate pools from: the granted upstream
+// subject (a pipeline DID) and the endpoint where its credentials can later be
+// fetched (the StoreIngressVC hint).
+type AggregateIngress struct {
+	Subject          string
+	UpstreamEndpoint string
+}
+
+// AggregateConfig is an aggregate loop's producing identity + N-ary consuming side +
+// window (Role == RoleAggregate). It produces a provin:aggregate FirstDrop (like a
+// source) but consumes MULTIPLE Pipeline-conformant ingress subjects (unlike any
+// single-ingress role), so the shared LoopConfig.IngressSubject is unused and the
+// subjects live in Ingresses. The transformation-claim (provin:aggregate) and the
+// source-root canonical (JCS) are fixed by the runtime, not config keys.
+type AggregateConfig struct {
+	// Producing side (mirrors SourceConfig minus SchemaRef/TransformationClaim).
+	OutputSubject string
+	Issuer        IssuerConfig
+	PipelineID    string
+	ProcessID     string
+	// Consuming side. Ingresses is the set of upstream subjects to pool (≥1), loaded
+	// from the aggregate.ingresses.<key> object map by sorted key. VerificationStrategy
+	// is the per-input ingress depth (adjacent).
+	Ingresses            []AggregateIngress
+	VerificationStrategy string
+	// Window is the fold trigger interval (> 0).
+	Window time.Duration
 }
 
 // LoadPipelineConfig reads and validates the pipeline block. It fails closed: an
@@ -364,9 +399,10 @@ func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
 // not use (e.g. an issuer block under a sink, or a sink block under a chained loop).
 // Source fields are top-level (17b shape); sink and chained fields nest under their block.
 var (
-	sourceKeys  = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
-	sinkKeys    = []string{"sink"}
-	chainedKeys = []string{"chained"}
+	sourceKeys    = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
+	sinkKeys      = []string{"sink"}
+	chainedKeys   = []string{"chained"}
+	aggregateKeys = []string{"aggregate"}
 )
 
 func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
@@ -379,20 +415,25 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 	}
 	lc.Role = role
 
-	if lc.IngressSubject, err = requireString(cfg, base+".ingress-subject"); err != nil {
-		return lc, err
-	}
-
+	// ingress-subject is the shared single-ingress field for source/sink/chained. The
+	// aggregate role consumes N subjects from its own aggregate.ingresses map, so it
+	// does not read ingress-subject — the requirement is per-role below.
 	switch role {
 	case RoleSource:
-		if err := rejectKeys(cfg, base, name, role, sinkKeys, chainedKeys); err != nil {
+		if lc.IngressSubject, err = requireString(cfg, base+".ingress-subject"); err != nil {
+			return lc, err
+		}
+		if err := rejectKeys(cfg, base, name, role, sinkKeys, chainedKeys, aggregateKeys); err != nil {
 			return lc, err
 		}
 		if lc.Source, err = loadSourceConfig(cfg, base, name); err != nil {
 			return lc, err
 		}
 	case RoleSink:
-		if err := rejectKeys(cfg, base, name, role, sourceKeys, chainedKeys); err != nil {
+		if lc.IngressSubject, err = requireString(cfg, base+".ingress-subject"); err != nil {
+			return lc, err
+		}
+		if err := rejectKeys(cfg, base, name, role, sourceKeys, chainedKeys, aggregateKeys); err != nil {
 			return lc, err
 		}
 		// A sink's ingress is the GRANTED upstream subject == an upstream source's
@@ -405,7 +446,10 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 			return lc, err
 		}
 	case RoleChained:
-		if err := rejectKeys(cfg, base, name, role, sourceKeys, sinkKeys); err != nil {
+		if lc.IngressSubject, err = requireString(cfg, base+".ingress-subject"); err != nil {
+			return lc, err
+		}
+		if err := rejectKeys(cfg, base, name, role, sourceKeys, sinkKeys, aggregateKeys); err != nil {
 			return lc, err
 		}
 		// Like a sink, a chained loop's ingress is the granted upstream pipeline DID.
@@ -420,6 +464,19 @@ func loadLoop(cfg *hoconconfig.Config, name string) (LoopConfig, error) {
 		// message storm. Fail closed on equal ingress/output subjects.
 		if lc.Chained.OutputSubject == lc.IngressSubject {
 			return lc, fmt.Errorf("pipeline: loop %q: chained.output-subject %q must differ from ingress-subject (a relay must not publish back to its own ingress)", name, lc.Chained.OutputSubject)
+		}
+	case RoleAggregate:
+		// An aggregate lists its N subjects under aggregate.ingresses, so a stray shared
+		// ingress-subject is a misconfiguration — reject it (fail-closed) rather than
+		// silently ignoring it. (ingress-subject is the shared key, not in any role set.)
+		if cfg.Has(base + ".ingress-subject") {
+			return lc, fmt.Errorf("pipeline: loop %q: key %q does not belong to role %q (an aggregate lists its subjects under aggregate.ingresses)", name, "ingress-subject", role)
+		}
+		if err := rejectKeys(cfg, base, name, role, sourceKeys, sinkKeys, chainedKeys); err != nil {
+			return lc, err
+		}
+		if lc.Aggregate, err = loadAggregateConfig(cfg, base, name); err != nil {
+			return lc, err
 		}
 	default:
 		return lc, fmt.Errorf("pipeline: loop %q: unknown role %q", name, role)
@@ -612,6 +669,86 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 		}
 	}
 	return cc, nil
+}
+
+// loadAggregateConfig validates an aggregate loop's producing identity + N-ary
+// consuming side + window. Producing/issuer rules mirror a source; the ingresses are
+// an object-keyed map (aggregate.ingresses.<key> { subject, upstream-endpoint }) loaded
+// by sorted key for determinism. Fails closed on: an empty ingress set, a malformed
+// subject/endpoint, a duplicate ingress subject, output-subject equal to any ingress
+// subject (self-consumption), an unknown strategy, or a non-positive window.
+func loadAggregateConfig(cfg *hoconconfig.Config, base, name string) (AggregateConfig, error) {
+	var ac AggregateConfig
+	var err error
+	abase := base + ".aggregate"
+
+	if ac.OutputSubject, err = requireString(cfg, abase+".output-subject"); err != nil {
+		return ac, err
+	}
+	if err := requirePipelineDID(ac.OutputSubject, name, "aggregate.output-subject"); err != nil {
+		return ac, err
+	}
+	if ac.Issuer, err = loadIssuer(cfg, abase, name, "aggregate.issuer"); err != nil {
+		return ac, err
+	}
+	if ac.PipelineID, err = requireString(cfg, abase+".pipeline-id"); err != nil {
+		return ac, err
+	}
+	if ac.ProcessID, err = requireString(cfg, abase+".process-id"); err != nil {
+		return ac, err
+	}
+	if ac.VerificationStrategy, err = loadStrategy(cfg, abase+".verification-strategy", name); err != nil {
+		return ac, err
+	}
+	if !cfg.Has(abase + ".window") {
+		return ac, fmt.Errorf("pipeline: loop %q: aggregate.window is required", name)
+	}
+	if ac.Window, err = cfg.Duration(abase + ".window"); err != nil {
+		return ac, fmt.Errorf("pipeline: loop %q: config aggregate.window: %w", name, err)
+	}
+	if ac.Window <= 0 {
+		return ac, fmt.Errorf("pipeline: loop %q: aggregate.window must be > 0 (got %s)", name, ac.Window)
+	}
+
+	// Ingresses: an object-keyed map, loaded by sorted key for a deterministic order.
+	if !cfg.Has(abase + ".ingresses") {
+		return ac, fmt.Errorf("pipeline: loop %q: aggregate.ingresses is required (at least one entry)", name)
+	}
+	keys, err := cfg.Keys(abase + ".ingresses")
+	if err != nil {
+		return ac, fmt.Errorf("pipeline: loop %q: config aggregate.ingresses: %w", name, err)
+	}
+	if len(keys) == 0 {
+		return ac, fmt.Errorf("pipeline: loop %q: aggregate.ingresses must have at least one entry", name)
+	}
+	// Sort the ingress keys for a deterministic Ingresses order: the consumed set feeds
+	// the fold + source commitment, so a stable order is load-bearing. (The top-level
+	// loops loader does NOT sort — loop order is not semantically significant there.)
+	sort.Strings(keys)
+	seen := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		ibase := abase + ".ingresses." + k
+		// Parse all per-ingress fields first, then apply the cross-field guards.
+		var ing AggregateIngress
+		if ing.Subject, err = requireString(cfg, ibase+".subject"); err != nil {
+			return ac, err
+		}
+		if err := requirePipelineDID(ing.Subject, name, "aggregate.ingresses."+k+".subject"); err != nil {
+			return ac, err
+		}
+		if ing.UpstreamEndpoint, err = requireString(cfg, ibase+".upstream-endpoint"); err != nil {
+			return ac, err
+		}
+		if seen[ing.Subject] {
+			return ac, fmt.Errorf("pipeline: loop %q: duplicate aggregate ingress subject %q", name, ing.Subject)
+		}
+		if ing.Subject == ac.OutputSubject {
+			return ac, fmt.Errorf("pipeline: loop %q: aggregate.output-subject %q must differ from every ingress subject (an aggregate must not consume its own output)", name, ac.OutputSubject)
+		}
+		seen[ing.Subject] = true
+		ac.Ingresses = append(ac.Ingresses, ing)
+	}
+	return ac, nil
 }
 
 func requireString(cfg *hoconconfig.Config, key string) (string, error) {

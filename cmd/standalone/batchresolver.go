@@ -41,7 +41,7 @@ func (f *peerFetcher) Fetch(ctx context.Context, endpoint, contentAddress string
 // that performs verified-ingress storage and so accumulates unresolved predecessor holes.
 func hasConsumingLoop(pipeCfg *pipelineconfig.Config) bool {
 	for _, lc := range pipeCfg.Loops {
-		if lc.Role == pipelineconfig.RoleSink || lc.Role == pipelineconfig.RoleChained {
+		if lc.Role == pipelineconfig.RoleSink || lc.Role == pipelineconfig.RoleChained || lc.Role == pipelineconfig.RoleAggregate {
 			return true
 		}
 	}

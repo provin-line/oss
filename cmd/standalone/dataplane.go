@@ -23,6 +23,7 @@ import (
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
+	"github.com/provin-line/oss/pipeline/source/aggregate"
 	"github.com/provin-line/oss/pipeline/source/ingest"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -64,8 +65,9 @@ type dataPlaneDeps struct {
 // them to drain on context cancellation, then closes the shared connection (the 17a
 // Conn-owns-teardown contract realized at node level).
 type dataPlane struct {
-	conn  *natstransport.Conn // nil when there are zero loops
-	loops []*transport.Loop
+	conn       *natstransport.Conn // nil when there are zero loops
+	loops      []*transport.Loop
+	aggregates []*aggregate.Process // self-triggered aggregate processes (contract.Process)
 }
 
 // buildDataPlane assembles the node's pipeline loops from the pipeline config. When
@@ -151,6 +153,20 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 			if err = ensureConsumer(lc.Name); err == nil {
 				loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, lc)
 			}
+		case pipelineconfig.RoleAggregate:
+			// An aggregate is a consuming producer (verifies+stores N ingress inputs,
+			// emits a FirstDrop) and implements contract.Process directly (it owns its
+			// window timer), so it is tracked in dp.aggregates, not dp.loops.
+			var agg *aggregate.Process
+			if err = ensureConsumer(lc.Name); err == nil {
+				agg, err = buildAggregateProcess(conn, builder, publisher, verifier, ingressStore, lc)
+			}
+			if err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			dp.aggregates = append(dp.aggregates, agg)
+			continue
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
 			// assembly seam against a role string that bypassed validation.
@@ -326,6 +342,57 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 	return loop, nil
 }
 
+// buildAggregateProcess assembles one aggregate Source Process (slice-17l): a stateful
+// pool+window process that verifies+stores N ingress inputs and, on each window tick,
+// folds them into a provin:aggregate FirstDrop with a multi-source commitment. The claim
+// and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
+// wired. When a VC store is configured the signer publishes each issued FirstDrop
+// (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
+func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
+	ac := lc.Aggregate
+	signer, err := vcdid.NewSigner(vcdid.Config{
+		Builder:             builder,
+		IssuerDID:           ac.Issuer.DID,
+		KeyID:               ac.Issuer.KeyID,
+		VerificationMethod:  ac.Issuer.VerificationMethod,
+		PipelineID:          ac.PipelineID,
+		ProcessID:           ac.ProcessID,
+		TransformationClaim: vc.ClaimAggregate,
+		SourceRootCanonical: vc.SourceRootCanonicalJCS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: aggregate signer: %w", lc.Name, err)
+	}
+	cfg := aggregate.Config{
+		Signer:    signer,
+		Verifier:  verifier,
+		Store:     store,
+		Publisher: conn.Publisher(ac.OutputSubject),
+		Codec:     envelopecodec.New(),
+		Emission:  memlog.New(),
+		Fold:      aggregate.ManifestFold{},
+		Window:    ac.Window,
+	}
+	// ac.VerificationStrategy is config-validated to "adjacent"; the aggregate runtime
+	// declares VerificationAdjacent intrinsically, so it takes no strategy field.
+	// Publish each issued aggregate FirstDrop to the VC store before emit when a store is
+	// configured — a FirstDrop has no predecessor, so no upstream-endpoint hint (like source).
+	if publisher != nil {
+		cfg.Signer = &publishingSigner{inner: signer, publisher: publisher}
+	}
+	for _, ing := range ac.Ingresses {
+		cfg.Ingress = append(cfg.Ingress, aggregate.Ingress{
+			Subscriber:       conn.Subscriber(ing.Subject),
+			UpstreamEndpoint: ing.UpstreamEndpoint,
+		})
+	}
+	proc, err := aggregate.New(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("standalone: loop %q: aggregate process: %w", lc.Name, err)
+	}
+	return proc, nil
+}
+
 // verificationStrategy maps a (config-validated) strategy token to its contract value.
 // "adjacent" verifies the immediately preceding credential — the only ingress strategy
 // (full-chain audit is the async audit runner's job, slice-17h; "full" was retired in 17j).
@@ -375,28 +442,36 @@ func sinkKind(k string) (contract.SinkKind, error) {
 // boot-time Subscribe error) cancels its siblings and Run returns promptly — it does
 // not block until an external cancellation arrives.
 func (d *dataPlane) Run(ctx context.Context) error {
-	if len(d.loops) == 0 {
+	total := len(d.loops) + len(d.aggregates)
+	if total == 0 {
 		return nil
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	errs := make(chan error, len(d.loops))
+	errs := make(chan error, total)
+	// Loops and aggregates both implement contract.Process; run them uniformly. A
+	// failure in any drains the siblings (cancel) instead of blocking on them.
+	run := func(p contract.Process) {
+		defer wg.Done()
+		if err := p.Run(runCtx); err != nil {
+			errs <- err
+			cancel()
+		}
+	}
 	for _, l := range d.loops {
 		wg.Add(1)
-		go func(l *transport.Loop) {
-			defer wg.Done()
-			if err := l.Run(runCtx); err != nil {
-				errs <- err
-				cancel() // a loop failed: drain the siblings instead of blocking on them
-			}
-		}(l)
+		go run(l)
+	}
+	for _, a := range d.aggregates {
+		wg.Add(1)
+		go run(a)
 	}
 	wg.Wait()
 	close(errs)
 
-	// All loops have drained (Subscriber.Drain + Publisher.Close); only now tear the
+	// All processes have drained (Subscriber.Drain + Publisher.Close); only now tear the
 	// shared connection down.
 	closeErr := d.conn.Close()
 
