@@ -66,12 +66,17 @@ func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[audit
 			Notations: rec.Notations,
 		}
 	}
-	// source_commitment is intentionally NOT emitted here: 17h-era records never set
-	// Scope.SourceCommitmentEvaluated, and the domain carries no independent consumed-set
-	// verdict to map (Overall is the LINEAR verdict — mapping it here would re-introduce
-	// the partial-read-as-aggregate hazard this slice forecloses, spec D-17i-2 / FCoT
-	// CA#6). The aggregate slice adds the domain ConfidenceState AND the gated emission
-	// together. Until then, an absent source_commitment IS the coverage signal.
+	// source_commitment is emitted ONLY when the consumed-set was actually evaluated
+	// (slice-17o): its presence IS the coverage signal (17i D-17i-2), and the confidence maps
+	// the DISTINCT domain field (never Overall — that is the linear verdict). No axes:
+	// VerifySourceCommitment yields a single state outside the three axes. When the flag is
+	// false (17h-era or a downstream linear-only audit) the field stays absent.
+	if rec.Scope.SourceCommitmentEvaluated {
+		resp.SourceCommitment = &auditpb.ScopeVerdict{
+			Confidence: confidence(rec.SourceCommitment),
+			Notations:  rec.SourceCommitmentNotations,
+		}
+	}
 
 	return connect.NewResponse(resp), nil
 }

@@ -34,12 +34,21 @@ type AuditScope struct {
 // coverage and the audit time. For a real verdict the Overall/Axes/Notations are verbatim
 // from VerifyChain; for an assembly hole they are a synthetic Indeterminate (all axes
 // explicitly Indeterminate — the AxisResult zero value is Failed, so it must be set).
+//
+// SourceCommitment is the DISTINCT consumed-set verdict (slice-17o): the VerifySourceCommitment
+// result, separate from Overall (the linear verdict), populated only when
+// Scope.SourceCommitmentEvaluated is true (an aggregate head with a local receipt). Its
+// notations are kept per-scope in SourceCommitmentNotations so the wire source_commitment.notations
+// never conflate with linear_chain.notations. When SourceCommitmentEvaluated is false the field
+// holds its fail-closed zero and is never served (the handler gates emission on the flag).
 type AuditRecord struct {
-	Overall   vc.ConfidenceState
-	Axes      vc.AxisResult
-	Notations []string
-	Scope     AuditScope
-	AuditedAt time.Time
+	Overall                   vc.ConfidenceState
+	Axes                      vc.AxisResult
+	Notations                 []string
+	SourceCommitment          vc.ConfidenceState
+	SourceCommitmentNotations []string
+	Scope                     AuditScope
+	AuditedAt                 time.Time
 }
 
 // StatusStore records the latest audit verdict per head. In-memory for the PoC.

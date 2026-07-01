@@ -87,6 +87,42 @@ func TestGetAuditStatus_LinearVerdictProjection(t *testing.T) {
 	}
 }
 
+// An evaluated aggregate record (slice-17o) emits the source_commitment ScopeVerdict:
+// confidence from the DISTINCT domain field (not Overall), its own per-scope notations, and
+// no axes (VerifySourceCommitment yields a single state outside the three axes, 17i D-17i-2).
+func TestGetAuditStatus_SourceCommitmentEmittedWhenEvaluated(t *testing.T) {
+	rec := auditor.AuditRecord{
+		Overall:                   vc.ConfidenceVerified, // linear
+		Axes:                      vc.AxisResult{DataIntegrity: vc.ConfidenceVerified},
+		Notations:                 []string{"linear-note"},
+		SourceCommitment:          vc.ConfidenceIndeterminate, // DISTINCT from Overall
+		SourceCommitmentNotations: []string{"source-commitment: self-audit (emit locus): 1/2 consumed sources resolved"},
+		Scope:                     auditor.AuditScope{LinearChain: true, SourceCommitmentEvaluated: true},
+		AuditedAt:                 time.Unix(0, 0).UTC(),
+	}
+	msg, err := get(t, fakeService{rec: rec})
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	sc := msg.GetSourceCommitment()
+	if sc == nil {
+		t.Fatal("source_commitment is nil, want present (SourceCommitmentEvaluated true)")
+	}
+	// The distinct field, NOT Overall: Indeterminate → INDETERMINATE, while linear is VERIFIED.
+	if sc.GetConfidence() != auditpb.Confidence_CONFIDENCE_INDETERMINATE {
+		t.Errorf("source_commitment.confidence = %v, want INDETERMINATE (the distinct field)", sc.GetConfidence())
+	}
+	if msg.GetLinearChain().GetConfidence() != auditpb.Confidence_CONFIDENCE_VERIFIED {
+		t.Error("linear_chain.confidence must stay VERIFIED (distinct from source_commitment)")
+	}
+	if got := sc.GetNotations(); len(got) != 1 || got[0] != rec.SourceCommitmentNotations[0] {
+		t.Errorf("source_commitment.notations = %v, want the per-scope note", got)
+	}
+	if sc.GetAxes() != nil {
+		t.Errorf("source_commitment.axes = %+v, want nil (single-state verdict, no axes)", sc.GetAxes())
+	}
+}
+
 // Each domain three-state maps to its proto counterpart with the +1 shift.
 func TestGetAuditStatus_ConfidenceMapping(t *testing.T) {
 	cases := []struct {
