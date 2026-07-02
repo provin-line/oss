@@ -1,0 +1,24 @@
+{
+  "id": "resolver-006",
+  "rule": "resolver.states.no-demotion",
+  "description": "Demoting Resolved to NotFound is forbidden (eviction transitions to Unavailable)",
+  "input": {
+    "sequence": [
+      {
+        "op": "lookup",
+        "key": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299",
+        "state": "Resolved"
+      },
+      {
+        "op": "evict",
+        "key": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299"
+      },
+      {
+        "op": "lookup",
+        "key": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299",
+        "state": "NotFound"
+      }
+    ]
+  },
+  "expect": "reject"
+}

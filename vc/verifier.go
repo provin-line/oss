@@ -95,50 +95,16 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 }
 
 // evalDataIntegrity evaluates the data-integrity axis from this credential
-// alone: @context/claim grammar and grounding, the required wire fields, and
-// source-commitment shape well-formedness. The cross-credential binding
-// (outputHash[n] == inputHash[n+1]) and schema content-hash resolution refine
-// this axis in VerifyChain and the schema layer respectively; in isolation a
-// well-formed credential is verified, a malformed one failed (no input is
-// missing, so there is no indeterminate at this level).
+// alone by delegating to ValidateWireForm — the single implementation of the
+// wire-form verdict, so a standalone wire-form check and the axis can never
+// drift. The cross-credential binding (outputHash[n] == inputHash[n+1]) and
+// schema content-hash resolution refine this axis in VerifyChain and the
+// schema layer respectively; in isolation a well-formed credential is
+// verified, a malformed one failed (no input is missing, so there is no
+// indeterminate at this level).
 func (v *Verifier) evalDataIntegrity(cred *PipelinePassCredential) ConfidenceState {
-	if cred.Issuer() == "" {
+	if err := cred.ValidateWireForm(); err != nil {
 		return ConfidenceFailed
-	}
-	if !hasRequiredVCTypes(cred) {
-		return ConfidenceFailed // type MUST carry VerifiableCredential + PipelinePassCredential
-	}
-	if _, err := cred.ValidFrom(); err != nil {
-		return ConfidenceFailed
-	}
-	rawSubject, ok := cred.body[keySubject].(map[string]any)
-	if !ok {
-		return ConfidenceFailed // credentialSubject must be an object
-	}
-	// Raw wire-shape validation BEFORE the typed accessors — the typed views are
-	// lossy (they drop present-but-wrong-typed fields to zero values), so a
-	// malformed field would otherwise read as "absent" and slip through.
-	if !rawSubjectWellFormed(rawSubject) {
-		return ConfidenceFailed
-	}
-	subj, err := cred.Subject()
-	if err != nil {
-		return ConfidenceFailed
-	}
-	if subj.PipelineID == "" || subj.ProcessID == "" || subj.OutputHash == "" {
-		return ConfidenceFailed
-	}
-	// Claim rules (presence, grammar, grounding) and the @context array shape.
-	if err := cred.ValidateTransformationClaim(); err != nil {
-		return ConfidenceFailed
-	}
-	// Source-commitment value well-formedness — orthogonal to previousCredential,
-	// so checked on any credential that carries the fields (raw type-shape was
-	// validated above; this checks the sorted-unique set and multihash digest).
-	if sc := cred.SourceCommitment(); sc != nil {
-		if !isSortedUniqueSet(sc.DerivedFrom) || !isSourceRootMultihash(sc.SourceRoot) {
-			return ConfidenceFailed
-		}
 	}
 	return ConfidenceVerified
 }
@@ -170,11 +136,13 @@ func hasRequiredVCTypes(cred *PipelinePassCredential) bool {
 
 // rawSubjectWellFormed validates the wire types of the optional credentialSubject
 // fields that the typed accessors collapse lossily: previousCredential must be a
-// string when present, and a source commitment (any of derived_from /
-// source_root / source_root_canonical present) must carry all three with
-// derived_from a string array and the roots strings.
+// string when present (a JSON null is equivalent to omission — a chain origin
+// may carry either, credential.subject.previous-credential), and a source
+// commitment (any of derived_from / source_root / source_root_canonical
+// present) must carry all three with derived_from a string array and the
+// roots strings.
 func rawSubjectWellFormed(subject map[string]any) bool {
-	if pc, present := subject[keyPreviousCredential]; present {
+	if pc, present := subject[keyPreviousCredential]; present && pc != nil {
 		if _, ok := pc.(string); !ok {
 			return false
 		}

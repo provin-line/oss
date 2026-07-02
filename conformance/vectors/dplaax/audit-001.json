@@ -1,0 +1,121 @@
+{
+  "id": "audit-001",
+  "rule": "audit.attribution.segment",
+  "description": "Each credential's transformation is attributed to its issuer's Owner DID",
+  "input": {
+    "chain": [
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+        "validFrom": "2026-06-10T00:00:00Z",
+        "credentialSubject": {
+          "pipelineId": "pl-acme",
+          "processId": "proc-x",
+          "transformationClaim": "provin:aggregate",
+          "outputHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-06-10T00:00:00Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+        }
+      },
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:gamma:pipeline:p:process:y",
+        "validFrom": "2026-06-10T00:00:01Z",
+        "credentialSubject": {
+          "pipelineId": "pl-gamma",
+          "processId": "proc-y",
+          "transformationClaim": "provin:convert",
+          "inputHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "previousCredential": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-06-10T00:00:01Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:gamma:pipeline:p:process:y#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+        }
+      },
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:delta:pipeline:p:process:z",
+        "validFrom": "2026-06-10T00:00:02Z",
+        "credentialSubject": {
+          "pipelineId": "pl-delta",
+          "processId": "proc-z",
+          "transformationClaim": "provin:filter",
+          "inputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "outputHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "previousCredential": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-06-10T00:00:02Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:delta:pipeline:p:process:z#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+        }
+      }
+    ],
+    "controllers": {
+      "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p",
+      "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p": "did:dplaax:poc.dplaax.dev:org:acme",
+      "did:dplaax:poc.dplaax.dev:org:gamma:pipeline:p:process:y": "did:dplaax:poc.dplaax.dev:org:gamma:pipeline:p",
+      "did:dplaax:poc.dplaax.dev:org:gamma:pipeline:p": "did:dplaax:poc.dplaax.dev:org:gamma",
+      "did:dplaax:poc.dplaax.dev:org:delta:pipeline:p:process:z": "did:dplaax:poc.dplaax.dev:org:delta:pipeline:p",
+      "did:dplaax:poc.dplaax.dev:org:delta:pipeline:p": "did:dplaax:poc.dplaax.dev:org:delta"
+    }
+  },
+  "expect": {
+    "attribution": {
+      "segments": [
+        {
+          "index": 0,
+          "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+        },
+        {
+          "index": 1,
+          "owner": "did:dplaax:poc.dplaax.dev:org:gamma"
+        },
+        {
+          "index": 2,
+          "owner": "did:dplaax:poc.dplaax.dev:org:delta"
+        }
+      ],
+      "pre_chain": "did:dplaax:poc.dplaax.dev:org:acme"
+    }
+  }
+}

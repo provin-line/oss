@@ -14,8 +14,8 @@ func sampleSubject() vc.CredentialSubjectFields {
 		PipelineID:          "p1",
 		ProcessID:           "proc1",
 		TransformationClaim: vc.ClaimConvert,
-		InputHash:           "sha256:in",
-		OutputHash:          "sha256:out",
+		InputHash:           "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		OutputHash:          "sha256:2222222222222222222222222222222222222222222222222222222222222222",
 	}
 }
 

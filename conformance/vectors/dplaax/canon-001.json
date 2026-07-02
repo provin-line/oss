@@ -1,0 +1,11 @@
+{
+  "id": "canon-001",
+  "rule": "canon.jcs.base",
+  "description": "Lexicographic key ordering and ES6 number normalization (2.50 → 2.5, 1.0 → 1)",
+  "input": {
+    "document": "{\"b\":2.50,\"a\":1.0}"
+  },
+  "expect": {
+    "canonical": "{\"a\":1,\"b\":2.5}"
+  }
+}

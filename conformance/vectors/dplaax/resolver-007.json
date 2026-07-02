@@ -1,0 +1,23 @@
+{
+  "id": "resolver-007",
+  "rule": "resolver.batch.shape",
+  "description": "Batch response is not same-length and same-order (two entries for three requests)",
+  "input": {
+    "request": [
+      "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299",
+      "sha256:bd2a89ffe6180c56c2bcff20e308b6cac94438237d84685c359038f6edbd1935",
+      "sha256:5549bcd73d44d3b27d1c30ddd1380d6d2c3b789dd5059fe428ce7ea546eda047"
+    ],
+    "response": [
+      {
+        "hash": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299",
+        "state": "Resolved"
+      },
+      {
+        "hash": "sha256:5549bcd73d44d3b27d1c30ddd1380d6d2c3b789dd5059fe428ce7ea546eda047",
+        "state": "NotFound"
+      }
+    ]
+  },
+  "expect": "reject"
+}

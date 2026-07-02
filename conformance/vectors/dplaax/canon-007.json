@@ -1,0 +1,9 @@
+{
+  "id": "canon-007",
+  "rule": "canon.strict-decode",
+  "description": "Trailing data after the document is rejected",
+  "input": {
+    "document": "{\"a\":1} {}"
+  },
+  "expect": "reject"
+}

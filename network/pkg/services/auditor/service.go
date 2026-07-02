@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/provin-line/oss/vc"
 )
 
 // Read-service sentinel errors. The AuditService handler maps these to Connect codes
@@ -42,18 +44,7 @@ func (s *StatusService) GetStatus(ctx context.Context, headHash string) (AuditRe
 	return rec, nil
 }
 
-// isContentAddress reports whether s is a "sha256:<64 lowercase hex>" address — the same
-// predicate vcresolver applies (duplicated, not exported across the package boundary: a
-// stable 4-line rule is not worth widening another service's API for).
-func isContentAddress(s string) bool {
-	const prefix = "sha256:"
-	if len(s) != len(prefix)+64 || s[:len(prefix)] != prefix {
-		return false
-	}
-	for _, r := range s[len(prefix):] {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
+// isContentAddress delegates to the exported grammar predicate
+// (vc.IsContentAddress) — the convergence point slice-7 §4 and the API
+// responsibility review predicted for the per-service copies.
+func isContentAddress(s string) bool { return vc.IsContentAddress(s) }

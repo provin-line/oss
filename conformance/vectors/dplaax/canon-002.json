@@ -1,0 +1,11 @@
+{
+  "id": "canon-002",
+  "rule": "canon.jcs.base",
+  "description": "U+2028 / U+2029 are emitted as raw UTF-8, not escaped (an RFC 8785 conformance pitfall — JS-leaning implementations tend to escape them). The \\u2028\\u2029 inside expect.canonical here is JSON file-level escaping; the decoded canonical text contains the raw characters",
+  "input": {
+    "document": "{\"s\":\"\\u2028\\u2029\"}"
+  },
+  "expect": {
+    "canonical": "{\"s\":\"\u2028\u2029\"}"
+  }
+}

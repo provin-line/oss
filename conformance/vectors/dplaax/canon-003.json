@@ -1,0 +1,11 @@
+{
+  "id": "canon-003",
+  "rule": "canon.jcs.base",
+  "description": "Minimal string escaping: \\u0041 becomes literal A, control characters use short-form escapes, double quotes stay escaped",
+  "input": {
+    "document": "{\"s\":\"\\u0041\\n\\\"\"}"
+  },
+  "expect": {
+    "canonical": "{\"s\":\"A\\n\\\"\"}"
+  }
+}

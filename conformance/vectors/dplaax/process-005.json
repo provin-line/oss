@@ -1,0 +1,38 @@
+{
+  "id": "process-005",
+  "rule": "process.sink.receipt",
+  "description": "A delivery receipt conforms to the PipelinePassCredential schema and references the last upstream credential via previousCredential",
+  "input": {
+    "process_type": "SinkProcess",
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://poc.dplaax.dev/vc/v1",
+        "https://poc.provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:sink:pipeline:p:process:es",
+      "validFrom": "2026-06-10T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-agg",
+        "processId": "proc-a",
+        "transformationClaim": "provin:sink-receipt",
+        "outputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "inputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "previousCredential": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-06-10T00:00:01Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:sink:pipeline:p:process:es#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    }
+  },
+  "expect": "accept"
+}

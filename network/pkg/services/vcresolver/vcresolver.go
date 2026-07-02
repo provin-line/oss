@@ -122,7 +122,9 @@ func rawPreviousCredential(body map[string]any) (prev string, present bool, err 
 		return "", false, fmt.Errorf("credentialSubject is not an object")
 	}
 	pv, ok := sub["previousCredential"]
-	if !ok {
+	if !ok || pv == nil {
+		// A JSON null is a conformant chain origin, equivalent to omission
+		// (credential.subject.previous-credential).
 		return "", false, nil
 	}
 	s, ok := pv.(string)
@@ -132,17 +134,7 @@ func rawPreviousCredential(body map[string]any) (prev string, present bool, err 
 	return s, true, nil
 }
 
-// isContentAddress reports whether s is a "sha256:<64 lowercase hex>" address —
-// the form jcs.Hash produces and previousCredential links carry.
-func isContentAddress(s string) bool {
-	const prefix = "sha256:"
-	if len(s) != len(prefix)+64 || s[:len(prefix)] != prefix {
-		return false
-	}
-	for _, r := range s[len(prefix):] {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
+// isContentAddress delegates to the exported grammar predicate — the one
+// implementation of the "sha256:<64 lowercase hex>" content-address syntax
+// (vc.IsContentAddress), converged from the per-service copies.
+func isContentAddress(s string) bool { return vc.IsContentAddress(s) }

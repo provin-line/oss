@@ -1,0 +1,17 @@
+{
+  "id": "process-004",
+  "rule": "process.sink.verify",
+  "description": "A Sink Process terminates without verifying the received chain",
+  "input": {
+    "process_type": "SinkProcess",
+    "sequence": [
+      {
+        "op": "receive"
+      },
+      {
+        "op": "terminate"
+      }
+    ]
+  },
+  "expect": "reject"
+}

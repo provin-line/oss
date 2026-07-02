@@ -1,0 +1,43 @@
+{
+  "id": "commitment-001",
+  "rule": "commitment.class.definition",
+  "description": "A chain-preserving credential carries the three source-commitment attributes — orthogonal to previousCredential (attachable regardless of topology)",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://poc.dplaax.dev/vc/v1",
+        "https://poc.provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:a1",
+      "validFrom": "2026-06-10T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-agg",
+        "processId": "proc-a",
+        "transformationClaim": "provin:enrich",
+        "outputHash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "inputHash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "previousCredential": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299",
+        "derived_from": [
+          "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+          "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s"
+        ],
+        "source_root": "f1220f3ab23a6fe77e03c61f48c9e1b85fcd315fb13882f1132fc552264fda5c72acb",
+        "source_root_canonical": "jcs-rfc8785"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-06-10T00:00:01Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:a1#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    }
+  },
+  "expect": "accept"
+}

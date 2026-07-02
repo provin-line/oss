@@ -1,0 +1,9 @@
+{
+  "id": "canon-008",
+  "rule": "canon.strict-decode",
+  "description": "Unpaired high surrogate escape (\\uD800) is rejected (silent U+FFFD replacement would diverge from the canonical hash)",
+  "input": {
+    "document": "{\"s\":\"\\uD800\"}"
+  },
+  "expect": "reject"
+}

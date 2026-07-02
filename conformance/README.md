@@ -31,8 +31,30 @@ Per-claim *semantics* are declarations by the signer (accountability, not
 machine-verified properties), so they are deliberately **absent** from the
 vectors: duplicating them here would create a second source of truth.
 
-## Future receptacle
+## dplaax protocol vectors (vendored)
 
-Cross-repo consumption of the protocol's own conformance vectors
-(`dplaax.spec_draft` `vectors/`, 78 vectors) lands here when the harness
-grows the families beyond the profile facts.
+`vectors/dplaax/` vendors the protocol's own conformance vector catalog
+(`dplaax.spec_draft` `vectors/`, 91 vectors as of 2026-07-02) byte-exact,
+pinned by `MANIFEST.sha256`. The manifest test fails on any in-place edit —
+adopting a spec change is a deliberate act: run
+`scripts/sync-spec-vectors.sh` and commit the vendored diff.
+
+**Tranche 1 — executed in CI** (`dplaax_test.go`), 65 vectors asserted across
+the pure-function families (commitment-012 is loaded but skipped — see
+tranche 2):
+
+| family | driver |
+|---|---|
+| `canon-001..008` | `canon.NewStrictDecoder` + `jcs.Canonicalize` |
+| `cred-001..029` | strict decode + `vc.PipelinePassCredential.ValidateWireForm` — the same single implementation the verifier's data-integrity axis delegates to |
+| `commitment-001..011` | wire form / `VerifyChain` (all-consumed) / `NewSourceCommitment` + `ComputeSourceRoot` (construction) / `VerifySourceCommitment` (verification) |
+| `chain-006..008` | `vc.Verifier.VerifyChain` — data-flow continuity on the DataIntegrity axis (fixtures carry synthetic proofs; the resolver-dependent axes are out of scope here) |
+| `confidence-001..006` | `vc.EvaluateConfidence` (synthesis) / real `Verify` with an entries-driven lifecycle registry, effectiveDates time-shifted so the proof.created order relations are preserved |
+| `delegation-001..005` | `delegation.Build` re-signing + `delegation.Verify` — structural defects (purpose, scope, foreign subject) are checked before the signature, so they survive the re-signing |
+| `signer-001..003` | `vc.VerifyProof` mandatory-member / no-op gates; `vc.RegisterCryptosuite` registration gate |
+
+**Tranche 2 — not yet executed** (behavior-fixture drivers to build):
+`chain-001..005` (trigger classification — issuance behavior),
+`process-001..006`, `audit-001..004` (attribution walker),
+`registry-001..002` and `resolver-001..008` (store/sequence drivers), and
+`commitment-012` (restart persistence — blocked on the durable-store epic).

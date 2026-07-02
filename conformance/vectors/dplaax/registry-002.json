@@ -1,0 +1,29 @@
+{
+  "id": "registry-002",
+  "rule": "registry.append-only",
+  "description": "Deprecation is lifecycle metadata outside the registered content: after deprecation the entry still resolves under its original key and version with the content hash unchanged",
+  "input": {
+    "sequence": [
+      {
+        "op": "commit",
+        "key": "schema/orders",
+        "version": "3",
+        "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "op": "deprecate",
+        "key": "schema/orders",
+        "version": "3"
+      },
+      {
+        "op": "get",
+        "key": "schema/orders",
+        "version": "3"
+      }
+    ]
+  },
+  "expect": {
+    "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "deprecated": true
+  }
+}

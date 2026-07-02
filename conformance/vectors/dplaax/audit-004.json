@@ -1,0 +1,57 @@
+{
+  "id": "audit-004",
+  "rule": "audit.attribution.origin-default",
+  "description": "A chain origin that carries a source commitment still attributes all preceding provenance to the origin's Owner — the commitment does not shed the default",
+  "input": {
+    "chain": [
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p:process:agg",
+        "validFrom": "2026-06-10T00:00:00Z",
+        "credentialSubject": {
+          "pipelineId": "pl-beta",
+          "processId": "proc-agg",
+          "transformationClaim": "provin:aggregate",
+          "outputHash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "derived_from": [
+            "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+            "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s"
+          ],
+          "source_root": "f1220f3ab23a6fe77e03c61f48c9e1b85fcd315fb13882f1132fc552264fda5c72acb",
+          "source_root_canonical": "jcs-rfc8785"
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-06-10T00:00:00Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p:process:agg#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+        }
+      }
+    ],
+    "controllers": {
+      "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p:process:agg": "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p",
+      "did:dplaax:poc.dplaax.dev:org:beta:pipeline:p": "did:dplaax:poc.dplaax.dev:org:beta"
+    }
+  },
+  "expect": {
+    "attribution": {
+      "segments": [
+        {
+          "index": 0,
+          "owner": "did:dplaax:poc.dplaax.dev:org:beta"
+        }
+      ],
+      "pre_chain": "did:dplaax:poc.dplaax.dev:org:beta"
+    }
+  }
+}

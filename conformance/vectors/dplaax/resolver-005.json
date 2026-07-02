@@ -1,0 +1,11 @@
+{
+  "id": "resolver-005",
+  "rule": "resolver.states",
+  "description": "NotFound (a definitive assertion of non-existence) → failed",
+  "input": {
+    "resolver_state": "NotFound"
+  },
+  "expect": {
+    "confidence": "failed"
+  }
+}

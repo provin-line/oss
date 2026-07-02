@@ -1,0 +1,14 @@
+{
+  "id": "signer-003",
+  "rule": "signer.cryptosuite.no-op-rejected",
+  "description": "Registering a no-op identifier in the lifecycle registry is rejected",
+  "input": {
+    "registry_op": {
+      "op": "register",
+      "id": "identity",
+      "phase": "Active",
+      "effectiveDate": "2026-06-10T00:00:00Z"
+    }
+  },
+  "expect": "reject"
+}

@@ -30,8 +30,23 @@ claim ごとの*意味*は署名者による宣言（帰責のための claim �
 性質ではない）ため、vector には意図的に**含めない** — ここに複製すると第二の
 SoT が生まれる。
 
-## 将来の受け皿
+## dplaax protocol vectors（vendored）
 
-protocol 自身の conformance vector（`dplaax.spec_draft` `vectors/`、78 本）の
-cross-repo 消費は、harness が profile 事実以外の family に拡張された時点で
-ここに置く。
+`vectors/dplaax/` は protocol 自身の conformance vector catalog
+（`dplaax.spec_draft` `vectors/`、2026-07-02 時点 91 本）を byte-exact に
+vendoring し、`MANIFEST.sha256` で pin する。manifest テストは in-place 編集で
+fail する — spec 変更の取り込みは意図的な行為であり、
+`scripts/sync-spec-vectors.sh` を実行して vendored diff ごと commit する。
+
+**第 1 弾（CI 実行で 65 本を assert — 純関数系 family。commitment-012 は
+load のみで skip、第 2 弾参照）**: canon-001..008 /
+cred-001..029（strict decode + `ValidateWireForm` — data-integrity 軸が委譲する
+単一実装）/ commitment-001..011 / chain-006..008（continuity、DataIntegrity 軸）/
+confidence-001..006（lifecycle は effectiveDate を時間シフトして実 Verify 駆動）/
+delegation-001..005（`Build` で再署名して `Verify`）/ signer-001..003。
+driver の詳細は README.md（英語版）の表を参照。
+
+**第 2 弾（未実行 — 挙動系 fixture driver が必要）**: chain-001..005（trigger
+分類 = 発行挙動）、`process-*`、`audit-*`（attribution walker）、`registry-*` /
+`resolver-*`（store/sequence driver）、commitment-012（restart 永続 —
+durable-store epic 待ち）。

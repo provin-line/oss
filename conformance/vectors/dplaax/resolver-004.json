@@ -1,0 +1,11 @@
+{
+  "id": "resolver-004",
+  "rule": "resolver.states",
+  "description": "Unavailable (currently not held; non-existence is not asserted) → indeterminate",
+  "input": {
+    "resolver_state": "Unavailable"
+  },
+  "expect": {
+    "confidence": "indeterminate"
+  }
+}

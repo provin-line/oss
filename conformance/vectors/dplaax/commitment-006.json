@@ -1,0 +1,14 @@
+{
+  "id": "commitment-006",
+  "rule": "commitment.source-root.tree",
+  "description": "The empty set commits to the SHA-256 of the empty string (RFC 6962 §2.1)",
+  "input": {
+    "sources": [],
+    "source_root_canonical": "jcs-rfc8785"
+  },
+  "expect": {
+    "derived_from": [],
+    "source_root": "f1220e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_root_canonical": "jcs-rfc8785"
+  }
+}

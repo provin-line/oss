@@ -1,0 +1,22 @@
+{
+  "id": "registry-001",
+  "rule": "registry.append-only",
+  "description": "Re-committing an existing version identifier with different content is rejected",
+  "input": {
+    "sequence": [
+      {
+        "op": "commit",
+        "key": "schema/orders",
+        "version": "3",
+        "contentHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "op": "commit",
+        "key": "schema/orders",
+        "version": "3",
+        "contentHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ]
+  },
+  "expect": "reject"
+}

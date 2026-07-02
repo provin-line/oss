@@ -1,0 +1,24 @@
+{
+  "id": "confidence-006",
+  "rule": "confidence.cryptosuite-lifecycle",
+  "description": "Unregistered cryptosuite → failed (fail-closed)",
+  "input": {
+    "registry": [
+      {
+        "id": "eddsa-jcs-2022",
+        "phase": "Active",
+        "effectiveDate": "2025-01-01T00:00:00Z"
+      },
+      {
+        "id": "eddsa-jcs-2022",
+        "phase": "Sunset",
+        "effectiveDate": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "cryptosuite": "ecdsa-jcs-2019",
+    "proof_created": "2025-06-01T00:00:00Z"
+  },
+  "expect": {
+    "confidence": "failed"
+  }
+}

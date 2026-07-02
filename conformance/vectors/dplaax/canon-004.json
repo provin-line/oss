@@ -1,0 +1,11 @@
+{
+  "id": "canon-004",
+  "rule": "canon.jcs.int64-verbatim",
+  "description": "2^53+1 emitted verbatim without an IEEE double round-trip (strict-ES6 JCS would round to 9007199254740992 — a deliberate divergence)",
+  "input": {
+    "document": "{\"n\":9007199254740993}"
+  },
+  "expect": {
+    "canonical": "{\"n\":9007199254740993}"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "confidence-003",
+  "rule": "confidence.composition.weakest-link",
+  "description": "Weakest-link composition: failed dominates even when other axes are verified",
+  "input": {
+    "axes": {
+      "signer-authenticity": "failed",
+      "chain-consistency": "verified",
+      "data-integrity": "indeterminate"
+    }
+  },
+  "expect": {
+    "confidence": "failed"
+  }
+}

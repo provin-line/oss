@@ -1,0 +1,15 @@
+{
+  "id": "confidence-002",
+  "rule": "confidence.composition.weakest-link",
+  "description": "Weakest-link composition: one indeterminate axis → overall indeterminate",
+  "input": {
+    "axes": {
+      "signer-authenticity": "verified",
+      "chain-consistency": "indeterminate",
+      "data-integrity": "verified"
+    }
+  },
+  "expect": {
+    "confidence": "indeterminate"
+  }
+}

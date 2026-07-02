@@ -110,6 +110,26 @@ func TestStoreVC_RejectsMalformedPrev(t *testing.T) {
 	}
 }
 
+// A JSON null previousCredential is a conformant chain origin — equivalent to
+// omission (spec credential.subject.previous-credential) — so the store must
+// accept it and queue nothing.
+func TestStoreVC_NullPreviousCredential_AcceptedAsOrigin(t *testing.T) {
+	svc := newSvc()
+	subject := map[string]any{"pipelineId": "p1", "processId": "proc1", "previousCredential": nil}
+	b, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            issuer,
+		"credentialSubject": subject,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StoreVC(context.Background(), b, "", 0); err != nil {
+		t.Fatalf("StoreVC rejected a null-previousCredential origin: %v", err)
+	}
+}
+
 func TestStoreVC_Idempotent(t *testing.T) {
 	store := memstore.NewStore()
 	svc := vcresolver.New(store, memstore.NewPool())

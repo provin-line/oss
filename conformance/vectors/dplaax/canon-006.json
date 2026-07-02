@@ -1,0 +1,9 @@
+{
+  "id": "canon-006",
+  "rule": "canon.strict-decode",
+  "description": "Duplicate key rejection (RFC 8785 §3.2.5)",
+  "input": {
+    "document": "{\"a\":1,\"a\":2}"
+  },
+  "expect": "reject"
+}

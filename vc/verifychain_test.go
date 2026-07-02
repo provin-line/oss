@@ -48,10 +48,15 @@ func buildChainFixture(t *testing.T, originIssuer, childIssuer string) (origin, 
 	}
 	b := vc.NewBuilder(ed25519.NewSigner(ks))
 
+	const (
+		hashIn  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		hashMid = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+		hashOut = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	)
 	subjA := vc.CredentialSubjectFields{
 		PipelineID: "p1", ProcessID: "procA",
 		TransformationClaim: vc.ClaimConvert,
-		InputHash:           "sha256:in", OutputHash: "sha256:mid",
+		InputHash:           hashIn, OutputHash: hashMid,
 	}
 	origin, err = b.BuildFirstDrop(originIssuer, string(keystore.KeyIDSigning), originIssuer+"#signing", subjA, nil)
 	if err != nil {
@@ -60,7 +65,7 @@ func buildChainFixture(t *testing.T, originIssuer, childIssuer string) (origin, 
 	subjB := vc.CredentialSubjectFields{
 		PipelineID: "p1", ProcessID: "procB",
 		TransformationClaim: vc.ClaimConvert,
-		InputHash:           "sha256:mid", OutputHash: "sha256:out", // inputHash == origin.outputHash
+		InputHash:           hashMid, OutputHash: hashOut, // inputHash == origin.outputHash
 	}
 	child, err = b.BuildChainPreserving(childIssuer, string(keystore.KeyIDSigning), childIssuer+"#signing", subjB, origin, nil)
 	if err != nil {

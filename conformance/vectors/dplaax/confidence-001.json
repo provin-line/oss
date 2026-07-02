@@ -1,0 +1,15 @@
+{
+  "id": "confidence-001",
+  "rule": "confidence.axes.three-state",
+  "description": "Independent three-axis evaluation: all axes verified → verified",
+  "input": {
+    "axes": {
+      "signer-authenticity": "verified",
+      "chain-consistency": "verified",
+      "data-integrity": "verified"
+    }
+  },
+  "expect": {
+    "confidence": "verified"
+  }
+}

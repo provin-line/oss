@@ -1,0 +1,9 @@
+{
+  "id": "canon-005",
+  "rule": "canon.jcs.reject-invalid-utf8",
+  "description": "Input containing an invalid UTF-8 byte (0xFF) in a string value is rejected (neither raw output nor U+FFFD replacement)",
+  "input": {
+    "document_b64": "eyJzIjoi/yJ9"
+  },
+  "expect": "reject"
+}

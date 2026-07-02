@@ -1,0 +1,13 @@
+{
+  "id": "resolver-008",
+  "rule": "resolver.body.encoding",
+  "description": "Body is base64url (unpadded) of the canonical signed document (body and proof) — parses, strips the proof, and recomputes to the key",
+  "input": {
+    "entry": {
+      "hash": "sha256:ebb6d5962b7901a0f2645a9dc3ab632cb4c74a3765e14640d39b33dbf7dbbe37",
+      "state": "Resolved",
+      "body": "eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiLCJodHRwczovL3BvYy5kcGxhYXguZGV2L3ZjL3YxIiwiaHR0cHM6Ly9wb2MucHJvdmluLmRldi92Yy92MSJdLCJjcmVkZW50aWFsU3ViamVjdCI6eyJpbnB1dEhhc2giOiJzaGEyNTY6MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsIm91dHB1dEhhc2giOiJzaGEyNTY6NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NSIsInBpcGVsaW5lSWQiOiJwbC1taW5lIiwicHJvY2Vzc0lkIjoicHJvYy0xIiwidHJhbnNmb3JtYXRpb25DbGFpbSI6InByb3Zpbjpjb252ZXJ0In0sImlzc3VlciI6ImRpZDpkcGxhYXg6cG9jLmRwbGFheC5kZXY6b3JnOm1pbmVBOnBpcGVsaW5lOm06cHJvY2VzczpzIiwicHJvb2YiOnsiY3JlYXRlZCI6IjIwMjYtMDYtMDFUMDA6MDA6MDFaIiwiY3J5cHRvc3VpdGUiOiJlZGRzYS1qY3MtMjAyMiIsInByb29mUHVycG9zZSI6ImFzc2VydGlvbk1ldGhvZCIsInByb29mVmFsdWUiOiJ6NWZpeHR1cmUwdmFsdWUwbm90MGEwcmVhbDBzaWduYXR1cmUwZml4dHVyZTB2YWx1ZTBub3QwcmVhbDAwIiwidHlwZSI6IkRhdGFJbnRlZ3JpdHlQcm9vZiIsInZlcmlmaWNhdGlvbk1ldGhvZCI6ImRpZDpkcGxhYXg6cG9jLmRwbGFheC5kZXY6b3JnOm1pbmVBOnBpcGVsaW5lOm06cHJvY2VzczpzI2tleS0xIn0sInR5cGUiOlsiVmVyaWZpYWJsZUNyZWRlbnRpYWwiLCJQaXBlbGluZVBhc3NDcmVkZW50aWFsIl0sInZhbGlkRnJvbSI6IjIwMjYtMDYtMDFUMDA6MDA6MDBaIn0"
+    }
+  },
+  "expect": "accept"
+}

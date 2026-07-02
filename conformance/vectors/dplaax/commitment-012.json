@@ -1,0 +1,23 @@
+{
+  "id": "commitment-012",
+  "rule": "commitment.store.persistence",
+  "description": "An audit-reachable deployment's VC store remains resolvable across a process restart",
+  "input": {
+    "sequence": [
+      {
+        "op": "store",
+        "key": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299"
+      },
+      {
+        "op": "process-restart"
+      },
+      {
+        "op": "lookup",
+        "key": "sha256:1f8b8307783ee2391a3cf9bb12623b057254eb290bb8fe2f48d25d3ec32d3299"
+      }
+    ]
+  },
+  "expect": {
+    "state": "Resolved"
+  }
+}

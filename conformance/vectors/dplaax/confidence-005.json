@@ -1,0 +1,24 @@
+{
+  "id": "confidence-005",
+  "rule": "confidence.cryptosuite-lifecycle",
+  "description": "Active at proof.created → verified (the evaluation key is proof.created, not validFrom)",
+  "input": {
+    "registry": [
+      {
+        "id": "eddsa-jcs-2022",
+        "phase": "Active",
+        "effectiveDate": "2025-01-01T00:00:00Z"
+      },
+      {
+        "id": "eddsa-jcs-2022",
+        "phase": "Sunset",
+        "effectiveDate": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "cryptosuite": "eddsa-jcs-2022",
+    "proof_created": "2025-06-01T00:00:00Z"
+  },
+  "expect": {
+    "confidence": "verified"
+  }
+}
