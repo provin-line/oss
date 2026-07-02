@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/provin-line/oss/did"
@@ -29,8 +30,14 @@ func TestResolve_RoundTrip(t *testing.T) {
 
 func TestResolve_NotFound(t *testing.T) {
 	r := local.New()
-	if _, err := r.Resolve(context.Background(), "did:dplaax:poc.dplaax.dev:org:absent"); err == nil {
-		t.Error("resolving an unregistered DID: want error")
+	_, err := r.Resolve(context.Background(), "did:dplaax:poc.dplaax.dev:org:absent")
+	if err == nil {
+		t.Fatal("resolving an unregistered DID: want error")
+	}
+	// A local miss is definitive — the store authoritatively holds no document —
+	// so the error must carry the resolver.ErrNotFound classification.
+	if !errors.Is(err, resolver.ErrNotFound) {
+		t.Errorf("err = %v, want errors.Is(err, resolver.ErrNotFound)", err)
 	}
 }
 

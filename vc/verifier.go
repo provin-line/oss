@@ -207,10 +207,14 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // proof field policy, the FCoT obligations (extra-member rejection and
 // verificationMethod-names-the-issuer), issuer DID resolution and assertion-key
 // extraction, Ed25519 proof verification, and the cryptosuite lifecycle phase
-// at proof.created. A resolver miss is treated as a definitive not-found
-// (failed): the in-memory/registry resolvers have no transient class — a
-// resolver that can time out must surface a typed transient error to yield
-// indeterminate here.
+// at proof.created. Issuer resolution follows the resolver error taxonomy: an
+// error wrapping resolver.ErrNotFound is a definitive not-found (failed —
+// verification completed against an authoritative negative), any other
+// resolution error is transient (indeterminate — may resolve later). A
+// resolved document whose id differs from the issuer (registry substitution)
+// is never honoured; because a misconfigured base mapping and a hostile
+// registry are indistinguishable at this point, it is indeterminate rather
+// than a terminal failed.
 func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string) ConfidenceState {
 	proof := cred.Proof()
 	if proof == nil {
@@ -238,12 +242,31 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 	if !found || vmDID != issuer {
 		return ConfidenceFailed
 	}
+	// Cryptosuite lifecycle at proof.created (optional hardening layer; a nil
+	// registry means no lifecycle gating — a registered, non-no-op suite is
+	// acceptable, the registration gate alone applies). The phase is evaluated
+	// BEFORE issuer resolution because it is resolver-independent: a transient
+	// resolution failure must not downgrade an established Sunset/Unknown
+	// failure to a retryable indeterminate (failed ⊏ indeterminate). The
+	// registry's own lookup error stays indeterminate and is applied only after
+	// the proof verifies, so a definitive signature failure still wins.
+	var phase LifecyclePhase
+	var phaseErr error
+	if v.lifecycle != nil {
+		phase, phaseErr = v.lifecycle.PhaseAt(ctx, proof.Cryptosuite, created)
+		if phaseErr == nil && phase != PhaseActive && phase != PhaseDeprecated {
+			return ConfidenceFailed // Sunset / Unknown fail closed
+		}
+	}
 	doc, err := v.resolver.Resolve(ctx, issuer)
-	if err != nil {
-		return ConfidenceFailed // definitive not-found
+	switch {
+	case errors.Is(err, resolver.ErrNotFound):
+		return ConfidenceFailed // definitive not-found: the registry states the issuer does not exist
+	case err != nil:
+		return ConfidenceIndeterminate // transient resolution failure — may resolve later
 	}
 	if doc.ID() != issuer {
-		return ConfidenceFailed // registry-substitution defense on the signing path
+		return ConfidenceIndeterminate // registry-substitution defense on the signing path: never honoured, never verified
 	}
 	pub, err := did.ExtractPublicKey(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
@@ -252,23 +275,14 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 	if err := VerifyProof(v.sigVerifier, pub, proof, cred.Body()); err != nil {
 		return ConfidenceFailed
 	}
-	// Cryptosuite lifecycle at proof.created (optional hardening layer; a nil
-	// registry means no lifecycle gating — a registered, non-no-op suite is
-	// acceptable, the registration gate alone applies).
 	if v.lifecycle != nil {
-		phase, err := v.lifecycle.PhaseAt(ctx, proof.Cryptosuite, created)
-		if err != nil {
+		if phaseErr != nil {
 			return ConfidenceIndeterminate
 		}
-		switch phase {
-		case PhaseActive:
-			// acceptable, unannotated.
-		case PhaseDeprecated:
+		if phase == PhaseDeprecated {
 			// acceptable, but the verdict carries an annotation.
 			*notations = append(*notations,
 				"signer-authenticity: cryptosuite "+proof.Cryptosuite+" is Deprecated (verified with notation)")
-		default:
-			return ConfidenceFailed // Sunset / Unknown fail closed
 		}
 	}
 	return ConfidenceVerified
@@ -279,9 +293,10 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 // every hop. Each resolved document is held to the registry-substitution
 // defense (doc.ID == requested DID); each controller link must be a structural
 // ancestor of the current DID (moving strictly up toward the owner); the walk
-// must terminate at the issuer's own owner, self-controlled. An unavailable
-// intermediate document is indeterminate (may resolve later); a broken link, a
-// foreign owner, or a cycle is failed.
+// must terminate at the issuer's own owner, self-controlled. A transiently
+// unreachable (or substituted) intermediate document is indeterminate (may
+// resolve later); a definitively absent one (resolver.ErrNotFound), a broken
+// link, a foreign owner, or a cycle is failed.
 func (v *Verifier) evalChainConsistency(ctx context.Context, cred *PipelinePassCredential) ConfidenceState {
 	issuer, err := dplaax.Parse(cred.Issuer())
 	if err != nil || !issuer.IsProcess() {
@@ -338,11 +353,17 @@ func (v *Verifier) walkControllerChain(ctx context.Context, start string) (strin
 			return "", errControllerBroken
 		}
 		doc, err := v.resolver.Resolve(ctx, cur)
-		if err != nil {
-			return "", errControllerUnreachable // intermediate (or issuer) document unavailable
+		switch {
+		case errors.Is(err, resolver.ErrNotFound):
+			return "", errControllerBroken // the controller target definitively does not exist — broken link
+		case err != nil:
+			return "", errControllerUnreachable // transient: the document may resolve later
 		}
 		if doc.ID() != cur {
-			return "", errControllerBroken // registry-substitution defense
+			// Registry-substitution defense: never honour the substituted document.
+			// Misconfiguration and attack are indistinguishable here, so treat the
+			// hop as unresolved (indeterminate) rather than an established break.
+			return "", errControllerUnreachable
 		}
 		ctrl := doc.Controller()
 		if d.IsOwner() {

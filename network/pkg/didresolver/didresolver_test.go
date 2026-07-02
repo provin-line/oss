@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/resolver"
 )
 
 // One HTTP resolver satisfies both consumer interfaces (D-r1): the publisher-side
@@ -27,19 +28,24 @@ var (
 const testDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
 // stub serves the canned doc for the expected resolution path and records the
-// path it was hit on; it can be told to 404, to return a mismatched id, or to
-// return an oversized body.
+// path it was hit on; it can be told to 404, to fail with a 500, to return a
+// mismatched id, or to return an oversized body.
 type stub struct {
-	gotPath   string
-	docID     string // id to put in the returned document (default testDID)
-	notFound  bool
-	oversized bool
+	gotPath     string
+	docID       string // id to put in the returned document (default testDID)
+	notFound    bool
+	serverError bool
+	oversized   bool
 }
 
 func (s *stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.gotPath = r.URL.Path
 	if s.notFound {
 		http.NotFound(w, r)
+		return
+	}
+	if s.serverError {
+		http.Error(w, "registry unavailable", http.StatusInternalServerError)
 		return
 	}
 	if s.oversized {
@@ -120,6 +126,25 @@ func TestResolve_NotFound(t *testing.T) {
 	if !errors.Is(err, didresolver.ErrDIDNotFound) {
 		t.Errorf("err = %v, want ErrDIDNotFound", err)
 	}
+	// A registry 404 is a definitive absence: it must ALSO carry the
+	// resolver.ErrNotFound classification the confidence axes key on.
+	if !errors.Is(err, resolver.ErrNotFound) {
+		t.Errorf("err = %v, want errors.Is(err, resolver.ErrNotFound)", err)
+	}
+}
+
+// A non-404 upstream failure is transient, not a definitive absence: the error
+// must NOT classify as resolver.ErrNotFound (the verifier treats it as
+// indeterminate, retryable).
+func TestResolve_ServerError_NotClassifiedNotFound(t *testing.T) {
+	r := newResolver(t, &stub{serverError: true}, loopbackGuard())
+	_, err := r.Resolve(context.Background(), testDID)
+	if err == nil {
+		t.Fatal("HTTP 500: want error")
+	}
+	if errors.Is(err, resolver.ErrNotFound) {
+		t.Errorf("HTTP 500 classified as definitive not-found: %v", err)
+	}
 }
 
 func TestResolve_IdentityMismatch(t *testing.T) {
@@ -127,6 +152,11 @@ func TestResolve_IdentityMismatch(t *testing.T) {
 	_, err := r.Resolve(context.Background(), testDID)
 	if !errors.Is(err, didresolver.ErrDIDIdentityMismatch) {
 		t.Errorf("err = %v, want ErrDIDIdentityMismatch", err)
+	}
+	// A substituted identity is misconfiguration-or-attack, not a definitive
+	// absence — it must stay in the indeterminate (retryable) error class.
+	if errors.Is(err, resolver.ErrNotFound) {
+		t.Errorf("identity mismatch classified as definitive not-found: %v", err)
 	}
 }
 

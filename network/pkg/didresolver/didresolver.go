@@ -17,6 +17,7 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/resolver"
 )
 
 // maxDocumentSize bounds the resolution response body: it is attacker-controlled
@@ -27,7 +28,12 @@ const maxDocumentSize = 1 << 20 // 1 MiB
 
 var (
 	// ErrDIDNotFound is returned when the registry has no such DID (HTTP 404).
-	ErrDIDNotFound = errors.New("didresolver: DID not found")
+	// It wraps resolver.ErrNotFound: a 404 from the owning registry is a
+	// DEFINITIVE absence in the resolver error taxonomy, which confidence
+	// verification maps to failed. Every other failure below (transport,
+	// non-404 status, size, parse, identity mismatch) stays outside that
+	// class and is treated as transient (indeterminate, retryable).
+	ErrDIDNotFound = fmt.Errorf("didresolver: DID not found: %w", resolver.ErrNotFound)
 	// ErrDIDIdentityMismatch is returned when the resolved document's id does not
 	// equal the requested DID — a misconfigured or hostile base mapping returning
 	// a substituted identity. Fail closed rather than trust it.

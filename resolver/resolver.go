@@ -14,6 +14,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 
 	"github.com/provin-line/oss/did"
 )
@@ -22,3 +23,12 @@ import (
 type Resolver interface {
 	Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }
+
+// ErrNotFound is the definitive-absence sentinel of the Resolve contract: an
+// implementation returns an error wrapping ErrNotFound (per errors.Is) when
+// the authoritative source states the DID does not exist — a registry 404, a
+// local-store miss. Every other resolution error is treated by
+// confidence-classifying consumers (vc.Verifier) as transient — indeterminate,
+// retryable — so an implementation must NOT wrap this sentinel on paths that
+// can fail non-definitively (timeout, connection refused, 5xx, parse failure).
+var ErrNotFound = errors.New("resolver: DID document not found")

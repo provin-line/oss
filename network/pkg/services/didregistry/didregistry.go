@@ -27,6 +27,7 @@ import (
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
+	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -603,7 +604,14 @@ func (r storeResolver) Resolve(_ context.Context, didStr string) (*did.DIDDocume
 	if err != nil {
 		return nil, err
 	}
-	return r.st.Resolve(d)
+	doc, err := r.st.Resolve(d)
+	if errors.Is(err, store.ErrNotFound) {
+		// This registry is authoritative for its own namespace, so a store miss
+		// is a definitive absence in the resolver.Resolver error taxonomy; the
+		// store sentinel is preserved for registry-internal consumers.
+		return nil, fmt.Errorf("%w: %w", err, resolver.ErrNotFound)
+	}
+	return doc, err
 }
 
 func ed25519JWK(pub []byte) map[string]any {

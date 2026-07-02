@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/resolver"
 )
 
 // Resolver is an in-memory DID resolver. Safe for concurrent use.
@@ -30,15 +31,17 @@ func (r *Resolver) Add(doc *did.DIDDocument) {
 	r.mu.Unlock()
 }
 
-// Resolve returns the document registered for didStr, or an error if none is.
-// The returned document's ID equals didStr by construction (Add keys by ID),
-// mirroring the registry-substitution defense the grpc resolver enforces.
+// Resolve returns the document registered for didStr, or an error wrapping
+// resolver.ErrNotFound if none is — a miss against the in-memory store is a
+// definitive absence, never a transient one. The returned document's ID equals
+// didStr by construction (Add keys by ID), mirroring the registry-substitution
+// defense the grpc resolver enforces.
 func (r *Resolver) Resolve(_ context.Context, didStr string) (*did.DIDDocument, error) {
 	r.mu.RLock()
 	doc, ok := r.docs[didStr]
 	r.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("local resolver: no document for %q", didStr)
+		return nil, fmt.Errorf("local resolver: no document for %q: %w", didStr, resolver.ErrNotFound)
 	}
 	return doc, nil
 }

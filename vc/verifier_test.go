@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
@@ -241,11 +244,39 @@ func TestVerify_BrokenControllerChain_Fails(t *testing.T) {
 	}
 }
 
-// An unavailable intermediate controller document is indeterminate, not failed:
-// it may resolve later. SignerAuthenticity stays verified (issuer doc present).
-func TestVerify_IntermediateControllerUnavailable_Indeterminate(t *testing.T) {
+// A TRANSIENTLY unreachable intermediate controller document (a resolver error
+// not wrapping resolver.ErrNotFound) is indeterminate, not failed: it may
+// resolve later. SignerAuthenticity stays verified (issuer doc present).
+func TestVerify_IntermediateControllerUnreachable_Indeterminate(t *testing.T) {
 	cred, pub := signedCred(t)
-	// Process → Pipeline, but the Pipeline doc is absent.
+	// Process → Pipeline, but fetching the Pipeline doc fails at transport level.
+	r := outageResolver{
+		inner: resolverWith(pub, pipelineDID, didDoc(pipelineDID, ownerDID, "", nil)),
+		down:  map[string]bool{pipelineDID: true},
+	}
+	v := vc.NewVerifier(r, ed25519Verifier())
+
+	res, err := v.Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Axes.SignerAuthenticity != vc.ConfidenceVerified {
+		t.Errorf("SignerAuthenticity=%v, want Verified (issuer doc resolves)", res.Axes.SignerAuthenticity)
+	}
+	if res.Axes.ChainConsistency != vc.ConfidenceIndeterminate {
+		t.Errorf("ChainConsistency=%v, want Indeterminate (intermediate unreachable)", res.Axes.ChainConsistency)
+	}
+	if res.Overall != vc.ConfidenceIndeterminate {
+		t.Errorf("Overall=%v, want Indeterminate", res.Overall)
+	}
+}
+
+// A DEFINITIVELY absent intermediate controller document — the resolver states
+// it does not exist (resolver.ErrNotFound; the local resolver's miss) — is a
+// broken controller link, not a resolution gap: failed.
+func TestVerify_IntermediateControllerNotFound_Fails(t *testing.T) {
+	cred, pub := signedCred(t)
+	// Process → Pipeline, but the Pipeline doc is definitively absent.
 	r := resolverWith(pub, pipelineDID)
 	v := vc.NewVerifier(r, ed25519Verifier())
 
@@ -253,11 +284,31 @@ func TestVerify_IntermediateControllerUnavailable_Indeterminate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if res.Axes.ChainConsistency != vc.ConfidenceIndeterminate {
-		t.Errorf("ChainConsistency=%v, want Indeterminate (intermediate unavailable)", res.Axes.ChainConsistency)
+	if res.Axes.ChainConsistency != vc.ConfidenceFailed {
+		t.Errorf("ChainConsistency=%v, want Failed (intermediate definitively absent)", res.Axes.ChainConsistency)
 	}
-	if res.Overall != vc.ConfidenceIndeterminate {
-		t.Errorf("Overall=%v, want Indeterminate", res.Overall)
+}
+
+// A Sunset/Unknown cryptosuite is a resolver-INDEPENDENT terminal failure: it
+// must fail closed even while issuer resolution is transiently unavailable.
+// The outage must not downgrade an established policy failure to a retryable
+// Indeterminate (fail-closed precedence: failed ⊏ indeterminate).
+func TestVerify_SunsetCryptosuite_FailsEvenDuringResolverOutage(t *testing.T) {
+	cred, _ := signedCred(t)
+	v := vc.NewVerifier(
+		erroringResolver{err: errors.New("dial tcp 203.0.113.7:443: connect: connection refused")},
+		ed25519Verifier(),
+		vc.WithLifecycleRegistry(stubLifecycle{phase: vc.PhaseSunset}))
+
+	res, err := v.Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Axes.SignerAuthenticity != vc.ConfidenceFailed {
+		t.Errorf("SignerAuthenticity=%v, want Failed (Sunset is established regardless of resolution)", res.Axes.SignerAuthenticity)
+	}
+	if res.Overall != vc.ConfidenceFailed {
+		t.Errorf("Overall=%v, want Failed", res.Overall)
 	}
 }
 
@@ -429,9 +480,87 @@ func (s substitutingResolver) Resolve(_ context.Context, _ string) (*did.DIDDocu
 	return s.doc, nil
 }
 
+// erroringResolver fails every resolution with a fixed error.
+type erroringResolver struct{ err error }
+
+func (e erroringResolver) Resolve(_ context.Context, _ string) (*did.DIDDocument, error) {
+	return nil, e.err
+}
+
+// outageResolver delegates to inner, except that resolving a DID in down fails
+// with a transport-class error (one NOT wrapping resolver.ErrNotFound).
+type outageResolver struct {
+	inner *local.Resolver
+	down  map[string]bool
+}
+
+func (o outageResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
+	if o.down[didStr] {
+		return nil, errors.New("dial tcp 203.0.113.7:443: connect: connection refused")
+	}
+	return o.inner.Resolve(ctx, didStr)
+}
+
+// Resolver-error classification: a definitive not-found (an error wrapping
+// resolver.ErrNotFound) is an established negative → Failed on both
+// resolver-dependent axes; any other resolver error is transient (may resolve
+// later) → Indeterminate; a substituted document identity (doc.ID != requested)
+// is indistinguishable between misconfiguration and attack → Indeterminate —
+// never honoured, but never a terminal Failed either. DataIntegrity never
+// depends on the resolver.
+func TestVerify_ResolverErrorClassification(t *testing.T) {
+	cred, pub := signedCred(t)
+	substituted := didDoc("did:dplaax:poc.dplaax.dev:org:other", "did:dplaax:poc.dplaax.dev:org:other", vmID, pub)
+	cases := []struct {
+		name           string
+		r              resolver.Resolver
+		wantSA, wantCC vc.ConfidenceState
+	}{
+		{
+			name:   "not-found wrap is definitive: Failed",
+			r:      erroringResolver{err: fmt.Errorf("registry has no such DID: %w", resolver.ErrNotFound)},
+			wantSA: vc.ConfidenceFailed, wantCC: vc.ConfidenceFailed,
+		},
+		{
+			name:   "transport error is transient: Indeterminate",
+			r:      erroringResolver{err: errors.New("dial tcp 203.0.113.7:443: connect: connection refused")},
+			wantSA: vc.ConfidenceIndeterminate, wantCC: vc.ConfidenceIndeterminate,
+		},
+		{
+			name:   "substituted doc identity: Indeterminate",
+			r:      substitutingResolver{doc: substituted},
+			wantSA: vc.ConfidenceIndeterminate, wantCC: vc.ConfidenceIndeterminate,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vc.NewVerifier(tc.r, ed25519Verifier())
+			res, err := v.Verify(context.Background(), cred)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if res.Axes.DataIntegrity != vc.ConfidenceVerified {
+				t.Errorf("DataIntegrity=%v, want Verified (axis is resolver-independent)", res.Axes.DataIntegrity)
+			}
+			if res.Axes.SignerAuthenticity != tc.wantSA {
+				t.Errorf("SignerAuthenticity=%v, want %v", res.Axes.SignerAuthenticity, tc.wantSA)
+			}
+			if res.Axes.ChainConsistency != tc.wantCC {
+				t.Errorf("ChainConsistency=%v, want %v", res.Axes.ChainConsistency, tc.wantCC)
+			}
+			if res.Overall == vc.ConfidenceVerified {
+				t.Errorf("Overall=Verified — a resolver failure must never verify (axes=%+v)", res.Axes)
+			}
+		})
+	}
+}
+
 // SignerAuthenticity independently enforces doc.ID == issuer, not relying on the
-// resolver or another axis (registry-substitution defense on the signing path).
-func TestVerify_SubstitutedDocID_SignerAuthenticityFails(t *testing.T) {
+// resolver or another axis (registry-substitution defense on the signing path):
+// the substituted document is never honoured. Because the mismatch may be a
+// misconfigured base mapping as well as a hostile registry, the verdict is
+// Indeterminate (retryable), never Verified.
+func TestVerify_SubstitutedDocID_SignerAuthenticityIndeterminate(t *testing.T) {
 	cred, pub := signedCred(t)
 	doc := didDoc("did:dplaax:poc.dplaax.dev:org:other", "did:dplaax:poc.dplaax.dev:org:other", vmID, pub)
 	v := vc.NewVerifier(substitutingResolver{doc: doc}, ed25519Verifier())
@@ -440,8 +569,11 @@ func TestVerify_SubstitutedDocID_SignerAuthenticityFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if res.Axes.SignerAuthenticity != vc.ConfidenceFailed {
-		t.Errorf("SignerAuthenticity=%v, want Failed (resolved doc.ID != issuer)", res.Axes.SignerAuthenticity)
+	if res.Axes.SignerAuthenticity != vc.ConfidenceIndeterminate {
+		t.Errorf("SignerAuthenticity=%v, want Indeterminate (resolved doc.ID != issuer)", res.Axes.SignerAuthenticity)
+	}
+	if res.Overall == vc.ConfidenceVerified {
+		t.Error("a substituted document must never yield a Verified verdict")
 	}
 }
 

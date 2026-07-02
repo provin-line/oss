@@ -35,16 +35,19 @@ type AxisResult struct {
 	// SignerAuthenticity — identity binding: the signature verifies under
 	// the public key resolved from proof.verificationMethod in the issuer's
 	// DID Document, and the cryptosuite is acceptable at proof.created per
-	// the lifecycle policy. Resolution timeout → indeterminate; definitive
-	// not-found, cryptographic failure, or Sunset/unregistered cryptosuite
-	// → failed.
+	// the lifecycle policy. Transient resolution failure (any resolver error
+	// not wrapping resolver.ErrNotFound) or a substituted document identity
+	// (resolved id != issuer — never honoured) → indeterminate; definitive
+	// not-found (resolver.ErrNotFound), cryptographic failure, or
+	// Sunset/unregistered cryptosuite → failed.
 	SignerAuthenticity ConfidenceState
 	// ChainConsistency — organizational attribution: the controller chain
 	// from the issuer Process DID reconstructs to a terminal Owner DID
 	// using only public DID Documents, and ordering against the predecessor
-	// (proof.created monotonicity) is consistent. Unavailable intermediate
-	// document → indeterminate; broken controller link or inconsistent
-	// ordering → failed.
+	// (proof.created monotonicity) is consistent. Transiently unreachable
+	// (or substituted) intermediate document → indeterminate; definitively
+	// absent intermediate (resolver.ErrNotFound), broken controller link,
+	// or inconsistent ordering → failed.
 	ChainConsistency ConfidenceState
 }
 
