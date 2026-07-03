@@ -198,6 +198,8 @@ func (s *Store) Resolve(d *dplaax.DID) (*did.DIDDocument, error) {
 		return nil, err
 	}
 	var doc did.DIDDocument
+	// Delegates to DIDDocument.UnmarshalJSON, which routes the decode through
+	// canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("yamlstore: unmarshal document: %w", err)
 	}
@@ -214,6 +216,10 @@ func (s *Store) ResolveDelegation(d *dplaax.DID) (*delegation.DelegationCredenti
 		return nil, err
 	}
 	var dlg delegation.DelegationCredential
+	// At-rest round-trip of bytes saveNode emitted with json.Marshal from an
+	// already-validated object: self-emitted JSON cannot carry duplicate keys
+	// or foreign numeric forms, and on-disk tamper-evidence is the tlog's
+	// responsibility, not the store's (decoder-hygiene-exempt).
 	if err := json.Unmarshal(data, &dlg); err != nil {
 		return nil, fmt.Errorf("yamlstore: unmarshal delegation: %w", err)
 	}

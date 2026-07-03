@@ -22,8 +22,8 @@ non-Go implementations (Java / Rust / JS).
 - **StrictDecoder is the only JSON decode path on protocol boundaries**: rejects
   duplicate keys (RFC 8785 §3.2.5), rejects trailing data, preserves numeric
   precision via `json.Number` (integers > 2^53 must not collapse to float64).
-  CI enforces this via `scripts/check-decoder-hygiene.sh`; exemptions require a
-  `decoder-hygiene-exempt` comment.
+  `make lint` enforces this via `scripts/check-decoder-hygiene.sh`; exemptions
+  require a `decoder-hygiene-exempt` comment.
 - JCS output must match RFC 8785 byte-for-byte — including the U+2028/U+2029
   raw-UTF-8 requirement that Go's encoder violates by default.
 - URDNA2015 uses an **offline document loader only**: JSON-LD contexts come from an

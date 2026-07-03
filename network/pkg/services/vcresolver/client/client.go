@@ -47,6 +47,8 @@ func (r *Resolver) ResolveCredential(ctx context.Context, contentAddress string)
 		return nil, err
 	}
 	var cred vc.PipelinePassCredential
+	// Delegates to PipelinePassCredential.UnmarshalJSON, which routes the
+	// decode through canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(resp.Msg.GetCredential(), &cred); err != nil {
 		return nil, fmt.Errorf("vcresolver/client: decode resolved credential: %w", err)
 	}

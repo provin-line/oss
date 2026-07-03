@@ -184,6 +184,7 @@ func (c *Converter) convertWholeDoc(v interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("jsonata converter: evaluation error: %w", err)
 	}
 
+	// canonicalizer-hygiene-exempt: converted payload bytes, not a signing scope.
 	out, err := json.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("jsonata converter: marshal result: %w", err)
@@ -212,6 +213,7 @@ func (c *Converter) convertSteps(v interface{}) ([]byte, error) {
 		doc[step.field] = result
 	}
 
+	// canonicalizer-hygiene-exempt: converted payload bytes, not a signing scope.
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("jsonata converter: marshal result: %w", err)

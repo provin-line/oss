@@ -35,7 +35,8 @@ func (e *DuplicateKeyError) Error() string {
 //     bytes (RFC 8785 presumes valid Unicode; fail closed instead).
 //
 // Direct encoding/json decoding on a protocol path requires a
-// `decoder-hygiene-exempt` comment and is checked by CI.
+// `decoder-hygiene-exempt` comment, enforced by `make lint`
+// (scripts/check-decoder-hygiene.sh).
 type StrictDecoder struct {
 	data []byte
 	used bool

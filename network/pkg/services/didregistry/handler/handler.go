@@ -172,13 +172,16 @@ func (h *Handler) ReadLifecycleLog(ctx context.Context, req *connect.Request[did
 // --- marshalling ------------------------------------------------------------
 
 func docToBytes(doc *did.DIDDocument) ([]byte, error) {
-	return json.Marshal(doc) // DIDDocument.MarshalJSON emits the JCS-canonical form
+	// canonicalizer-hygiene-exempt: DIDDocument.MarshalJSON emits the JCS-canonical form.
+	return json.Marshal(doc)
 }
 
 // docFromBytes decodes a wire DID Document. A decode failure is a malformed
 // request (InvalidArgument), never an internal error.
 func docFromBytes(b []byte) (*did.DIDDocument, error) {
 	var doc did.DIDDocument
+	// Delegates to DIDDocument.UnmarshalJSON, which routes the decode through
+	// canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(b, &doc); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -191,6 +194,7 @@ func docFromBytes(b []byte) (*did.DIDDocument, error) {
 // bytes), matching how DID Documents marshal. Round-trip through the strict
 // decoder (UseNumber) then canonicalize.
 func delegationToBytes(dlg *delegation.DelegationCredential) ([]byte, error) {
+	// canonicalizer-hygiene-exempt: struct-order bytes, re-canonicalized below.
 	raw, err := json.Marshal(dlg)
 	if err != nil {
 		return nil, err

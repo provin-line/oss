@@ -64,8 +64,8 @@ func TestParse_Process(t *testing.T) {
 func TestParse_Rejects(t *testing.T) {
 	cases := []string{
 		"",
-		"did:web:example.com",                // wrong method
-		"did:dplaax:",                        // no segments
+		"did:web:example.com",                 // wrong method
+		"did:dplaax:",                         // no segments
 		"did:dplaax:poc.dplaax.dev",           // missing accountType+accountId
 		"did:dplaax:poc.dplaax.dev:org",       // missing accountId
 		"did:dplaax:poc.dplaax.dev:org:",      // empty accountId segment

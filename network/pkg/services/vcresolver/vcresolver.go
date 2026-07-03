@@ -50,6 +50,8 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 		return "", fmt.Errorf("%w: assemblyDepth %d is negative", ErrInvalidArgument, assemblyDepth)
 	}
 	var cred vc.PipelinePassCredential
+	// Delegates to PipelinePassCredential.UnmarshalJSON, which routes the
+	// decode through canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(credential, &cred); err != nil {
 		return "", fmt.Errorf("%w: decode credential: %v", ErrInvalidArgument, err)
 	}

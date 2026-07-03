@@ -31,7 +31,7 @@ vet:
 
 lint: vet
 	cd api/protobuf && buf lint
-	@for s in scripts/check-*.sh; do [ -x "$$s" ] && "$$s" || true; done
+	@for s in scripts/check-*.sh; do [ -e "$$s" ] || continue; "$$s" || exit 1; done
 
 proto:
 	# Generate only dplaax/*; vendored third-party protos (o3co/authz) are
