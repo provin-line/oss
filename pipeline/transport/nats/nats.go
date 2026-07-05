@@ -41,7 +41,8 @@ const (
 // already holds a subscription (one Subscriber = one subscription).
 var ErrAlreadySubscribed = errors.New("nats: subscriber already has a subscription")
 
-// Config configures a Conn. Both fields are required and validated at Connect.
+// Config configures a Conn. URL and AccountSeed are required and validated at
+// Connect.
 type Config struct {
 	// URL is the nats:// server URL (scheme + host required).
 	URL string
@@ -49,6 +50,16 @@ type Config struct {
 	// minted from it; it is never persisted by this package. It must be an account
 	// seed (not an operator or user seed).
 	AccountSeed string
+	// ConnectWait is the boot budget for the initial dial: Connect retries a
+	// failed dial with backoff until it succeeds or the budget elapses, then
+	// fails closed. Zero preserves the strict fail-fast contract (one attempt).
+	// This covers orchestrated deployments where the broker and the node start
+	// concurrently. LOCAL validation failures (malformed URL, non-account seed)
+	// precede the budget and fail immediately; server-side rejections —
+	// including authorization failures — ARE retried, because at boot they are
+	// indistinguishable from a broker whose account resolver has not received
+	// this account's JWT yet.
+	ConnectWait time.Duration
 }
 
 // Conn owns one authenticated nats.go connection established as a NATS account.
@@ -100,11 +111,55 @@ func Connect(cfg Config) (*Conn, error) {
 		return nil, fmt.Errorf("nats: encode user JWT: %w", err)
 	}
 
-	nc, err := natsclient.Connect(cfg.URL,
-		natsclient.UserJWTAndSeed(ujwt, string(userSeed)),
-		natsclient.Name("provin-pipeline"),
-	)
+	// The budget clock starts before the FIRST attempt, and every attempt's
+	// dial timeout is capped to the remaining budget, so ConnectWait is a hard
+	// bound (modulo scheduler noise) rather than merely bounding when the last
+	// attempt may start.
+	deadline := time.Now().Add(cfg.ConnectWait)
+	dial := func() (*natsclient.Conn, error) {
+		opts := []natsclient.Option{
+			natsclient.UserJWTAndSeed(ujwt, string(userSeed)),
+			natsclient.Name("provin-pipeline"),
+		}
+		if cfg.ConnectWait > 0 {
+			timeout := natsclient.DefaultTimeout
+			if remaining := time.Until(deadline); remaining < timeout {
+				timeout = remaining
+			}
+			if timeout <= 0 {
+				timeout = time.Millisecond
+			}
+			opts = append(opts, natsclient.Timeout(timeout))
+		}
+		return natsclient.Connect(cfg.URL, opts...)
+	}
+	nc, err := dial()
+	retried := false
+	if err != nil && cfg.ConnectWait > 0 {
+		// Boot-budget retry: back off 250ms → 2s until the budget elapses.
+		// Every connect error is retried — at boot an authorization failure is
+		// indistinguishable from an account JWT the resolver has not received
+		// yet (see Config.ConnectWait).
+		retried = true
+		backoff := 250 * time.Millisecond
+		for time.Now().Before(deadline) {
+			sleep := backoff
+			if remaining := time.Until(deadline); sleep > remaining {
+				sleep = remaining
+			}
+			time.Sleep(sleep)
+			if backoff < 2*time.Second {
+				backoff *= 2
+			}
+			if nc, err = dial(); err == nil {
+				break
+			}
+		}
+	}
 	if err != nil {
+		if retried {
+			return nil, fmt.Errorf("nats: connect (retried for %s): %w", cfg.ConnectWait, err)
+		}
 		return nil, fmt.Errorf("nats: connect: %w", err)
 	}
 	return &Conn{nc: nc}, nil

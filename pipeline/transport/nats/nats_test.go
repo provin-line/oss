@@ -1,6 +1,8 @@
 package nats_test
 
 import (
+	"fmt"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -334,5 +336,126 @@ func TestConnect_FailClosed(t *testing.T) {
 				t.Fatalf("Connect(%s): want error, got nil", tc.name)
 			}
 		})
+	}
+}
+
+// newTrustedOptions builds operator-trusted server options plus one account, so a
+// test can control WHEN the broker starts (boot-race paths).
+func newTrustedOptions(t *testing.T, port int) (opts *server.Options, accountSeed string) {
+	t.Helper()
+	op, err := nkeys.CreateOperator()
+	if err != nil {
+		t.Fatalf("create operator: %v", err)
+	}
+	opPub, _ := op.PublicKey()
+	acc, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	accPub, _ := acc.PublicKey()
+	accSeed, _ := acc.Seed()
+	ac := jwt.NewAccountClaims(accPub)
+	ajwt, err := ac.Encode(op)
+	if err != nil {
+		t.Fatalf("encode account JWT: %v", err)
+	}
+	mr := &server.MemAccResolver{}
+	if err := mr.Store(accPub, ajwt); err != nil {
+		t.Fatalf("resolver store: %v", err)
+	}
+	return &server.Options{
+		Host: "127.0.0.1", Port: port, NoLog: true, NoSigs: true,
+		TrustedKeys: []string{opPub}, AccountResolver: mr,
+	}, string(accSeed)
+}
+
+// reservePort picks a currently-free loopback TCP port.
+func reservePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port
+}
+
+// The ConnectWait budget covers a broker that starts AFTER the node: the dial
+// retries with backoff until the broker accepts, then succeeds.
+func TestConnect_WaitsForLateBroker(t *testing.T) {
+	port := reservePort(t)
+	opts, seed := newTrustedOptions(t, port)
+
+	srvCh := make(chan *server.Server, 1)
+	go func() {
+		time.Sleep(750 * time.Millisecond)
+		srvCh <- natstest.RunServer(opts)
+	}()
+	// Registered from the main goroutine: a t.Cleanup from the background
+	// goroutine could land after the test finished and silently never run.
+	t.Cleanup(func() { (<-srvCh).Shutdown() })
+
+	c, err := natstransport.Connect(natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: seed,
+		ConnectWait: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Connect with ConnectWait against a late broker: %v", err)
+	}
+	_ = c.Close()
+}
+
+// ConnectWait zero preserves the fail-fast contract: no broker, immediate error.
+func TestConnect_ZeroWaitFailsFast(t *testing.T) {
+	port := reservePort(t)
+	_, seed := newTrustedOptions(t, port)
+	start := time.Now()
+	_, err := natstransport.Connect(natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: seed,
+	})
+	if err == nil {
+		t.Fatal("Connect with no broker and zero ConnectWait: want error")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("zero-wait connect took %s, want fast failure", elapsed)
+	}
+}
+
+// The budget is bounded: with no broker the retry loop gives up after roughly
+// ConnectWait, and the error surfaces the dial failure.
+func TestConnect_WaitBudgetExhausted(t *testing.T) {
+	port := reservePort(t)
+	_, seed := newTrustedOptions(t, port)
+	start := time.Now()
+	_, err := natstransport.Connect(natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: seed,
+		ConnectWait: 700 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("Connect with no broker: want error after budget")
+	}
+	if elapsed := time.Since(start); elapsed < 500*time.Millisecond || elapsed > 3*time.Second {
+		t.Errorf("budgeted connect took %s, want roughly the 700ms budget (hard bound)", elapsed)
+	}
+}
+
+// Config-validation failures are config errors, not outages: they never consume
+// the retry budget.
+func TestConnect_ValidationSkipsWait(t *testing.T) {
+	start := time.Now()
+	_, err := natstransport.Connect(natstransport.Config{
+		URL:         "nats://127.0.0.1:4222",
+		AccountSeed: "not-a-seed",
+		ConnectWait: 10 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("Connect with a garbage seed: want error")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("validation failure took %s, want immediate (no retry budget)", elapsed)
 	}
 }

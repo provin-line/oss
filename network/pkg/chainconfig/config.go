@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nats-io/nkeys"
 
@@ -41,6 +42,7 @@ const (
 	keyResolverDir       = "provin.network.chain.nats.resolver-dir"
 	keyNodeDID           = "provin.network.chain.nats.node-did"
 	keyResolverBaseURL   = "provin.network.chain.nats.resolver-base-url"
+	keyConnectWait       = "provin.network.chain.nats.connect-wait"
 	keyAllowNoop         = "provin.network.chain.dev.allow-noop-transport"
 )
 
@@ -71,6 +73,9 @@ type NATSConfig struct {
 	// ResolverBaseURL optionally overrides registry -> base URL (empty = default
 	// https://{registry}).
 	ResolverBaseURL string
+	// ConnectWait is the boot budget for the initial broker dial (transport
+	// nats.Config.ConnectWait). Zero = strict fail-fast.
+	ConnectWait time.Duration
 }
 
 // LoadChainConfig reads and validates the chain block. It fails closed: an
@@ -132,6 +137,14 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 		return n, fmt.Errorf("chain: config %s: %w", keyResolverBaseURL, err)
 	}
 	n.ResolverBaseURL = base
+	wait, err := cfg.Duration(keyConnectWait)
+	if err != nil {
+		return n, fmt.Errorf("chain: config %s: %w", keyConnectWait, err)
+	}
+	if wait < 0 {
+		return n, fmt.Errorf("chain: config %s: must not be negative", keyConnectWait)
+	}
+	n.ConnectWait = wait
 	return n, nil
 }
 

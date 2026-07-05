@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nkeys"
 
@@ -157,5 +158,37 @@ func TestLoad_InvalidTransport(t *testing.T) {
 	cfg := loadWith(t, `provin.network.chain { transport = "kafka" }`)
 	if _, err := chainconfig.LoadChainConfig(cfg); err == nil {
 		t.Error("invalid transport accepted")
+	}
+}
+
+func TestLoad_NATS_ConnectWait(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	base := natsConf("nats", "nats://h:4222",
+		seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID)
+
+	// Default: 30s boot budget from reference.conf.
+	c, err := chainconfig.LoadChainConfig(loadWith(t, base))
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if c.NATS.ConnectWait != 30*time.Second {
+		t.Errorf("default ConnectWait = %s, want 30s", c.NATS.ConnectWait)
+	}
+
+	// Override to strict fail-fast zero.
+	c, err = chainconfig.LoadChainConfig(loadWith(t, base+"\nprovin.network.chain.nats.connect-wait = 0s"))
+	if err != nil {
+		t.Fatalf("LoadChainConfig(0s): %v", err)
+	}
+	if c.NATS.ConnectWait != 0 {
+		t.Errorf("zero override ConnectWait = %s, want 0", c.NATS.ConnectWait)
+	}
+
+	// Negative fails boot.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+"\nprovin.network.chain.nats.connect-wait = -1s")); err == nil {
+		t.Error("negative connect-wait: want boot error")
 	}
 }

@@ -92,6 +92,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 	conn, err := natstransport.Connect(natstransport.Config{
 		URL:         chainCfg.NATS.URL,
 		AccountSeed: chainCfg.NATS.AccountSeed,
+		ConnectWait: chainCfg.NATS.ConnectWait,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: data-plane nats connect: %w", err)
