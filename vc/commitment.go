@@ -194,6 +194,18 @@ func merkleTreeHash(leaves [][sha256.Size]byte) [sha256.Size]byte {
 // another provided source surfaces as failed, not indeterminate — the
 // commitment grammar cannot distinguish the two.
 func (v *Verifier) VerifySourceCommitment(ctx context.Context, cred *PipelinePassCredential, sources []*PipelinePassCredential) (ConfidenceState, error) {
+	// Misuse guards, checked before any traversal (uniqueIssuers dereferences
+	// each source): nil inputs are caller wiring errors — a gather loop with
+	// unfilled slots — and must surface as errors, never panics. Mirrors the
+	// construction-side hardening in ComputeSourceRoot (17k).
+	if cred == nil {
+		return ConfidenceFailed, errors.New("vc: nil credential")
+	}
+	for i, s := range sources {
+		if s == nil {
+			return ConfidenceFailed, fmt.Errorf("vc: nil source credential at index %d", i)
+		}
+	}
 	claimed := cred.SourceCommitment()
 	if claimed == nil {
 		return ConfidenceFailed, errors.New("vc: credential carries no source commitment")

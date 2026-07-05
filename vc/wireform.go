@@ -3,6 +3,7 @@ package vc
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -82,14 +83,27 @@ func (c *PipelinePassCredential) ValidateWireForm() error {
 		return errors.New("vc: wire form: @context must contain the dplaax protocol context " + ContextDplaaxVCV1)
 	}
 	// validFrom is recommended, not mandatory (credential.field.valid-from):
-	// absence is acceptable, a present value must be RFC 3339.
+	// absence is acceptable; a present value must be an RFC 3339 UTC timestamp
+	// at second precision. time.Parse alone accepts zoned offsets and
+	// fractional seconds, so both are rejected explicitly: a non-zero offset
+	// is not UTC, and a fractional part violates second precision even when
+	// it is all zeros. Go's parser admits both '.' and ',' as the fraction
+	// separator (ISO 8601 leniency; RFC 3339's ABNF permits only '.'), and
+	// neither character appears anywhere else in a parseable timestamp.
 	if raw, present := c.body[keyValidFrom]; present {
 		s, ok := raw.(string)
 		if !ok {
 			return errors.New("vc: wire form: validFrom must be a string")
 		}
-		if _, err := time.Parse(time.RFC3339, s); err != nil {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
 			return fmt.Errorf("vc: wire form: validFrom: %w", err)
+		}
+		if _, offset := parsed.Zone(); offset != 0 {
+			return fmt.Errorf("vc: wire form: validFrom %q is not a UTC timestamp", s)
+		}
+		if strings.ContainsAny(s, ".,") {
+			return fmt.Errorf("vc: wire form: validFrom %q carries sub-second precision", s)
 		}
 	}
 	rawSubject, ok := c.body[keySubject].(map[string]any)

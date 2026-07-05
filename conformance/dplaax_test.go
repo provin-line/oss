@@ -186,7 +186,7 @@ func TestDplaaxCanonVectors(t *testing.T) {
 // accepted as-received at wire-form level (the signer-authenticity axis owns
 // what a verifier honours).
 func TestDplaaxCredVectors(t *testing.T) {
-	for i := 1; i <= 29; i++ {
+	for i := 1; i <= 31; i++ {
 		v := loadDplaax(t, vecID("cred", i))
 		t.Run(v.ID, func(t *testing.T) {
 			var input struct {

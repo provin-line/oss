@@ -192,6 +192,31 @@ func TestVerifySourceCommitmentVerified(t *testing.T) {
 	}
 }
 
+func TestVerifySourceCommitmentNilInputs(t *testing.T) {
+	// Misuse guard: nil inputs must return a defined error, never panic —
+	// sources arrive from gather loops whose slots can legitimately still be
+	// nil when a caller wires the gathering wrong (17k hardened the
+	// construction side in ComputeSourceRoot; this pins the verify side).
+	s := threeSources(t)
+	oc, err := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
+	if err != nil {
+		t.Fatalf("NewSourceCommitment: %v", err)
+	}
+	cred := aggregateCred(t, oc)
+
+	if _, err := newTestVerifier().VerifySourceCommitment(context.Background(), nil, s); err == nil {
+		t.Error("nil credential: want error, got nil")
+	}
+	withNil := append(append([]*vc.PipelinePassCredential{}, s...), nil)
+	got, err := newTestVerifier().VerifySourceCommitment(context.Background(), cred, withNil)
+	if err == nil {
+		t.Error("nil source element: want error, got nil")
+	}
+	if got != vc.ConfidenceFailed {
+		t.Errorf("nil source element: verdict = %v, want failed", got)
+	}
+}
+
 func TestVerifySourceCommitmentTamperedRoot(t *testing.T) {
 	s := threeSources(t)
 	oc, _ := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)

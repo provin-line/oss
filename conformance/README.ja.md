@@ -33,14 +33,14 @@ SoT が生まれる。
 ## dplaax protocol vectors（vendored）
 
 `vectors/dplaax/` は protocol 自身の conformance vector catalog
-（`dplaax.spec_draft` `vectors/`、2026-07-02 時点 91 本）を byte-exact に
+（`dplaax.spec_draft` `vectors/`、2026-07-06 時点 93 本）を byte-exact に
 vendoring し、`MANIFEST.sha256` で pin する。manifest テストは in-place 編集で
 fail する — spec 変更の取り込みは意図的な行為であり、
 `scripts/sync-spec-vectors.sh` を実行して vendored diff ごと commit する。
 
-**第 1 弾（CI 実行で 65 本を assert — 純関数系 family。commitment-012 は
+**第 1 弾（CI 実行で 67 本を assert — 純関数系 family。commitment-012 は
 load のみで skip、第 2 弾参照）**: canon-001..008 /
-cred-001..029（strict decode + `ValidateWireForm` — data-integrity 軸が委譲する
+cred-001..031（strict decode + `ValidateWireForm` — data-integrity 軸が委譲する
 単一実装）/ commitment-001..011 / chain-006..008（continuity、DataIntegrity 軸）/
 confidence-001..006（lifecycle は effectiveDate を時間シフトして実 Verify 駆動）/
 delegation-001..005（`Build` で再署名して `Verify`）/ signer-001..003。

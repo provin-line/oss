@@ -261,6 +261,59 @@ func TestRegisterOwner_RecordsOutwardSnapshotAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRegisterOwner_RevokedOwnerReplayDoesNotResurrect(t *testing.T) {
+	// Replay pin: re-sending the ORIGINAL RegisterOwner request against a
+	// since-revoked owner must ride the idempotent path — same document
+	// returned, status stays revoked, no new lifecycle event. A replayed
+	// registration must never work as an un-revoke.
+	ctx := context.Background()
+	svc, signer, signPub := newService(t)
+	doc := signedOwnerDoc(t, signer, signPub, nil)
+
+	if _, err := svc.RegisterOwner(ctx, doc, nil); err != nil {
+		t.Fatalf("RegisterOwner: %v", err)
+	}
+	if _, err := svc.UpdateStatus(ctx, ownerDID, "revoked"); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	got, err := svc.RegisterOwner(ctx, doc, nil)
+	if err != nil {
+		t.Fatalf("replayed RegisterOwner after revoke: %v", err)
+	}
+	wantHash, err := doc.Hash()
+	if err != nil {
+		t.Fatalf("hash original doc: %v", err)
+	}
+	gotHash, err := got.Hash()
+	if err != nil {
+		t.Fatalf("hash replayed doc: %v", err)
+	}
+	if gotHash != wantHash {
+		t.Errorf("replay returned a different document: %s != %s", gotHash, wantHash)
+	}
+
+	resolved, err := svc.ResolveDID(ctx, ownerDID)
+	if err != nil {
+		t.Fatalf("ResolveDID: %v", err)
+	}
+	if rh, _ := resolved.Hash(); rh != wantHash {
+		t.Errorf("stored document changed after replay")
+	}
+	log, err := svc.ReadLifecycleLog(ctx, ownerDID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exactly register + revoke — the replay appended nothing.
+	if len(log) != 2 {
+		t.Fatalf("lifecycle log has %d events after replay, want 2 (register, revoke)", len(log))
+	}
+	// Status is still revoked: an owner-gated operation must keep rejecting.
+	if _, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID)); !errors.Is(err, didregistry.ErrUnauthorized) {
+		t.Errorf("post-replay issue under revoked owner: want ErrUnauthorized, got %v", err)
+	}
+}
+
 func TestRegisterOwner_RejectsTamperedProof(t *testing.T) {
 	ctx := context.Background()
 	svc, signer, signPub := newService(t)
