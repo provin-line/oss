@@ -207,12 +207,13 @@ func BenchmarkChainVerify(b *testing.B) {
 // `stages` process-boundary signatures each; total VCs = orgs*stages. Build latency scales
 // linearly with total VCs; per-VC cost is near-constant across chain breadth.
 func BenchmarkMultiOrgChainBuild(b *testing.B) {
+	// The paper §6.2 Table 5 grid: orgs {2,5,10,20,50} × stages {1,3,5,10}.
 	grid := []struct{ orgs, stages int }{
-		{2, 1}, {2, 5}, {2, 10},
-		{5, 1}, {5, 5}, {5, 10},
-		{10, 1}, {10, 5}, {10, 10},
-		{20, 5}, {20, 10},
-		{50, 5}, {50, 10},
+		{2, 1}, {2, 3}, {2, 5}, {2, 10},
+		{5, 1}, {5, 3}, {5, 5}, {5, 10},
+		{10, 1}, {10, 3}, {10, 5}, {10, 10},
+		{20, 1}, {20, 3}, {20, 5}, {20, 10},
+		{50, 1}, {50, 3}, {50, 5}, {50, 10},
 	}
 	subject := benchSubject()
 	for _, g := range grid {
