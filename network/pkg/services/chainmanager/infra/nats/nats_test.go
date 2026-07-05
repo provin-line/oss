@@ -447,3 +447,48 @@ func TestMutators_RejectMalformed(t *testing.T) {
 		t.Error("empty import subject accepted")
 	}
 }
+
+// PublishClaims makes a freshly-created account resolvable BEFORE any grant:
+// without it, account JWTs are written only on a mutation, so a bare account
+// cannot connect (finding #14 in the provin.e2e findings log).
+func TestOperator_PublishClaims(t *testing.T) {
+	dir := t.TempDir()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	accPub, _ := acc.PublicKey()
+
+	o, err := natsop.New(natsop.Config{
+		AccountSeed:   string(accSeed),
+		TrustRootSeed: string(opSeed),
+		URL:           "nats://h:4222",
+		Publisher:     natsop.NewDirPublisher(dir),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := o.PublishClaims(); err != nil {
+		t.Fatalf("PublishClaims: %v", err)
+	}
+	token, err := natsop.NewDirPublisher(dir).Load(accPub)
+	if err != nil {
+		t.Fatalf("Load after PublishClaims: %v", err)
+	}
+	claims, err := jwt.DecodeAccountClaims(token)
+	if err != nil {
+		t.Fatalf("decode published claims: %v", err)
+	}
+	if claims.Subject != accPub {
+		t.Errorf("claims subject = %s, want %s", claims.Subject, accPub)
+	}
+	if len(claims.Exports) != 0 || len(claims.Imports) != 0 {
+		t.Errorf("bare account published with grants: exports=%d imports=%d", len(claims.Exports), len(claims.Imports))
+	}
+
+	// Idempotent: a second publish succeeds and does not invent grants.
+	if err := o.PublishClaims(); err != nil {
+		t.Fatalf("PublishClaims (second): %v", err)
+	}
+}

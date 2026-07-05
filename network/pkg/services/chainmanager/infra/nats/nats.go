@@ -269,6 +269,17 @@ func (o *Operator) RemoveImport(remoteSubject, remoteAccountKey string) error {
 
 // publishLocked re-encodes the current claims under the trust-root key and
 // publishes them. Caller holds o.mu.
+// PublishClaims signs and publishes the account's CURRENT claims, mutation or
+// not. Provisioning uses it to make a freshly-created account resolvable (and
+// therefore connectable) before any grant exists — account JWTs are otherwise
+// written only when a grant mutates the claims, leaving a bare account unable
+// to connect.
+func (o *Operator) PublishClaims() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.publishLocked()
+}
+
 func (o *Operator) publishLocked() error {
 	token, err := o.claims.Encode(o.trustRoot)
 	if err != nil {
