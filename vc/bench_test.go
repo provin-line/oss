@@ -194,8 +194,9 @@ func BenchmarkChainVerify(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				for _, c := range chain {
-					if _, err := verifier.Verify(ctx, c); err != nil {
-						b.Fatal(err)
+					r, err := verifier.Verify(ctx, c)
+					if err != nil || r.Overall != vc.ConfidenceVerified {
+						b.Fatalf("verify: result=%v err=%v", r, err)
 					}
 				}
 			}
@@ -203,26 +204,34 @@ func BenchmarkChainVerify(b *testing.B) {
 	}
 }
 
+// benchGrid is the paper §6.2 Table 5 / Figure 3 grid: orgs {2,5,10,20,50} × stages {1,3,5,10}.
+var benchGrid = []struct{ orgs, stages int }{
+	{2, 1}, {2, 3}, {2, 5}, {2, 10},
+	{5, 1}, {5, 3}, {5, 5}, {5, 10},
+	{10, 1}, {10, 3}, {10, 5}, {10, 10},
+	{20, 1}, {20, 3}, {20, 5}, {20, 10},
+	{50, 1}, {50, 3}, {50, 5}, {50, 10},
+}
+
+// newBenchOrgs returns n organizations with their builders, each with a fresh key.
+func newBenchOrgs(b *testing.B, n int) ([]benchOrg, []*vc.Builder) {
+	b.Helper()
+	orgs := make([]benchOrg, n)
+	builders := make([]*vc.Builder, n)
+	for i := range orgs {
+		orgs[i] = newBenchOrg(b, i)
+		builders[i] = vc.NewBuilder(orgs[i].signer)
+	}
+	return orgs, builders
+}
+
 // BenchmarkMultiOrgChainBuild (Table 5): a synthetic chain spanning `orgs` organizations with
 // `stages` process-boundary signatures each; total VCs = orgs*stages. Build latency scales
 // linearly with total VCs; per-VC cost is near-constant across chain breadth.
 func BenchmarkMultiOrgChainBuild(b *testing.B) {
-	// The paper §6.2 Table 5 grid: orgs {2,5,10,20,50} × stages {1,3,5,10}.
-	grid := []struct{ orgs, stages int }{
-		{2, 1}, {2, 3}, {2, 5}, {2, 10},
-		{5, 1}, {5, 3}, {5, 5}, {5, 10},
-		{10, 1}, {10, 3}, {10, 5}, {10, 10},
-		{20, 1}, {20, 3}, {20, 5}, {20, 10},
-		{50, 1}, {50, 3}, {50, 5}, {50, 10},
-	}
 	subject := benchSubject()
-	for _, g := range grid {
-		orgs := make([]benchOrg, g.orgs)
-		builders := make([]*vc.Builder, g.orgs)
-		for i := range orgs {
-			orgs[i] = newBenchOrg(b, i)
-			builders[i] = vc.NewBuilder(orgs[i].signer)
-		}
+	for _, g := range benchGrid {
+		orgs, builders := newBenchOrgs(b, g.orgs)
 		total := g.orgs * g.stages
 		b.Run(fmt.Sprintf("orgs=%d/stages=%d", g.orgs, g.stages), func(b *testing.B) {
 			b.ReportAllocs()
@@ -244,6 +253,56 @@ func BenchmarkMultiOrgChainBuild(b *testing.B) {
 					}
 				}
 				_ = total
+			}
+		})
+	}
+}
+
+// BenchmarkMultiOrgChainVerify (Fig 3): verifying every credential of a multi-organization
+// synthetic chain, resolving each issuer's DID document from the in-memory resolver. Each VC
+// verifies independently (one Ed25519 verify + a previousCredential hash comparison), so
+// per-VC cost stays near-constant across chain breadth; total latency scales with orgs*stages.
+func BenchmarkMultiOrgChainVerify(b *testing.B) {
+	ctx := context.Background()
+	for _, g := range benchGrid {
+		orgs, builders := newBenchOrgs(b, g.orgs)
+		res := local.New()
+		res.Add(did.New(did.DocumentFields{ID: benchOwner, Controller: benchOwner}))
+		for _, o := range orgs {
+			res.Add(benchDIDDoc(o.did, benchOwner, o.pub))
+		}
+		verifier := vc.NewVerifier(res, ed25519.Verifier{})
+
+		// Build the chain once outside the timed loop; only verification is measured.
+		subject := benchSubject()
+		chain := make([]*vc.PipelinePassCredential, 0, g.orgs*g.stages)
+		var prev *vc.PipelinePassCredential
+		for o := 0; o < g.orgs; o++ {
+			for s := 0; s < g.stages; s++ {
+				var c *vc.PipelinePassCredential
+				var err error
+				if prev == nil {
+					c, err = builders[o].BuildFirstDrop(orgs[o].did, benchKeyID, orgs[o].vm, subject, nil)
+				} else {
+					c, err = builders[o].BuildChainPreserving(orgs[o].did, benchKeyID, orgs[o].vm, subject, prev, nil)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				chain = append(chain, c)
+				prev = c
+			}
+		}
+
+		b.Run(fmt.Sprintf("orgs=%d/stages=%d", g.orgs, g.stages), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				for _, c := range chain {
+					r, err := verifier.Verify(ctx, c)
+					if err != nil || r.Overall != vc.ConfidenceVerified {
+						b.Fatalf("verify: result=%v err=%v", r, err)
+					}
+				}
 			}
 		})
 	}
