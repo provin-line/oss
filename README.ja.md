@@ -25,7 +25,7 @@ cmd/standalone/ ネットワークノードバイナリ（レジストリのコ�
 cmd/provin/     オペレーター CLI
 conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID
-scripts/        CI 衛生チェック
+scripts/        lint 衛生チェック（`make lint` から実行）
 ```
 
 上記以外のトップレベルディレクトリは **ライブラリパッケージ** — `network/`・`pipeline/`・`cmd/` が利用する純粋なドメインライブラリ群（→ [ライブラリパッケージ](#ライブラリパッケージ)）。

@@ -10,6 +10,10 @@
 #      (for files that ARE the strict decode path, e.g. canon/strict.go)
 #   2. call site  — the token on the call line or the line directly above
 #
+# Aliased or dot imports of encoding/json (`j "encoding/json"`) are rejected
+# outright: the calls would no longer match `json.` and the check would go
+# blind. A blank import (`_`) is allowed — it cannot be called.
+#
 # This is a syntactic check: it matches call syntax (`json.Unmarshal(`), so a
 # prose comment mentioning the function name does not trip it, but a comment
 # containing literal call syntax would — reword the comment or carry the token.
@@ -19,7 +23,21 @@ cd "$(dirname "$0")/.."
 
 violations=""
 while IFS= read -r f; do
-  if grep -Eq '"encoding/json".*decoder-hygiene-exempt' "$f"; then
+  aliased=$(awk '
+    {
+      line = $0
+      sub(/^[[:space:]]*import[[:space:]]+/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      if (line ~ /^[A-Za-z.][A-Za-z0-9_]*[[:space:]]+"encoding\/json"/ && line !~ /^_[[:space:]]/)
+        printf "%s:%d: aliased or dot import of encoding/json defeats this check\n", FILENAME, FNR
+    }
+  ' "$f")
+  if [ -n "$aliased" ]; then
+    violations="${violations}${aliased}
+"
+    continue
+  fi
+  if grep -Eq '^[[:space:]]*(import[[:space:]]+)?"encoding/json".*decoder-hygiene-exempt' "$f"; then
     continue
   fi
   out=$(awk '

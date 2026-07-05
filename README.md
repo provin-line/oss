@@ -31,7 +31,7 @@ cmd/standalone/ network node binary (registry control plane + pipeline data plan
 cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did
-scripts/        CI hygiene checks
+scripts/        lint hygiene checks (run by `make lint`)
 ```
 
 The remaining top-level directories are the **library packages** — pure domain
