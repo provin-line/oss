@@ -56,7 +56,10 @@ import (
 // verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
 // e2e) override the default https://{registry} mapping (D-m6).
 func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver) {
-	guard := core.NewURLGuard(core.WithAllowLoopback(coreCfg.AllowLoopback))
+	guard := core.NewURLGuard(
+		core.WithAllowLoopback(coreCfg.AllowLoopback),
+		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
+	)
 	var resolverOpts []didresolver.Option
 	if chainCfg.Transport == chainconfig.TransportNATS && chainCfg.NATS.ResolverBaseURL != "" {
 		base := chainCfg.NATS.ResolverBaseURL

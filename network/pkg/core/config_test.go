@@ -79,3 +79,20 @@ func TestLoadCoreConfig_EmptyDataDir(t *testing.T) {
 		t.Error("empty data-dir: want error")
 	}
 }
+
+func TestLoadCoreConfig_AllowPrivateNetworks(t *testing.T) {
+	cc, err := core.LoadCoreConfig(loadWith(t, ""))
+	if err != nil {
+		t.Fatalf("LoadCoreConfig: %v", err)
+	}
+	if cc.AllowPrivateNetworks {
+		t.Error("AllowPrivateNetworks = true, want false (default)")
+	}
+	cc, err = core.LoadCoreConfig(loadWith(t, `provin.network.core.allow-private-networks = true`))
+	if err != nil {
+		t.Fatalf("LoadCoreConfig(override): %v", err)
+	}
+	if !cc.AllowPrivateNetworks {
+		t.Error("AllowPrivateNetworks = false, want true (override)")
+	}
+}

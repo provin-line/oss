@@ -171,3 +171,47 @@ func TestCheckRedirect(t *testing.T) {
 		t.Error("CheckRedirect 11th hop: want blocked (hop cap)")
 	}
 }
+
+func TestCheckURL_AllowPrivateNetworksOptIn(t *testing.T) {
+	ctx := context.Background()
+
+	// Default: RFC 1918 stays blocked.
+	g := core.NewURLGuard()
+	if err := g.CheckURL(ctx, "http://172.20.0.2/"); err == nil {
+		t.Error("default guard allowed a private address")
+	}
+
+	g = core.NewURLGuard(core.WithAllowPrivateNetworks(true))
+	// The opt-in permits exactly the RFC 1918 IPv4 ranges — including their
+	// v4-mapped IPv6 spellings, which Unmap() makes equivalent to the v4 form.
+	for _, u := range []string{
+		"http://10.1.2.3/",
+		"http://172.20.0.2:8443/",
+		"http://192.168.1.9/",
+		"http://[::ffff:10.0.0.1]/",
+	} {
+		if err := g.CheckURL(ctx, u); err != nil {
+			t.Errorf("CheckURL(%q) with private opt-in: %v", u, err)
+		}
+	}
+	// The resolver path funnels through the same validator: a hostname whose A
+	// record is private is allowed under the opt-in.
+	gr := core.NewURLGuard(core.WithAllowPrivateNetworks(true),
+		core.WithResolver(staticResolver(mustAddrs("172.20.0.2"), nil)))
+	if err := gr.CheckURL(ctx, "http://peer.internal/"); err != nil {
+		t.Errorf("CheckURL(resolved private) with opt-in: %v", err)
+	}
+	// Everything else stays blocked: link-local metadata, CGNAT, IPv6 ULA
+	// (fd00:ec2::254 metadata lives there), and loopback (its own opt-in).
+	for _, u := range []string{
+		"http://169.254.169.254/",
+		"http://100.100.100.200/",
+		"http://[fc00::1]/",
+		"http://[fd00:ec2::254]/",
+		"http://127.0.0.1/",
+	} {
+		if err := g.CheckURL(ctx, u); err == nil {
+			t.Errorf("CheckURL(%q) allowed despite private-networks opt-in", u)
+		}
+	}
+}

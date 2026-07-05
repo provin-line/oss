@@ -80,9 +80,20 @@ func mustPrefixes(ss ...string) []netip.Prefix {
 
 type resolveFunc func(ctx context.Context, host string) ([]netip.Addr, error)
 
+// privatePrefixes are the RFC 1918 IPv4 ranges the WithAllowPrivateNetworks
+// opt-in permits. Deliberately v4-only: IPv6 unique-local (fc00::/7) contains
+// cloud metadata endpoints (fd00:ec2::254) and stays blocked; a v6-private
+// deployment needs its own, narrower opt-in if one is ever justified.
+var privatePrefixes = mustPrefixes(
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+)
+
 // URLGuard validates outbound URLs against SSRF. Safe for concurrent use.
 type URLGuard struct {
 	allowLoopback bool
+	allowPrivate  bool
 	resolve       resolveFunc
 }
 
@@ -94,6 +105,15 @@ type GuardOption func(*URLGuard)
 // unspecified, private, etc. stay blocked.
 func WithAllowLoopback(allow bool) GuardOption {
 	return func(g *URLGuard) { g.allowLoopback = allow }
+}
+
+// WithAllowPrivateNetworks permits RFC 1918 IPv4 private targets (10/8,
+// 172.16/12, 192.168/16) — the opt-in for deployments whose peers live on a
+// private network (LAN, VPC, container networks). It relaxes nothing else:
+// loopback keeps its own opt-in, and link-local, CGNAT, IPv6 unique-local
+// (which contains metadata endpoints), multicast, etc. stay blocked.
+func WithAllowPrivateNetworks(allow bool) GuardOption {
+	return func(g *URLGuard) { g.allowPrivate = allow }
 }
 
 // WithResolver injects the DNS resolver (test seam; default resolves via
@@ -275,6 +295,17 @@ func (g *URLGuard) checkAddr(addr netip.Addr) error {
 			return nil
 		}
 		return fmt.Errorf("%w: loopback %q", ErrURLBlocked, addr)
+	}
+	// The private allow runs BEFORE blockedPrefixes, so it must stay exactly
+	// the RFC 1918 set: a future blocked prefix carved out INSIDE one of these
+	// ranges would be silently overridden here — handle such a carve-out before
+	// this allow, not by appending to blockedPrefixes.
+	if g.allowPrivate {
+		for _, p := range privatePrefixes {
+			if p.Contains(addr) {
+				return nil
+			}
+		}
 	}
 	for _, p := range blockedPrefixes {
 		if p.Contains(addr) {

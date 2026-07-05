@@ -18,9 +18,10 @@ func init() {
 
 // Config keys under the provin.network.core block.
 const (
-	keyListenAddr    = "provin.network.core.listen-addr"
-	keyDataDir       = "provin.network.core.data-dir"
-	keyAllowLoopback = "provin.network.core.dev.allow-loopback"
+	keyListenAddr           = "provin.network.core.listen-addr"
+	keyDataDir              = "provin.network.core.data-dir"
+	keyAllowLoopback        = "provin.network.core.dev.allow-loopback"
+	keyAllowPrivateNetworks = "provin.network.core.allow-private-networks"
 )
 
 // CoreConfig is the server foundation's typed configuration. Every value comes
@@ -32,6 +33,10 @@ type CoreConfig struct {
 	DataDir string
 	// AllowLoopback feeds core.WithAllowLoopback — local-dev only.
 	AllowLoopback bool
+	// AllowPrivateNetworks feeds core.WithAllowPrivateNetworks — the opt-in for
+	// deployments whose peers live on RFC 1918 addresses (LAN, VPC, container
+	// networks).
+	AllowPrivateNetworks bool
 }
 
 // LoadCoreConfig reads and validates the core block from a loaded hocon config.
@@ -56,10 +61,15 @@ func LoadCoreConfig(cfg *hoconconfig.Config) (*CoreConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("core: config %s: %w", keyAllowLoopback, err)
 	}
+	allowPrivate, err := cfg.Bool(keyAllowPrivateNetworks)
+	if err != nil {
+		return nil, fmt.Errorf("core: config %s: %w", keyAllowPrivateNetworks, err)
+	}
 	return &CoreConfig{
-		ListenAddr:    listenAddr,
-		DataDir:       dataDir,
-		AllowLoopback: allowLoopback,
+		ListenAddr:           listenAddr,
+		DataDir:              dataDir,
+		AllowLoopback:        allowLoopback,
+		AllowPrivateNetworks: allowPrivate,
 	}, nil
 }
 
