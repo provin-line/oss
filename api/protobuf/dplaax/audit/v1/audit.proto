@@ -80,4 +80,10 @@ message GetAuditStatusResponse {
   // audited_at is an RFC 3339 UTC timestamp string (display field; codebase
   // convention — dplaax.chain.v1 deliberately avoids google.protobuf.Timestamp).
   string audited_at = 3;
+  // abandoned marks retries exhausted: the audit runner dropped this head and
+  // will not re-audit it (a re-registration starts fresh and clears the flag).
+  // A HEAD-LEVEL lifecycle fact, not a confidence: either scope's retry may be
+  // the one that ran out — inspect linear_chain / source_commitment for the
+  // verdicts themselves. false == the head may still be re-audited.
+  bool abandoned = 4;
 }

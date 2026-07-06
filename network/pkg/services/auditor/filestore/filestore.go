@@ -128,6 +128,9 @@ type verdictEnvelope struct {
 	LinearChain               bool               `json:"linear_chain"`
 	SourceCommitmentEvaluated bool               `json:"source_commitment_evaluated"`
 	AuditedAt                 time.Time          `json:"audited_at"`
+	// Abandoned is the retries-exhausted lifecycle marker (AuditRecord.Abandoned).
+	// omitempty: envelopes written before the field decode as false (still live).
+	Abandoned bool `json:"abandoned,omitempty"`
 }
 
 func stateInRange(s vc.ConfidenceState) bool {
@@ -186,6 +189,7 @@ func (s *StatusStore) Put(headHash string, rec auditor.AuditRecord) error {
 		SourceCommitment:   rec.SourceCommitment, SourceCommitmentNotations: rec.SourceCommitmentNotations,
 		LinearChain: rec.Scope.LinearChain, SourceCommitmentEvaluated: rec.Scope.SourceCommitmentEvaluated,
 		AuditedAt: rec.AuditedAt,
+		Abandoned: rec.Abandoned,
 	}
 	// A local storage envelope, never hashed or signed over — not a signing
 	// scope (canonicalizer-hygiene-exempt).
@@ -239,6 +243,7 @@ func (s *StatusStore) Get(headHash string) (auditor.AuditRecord, error) {
 		SourceCommitment: env.SourceCommitment, SourceCommitmentNotations: env.SourceCommitmentNotations,
 		Scope:     auditor.AuditScope{LinearChain: env.LinearChain, SourceCommitmentEvaluated: env.SourceCommitmentEvaluated},
 		AuditedAt: env.AuditedAt,
+		Abandoned: env.Abandoned,
 	}, nil
 }
 

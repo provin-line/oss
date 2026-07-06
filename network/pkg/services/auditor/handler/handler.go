@@ -50,6 +50,9 @@ func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[audit
 
 	resp := &auditpb.GetAuditStatusResponse{
 		AuditedAt: rec.AuditedAt.UTC().Format(time.RFC3339),
+		// Lifecycle, not confidence: true == the runner exhausted its retries and
+		// dropped the head; the per-scope verdicts below are what is final.
+		Abandoned: rec.Abandoned,
 	}
 	// linear_chain is present whenever the spine was verified. The runner always records
 	// a recorded audit with Scope.LinearChain true (it walks head→origin before

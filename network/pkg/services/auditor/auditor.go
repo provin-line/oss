@@ -50,6 +50,14 @@ type AuditRecord struct {
 	SourceCommitmentNotations []string
 	Scope                     AuditScope
 	AuditedAt                 time.Time
+	// Abandoned marks retries exhausted: the runner dropped this head from the
+	// queue and will not re-audit it (a later re-registration starts a fresh
+	// record and clears the flag). A HEAD-LEVEL lifecycle fact, deliberately
+	// separate from the confidence verdicts — either scope may be the one whose
+	// retry ran out; inspect the per-scope verdicts for what is final. Without
+	// it a status reader cannot distinguish "still being retried" from "gave
+	// up" (queue membership is not served).
+	Abandoned bool
 }
 
 // StatusStore records the latest audit verdict per head.

@@ -417,9 +417,16 @@ func (r *Runner) recordIndeterminate(headHash, notation string) error {
 
 // bumpOrDrop increments the head's attempt counter, or drops it once MaxAttempts is reached
 // (the backstop for a persistent indeterminate that the pool-liveness signal cannot
-// finalize — a non-hole verdict, or a hole absent from both store and pool).
+// finalize — a non-hole verdict, or a hole absent from both store and pool). The drop is
+// never silent: the abandon marker must land in the status store BEFORE the head leaves
+// the queue, or the head stays queued — otherwise "gave up" would be a log line only,
+// invisible to every GetAuditStatus consumer.
 func (r *Runner) bumpOrDrop(c AuditCandidate, reason string) {
 	if c.Attempts+1 >= r.cfg.MaxAttempts {
+		if err := r.markAbandoned(c.HeadHash, reason); err != nil {
+			r.logger.Printf("auditor: %s: mark abandoned: %v", c.HeadHash, err)
+			return // keep queued, retry next tick (the marker must not be lost)
+		}
 		r.logger.Printf("auditor: dropping %s: exhausted %d audit attempts (%s)", c.HeadHash, r.cfg.MaxAttempts, reason)
 		r.remove(c.HeadHash)
 		return
@@ -427,6 +434,37 @@ func (r *Runner) bumpOrDrop(c AuditCandidate, reason string) {
 	if err := r.queue.IncrementAttempt(c.HeadHash); err != nil {
 		r.logger.Printf("auditor: %s: increment attempt: %v", c.HeadHash, err)
 	}
+}
+
+// markAbandoned finalizes the status record for a head the runner will not retry
+// again. The note lands in the scope whose retry actually ran out: with a terminal
+// linear verdict the exhausted retry is the consumed-set one, so the note goes to
+// SourceCommitmentNotations; otherwise the linear scope. A head that never got a
+// verdict written (e.g. unreadable from the first attempt) gets a synthesized
+// Indeterminate — a consumer must find SOME record behind an abandoned head. A
+// damaged existing record is an error (keep queued): auditOne's next tick re-audits
+// and repairs it, and the abandon lands on the repaired record.
+func (r *Runner) markAbandoned(headHash, reason string) error {
+	rec, err := r.status.Get(headHash)
+	if errors.Is(err, ErrNotFound) {
+		ind := vc.ConfidenceIndeterminate
+		rec = AuditRecord{
+			Overall: ind,
+			Axes:    vc.AxisResult{DataIntegrity: ind, SignerAuthenticity: ind, ChainConsistency: ind},
+			Scope:   AuditScope{LinearChain: true},
+		}
+	} else if err != nil {
+		return err
+	}
+	note := fmt.Sprintf("audit abandoned: exhausted %d attempts (%s)", r.cfg.MaxAttempts, reason)
+	if isTerminal(rec.Overall) && scRetryable(rec) {
+		rec.SourceCommitmentNotations = append(rec.SourceCommitmentNotations, note)
+	} else {
+		rec.Notations = append(rec.Notations, note)
+	}
+	rec.Abandoned = true
+	rec.AuditedAt = r.now()
+	return r.status.Put(headHash, rec)
 }
 
 func (r *Runner) remove(headHash string) {

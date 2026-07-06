@@ -69,6 +69,35 @@ func TestStatusStore_RoundTripRestartOverwrite(t *testing.T) {
 	}
 }
 
+// The abandon lifecycle marker survives the disk round-trip — losing it on
+// restart would resurrect the "retrying or gave up?" ambiguity it exists to kill.
+func TestStatusStore_AbandonedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewStatusStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:   i,
+		Axes:      vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations: []string{"audit abandoned: exhausted 3 attempts (head unreadable)"},
+		Scope:     auditor.AuditScope{LinearChain: true},
+		AuditedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+		Abandoned: true,
+	}
+	if err := s.Put(h(2), rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := s.Get(h(2))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !reflect.DeepEqual(got, rec) {
+		t.Fatalf("roundtrip mismatch:\n got = %+v\nwant = %+v", got, rec)
+	}
+}
+
 func TestStatusStore_AbsentAndDamaged(t *testing.T) {
 	dir := t.TempDir()
 	s, err := filestore.NewStatusStore(dir)

@@ -274,7 +274,13 @@ type GetAuditStatusResponse struct {
 	SourceCommitment *ScopeVerdict `protobuf:"bytes,2,opt,name=source_commitment,json=sourceCommitment,proto3" json:"source_commitment,omitempty"`
 	// audited_at is an RFC 3339 UTC timestamp string (display field; codebase
 	// convention — dplaax.chain.v1 deliberately avoids google.protobuf.Timestamp).
-	AuditedAt     string `protobuf:"bytes,3,opt,name=audited_at,json=auditedAt,proto3" json:"audited_at,omitempty"`
+	AuditedAt string `protobuf:"bytes,3,opt,name=audited_at,json=auditedAt,proto3" json:"audited_at,omitempty"`
+	// abandoned marks retries exhausted: the audit runner dropped this head and
+	// will not re-audit it (a re-registration starts fresh and clears the flag).
+	// A HEAD-LEVEL lifecycle fact, not a confidence: either scope's retry may be
+	// the one that ran out — inspect linear_chain / source_commitment for the
+	// verdicts themselves. false == the head may still be re-audited.
+	Abandoned     bool `protobuf:"varint,4,opt,name=abandoned,proto3" json:"abandoned,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -330,6 +336,13 @@ func (x *GetAuditStatusResponse) GetAuditedAt() string {
 	return ""
 }
 
+func (x *GetAuditStatusResponse) GetAbandoned() bool {
+	if x != nil {
+		return x.Abandoned
+	}
+	return false
+}
+
 var File_dplaax_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
@@ -346,12 +359,13 @@ const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
 	"\x04axes\x18\x02 \x01(\v2\x1c.dplaax.audit.v1.AxisVerdictR\x04axes\x12\x1c\n" +
 	"\tnotations\x18\x03 \x03(\tR\tnotations\"4\n" +
 	"\x15GetAuditStatusRequest\x12\x1b\n" +
-	"\thead_hash\x18\x01 \x01(\tR\bheadHash\"\xc5\x01\n" +
+	"\thead_hash\x18\x01 \x01(\tR\bheadHash\"\xe3\x01\n" +
 	"\x16GetAuditStatusResponse\x12@\n" +
 	"\flinear_chain\x18\x01 \x01(\v2\x1d.dplaax.audit.v1.ScopeVerdictR\vlinearChain\x12J\n" +
 	"\x11source_commitment\x18\x02 \x01(\v2\x1d.dplaax.audit.v1.ScopeVerdictR\x10sourceCommitment\x12\x1d\n" +
 	"\n" +
-	"audited_at\x18\x03 \x01(\tR\tauditedAt*v\n" +
+	"audited_at\x18\x03 \x01(\tR\tauditedAt\x12\x1c\n" +
+	"\tabandoned\x18\x04 \x01(\bR\tabandoned*v\n" +
 	"\n" +
 	"Confidence\x12\x1a\n" +
 	"\x16CONFIDENCE_UNSPECIFIED\x10\x00\x12\x15\n" +

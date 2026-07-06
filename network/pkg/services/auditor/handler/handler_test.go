@@ -121,6 +121,35 @@ func TestGetAuditStatus_SourceCommitmentEmittedWhenEvaluated(t *testing.T) {
 	if sc.GetAxes() != nil {
 		t.Errorf("source_commitment.axes = %+v, want nil (single-state verdict, no axes)", sc.GetAxes())
 	}
+	// A live (non-abandoned) record serves abandoned=false.
+	if msg.GetAbandoned() {
+		t.Error("abandoned = true for a live record, want false")
+	}
+}
+
+// The abandon lifecycle marker is served on the wire: a consumer polling an
+// Indeterminate can tell "the runner gave up" from "still being retried".
+func TestGetAuditStatus_AbandonedServed(t *testing.T) {
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:   i,
+		Axes:      vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations: []string{"audit abandoned: exhausted 3 attempts (non-hole verify error)"},
+		Scope:     auditor.AuditScope{LinearChain: true},
+		AuditedAt: time.Unix(0, 0).UTC(),
+		Abandoned: true,
+	}
+	msg, err := get(t, fakeService{rec: rec})
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	if !msg.GetAbandoned() {
+		t.Error("abandoned = false, want true")
+	}
+	// The verdict itself stays Indeterminate — abandoned is lifecycle, not confidence.
+	if msg.GetLinearChain().GetConfidence() != auditpb.Confidence_CONFIDENCE_INDETERMINATE {
+		t.Errorf("linear_chain.confidence = %v, want INDETERMINATE", msg.GetLinearChain().GetConfidence())
+	}
 }
 
 // Each domain three-state maps to its proto counterpart with the +1 shift.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,9 +166,115 @@ func TestAuditOne_NonHoleIndeterminate_BackstopDrops(t *testing.T) {
 	if rec, _ := status.Get(headH); rec.Overall != vc.ConfidenceIndeterminate {
 		t.Errorf("Overall = %v, want Indeterminate", rec.Overall)
 	}
+	if rec, _ := status.Get(headH); rec.Abandoned {
+		t.Error("Abandoned = true while still retried, want false")
+	}
 	_ = r.drainOnce(ctx) // attempts 1 → drop (1+1 >= 2)
 	if q.Len() != 0 {
 		t.Errorf("after tick 2: queue len = %d, want 0 (backstop dropped)", q.Len())
+	}
+	// The drop is not silent: the status record now says the runner gave up,
+	// so a GetAuditStatus consumer can distinguish "retrying" from "abandoned".
+	rec, err := status.Get(headH)
+	if err != nil {
+		t.Fatalf("status after drop: %v", err)
+	}
+	if !rec.Abandoned {
+		t.Error("Abandoned = false after backstop drop, want true")
+	}
+	if !hasAbandonNote(rec.Notations) {
+		t.Errorf("Notations = %v, want an 'audit abandoned: exhausted' entry", rec.Notations)
+	}
+}
+
+func hasAbandonNote(notes []string) bool {
+	for _, n := range notes {
+		if strings.HasPrefix(n, "audit abandoned: exhausted") {
+			return true
+		}
+	}
+	return false
+}
+
+// The backstop can trigger on a path that never wrote a verdict (head unreadable
+// from the first attempt): the drop must synthesize an abandoned Indeterminate
+// record rather than leave the head with no status at all (Codex design review).
+func TestAuditOne_BackstopDropWithoutRecord_SynthesizesAbandoned(t *testing.T) {
+	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
+	cfg := okCfg()
+	cfg.MaxAttempts = 2
+	// Empty head store: ResolveVC fails with a non-NotFound error → "head
+	// unreadable" path, which reaches bumpOrDrop without a status record.
+	r, q, status := newRunner(t, cv, fakeHeads{m: map[string]*vc.PipelinePassCredential{}}, fakePool{}, cfg)
+	ctx := context.Background()
+
+	_ = r.drainOnce(ctx) // attempts 0 → 1
+	_ = r.drainOnce(ctx) // attempts 1 → drop
+	if q.Len() != 0 {
+		t.Fatalf("queue len = %d, want 0", q.Len())
+	}
+	rec, err := status.Get(headH)
+	if err != nil {
+		t.Fatalf("status after drop: %v (want a synthesized record)", err)
+	}
+	if rec.Overall != vc.ConfidenceIndeterminate || !rec.Abandoned {
+		t.Errorf("Overall = %v, Abandoned = %v; want Indeterminate + abandoned", rec.Overall, rec.Abandoned)
+	}
+	i := vc.ConfidenceIndeterminate
+	if rec.Axes != (vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i}) {
+		t.Errorf("synthesized axes = %+v, want all Indeterminate (NOT zero-value Failed)", rec.Axes)
+	}
+}
+
+// When the abandon marker cannot be persisted, the head stays queued — the
+// "gave up" fact must never be silently lost (keep-queued-retry idiom).
+func TestAuditOne_AbandonWriteFailure_RetainsHead(t *testing.T) {
+	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
+	cfg := okCfg()
+	cfg.MaxAttempts = 1 // first unreadable observation goes straight to the drop branch
+	q := NewMemQueue()
+	_ = q.Add(headH)
+	r, err := New(q, fakeHeads{m: map[string]*vc.PipelinePassCredential{}}, cv, failingStatus{}, fakePool{}, cfg,
+		WithClock(func() time.Time { return time.Unix(0, 0) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.drainOnce(context.Background())
+	if q.Len() != 1 {
+		t.Errorf("queue len = %d, want 1 (abandon marker unwritable → head retained)", q.Len())
+	}
+}
+
+// Source-commitment exhaustion: linear verdict already terminal, the retry that
+// ran out is the consumed-set one — the abandon note lands in the SC scope's
+// notations, not the linear scope's (Codex design review).
+func TestMarkAbandoned_ScRetryable_NotesSourceCommitmentScope(t *testing.T) {
+	status := NewMemStatusStore()
+	rec := AuditRecord{
+		Overall:          vc.ConfidenceVerified,
+		SourceCommitment: vc.ConfidenceIndeterminate,
+		Scope:            AuditScope{LinearChain: true, SourceCommitmentEvaluated: true},
+	}
+	if err := status.Put(headH, rec); err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(NewMemQueue(), headStore(), fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }},
+		status, fakePool{}, okCfg(), WithClock(func() time.Time { return time.Unix(0, 0) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.markAbandoned(headH, "source-commitment indeterminate"); err != nil {
+		t.Fatalf("markAbandoned: %v", err)
+	}
+	got, _ := status.Get(headH)
+	if !got.Abandoned {
+		t.Error("Abandoned = false, want true")
+	}
+	if !hasAbandonNote(got.SourceCommitmentNotations) {
+		t.Errorf("SourceCommitmentNotations = %v, want the abandon note here", got.SourceCommitmentNotations)
+	}
+	if hasAbandonNote(got.Notations) {
+		t.Errorf("Notations = %v, abandon note must not leak into the linear scope", got.Notations)
 	}
 }
 
