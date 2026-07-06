@@ -1,0 +1,37 @@
+{
+  "id": "cred-032",
+  "rule": "credential.field.valid-from",
+  "description": "validFrom carries the RFC 3339 -00:00 unknown-local-offset form (not an asserted UTC)",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://poc.dplaax.dev/vc/v1",
+        "https://poc.provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+      "validFrom": "2026-06-10T09:00:00-00:00",
+      "credentialSubject": {
+        "pipelineId": "pl-acme",
+        "processId": "proc-x",
+        "transformationClaim": "provin:filter",
+        "outputHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "inputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "previousCredential": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-06-10T00:00:01Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    }
+  },
+  "expect": "reject"
+}

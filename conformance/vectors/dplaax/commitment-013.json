@@ -1,0 +1,129 @@
+{
+  "id": "commitment-013",
+  "rule": "commitment.verify.equality-fail-closed",
+  "description": "Every claimed issuer resolved, all-consumed satisfied, recomputed root equals source_root -> verified (the positive path)",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://poc.dplaax.dev/vc/v1",
+        "https://poc.provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:a1",
+      "validFrom": "2026-06-10T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-agg",
+        "processId": "proc-a",
+        "transformationClaim": "provin:aggregate",
+        "outputHash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "derived_from": [
+          "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+          "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s"
+        ],
+        "source_root": "f12209902a36bd81193d37adf4b0a34ad5d3a9b30e673c809bafd943c5586b938fc26",
+        "source_root_canonical": "jcs-rfc8785"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-06-10T00:00:01Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:agg:process:a1#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    },
+    "sources": [
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "credentialSubject": {
+          "inputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "outputHash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+          "pipelineId": "pl-mine",
+          "processId": "proc-1",
+          "transformationClaim": "provin:convert"
+        },
+        "issuer": "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+        "proof": {
+          "created": "2026-06-01T00:00:01Z",
+          "cryptosuite": "eddsa-jcs-2022",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00",
+          "type": "DataIntegrityProof",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s#key-1"
+        },
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "validFrom": "2026-06-01T00:00:00Z"
+      },
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "credentialSubject": {
+          "inputHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "outputHash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "pipelineId": "pl-mine",
+          "processId": "proc-1",
+          "transformationClaim": "provin:convert"
+        },
+        "issuer": "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s",
+        "proof": {
+          "created": "2026-06-01T00:00:01Z",
+          "cryptosuite": "eddsa-jcs-2022",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00",
+          "type": "DataIntegrityProof",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s#key-1"
+        },
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "validFrom": "2026-06-01T00:00:00Z"
+      },
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://poc.dplaax.dev/vc/v1",
+          "https://poc.provin.dev/vc/v1"
+        ],
+        "credentialSubject": {
+          "inputHash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "outputHash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "pipelineId": "pl-mine",
+          "processId": "proc-1",
+          "transformationClaim": "provin:convert"
+        },
+        "issuer": "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s",
+        "proof": {
+          "created": "2026-06-01T00:00:01Z",
+          "cryptosuite": "eddsa-jcs-2022",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00",
+          "type": "DataIntegrityProof",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:mineB:pipeline:m:process:s#key-1"
+        },
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "validFrom": "2026-06-01T00:00:00Z"
+      }
+    ]
+  },
+  "expect": {
+    "confidence": "verified"
+  }
+}

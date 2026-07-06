@@ -186,7 +186,7 @@ func TestDplaaxCanonVectors(t *testing.T) {
 // accepted as-received at wire-form level (the signer-authenticity axis owns
 // what a verifier honours).
 func TestDplaaxCredVectors(t *testing.T) {
-	for i := 1; i <= 31; i++ {
+	for i := 1; i <= 32; i++ {
 		v := loadDplaax(t, vecID("cred", i))
 		t.Run(v.ID, func(t *testing.T) {
 			var input struct {
@@ -224,7 +224,7 @@ func TestDplaaxCredVectors(t *testing.T) {
 
 func TestDplaaxCommitmentVectors(t *testing.T) {
 	verifier := vc.NewVerifier(local.New(), ed25519.Verifier{})
-	for i := 1; i <= 12; i++ {
+	for i := 1; i <= 13; i++ {
 		v := loadDplaax(t, vecID("commitment", i))
 		t.Run(v.ID, func(t *testing.T) {
 			switch i {
@@ -294,7 +294,7 @@ func TestDplaaxCommitmentVectors(t *testing.T) {
 				if sc.SourceRootCanonical != e.SourceRootCanonical {
 					t.Errorf("source_root_canonical = %s, want %s", sc.SourceRootCanonical, e.SourceRootCanonical)
 				}
-			case 8, 9, 10, 11: // verification: credential + gathered sources -> confidence
+			case 8, 9, 10, 11, 13: // verification: credential + gathered sources -> confidence (13 = the verified positive path)
 				var input struct {
 					Credential json.RawMessage   `json:"credential"`
 					Sources    []json.RawMessage `json:"sources"`

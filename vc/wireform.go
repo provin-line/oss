@@ -90,6 +90,10 @@ func (c *PipelinePassCredential) ValidateWireForm() error {
 	// it is all zeros. Go's parser admits both '.' and ',' as the fraction
 	// separator (ISO 8601 leniency; RFC 3339's ABNF permits only '.'), and
 	// neither character appears anywhere else in a parseable timestamp.
+	// "-00:00" is RFC 3339 §4.3's unknown-local-offset form — an explicit
+	// statement that the offset is NOT known, so it cannot assert UTC; the
+	// parser folds it to offset 0 (indistinguishable from Z/+00:00 after
+	// parse), so it is rejected at the string level (cred-032).
 	if raw, present := c.body[keyValidFrom]; present {
 		s, ok := raw.(string)
 		if !ok {
@@ -101,6 +105,9 @@ func (c *PipelinePassCredential) ValidateWireForm() error {
 		}
 		if _, offset := parsed.Zone(); offset != 0 {
 			return fmt.Errorf("vc: wire form: validFrom %q is not a UTC timestamp", s)
+		}
+		if strings.HasSuffix(s, "-00:00") {
+			return fmt.Errorf("vc: wire form: validFrom %q carries the unknown-local-offset form (-00:00), not an asserted UTC", s)
 		}
 		if strings.ContainsAny(s, ".,") {
 			return fmt.Errorf("vc: wire form: validFrom %q carries sub-second precision", s)

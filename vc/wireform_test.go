@@ -101,6 +101,11 @@ func TestValidateWireForm_ValidFromUTCSecondPrecision(t *testing.T) {
 		{"UTC Z at second precision", "2026-06-10T00:00:00Z", false},
 		{"zero numeric offset denotes UTC", "2026-06-10T00:00:00+00:00", false},
 		{"non-UTC offset", "2026-06-10T09:00:00+09:00", true},
+		// RFC 3339 §4.3: "-00:00" asserts the local offset is UNKNOWN — it is
+		// not an assertion of UTC, so the profile rejects it (cred-032). Go's
+		// parser folds it to offset 0, indistinguishable from Z/+00:00 after
+		// parse, hence the string-level check in ValidateWireForm.
+		{"unknown-local-offset -00:00", "2026-06-10T00:00:00-00:00", true},
 		{"sub-second precision", "2026-06-10T00:00:00.500Z", true},
 		{"sub-second zeros still reject", "2026-06-10T00:00:00.000Z", true},
 		// Go's parser accepts a comma fraction separator (ISO 8601 leniency)
