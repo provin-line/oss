@@ -193,7 +193,7 @@ func TestLoad_NATS_ConnectWait(t *testing.T) {
 	}
 }
 
-func TestLoad_NATS_RegistryURLs(t *testing.T) {
+func TestLoad_NATS_RegistryBaseURLs(t *testing.T) {
 	acc, _ := nkeys.CreateAccount()
 	accSeed, _ := acc.Seed()
 	op, _ := nkeys.CreateOperator()
@@ -206,44 +206,61 @@ func TestLoad_NATS_RegistryURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadChainConfig: %v", err)
 	}
-	if len(c.NATS.RegistryURLs) != 0 {
-		t.Errorf("default RegistryURLs = %v, want empty", c.NATS.RegistryURLs)
+	if len(c.NATS.RegistryBaseURLs) != 0 {
+		t.Errorf("default RegistryBaseURLs = %v, want empty", c.NATS.RegistryBaseURLs)
 	}
 
 	// Per-registry mapping, dotted registry ids as quoted keys.
 	mapped := base + `
-provin.network.chain.nats.registry-urls {
+provin.network.chain.nats.registry-base-urls {
   "mfg.dplaax.dev"    = "http://mfg:8443"
   "retail.dplaax.dev" = "https://retail.example"
 }`
 	c, err = chainconfig.LoadChainConfig(loadWith(t, mapped))
 	if err != nil {
-		t.Fatalf("LoadChainConfig(registry-urls): %v", err)
+		t.Fatalf("LoadChainConfig(registry-base-urls): %v", err)
 	}
 	want := map[string]string{
 		"mfg.dplaax.dev":    "http://mfg:8443",
 		"retail.dplaax.dev": "https://retail.example",
 	}
-	if len(c.NATS.RegistryURLs) != len(want) {
-		t.Fatalf("RegistryURLs = %v, want %v", c.NATS.RegistryURLs, want)
+	if len(c.NATS.RegistryBaseURLs) != len(want) {
+		t.Fatalf("RegistryBaseURLs = %v, want %v", c.NATS.RegistryBaseURLs, want)
 	}
 	for k, v := range want {
-		if c.NATS.RegistryURLs[k] != v {
-			t.Errorf("RegistryURLs[%q] = %q, want %q", k, c.NATS.RegistryURLs[k], v)
+		if c.NATS.RegistryBaseURLs[k] != v {
+			t.Errorf("RegistryBaseURLs[%q] = %q, want %q", k, c.NATS.RegistryBaseURLs[k], v)
 		}
 	}
 
 	// A mapping value must be an absolute http(s) URL.
 	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
-provin.network.chain.nats.registry-urls { "mfg.dplaax.dev" = "not-a-url" }`)); err == nil {
-		t.Error("malformed registry-urls value silently accepted")
+provin.network.chain.nats.registry-base-urls { "mfg.dplaax.dev" = "not-a-url" }`)); err == nil {
+		t.Error("malformed registry-base-urls value silently accepted")
 	}
 
-	// registry-urls and resolver-base-url are mutually exclusive resolution
+	// An empty registry id is dead config; a query/fragment would be glued
+	// mid-URL by the resolver. Both fail boot.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.registry-base-urls { "" = "http://x:1" }`)); err == nil {
+		t.Error("empty registry id silently accepted")
+	}
+	// A key dplaax.Parse could never produce would silently miss at resolve
+	// time (fallback to external resolution) — must fail boot instead.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.registry-base-urls { "mfg.dplaax.dev/" = "http://x:1" }`)); err == nil {
+		t.Error("non-segment registry key silently accepted")
+	}
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.registry-base-urls { "mfg.dplaax.dev" = "http://x:1?q=1" }`)); err == nil {
+		t.Error("registry-base-urls value with a query silently accepted")
+	}
+
+	// registry-base-urls and resolver-base-url are mutually exclusive resolution
 	// models — both set fails boot.
 	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
 provin.network.chain.nats.resolver-base-url = "http://one:8443"
-provin.network.chain.nats.registry-urls { "mfg.dplaax.dev" = "http://mfg:8443" }`)); err == nil {
-		t.Error("registry-urls together with resolver-base-url silently accepted")
+provin.network.chain.nats.registry-base-urls { "mfg.dplaax.dev" = "http://mfg:8443" }`)); err == nil {
+		t.Error("registry-base-urls together with resolver-base-url silently accepted")
 	}
 }

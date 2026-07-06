@@ -58,6 +58,13 @@ func WithRegistryBaseURL(f func(registry string) (string, error)) Option {
 	return func(r *Resolver) { r.baseURL = f }
 }
 
+// DefaultBaseURL is the default registry -> base-URL derivation: the registry
+// id as an https host. Overrides (WithRegistryBaseURL) that map only SOME
+// registries delegate unmapped ones here so the two derivations cannot drift.
+func DefaultBaseURL(registry string) (string, error) {
+	return "https://" + registry, nil
+}
+
 // New returns a Resolver dialing through guard's SSRF-guarded HTTP client. A nil
 // guard yields a strict default (fail-closed). The base-URL derivation defaults
 // to https://{registry}.
@@ -68,7 +75,7 @@ func New(guard *core.URLGuard, opts ...Option) *Resolver {
 	r := &Resolver{
 		client:  guard.HTTPClient(),
 		guard:   guard,
-		baseURL: func(registry string) (string, error) { return "https://" + registry, nil },
+		baseURL: DefaultBaseURL,
 	}
 	for _, opt := range opts {
 		opt(r)

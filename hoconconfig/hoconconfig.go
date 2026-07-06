@@ -277,11 +277,6 @@ func (c *Config) StringList(path string) ([]string, error) {
 	return out, nil
 }
 
-// Keys returns the field names of the HOCON object at path, sorted for
-// deterministic iteration. Returns ErrMissingKey (wrapped) if the key is absent
-// and ErrTypeMismatch (wrapped) if the value is not an object. This is the
-// accessor for object-keyed config blocks (e.g. a set of named service
-// endpoints): enumerate the keys here, then read each entry's fields with the
 // StringMap returns the object at path as a key -> string-value map. It reads
 // the object's entries directly (no per-key path round-trip), so keys
 // containing dots — quoted HOCON keys like "mfg.dplaax.dev" — are returned
@@ -317,6 +312,11 @@ func (c *Config) StringMap(path string) (m map[string]string, err error) {
 	return m, nil
 }
 
+// Keys returns the field names of the HOCON object at path, sorted for
+// deterministic iteration. Returns ErrMissingKey (wrapped) if the key is absent
+// and ErrTypeMismatch (wrapped) if the value is not an object. This is the
+// accessor for object-keyed config blocks (e.g. a set of named service
+// endpoints): enumerate the keys here, then read each entry's fields with the
 // scalar accessors at "path.<key>.<field>".
 //
 // Like String, a scalar parent (a non-object at path) surfaces as

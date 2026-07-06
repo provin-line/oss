@@ -340,3 +340,16 @@ func TestBoot_ChainPeerServiceMountedNoL1(t *testing.T) {
 			connect.CodeOf(err), err)
 	}
 }
+
+// registryBaseURL: mapped registries resolve to their configured base; the
+// rest fall back to the didresolver default — the "partial maps compose with
+// public registries" contract.
+func TestRegistryBaseURL_HitAndFallback(t *testing.T) {
+	f := registryBaseURL(map[string]string{"mfg.dplaax.dev": "http://mfg:8443"})
+	if got, err := f("mfg.dplaax.dev"); err != nil || got != "http://mfg:8443" {
+		t.Errorf("mapped: got %q err %v", got, err)
+	}
+	if got, err := f("public.dplaax.example"); err != nil || got != "https://public.dplaax.example" {
+		t.Errorf("fallback: got %q err %v", got, err)
+	}
+}

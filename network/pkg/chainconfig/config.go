@@ -44,7 +44,7 @@ const (
 	keyNodeDID           = "provin.network.chain.nats.node-did"
 	keyResolverBaseURL   = "provin.network.chain.nats.resolver-base-url"
 	keyConnectWait       = "provin.network.chain.nats.connect-wait"
-	keyRegistryURLs      = "provin.network.chain.nats.registry-urls"
+	keyRegistryBaseURLs  = "provin.network.chain.nats.registry-base-urls"
 	keyAllowNoop         = "provin.network.chain.dev.allow-noop-transport"
 )
 
@@ -78,10 +78,10 @@ type NATSConfig struct {
 	// ConnectWait is the boot budget for the initial broker dial (transport
 	// nats.Config.ConnectWait). Zero = strict fail-fast.
 	ConnectWait time.Duration
-	// RegistryURLs maps a registry id to the base URL its DIDs resolve
+	// RegistryBaseURLs maps a registry id to the base URL its DIDs resolve
 	// against. Unmapped registries use the default (https://{registry}).
 	// Mutually exclusive with ResolverBaseURL.
-	RegistryURLs map[string]string
+	RegistryBaseURLs map[string]string
 }
 
 // LoadChainConfig reads and validates the chain block. It fails closed: an
@@ -151,21 +151,33 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 		return n, fmt.Errorf("chain: config %s: must not be negative", keyConnectWait)
 	}
 	n.ConnectWait = wait
-	urls, err := cfg.StringMap(keyRegistryURLs)
+	urls, err := cfg.StringMap(keyRegistryBaseURLs)
 	if err != nil {
-		return n, fmt.Errorf("chain: config %s: %w", keyRegistryURLs, err)
+		return n, fmt.Errorf("chain: config %s: %w", keyRegistryBaseURLs, err)
 	}
 	if len(urls) > 0 {
 		if n.ResolverBaseURL != "" {
-			return n, fmt.Errorf("chain: config %s and %s are mutually exclusive resolution models — set one", keyRegistryURLs, keyResolverBaseURL)
+			return n, fmt.Errorf("chain: config %s and %s are mutually exclusive resolution models — set one", keyRegistryBaseURLs, keyResolverBaseURL)
 		}
 		for reg, raw := range urls {
+			// A key that could never come out of dplaax.Parse would silently
+			// miss at resolve time and fall back to external resolution — the
+			// opposite of the operator's intent. Fail boot instead.
+			if !dplaax.IsSafeSegment(reg) {
+				return n, fmt.Errorf("chain: config %s: %q is not a valid registry segment", keyRegistryBaseURLs, reg)
+			}
 			u, err := url.Parse(raw)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				return n, fmt.Errorf("chain: config %s[%q]: %q is not an absolute http(s) URL", keyRegistryURLs, reg, raw)
+				return n, fmt.Errorf("chain: config %s[%q]: %q is not an absolute http(s) URL", keyRegistryBaseURLs, reg, raw)
+			}
+			// A path prefix composes with the /did/... route; a query or
+			// fragment would be glued mid-URL by the resolver and can only be
+			// a mistake.
+			if u.RawQuery != "" || u.Fragment != "" {
+				return n, fmt.Errorf("chain: config %s[%q]: %q must not carry a query or fragment", keyRegistryBaseURLs, reg, raw)
 			}
 		}
-		n.RegistryURLs = urls
+		n.RegistryBaseURLs = urls
 	}
 	return n, nil
 }

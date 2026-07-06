@@ -491,4 +491,15 @@ func TestOperator_PublishClaims(t *testing.T) {
 	if err := o.PublishClaims(); err != nil {
 		t.Fatalf("PublishClaims (second): %v", err)
 	}
+	token, err = natsop.NewDirPublisher(dir).Load(accPub)
+	if err != nil {
+		t.Fatalf("Load after second publish: %v", err)
+	}
+	claims, err = jwt.DecodeAccountClaims(token)
+	if err != nil {
+		t.Fatalf("decode after second publish: %v", err)
+	}
+	if len(claims.Exports) != 0 || len(claims.Imports) != 0 {
+		t.Errorf("second publish invented grants: exports=%d imports=%d", len(claims.Exports), len(claims.Imports))
+	}
 }

@@ -63,23 +63,27 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	var resolverOpts []didresolver.Option
 	if chainCfg.Transport == chainconfig.TransportNATS {
 		switch {
-		case len(chainCfg.NATS.RegistryURLs) > 0:
-			// Per-registry overrides; an unmapped registry falls back to the
-			// didresolver default (https://{registry}), so a partial map for
-			// local/VPC peers composes with public registries.
-			urls := chainCfg.NATS.RegistryURLs
-			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(registry string) (string, error) {
-				if base, ok := urls[registry]; ok {
-					return base, nil
-				}
-				return "https://" + registry, nil
-			}))
+		case len(chainCfg.NATS.RegistryBaseURLs) > 0:
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(registryBaseURL(chainCfg.NATS.RegistryBaseURLs)))
 		case chainCfg.NATS.ResolverBaseURL != "":
 			base := chainCfg.NATS.ResolverBaseURL
 			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
 		}
 	}
 	return guard, didresolver.New(guard, resolverOpts...)
+}
+
+// registryBaseURL derives a registry's resolution base URL from the configured
+// per-registry map; an unmapped registry falls back to the didresolver default
+// (https://{registry}), so a partial map for local/VPC peers composes with
+// public registries.
+func registryBaseURL(urls map[string]string) func(registry string) (string, error) {
+	return func(registry string) (string, error) {
+		if base, ok := urls[registry]; ok {
+			return base, nil
+		}
+		return didresolver.DefaultBaseURL(registry)
+	}
 }
 
 // The guard (SSRF policy) and resolver (cross-registry DID resolution) are built by
