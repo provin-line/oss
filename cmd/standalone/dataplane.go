@@ -92,7 +92,8 @@ type dataPlane struct {
 // HTTP-only deployment). Otherwise it dials once as the node account and builds one
 // loop per config entry over that shared connection, dispatching on role: a source
 // loop signs FirstDrop credentials with keyStore; a sink loop verifies upstream
-// credentials through deps.Resolver and writes consumed events to deps.SinkWriter.
+// credentials through deps.Resolver and delivers consumed events to its
+// config-selected output surface (sink.output; deps.SinkWriter overrides for tests).
 func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps dataPlaneDeps) (*dataPlane, error) {
 	if len(pipeCfg.Loops) == 0 {
 		return &dataPlane{}, nil

@@ -51,6 +51,25 @@ func StatusStore(t *testing.T, newStore func(t *testing.T) auditor.StatusStore) 
 	if !reflect.DeepEqual(got, rec) {
 		t.Fatalf("roundtrip mismatch:\n got = %+v\nwant = %+v", got, rec)
 	}
+	// The abandon lifecycle marker round-trips: an implementation that drops it
+	// would resurrect the "retrying or gave up?" ambiguity it exists to kill.
+	ab := Record()
+	ab.Overall = vc.ConfidenceIndeterminate
+	ab.Axes = vc.AxisResult{
+		DataIntegrity:      vc.ConfidenceIndeterminate,
+		SignerAuthenticity: vc.ConfidenceIndeterminate,
+		ChainConsistency:   vc.ConfidenceIndeterminate,
+	}
+	ab.Notations = []string{"audit abandoned: exhausted 3 attempts (head unreadable)"}
+	ab.Abandoned = true
+	hAb := Hash(2)
+	if err := s.Put(hAb, ab); err != nil {
+		t.Fatalf("Put(abandoned): %v", err)
+	}
+	if got, err := s.Get(hAb); err != nil || !got.Abandoned {
+		t.Fatalf("abandoned roundtrip: got %+v (err %v), want Abandoned=true", got, err)
+	}
+
 	// Latest audit wins.
 	rec2 := rec
 	rec2.Overall = vc.ConfidenceFailed

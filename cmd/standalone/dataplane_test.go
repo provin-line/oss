@@ -385,8 +385,9 @@ func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 	}
 }
 
-// TestBuildDataPlane_SinkRequiresDeps asserts a sink loop without a resolver/writer is a
-// build error (fail closed) rather than a nil-deref at run time.
+// TestBuildDataPlane_SinkRequiresDeps asserts a sink loop without a resolver is a
+// build error (fail closed) rather than a nil-deref at run time. (The writer no
+// longer gates assembly: it comes from sink.output config, console by default.)
 func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	chainCfg := &chainconfig.Config{
