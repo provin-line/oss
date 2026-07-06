@@ -15,13 +15,13 @@ help:
 
 # Binaries land here as their packages materialize:
 #   cmd/standalone                → $(DIST)/standalone   [built]
+#   cmd/provin                    → $(DIST)/provin       [built]
 #   pipeline/chained/cmd          → $(DIST)/chained
-#   pipeline/source/ingest/apipush → $(DIST)/apipush-source
 #   pipeline/sink/console         → $(DIST)/console-sink
-#   cmd/provin                    → $(DIST)/provin
 build:
 	mkdir -p $(DIST)
 	go build -o $(DIST)/standalone ./cmd/standalone
+	go build -o $(DIST)/provin ./cmd/provin
 
 test:
 	go test ./...
