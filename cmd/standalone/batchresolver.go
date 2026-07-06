@@ -37,17 +37,6 @@ func (f *peerFetcher) Fetch(ctx context.Context, endpoint, contentAddress string
 	return c.ResolveCredential(ctx, contentAddress)
 }
 
-// hasConsumingLoop reports whether the node runs a sink or chained loop — the population
-// that performs verified-ingress storage and so accumulates unresolved predecessor holes.
-func hasConsumingLoop(pipeCfg *pipelineconfig.Config) bool {
-	for _, lc := range pipeCfg.Loops {
-		if lc.Role == pipelineconfig.RoleSink || lc.Role == pipelineconfig.RoleChained || lc.Role == pipelineconfig.RoleAggregate {
-			return true
-		}
-	}
-	return false
-}
-
 // buildBatchResolver constructs the async chain-audit runner, or returns (nil, nil) when
 // the node has no consuming loop (a source-only node accumulates no holes, so there is
 // nothing to drain). pool and submitter are the shared instances main threads into the
@@ -59,7 +48,7 @@ func buildBatchResolver(
 	didResolver batchresolver.DIDResolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*batchresolver.Runner, error) {
-	if !hasConsumingLoop(pipeCfg) {
+	if !pipeCfg.HasConsumingLoop() {
 		return nil, nil
 	}
 	fetcher := &peerFetcher{httpClient: guard.HTTPClient(), bearer: pipeCfg.VCStoreBearer, maxBytes: pipeCfg.MaxCredentialSize}

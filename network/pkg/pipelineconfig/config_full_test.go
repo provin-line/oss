@@ -69,11 +69,14 @@ func TestLoad_FullStrategy_Rejected(t *testing.T) {
 
 // A vc-store-endpoint WITHOUT a vc-store-bearer is a boot error — the VC store is
 // L1-protected, so a tokenless client's publish/resolve would be rejected at runtime.
-// (Independent of the loop strategy; driven through an adjacent loop.)
+// This isolates the ENDPOINT→bearer rule from the consuming-loop→bearer rule: a
+// source-only loop keeps the consuming rule out of reach, and the assertion pins the
+// error to the endpoint key so only the endpoint rule can satisfy it.
 func TestLoad_VCStoreEndpoint_RequiresBearer(t *testing.T) {
-	cfg := loadWith(t, pipelineConf("https://node.example/", "", adjacentSinkLoop))
-	if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
-		t.Fatal("vc-store-endpoint without vc-store-bearer: want error, got nil")
+	cfg := loadWith(t, pipelineConf("https://node.example/", "", validSourceLoop))
+	_, err := pipelineconfig.LoadPipelineConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "vc-store-endpoint") {
+		t.Fatalf("vc-store-endpoint without vc-store-bearer: want error naming vc-store-endpoint, got %v", err)
 	}
 }
 
@@ -97,9 +100,10 @@ func TestLoad_VCStoreEndpoint_RejectsQueryFragment(t *testing.T) {
 	}
 }
 
-// An adjacent-only config still loads with no vc-store-endpoint (17d unaffected).
+// An adjacent-only config still loads with no vc-store-endpoint (17d unaffected) —
+// the bearer alone satisfies the consuming-loop requirement (endpoint stays optional).
 func TestLoad_AdjacentNeedsNoEndpoint(t *testing.T) {
-	cfg := loadWith(t, loopsConf(validSinkLoop))
+	cfg := loadWith(t, withBearer(loopsConf(validSinkLoop)))
 	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
 	if err != nil {
 		t.Fatalf("LoadPipelineConfig: %v", err)

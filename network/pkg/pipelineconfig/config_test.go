@@ -80,6 +80,67 @@ func loopsConf(body string) string {
 	return "provin.network.pipeline.loops {\n" + body + "\n}\n"
 }
 
+// withBearer adds the node-level vc-store-bearer a consuming-loop config requires.
+func withBearer(conf string) string {
+	return conf + "provin.network.pipeline.vc-store-bearer = \"tok\"\n"
+}
+
+// A consuming loop (sink/chained/aggregate) drives the async chain audit, whose peer
+// predecessor fetches present vc-store-bearer against L1-protected peers. An empty
+// bearer would not fail until the first cross-node hole silently starves an audit at
+// runtime, so it fails closed at boot instead.
+func TestLoad_ConsumingLoopRequiresBearer(t *testing.T) {
+	for name, body := range map[string]string{
+		"sink":      validSinkLoop,
+		"chained":   validChainedLoop,
+		"aggregate": validAggregateLoop,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(body)))
+			if err == nil || !strings.Contains(err.Error(), "vc-store-bearer") {
+				t.Fatalf("consuming loop without bearer: want vc-store-bearer error, got %v", err)
+			}
+		})
+	}
+}
+
+// A source-only node performs no peer fetches (it accumulates no predecessor holes),
+// so it boots without a bearer.
+func TestLoad_SourceOnlyWithoutBearerLoads(t *testing.T) {
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validSourceLoop))); err != nil {
+		t.Fatalf("source-only without bearer should load: %v", err)
+	}
+}
+
+// HasConsumingLoop classifies the population that drives the async chain audit: any
+// sink/chained/aggregate loop, regardless of siblings; never source-only or zero loops.
+func TestHasConsumingLoop(t *testing.T) {
+	loops := func(roles ...string) *pipelineconfig.Config {
+		c := &pipelineconfig.Config{}
+		for _, r := range roles {
+			c.Loops = append(c.Loops, pipelineconfig.LoopConfig{Role: r})
+		}
+		return c
+	}
+	cases := []struct {
+		name string
+		cfg  *pipelineconfig.Config
+		want bool
+	}{
+		{"zero loops", loops(), false},
+		{"source only", loops(pipelineconfig.RoleSource), false},
+		{"sink", loops(pipelineconfig.RoleSink), true},
+		{"chained", loops(pipelineconfig.RoleChained), true},
+		{"aggregate", loops(pipelineconfig.RoleAggregate), true},
+		{"source + sink", loops(pipelineconfig.RoleSource, pipelineconfig.RoleSink), true},
+	}
+	for _, tc := range cases {
+		if got := tc.cfg.HasConsumingLoop(); got != tc.want {
+			t.Errorf("%s: HasConsumingLoop() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 const validSourceLoop = `
   src {
     role = "source"
@@ -183,7 +244,7 @@ func TestLoad_FailClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadWith(t, loopsConf(tc.body))
+			cfg := loadWith(t, withBearer(loopsConf(tc.body)))
 			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 				t.Fatalf("%s: want error, got nil", tc.name)
 			}
@@ -204,7 +265,7 @@ const validSinkLoop = `
 `
 
 func TestLoad_ValidSink(t *testing.T) {
-	cfg := loadWith(t, loopsConf(validSinkLoop))
+	cfg := loadWith(t, withBearer(loopsConf(validSinkLoop)))
 	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
 	if err != nil {
 		t.Fatalf("LoadPipelineConfig: %v", err)
@@ -267,7 +328,7 @@ func TestLoad_FailClosed_Sink(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadWith(t, loopsConf(tc.body))
+			cfg := loadWith(t, withBearer(loopsConf(tc.body)))
 			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 				t.Fatalf("%s: want error, got nil", tc.name)
 			}
@@ -309,7 +370,7 @@ const validChainedLoop = `
 `
 
 func TestLoad_ValidChained(t *testing.T) {
-	cfg := loadWith(t, loopsConf(validChainedLoop))
+	cfg := loadWith(t, withBearer(loopsConf(validChainedLoop)))
 	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
 	if err != nil {
 		t.Fatalf("LoadPipelineConfig: %v", err)
@@ -352,7 +413,7 @@ func TestLoad_ChainedPassthrough(t *testing.T) {
 	// converter + filters omitted = passthrough relay; must load.
 	body := strings.Replace(validChainedLoop,
 		"      converter = \"{ 'reading': reading, 'relayed': true }\"\n      filters = [\"reading > 0\"]\n", "", 1)
-	cfg := loadWith(t, loopsConf(body))
+	cfg := loadWith(t, withBearer(loopsConf(body)))
 	pc, err := pipelineconfig.LoadPipelineConfig(cfg)
 	if err != nil {
 		t.Fatalf("passthrough chained should load: %v", err)
@@ -393,7 +454,7 @@ func TestLoad_FailClosed_Chained(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := loadWith(t, loopsConf(tc.body))
+			cfg := loadWith(t, withBearer(loopsConf(tc.body)))
 			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 				t.Fatalf("%s: want error, got nil", tc.name)
 			}
@@ -416,7 +477,7 @@ func TestLoad_CrossRoleChainedBlock(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			cfg := loadWith(t, loopsConf(body))
+			cfg := loadWith(t, withBearer(loopsConf(body)))
 			if _, err := pipelineconfig.LoadPipelineConfig(cfg); err == nil {
 				t.Fatalf("%s: want error, got nil", name)
 			}

@@ -31,7 +31,7 @@ const validAggregateLoop = `
 `
 
 func TestLoad_ValidAggregate(t *testing.T) {
-	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validAggregateLoop)))
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(validAggregateLoop))))
 	if err != nil {
 		t.Fatalf("LoadPipelineConfig: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestLoad_Aggregate_FailClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(tc.body))); err == nil {
+			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(tc.body)))); err == nil {
 				t.Errorf("%s: want boot error, got nil", tc.name)
 			}
 		})

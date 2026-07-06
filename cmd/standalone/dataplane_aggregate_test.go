@@ -107,11 +107,3 @@ func TestBuildDataPlane_AggregateRequiresConsumerDeps(t *testing.T) {
 		t.Fatal("aggregate without resolver/VC store: want error, got nil")
 	}
 }
-
-// TestHasConsumingLoop_Aggregate: an aggregate node accumulates ingress holes, so it must
-// run the async batch resolver / audit runner.
-func TestHasConsumingLoop_Aggregate(t *testing.T) {
-	if !hasConsumingLoop(dpAggregateCfg()) {
-		t.Error("hasConsumingLoop(aggregate) = false, want true")
-	}
-}

@@ -88,10 +88,10 @@ type Config struct {
 	// over the local store, not this endpoint; slice-17j retired real-time "full".)
 	VCStoreEndpoint string
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
-	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set —
-	// a tokenless client would be rejected at runtime, so LoadPipelineConfig fails closed.
-	// The async batch resolver presents the same token for peer predecessor fetches, so
-	// a consuming-only node that assembles cross-node chains sets it WITHOUT an endpoint.
+	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
+	// and whenever any consuming loop runs (the async batch resolver presents the same
+	// token for peer predecessor fetches) — a tokenless client would be rejected at
+	// runtime, so LoadPipelineConfig fails closed on both.
 	VCStoreBearer string
 	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
 	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
@@ -104,6 +104,20 @@ type Config struct {
 	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
 	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
 	AuditRunner AuditRunnerConfig
+}
+
+// HasConsumingLoop reports whether any loop consumes upstream credentials — a sink,
+// chained, or aggregate role. Consuming loops perform verified-ingress storage and so
+// accumulate predecessor holes that the async chain audit drains with L1-authenticated
+// peer fetches.
+func (c *Config) HasConsumingLoop() bool {
+	for _, lc := range c.Loops {
+		switch lc.Role {
+		case RoleSink, RoleChained, RoleAggregate:
+			return true
+		}
+	}
+	return false
 }
 
 // AuditRunnerConfig is the node-level tuning for the async audit runner (slice-17h). All
@@ -277,6 +291,13 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	// tokenless publish/resolve would be rejected at runtime. Fail closed at boot.
 	if out.VCStoreEndpoint != "" && out.VCStoreBearer == "" {
 		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, vcStoreBearerKey)
+	}
+	// A consuming loop drives the async chain audit, whose peer predecessor fetches
+	// present this bearer against L1-protected peers. An empty bearer would not fail
+	// until the first cross-node hole silently starves an audit at runtime, so it
+	// fails closed at boot instead.
+	if out.VCStoreBearer == "" && out.HasConsumingLoop() {
+		return nil, fmt.Errorf("pipeline: a consuming loop (sink/chained/aggregate) requires %s — the async audit's peer fetches are L1-authenticated", vcStoreBearerKey)
 	}
 	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
 		return nil, err

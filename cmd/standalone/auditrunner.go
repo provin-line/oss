@@ -36,7 +36,7 @@ func buildAuditRunner(
 	didResolver resolver.Resolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*auditor.Runner, error) {
-	if !hasConsumingLoop(pipeCfg) {
+	if !pipeCfg.HasConsumingLoop() {
 		return nil, nil
 	}
 	verifier := vc.NewVerifier(didResolver, ed25519.Verifier{})
