@@ -5,9 +5,10 @@
 //
 // Loops are a keyed map (key = loop name) because a node runs zero or more loops of
 // potentially different roles — the layer's responsibility is a SET of loops, not one
-// fixed loop. slice-17b implements role = "source"; slice-17c adds role = "sink" (a
-// terminating subscriber that verifies and writes out-of-network); role = "chained"
-// remains a fail-closed boot error until its assembly lands (17d).
+// fixed loop. All four roles are implemented: "source" (external ingestion, 17b),
+// "sink" (terminating subscriber that verifies and writes out-of-network, 17c),
+// "chained" (verify-and-relay, 17d), and "aggregate" (N-ary pool + window, 17m).
+// An unknown role remains a fail-closed boot error.
 package pipelineconfig
 
 import (
