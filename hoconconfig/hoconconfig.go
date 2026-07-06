@@ -279,7 +279,7 @@ func (c *Config) StringList(path string) ([]string, error) {
 
 // StringMap returns the object at path as a key -> string-value map. It reads
 // the object's entries directly (no per-key path round-trip), so keys
-// containing dots — quoted HOCON keys like "mfg.dplaax.dev" — are returned
+// containing dots — quoted HOCON keys like "mfg.poc.dplaax.dev" — are returned
 // verbatim; the path parser would otherwise split them. Returns ErrMissingKey
 // if path is absent, and ErrTypeMismatch if path is not an object or any value
 // is not a string.
