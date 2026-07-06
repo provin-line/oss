@@ -199,3 +199,32 @@ func TestResolve_SSRFBlocked_PrivateDNS(t *testing.T) {
 		t.Error("private-resolving host not blocked")
 	}
 }
+
+// ResolveDocument returns the parsed document AND the raw bytes actually
+// fetched (post size-cap, post identity check) — what an archiver stores.
+// The bytes must be the wire bytes verbatim, never a re-marshal.
+func TestResolveDocument_RawBytesVerbatim(t *testing.T) {
+	s := &stub{}
+	r := newResolver(t, s, loopbackGuard())
+	doc, raw, err := r.ResolveDocument(context.Background(), testDID)
+	if err != nil {
+		t.Fatalf("ResolveDocument: %v", err)
+	}
+	if doc.ID() != testDID {
+		t.Errorf("doc.ID = %q", doc.ID())
+	}
+	want, _ := did.New(did.DocumentFields{ID: testDID}).MarshalJSON()
+	if string(raw) != string(want) {
+		t.Errorf("raw bytes differ from what the stub served:\n got %s\nwant %s", raw, want)
+	}
+}
+
+// The raw-bytes path applies the same defenses as Resolve: an identity
+// mismatch is never honoured, bytes or not.
+func TestResolveDocument_IdentityMismatch(t *testing.T) {
+	s := &stub{docID: "did:dplaax:poc.dplaax.dev:org:evil"}
+	r := newResolver(t, s, loopbackGuard())
+	if _, _, err := r.ResolveDocument(context.Background(), testDID); !errors.Is(err, didresolver.ErrDIDIdentityMismatch) {
+		t.Fatalf("err = %v, want ErrDIDIdentityMismatch", err)
+	}
+}

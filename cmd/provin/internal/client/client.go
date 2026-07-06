@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
 
 // DID returns a DIDService client for the registry base URL, presenting token
@@ -28,6 +29,23 @@ func DID(httpClient connect.HTTPClient, registry, token string) (didpbconnect.DI
 		httpClient = http.DefaultClient
 	}
 	return didpbconnect.NewDIDServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
+}
+
+// VCResolver returns a VCResolverService client for the registry base URL,
+// presenting token as the L1 bearer on every RPC — the credential-fetch
+// surface the audit-bundle exporter walks a chain over. Same validation and
+// injection rules as DID.
+func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconnect.VCResolverServiceClient, error) {
+	if err := validateBaseURL(registry); err != nil {
+		return nil, fmt.Errorf("client: registry URL: %w", err)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("client: bearer token must not be empty (--token / PROVIN_TOKEN)")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return vcpbconnect.NewVCResolverServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
 }
 
 // validateBaseURL rejects a base URL that is empty, scheme-less, not http(s),

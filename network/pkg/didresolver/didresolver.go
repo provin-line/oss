@@ -89,56 +89,66 @@ func New(guard *core.URLGuard, opts ...Option) *Resolver {
 // are wrapped. It does NOT validate the document's keys/relationships — that is
 // the consumer's policy step (wireauth.ExtractPublicKey).
 func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
+	doc, _, err := r.ResolveDocument(ctx, didStr)
+	return doc, err
+}
+
+// ResolveDocument is Resolve returning, alongside the parsed document, the
+// raw bytes actually fetched (post size-cap, post identity check) — never a
+// re-marshal. Raw bytes are what an archiver stores (the audit-bundle
+// exporter); the parsed document is what runtime consumers want; one fetch
+// serves both so the two views cannot drift.
+func (r *Resolver) ResolveDocument(ctx context.Context, didStr string) (*did.DIDDocument, []byte, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("didresolver: parse %q: %w", didStr, err)
+		return nil, nil, fmt.Errorf("didresolver: parse %q: %w", didStr, err)
 	}
 	url, err := r.resolutionURL(d)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Early typed SSRF rejection before dialing; the guarded client also re-guards
 	// at dial time (DNS-rebinding), so this preflight is defense-in-depth.
 	if err := r.guard.CheckURL(ctx, url); err != nil {
-		return nil, fmt.Errorf("didresolver: endpoint rejected: %w", err)
+		return nil, nil, fmt.Errorf("didresolver: endpoint rejected: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("didresolver: build request: %w", err)
+		return nil, nil, fmt.Errorf("didresolver: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/did+json")
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("didresolver: fetch %s: %w", didStr, err)
+		return nil, nil, fmt.Errorf("didresolver: fetch %s: %w", didStr, err)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("%w: %s", ErrDIDNotFound, didStr)
+		return nil, nil, fmt.Errorf("%w: %s", ErrDIDNotFound, didStr)
 	default:
-		return nil, fmt.Errorf("didresolver: %s: unexpected status %d", didStr, resp.StatusCode)
+		return nil, nil, fmt.Errorf("didresolver: %s: unexpected status %d", didStr, resp.StatusCode)
 	}
 	// Bounded read: cap+1 so an exactly-cap body still fits and an over-cap body
 	// is detected.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDocumentSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("didresolver: read %s: %w", didStr, err)
+		return nil, nil, fmt.Errorf("didresolver: read %s: %w", didStr, err)
 	}
 	if len(body) > maxDocumentSize {
-		return nil, fmt.Errorf("didresolver: %s: document exceeds %d bytes", didStr, maxDocumentSize)
+		return nil, nil, fmt.Errorf("didresolver: %s: document exceeds %d bytes", didStr, maxDocumentSize)
 	}
 	var doc did.DIDDocument
 	if err := doc.UnmarshalJSON(body); err != nil {
-		return nil, fmt.Errorf("didresolver: parse document for %s: %w", didStr, err)
+		return nil, nil, fmt.Errorf("didresolver: parse document for %s: %w", didStr, err)
 	}
 	// Compare to the canonical reconstruction (d.String()), not the raw input, so
 	// the check stays correct if the parser ever normalizes (the remote resolves
 	// and returns the canonical id).
 	if doc.ID() != d.String() {
-		return nil, fmt.Errorf("%w: got %q for %q", ErrDIDIdentityMismatch, doc.ID(), d.String())
+		return nil, nil, fmt.Errorf("%w: got %q for %q", ErrDIDIdentityMismatch, doc.ID(), d.String())
 	}
-	return &doc, nil
+	return &doc, body, nil
 }
 
 // resolutionURL builds {base}/did/{accountType}/{accountID}/{resourcePath…}/did.json,

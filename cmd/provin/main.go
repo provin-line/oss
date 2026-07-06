@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/provin-line/oss/cmd/provin/internal/commands"
 )
@@ -28,8 +29,12 @@ Implemented:
   owner    init    --did <owner-did> --key <jwk-path>     register a pipeline owner
   pipeline create  --did <target-did> --owner-key <path>  issue a pipeline DID
   process  create  --did <target-did> --owner-key <path>  issue a process DID
+  bundle   export  --head <sha256:hex> --out <dir>        archive a chain + its authority documents
+                   [--did-base <registry>=<url>]... [--allow-loopback] [--allow-private] [--max-depth <n>]
+  bundle   verify  --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
+                                                          re-verify a bundle offline (no network)
 
-Global flags (every operation):
+Global flags (owner/pipeline/process/bundle export):
   --registry <base-url>   registry base URL   (env PROVIN_REGISTRY)
   --token    <token>      L1 bearer token     (env PROVIN_TOKEN)
 
@@ -49,6 +54,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return issueCmd(ctx, rest, stdout, commands.PipelineCreate)
 	case "process create":
 		return issueCmd(ctx, rest, stdout, commands.ProcessCreate)
+	case "bundle export":
+		return bundleExport(ctx, rest, stdout)
+	case "bundle verify":
+		return bundleVerify(ctx, rest, stdout)
 	default:
 		return fmt.Errorf("unknown command %q %q\n%s", group, op, usage)
 	}
@@ -114,4 +123,62 @@ func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(
 	}
 	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
 	return create(ctx, env, *did, *ownerKey)
+}
+
+func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("bundle export", flag.ContinueOnError)
+	registry, token := globalFlags(fs)
+	head := fs.String("head", "", "chain head content address sha256:<hex> (required)")
+	out := fs.String("out", "", "bundle directory to create; must not exist (required)")
+	didBases := map[string]string{}
+	fs.Func("did-base", "map a registry id to a DID-resolution base URL, <registry>=<url> (repeatable; unmapped registries default to https://<registry>)", func(v string) error {
+		reg, base, ok := strings.Cut(v, "=")
+		if !ok || reg == "" || base == "" {
+			return fmt.Errorf("want <registry>=<url>, got %q", v)
+		}
+		didBases[reg] = base
+		return nil
+	})
+	allowLoopback := fs.Bool("allow-loopback", false, "permit loopback DID-resolution targets (local development)")
+	allowPrivate := fs.Bool("allow-private", false, "permit RFC 1918 private DID-resolution targets")
+	maxDepth := fs.Int("max-depth", 0, "chain walk bound (0 = default)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if *head == "" || *out == "" {
+		return fmt.Errorf("bundle export: --head and --out are required")
+	}
+	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
+	return commands.BundleExport(ctx, env, commands.BundleExportConfig{
+		Head:          *head,
+		Out:           *out,
+		DIDBases:      didBases,
+		AllowLoopback: *allowLoopback,
+		AllowPrivate:  *allowPrivate,
+		MaxDepth:      *maxDepth,
+	})
+}
+
+func bundleVerify(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("bundle verify", flag.ContinueOnError)
+	dir := fs.String("bundle", "", "bundle directory (required)")
+	head := fs.String("head", "", "expected chain head sha256:<hex> — anchors what data flowed")
+	digest := fs.String("digest", "", "expected bundle digest sha256:<hex> — anchors the whole archive, proofs and documents included")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if *dir == "" {
+		return fmt.Errorf("bundle verify: --bundle is required")
+	}
+	return commands.BundleVerify(ctx, commands.Env{Stdout: stdout}, commands.BundleVerifyConfig{
+		Dir:    *dir,
+		Head:   *head,
+		Digest: *digest,
+	})
 }
