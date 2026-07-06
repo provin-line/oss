@@ -54,6 +54,9 @@ const (
 	// VCResolverServiceResolveVCProcedure is the fully-qualified name of the VCResolverService's
 	// ResolveVC RPC.
 	VCResolverServiceResolveVCProcedure = "/dplaax.vc.v1.VCResolverService/ResolveVC"
+	// VCResolverServiceListSuccessorsProcedure is the fully-qualified name of the VCResolverService's
+	// ListSuccessors RPC.
+	VCResolverServiceListSuccessorsProcedure = "/dplaax.vc.v1.VCResolverService/ListSuccessors"
 )
 
 // VCResolverServiceClient is a client for the dplaax.vc.v1.VCResolverService service.
@@ -70,6 +73,23 @@ type VCResolverServiceClient interface {
 	// (unlike W3C DID resolution). It is also the cross-registry fetch a peer
 	// resolver calls; how that peer authenticates is a deployment concern.
 	ResolveVC(context.Context, *connect.Request[v1.ResolveVCRequest]) (*connect.Response[v1.ResolveVCResponse], error)
+	// ListSuccessors returns the content addresses of credentials HELD BY THIS
+	// NODE whose previousCredential is the given hash — the forward-traversal
+	// primitive recall needs (chain links point backward; "find every
+	// descendant of contaminated lot X" walks this transitively, one step per
+	// call, the client's loop matching ResolveVC's per-node granularity). An
+	// unknown or childless hash returns an empty page, not NotFound: "no known
+	// successors" is a normal answer, and the index is explicitly scoped to
+	// this node's store — holding no successors is not a claim none exist.
+	// LINEAR edges only: an aggregate references its sources via its receipt
+	// (and derivedFrom carries issuer DIDs, not hashes), so aggregate edges
+	// are invisible here — recall across an aggregate boundary composes with
+	// AuditService.GetConsumedSources. Same L1 gate as ResolveVC: successor
+	// knowledge reveals provenance topology, the same class a VC read reveals.
+	// Pagination per the dplaax.audit.v1 convention (page_size 0 = default 64,
+	// negative = InvalidArgument, clamp at 256; opaque versioned token;
+	// lexicographic order).
+	ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error)
 }
 
 // NewVCResolverServiceClient constructs a client for the dplaax.vc.v1.VCResolverService service. By
@@ -95,13 +115,20 @@ func NewVCResolverServiceClient(httpClient connect.HTTPClient, baseURL string, o
 			connect.WithSchema(vCResolverServiceMethods.ByName("ResolveVC")),
 			connect.WithClientOptions(opts...),
 		),
+		listSuccessors: connect.NewClient[v1.ListSuccessorsRequest, v1.ListSuccessorsResponse](
+			httpClient,
+			baseURL+VCResolverServiceListSuccessorsProcedure,
+			connect.WithSchema(vCResolverServiceMethods.ByName("ListSuccessors")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // vCResolverServiceClient implements VCResolverServiceClient.
 type vCResolverServiceClient struct {
-	storeVC   *connect.Client[v1.StoreVCRequest, v1.StoreVCResponse]
-	resolveVC *connect.Client[v1.ResolveVCRequest, v1.ResolveVCResponse]
+	storeVC        *connect.Client[v1.StoreVCRequest, v1.StoreVCResponse]
+	resolveVC      *connect.Client[v1.ResolveVCRequest, v1.ResolveVCResponse]
+	listSuccessors *connect.Client[v1.ListSuccessorsRequest, v1.ListSuccessorsResponse]
 }
 
 // StoreVC calls dplaax.vc.v1.VCResolverService.StoreVC.
@@ -112,6 +139,11 @@ func (c *vCResolverServiceClient) StoreVC(ctx context.Context, req *connect.Requ
 // ResolveVC calls dplaax.vc.v1.VCResolverService.ResolveVC.
 func (c *vCResolverServiceClient) ResolveVC(ctx context.Context, req *connect.Request[v1.ResolveVCRequest]) (*connect.Response[v1.ResolveVCResponse], error) {
 	return c.resolveVC.CallUnary(ctx, req)
+}
+
+// ListSuccessors calls dplaax.vc.v1.VCResolverService.ListSuccessors.
+func (c *vCResolverServiceClient) ListSuccessors(ctx context.Context, req *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error) {
+	return c.listSuccessors.CallUnary(ctx, req)
 }
 
 // VCResolverServiceHandler is an implementation of the dplaax.vc.v1.VCResolverService service.
@@ -128,6 +160,23 @@ type VCResolverServiceHandler interface {
 	// (unlike W3C DID resolution). It is also the cross-registry fetch a peer
 	// resolver calls; how that peer authenticates is a deployment concern.
 	ResolveVC(context.Context, *connect.Request[v1.ResolveVCRequest]) (*connect.Response[v1.ResolveVCResponse], error)
+	// ListSuccessors returns the content addresses of credentials HELD BY THIS
+	// NODE whose previousCredential is the given hash — the forward-traversal
+	// primitive recall needs (chain links point backward; "find every
+	// descendant of contaminated lot X" walks this transitively, one step per
+	// call, the client's loop matching ResolveVC's per-node granularity). An
+	// unknown or childless hash returns an empty page, not NotFound: "no known
+	// successors" is a normal answer, and the index is explicitly scoped to
+	// this node's store — holding no successors is not a claim none exist.
+	// LINEAR edges only: an aggregate references its sources via its receipt
+	// (and derivedFrom carries issuer DIDs, not hashes), so aggregate edges
+	// are invisible here — recall across an aggregate boundary composes with
+	// AuditService.GetConsumedSources. Same L1 gate as ResolveVC: successor
+	// knowledge reveals provenance topology, the same class a VC read reveals.
+	// Pagination per the dplaax.audit.v1 convention (page_size 0 = default 64,
+	// negative = InvalidArgument, clamp at 256; opaque versioned token;
+	// lexicographic order).
+	ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error)
 }
 
 // NewVCResolverServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -149,12 +198,20 @@ func NewVCResolverServiceHandler(svc VCResolverServiceHandler, opts ...connect.H
 		connect.WithSchema(vCResolverServiceMethods.ByName("ResolveVC")),
 		connect.WithHandlerOptions(opts...),
 	)
+	vCResolverServiceListSuccessorsHandler := connect.NewUnaryHandler(
+		VCResolverServiceListSuccessorsProcedure,
+		svc.ListSuccessors,
+		connect.WithSchema(vCResolverServiceMethods.ByName("ListSuccessors")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.vc.v1.VCResolverService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case VCResolverServiceStoreVCProcedure:
 			vCResolverServiceStoreVCHandler.ServeHTTP(w, r)
 		case VCResolverServiceResolveVCProcedure:
 			vCResolverServiceResolveVCHandler.ServeHTTP(w, r)
+		case VCResolverServiceListSuccessorsProcedure:
+			vCResolverServiceListSuccessorsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -170,4 +227,8 @@ func (UnimplementedVCResolverServiceHandler) StoreVC(context.Context, *connect.R
 
 func (UnimplementedVCResolverServiceHandler) ResolveVC(context.Context, *connect.Request[v1.ResolveVCRequest]) (*connect.Response[v1.ResolveVCResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.vc.v1.VCResolverService.ResolveVC is not implemented"))
+}
+
+func (UnimplementedVCResolverServiceHandler) ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.vc.v1.VCResolverService.ListSuccessors is not implemented"))
 }

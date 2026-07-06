@@ -150,7 +150,7 @@ func TestAuditOne_HeadUnreadableRetained_MissDropped(t *testing.T) {
 func TestGetStatus_DamageIsNotNotFound(t *testing.T) {
 	head := "sha256:0000000000000000000000000000000000000000000000000000000000000001"
 	status := &damagedStatus{MemStatusStore: NewMemStatusStore(), damaged: map[string]bool{head: true}}
-	svc := NewStatusService(status)
+	svc := NewStatusService(status, NewMemReceiptStore())
 	_, err := svc.GetStatus(context.Background(), head)
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("damaged verdict via GetStatus: want a non-notfound error, got %v", err)

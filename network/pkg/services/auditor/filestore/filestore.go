@@ -160,8 +160,9 @@ func (e verdictEnvelope) validate() error {
 
 // StatusStore is the file-backed auditor.StatusStore.
 type StatusStore struct {
-	mu  sync.RWMutex
-	dir string
+	mu     sync.RWMutex
+	dir    string
+	logger *slog.Logger
 }
 
 var _ auditor.StatusStore = (*StatusStore)(nil)
@@ -171,7 +172,7 @@ func NewStatusStore(dir string) (*StatusStore, error) {
 	if err := mkdir(dir, "verdict"); err != nil {
 		return nil, err
 	}
-	return &StatusStore{dir: dir}, nil
+	return &StatusStore{dir: dir, logger: slog.Default()}, nil
 }
 
 // Put records rec for headHash (latest audit wins).
@@ -225,6 +226,11 @@ func (s *StatusStore) Get(headHash string) (auditor.AuditRecord, error) {
 	if err != nil {
 		return auditor.AuditRecord{}, fmt.Errorf("auditor/filestore: read verdict %s: %w", headHash, err)
 	}
+	return decodeVerdict(raw, headHash)
+}
+
+// decodeVerdict strict-decodes and validates one verdict entry's bytes.
+func decodeVerdict(raw []byte, headHash string) (auditor.AuditRecord, error) {
 	var env verdictEnvelope
 	if err := canon.NewStrictDecoder(raw).Decode(&env); err != nil {
 		return auditor.AuditRecord{}, fmt.Errorf("auditor/filestore: damaged verdict entry %s: %w", headHash, err)
@@ -245,6 +251,66 @@ func (s *StatusStore) Get(headHash string) (auditor.AuditRecord, error) {
 		AuditedAt: env.AuditedAt,
 		Abandoned: env.Abandoned,
 	}, nil
+}
+
+// List returns up to limit entries in lexicographic hash order, strictly
+// after fromExclusive. A damaged entry is returned with Damaged set and a
+// warn log — never skipped (damage must stay visible) and never fatal to the
+// listing (one damaged record must not deny enumeration of everything
+// sorting after it). Foreign filenames are ignored (not verdict entries).
+func (s *StatusStore) List(fromExclusive string, limit int) ([]auditor.HeadStatus, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	des, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("auditor/filestore: list verdicts: %w", err)
+	}
+	hashes := make([]string, 0, len(des))
+	for _, de := range des {
+		if de.IsDir() {
+			continue
+		}
+		base, ok := strings.CutSuffix(de.Name(), ".json")
+		if !ok {
+			continue
+		}
+		h := "sha256:" + base
+		if !vc.IsContentAddress(h) {
+			continue
+		}
+		if h > fromExclusive {
+			hashes = append(hashes, h)
+		}
+	}
+	sort.Strings(hashes)
+	if len(hashes) > limit {
+		hashes = hashes[:limit]
+	}
+	out := make([]auditor.HeadStatus, 0, len(hashes))
+	for _, h := range hashes {
+		path, err := entryFile(s.dir, h)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			// Listed a moment ago but unreadable now: damage, not absence.
+			s.logger.Warn("auditor/filestore: verdict entry unreadable — listed as damaged", "head", h, "err", err)
+			out = append(out, auditor.HeadStatus{Head: h, Damaged: true})
+			continue
+		}
+		rec, err := decodeVerdict(raw, h)
+		if err != nil {
+			s.logger.Warn("auditor/filestore: damaged verdict entry — listed as damaged", "head", h, "err", err)
+			out = append(out, auditor.HeadStatus{Head: h, Damaged: true})
+			continue
+		}
+		out = append(out, auditor.HeadStatus{Head: h, Record: rec})
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

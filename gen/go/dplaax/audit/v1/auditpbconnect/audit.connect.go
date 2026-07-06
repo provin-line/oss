@@ -49,6 +49,12 @@ const (
 	// AuditServiceGetAuditStatusProcedure is the fully-qualified name of the AuditService's
 	// GetAuditStatus RPC.
 	AuditServiceGetAuditStatusProcedure = "/dplaax.audit.v1.AuditService/GetAuditStatus"
+	// AuditServiceListAuditStatusesProcedure is the fully-qualified name of the AuditService's
+	// ListAuditStatuses RPC.
+	AuditServiceListAuditStatusesProcedure = "/dplaax.audit.v1.AuditService/ListAuditStatuses"
+	// AuditServiceGetConsumedSourcesProcedure is the fully-qualified name of the AuditService's
+	// GetConsumedSources RPC.
+	AuditServiceGetConsumedSourcesProcedure = "/dplaax.audit.v1.AuditService/GetConsumedSources"
 )
 
 // AuditServiceClient is a client for the dplaax.audit.v1.AuditService service.
@@ -59,6 +65,32 @@ type AuditServiceClient interface {
 	// malformed content address. Audit verdicts are provenance metadata, L1-gated
 	// like a VC read.
 	GetAuditStatus(context.Context, *connect.Request[v1.GetAuditStatusRequest]) (*connect.Response[v1.GetAuditStatusResponse], error)
+	// ListAuditStatuses enumerates the recorded verdicts — the discovery
+	// surface a relying party starts from ("what did my node audit"), where
+	// GetAuditStatus is the point lookup for a hash already known. Ordering is
+	// LEXICOGRAPHIC BY HEAD HASH, deliberately not temporal (stable under
+	// concurrent inserts; time-range questions go through the filter fields).
+	// Listings are not snapshots: an insert sorting before the cursor appears
+	// only on a fresh listing. Same L1 gate as the point read — this widens
+	// audit/read from point lookup to enumeration, which is the RPC's point;
+	// nothing is served that GetAuditStatus would not serve the same bearer.
+	ListAuditStatuses(context.Context, *connect.Request[v1.ListAuditStatusesRequest]) (*connect.Response[v1.ListAuditStatusesResponse], error)
+	// GetConsumedSources returns one page of the recorded receipt for a head:
+	// the content addresses of the source credentials the emitting boundary
+	// consumed (the emit-locus record, slice-17o). NotFound means NO RECEIPT
+	// RECORDED FOR THIS HEAD ON THIS NODE — a coverage fact (the head's audit
+	// here is linear-only), never a claim that the credential is intrinsically
+	// linear; callers distinguishing "unknown head" from "linear coverage" use
+	// GetAuditStatus. Paged because a consumed set has no bounded size (an
+	// aggregate window folds every input); ordering is lexicographic (the
+	// receipt is a set — storage order is not contractual). This is the
+	// consumed-set exposure slice-17q deferred: it feeds independent
+	// consume-locus verification, aggregate-complete archive export, and
+	// recall joins across aggregate boundaries. Recall composition note: the
+	// ListAuditStatuses × GetConsumedSources join is audited-head-complete —
+	// a just-emitted head has a receipt but no verdict until the audit
+	// runner's next tick.
+	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
 }
 
 // NewAuditServiceClient constructs a client for the dplaax.audit.v1.AuditService service. By
@@ -78,17 +110,41 @@ func NewAuditServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(auditServiceMethods.ByName("GetAuditStatus")),
 			connect.WithClientOptions(opts...),
 		),
+		listAuditStatuses: connect.NewClient[v1.ListAuditStatusesRequest, v1.ListAuditStatusesResponse](
+			httpClient,
+			baseURL+AuditServiceListAuditStatusesProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("ListAuditStatuses")),
+			connect.WithClientOptions(opts...),
+		),
+		getConsumedSources: connect.NewClient[v1.GetConsumedSourcesRequest, v1.GetConsumedSourcesResponse](
+			httpClient,
+			baseURL+AuditServiceGetConsumedSourcesProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("GetConsumedSources")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // auditServiceClient implements AuditServiceClient.
 type auditServiceClient struct {
-	getAuditStatus *connect.Client[v1.GetAuditStatusRequest, v1.GetAuditStatusResponse]
+	getAuditStatus     *connect.Client[v1.GetAuditStatusRequest, v1.GetAuditStatusResponse]
+	listAuditStatuses  *connect.Client[v1.ListAuditStatusesRequest, v1.ListAuditStatusesResponse]
+	getConsumedSources *connect.Client[v1.GetConsumedSourcesRequest, v1.GetConsumedSourcesResponse]
 }
 
 // GetAuditStatus calls dplaax.audit.v1.AuditService.GetAuditStatus.
 func (c *auditServiceClient) GetAuditStatus(ctx context.Context, req *connect.Request[v1.GetAuditStatusRequest]) (*connect.Response[v1.GetAuditStatusResponse], error) {
 	return c.getAuditStatus.CallUnary(ctx, req)
+}
+
+// ListAuditStatuses calls dplaax.audit.v1.AuditService.ListAuditStatuses.
+func (c *auditServiceClient) ListAuditStatuses(ctx context.Context, req *connect.Request[v1.ListAuditStatusesRequest]) (*connect.Response[v1.ListAuditStatusesResponse], error) {
+	return c.listAuditStatuses.CallUnary(ctx, req)
+}
+
+// GetConsumedSources calls dplaax.audit.v1.AuditService.GetConsumedSources.
+func (c *auditServiceClient) GetConsumedSources(ctx context.Context, req *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error) {
+	return c.getConsumedSources.CallUnary(ctx, req)
 }
 
 // AuditServiceHandler is an implementation of the dplaax.audit.v1.AuditService service.
@@ -99,6 +155,32 @@ type AuditServiceHandler interface {
 	// malformed content address. Audit verdicts are provenance metadata, L1-gated
 	// like a VC read.
 	GetAuditStatus(context.Context, *connect.Request[v1.GetAuditStatusRequest]) (*connect.Response[v1.GetAuditStatusResponse], error)
+	// ListAuditStatuses enumerates the recorded verdicts — the discovery
+	// surface a relying party starts from ("what did my node audit"), where
+	// GetAuditStatus is the point lookup for a hash already known. Ordering is
+	// LEXICOGRAPHIC BY HEAD HASH, deliberately not temporal (stable under
+	// concurrent inserts; time-range questions go through the filter fields).
+	// Listings are not snapshots: an insert sorting before the cursor appears
+	// only on a fresh listing. Same L1 gate as the point read — this widens
+	// audit/read from point lookup to enumeration, which is the RPC's point;
+	// nothing is served that GetAuditStatus would not serve the same bearer.
+	ListAuditStatuses(context.Context, *connect.Request[v1.ListAuditStatusesRequest]) (*connect.Response[v1.ListAuditStatusesResponse], error)
+	// GetConsumedSources returns one page of the recorded receipt for a head:
+	// the content addresses of the source credentials the emitting boundary
+	// consumed (the emit-locus record, slice-17o). NotFound means NO RECEIPT
+	// RECORDED FOR THIS HEAD ON THIS NODE — a coverage fact (the head's audit
+	// here is linear-only), never a claim that the credential is intrinsically
+	// linear; callers distinguishing "unknown head" from "linear coverage" use
+	// GetAuditStatus. Paged because a consumed set has no bounded size (an
+	// aggregate window folds every input); ordering is lexicographic (the
+	// receipt is a set — storage order is not contractual). This is the
+	// consumed-set exposure slice-17q deferred: it feeds independent
+	// consume-locus verification, aggregate-complete archive export, and
+	// recall joins across aggregate boundaries. Recall composition note: the
+	// ListAuditStatuses × GetConsumedSources join is audited-head-complete —
+	// a just-emitted head has a receipt but no verdict until the audit
+	// runner's next tick.
+	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
 }
 
 // NewAuditServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -114,10 +196,26 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(auditServiceMethods.ByName("GetAuditStatus")),
 		connect.WithHandlerOptions(opts...),
 	)
+	auditServiceListAuditStatusesHandler := connect.NewUnaryHandler(
+		AuditServiceListAuditStatusesProcedure,
+		svc.ListAuditStatuses,
+		connect.WithSchema(auditServiceMethods.ByName("ListAuditStatuses")),
+		connect.WithHandlerOptions(opts...),
+	)
+	auditServiceGetConsumedSourcesHandler := connect.NewUnaryHandler(
+		AuditServiceGetConsumedSourcesProcedure,
+		svc.GetConsumedSources,
+		connect.WithSchema(auditServiceMethods.ByName("GetConsumedSources")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.audit.v1.AuditService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuditServiceGetAuditStatusProcedure:
 			auditServiceGetAuditStatusHandler.ServeHTTP(w, r)
+		case AuditServiceListAuditStatusesProcedure:
+			auditServiceListAuditStatusesHandler.ServeHTTP(w, r)
+		case AuditServiceGetConsumedSourcesProcedure:
+			auditServiceGetConsumedSourcesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -129,4 +227,12 @@ type UnimplementedAuditServiceHandler struct{}
 
 func (UnimplementedAuditServiceHandler) GetAuditStatus(context.Context, *connect.Request[v1.GetAuditStatusRequest]) (*connect.Response[v1.GetAuditStatusResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.GetAuditStatus is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) ListAuditStatuses(context.Context, *connect.Request[v1.ListAuditStatusesRequest]) (*connect.Response[v1.ListAuditStatusesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.ListAuditStatuses is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.GetConsumedSources is not implemented"))
 }

@@ -79,6 +79,51 @@ func StatusStore(t *testing.T, newStore func(t *testing.T) auditor.StatusStore) 
 	if got, err := s.Get(h); err != nil || got.Overall != vc.ConfidenceFailed {
 		t.Fatalf("overwrite: got %+v (err %v), want Failed", got, err)
 	}
+
+	// Enumeration: lexicographic hash order regardless of insertion order,
+	// exclusive cursor, limit, records carried on the entries, no Damaged
+	// flags on healthy stores. (Damage behavior is impl-specific: the mem
+	// store cannot damage; the file store pins it in its own tests.)
+	lister := newStore(t)
+	recs := map[string]auditor.AuditRecord{}
+	for _, b := range []byte{9, 3, 12, 5} { // 12 -> 'c'*64, sorts after '9'*64
+		hh := Hash(b)
+		r := Record()
+		r.Notations = []string{hh}
+		if err := lister.Put(hh, r); err != nil {
+			t.Fatal(err)
+		}
+		recs[hh] = r
+	}
+	all, err := lister.List("", 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	wantOrder := []string{Hash(3), Hash(5), Hash(9), Hash(12)}
+	if len(all) != len(wantOrder) {
+		t.Fatalf("List(\"\", 10) returned %d entries, want %d", len(all), len(wantOrder))
+	}
+	for i, e := range all {
+		if e.Head != wantOrder[i] {
+			t.Fatalf("List order[%d] = %s, want %s", i, e.Head, wantOrder[i])
+		}
+		if e.Damaged {
+			t.Fatalf("healthy entry %s listed as Damaged", e.Head)
+		}
+		if !reflect.DeepEqual(e.Record, recs[e.Head]) {
+			t.Fatalf("List entry %s record mismatch:\n got = %+v\nwant = %+v", e.Head, e.Record, recs[e.Head])
+		}
+	}
+	page, err := lister.List(Hash(3), 2)
+	if err != nil || len(page) != 2 || page[0].Head != Hash(5) || page[1].Head != Hash(9) {
+		t.Fatalf("List(after h3, 2) = %+v (err %v), want [h5 h9]", page, err)
+	}
+	if rest, err := lister.List(Hash(12), 5); err != nil || len(rest) != 0 {
+		t.Fatalf("List past the end = %+v (err %v), want empty", rest, err)
+	}
+	if none, err := newStore(t).List("", 5); err != nil || len(none) != 0 {
+		t.Fatalf("List on empty store = %+v (err %v), want empty", none, err)
+	}
 }
 
 // ReceiptStore runs the ReceiptStore contract against a fresh implementation.

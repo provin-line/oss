@@ -2,13 +2,16 @@ package handler_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
 
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
+	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/vc"
@@ -18,12 +21,31 @@ import (
 // auditor.StatusService so the handler test exercises only proto↔domain projection and
 // error mapping — the validation/lookup logic is the service's own test.
 type fakeService struct {
-	rec auditor.AuditRecord
-	err error
+	rec         auditor.AuditRecord
+	err         error
+	entries     []auditor.HeadStatus
+	lastScanned string
+	more        bool
+	consumed    []string
+	next        string
 }
 
 func (f fakeService) GetStatus(context.Context, string) (auditor.AuditRecord, error) {
 	return f.rec, f.err
+}
+
+func (f fakeService) ListStatuses(context.Context, string, int, time.Time, time.Time) ([]auditor.HeadStatus, string, bool, error) {
+	if f.err != nil {
+		return nil, "", false, f.err
+	}
+	return f.entries, f.lastScanned, f.more, nil
+}
+
+func (f fakeService) GetConsumed(context.Context, string, string, int) ([]string, string, error) {
+	if f.err != nil {
+		return nil, "", f.err
+	}
+	return f.consumed, f.next, nil
 }
 
 func get(t *testing.T, svc handler.Service) (*auditpb.GetAuditStatusResponse, error) {
@@ -192,5 +214,101 @@ func TestGetAuditStatus_ErrorMapping(t *testing.T) {
 				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
 			}
 		})
+	}
+}
+
+// The listing projects each intact entry through the SAME status projection
+// as the point lookup, marks damaged entries without a status, and issues a
+// continuation token only when the scan has more.
+func TestListAuditStatuses_ProjectionAndToken(t *testing.T) {
+	rec := auditor.AuditRecord{
+		Overall:   vc.ConfidenceVerified,
+		Axes:      vc.AxisResult{DataIntegrity: vc.ConfidenceVerified, SignerAuthenticity: vc.ConfidenceVerified, ChainConsistency: vc.ConfidenceVerified},
+		Scope:     auditor.AuditScope{LinearChain: true},
+		AuditedAt: time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+	h := handler.New(fakeService{
+		entries: []auditor.HeadStatus{
+			{Head: "sha256:" + strings.Repeat("aa", 32), Record: rec},
+			{Head: "sha256:" + strings.Repeat("bb", 32), Damaged: true},
+		},
+		lastScanned: "sha256:" + strings.Repeat("bb", 32),
+		more:        true,
+	})
+	resp, err := h.ListAuditStatuses(context.Background(), connect.NewRequest(&auditpb.ListAuditStatusesRequest{}))
+	if err != nil {
+		t.Fatalf("ListAuditStatuses: %v", err)
+	}
+	entries := resp.Msg.GetEntries()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if entries[0].GetDamaged() || entries[0].GetStatus().GetLinearChain().GetConfidence() != auditpb.Confidence_CONFIDENCE_VERIFIED {
+		t.Errorf("intact entry projected wrong: %+v", entries[0])
+	}
+	if !entries[1].GetDamaged() || entries[1].GetStatus() != nil {
+		t.Errorf("damaged entry must carry damaged=true and NO status: %+v", entries[1])
+	}
+	tok := resp.Msg.GetNextPageToken()
+	if tok == "" {
+		t.Fatal("more=true must issue a continuation token")
+	}
+	// The token round-trips only with the SAME filters.
+	if _, err := pagination.DecodeToken("dplaax.audit.v1.AuditService.ListAuditStatuses", tok, "", ""); err != nil {
+		t.Errorf("token does not decode with the issuing filters: %v", err)
+	}
+	if _, err := pagination.DecodeToken("dplaax.audit.v1.AuditService.ListAuditStatuses", tok, "2026-01-01T00:00:00Z", ""); err == nil {
+		t.Error("token decoded with different filters — cross-filter replay must be rejected")
+	}
+}
+
+func TestListAuditStatuses_InvalidInputs(t *testing.T) {
+	h := handler.New(fakeService{})
+	cases := []*auditpb.ListAuditStatusesRequest{
+		{PageSize: -1},
+		{PageToken: "garbage!!!"},
+		{AuditedAfter: "yesterday-ish"},
+		{AuditedBefore: "2026-13-99"},
+	}
+	for _, req := range cases {
+		_, err := h.ListAuditStatuses(context.Background(), connect.NewRequest(req))
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("req %+v: code = %v, want InvalidArgument", req, connect.CodeOf(err))
+		}
+	}
+}
+
+func TestGetConsumedSources_PageAndErrors(t *testing.T) {
+	head := "sha256:" + strings.Repeat("cc", 32)
+	consumed := []string{"sha256:" + strings.Repeat("11", 32), "sha256:" + strings.Repeat("22", 32)}
+	h := handler.New(fakeService{consumed: consumed, next: consumed[1]})
+	resp, err := h.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head}))
+	if err != nil {
+		t.Fatalf("GetConsumedSources: %v", err)
+	}
+	if got := resp.Msg.GetConsumed(); len(got) != 2 || got[0] != consumed[0] {
+		t.Fatalf("consumed = %v, want %v", got, consumed)
+	}
+	tok := resp.Msg.GetNextPageToken()
+	if tok == "" {
+		t.Fatal("non-empty next cursor must issue a token")
+	}
+	// The head hash is part of the token fingerprint: replay against another
+	// head must be rejected, never silently list the wrong receipt.
+	if _, err := pagination.DecodeToken("dplaax.audit.v1.AuditService.GetConsumedSources", tok, head); err != nil {
+		t.Errorf("token does not decode for its own head: %v", err)
+	}
+	if _, err := pagination.DecodeToken("dplaax.audit.v1.AuditService.GetConsumedSources", tok, "sha256:"+strings.Repeat("dd", 32)); err == nil {
+		t.Error("token decoded for a different head — cross-head replay must be rejected")
+	}
+
+	// Sentinel mapping flows through the shared mapError.
+	notFound := handler.New(fakeService{err: fmt.Errorf("wrap: %w", auditor.ErrNotFound)})
+	if _, err := notFound.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("no receipt: code = %v, want NotFound", connect.CodeOf(err))
+	}
+	damaged := handler.New(fakeService{err: errors.New("damaged receipt")})
+	if _, err := damaged.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head})); connect.CodeOf(err) != connect.CodeInternal {
+		t.Errorf("damaged receipt: code = %v, want Internal", connect.CodeOf(err))
 	}
 }

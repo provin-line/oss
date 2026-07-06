@@ -16,7 +16,9 @@ import (
 // audit.proto is written (slice-17i Phase A), before any handler exists.
 func TestAuditService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
-		"GetAuditStatus": {"audit", "read"},
+		"GetAuditStatus":     {"audit", "read"},
+		"ListAuditStatuses":  {"audit", "read"},
+		"GetConsumedSources": {"audit", "read"},
 	}
 	methods := auditpb.File_dplaax_audit_v1_audit_proto.Services().ByName("AuditService").Methods()
 	if methods.Len() != len(want) {

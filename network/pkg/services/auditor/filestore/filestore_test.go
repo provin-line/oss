@@ -237,3 +237,42 @@ func TestQueue_DamagedEntrySkippedAndRepaired(t *testing.T) {
 		t.Fatalf("repaired list = %+v (err %v)", list, err)
 	}
 }
+
+// One damaged verdict entry must not deny enumeration: it lists as Damaged
+// and everything sorting after it still lists intact (discovery-layer
+// doctrine: damage visible, never absence, never a listing-wide error).
+func TestStatusStoreList_DamagedEntryStaysEnumerable(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewStatusStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := "sha256:" + strings.Repeat("11", 32)
+	h2 := "sha256:" + strings.Repeat("22", 32)
+	h3 := "sha256:" + strings.Repeat("33", 32)
+	for _, h := range []string{h1, h2, h3} {
+		if err := s.Put(h, verifiedRecord()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Corrupt the middle entry on disk.
+	if err := os.WriteFile(filepath.Join(dir, strings.TrimPrefix(h2, "sha256:")+".json"), []byte("{broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.List("", 10)
+	if err != nil {
+		t.Fatalf("List with a damaged entry must not error the listing: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("List returned %d entries, want 3", len(got))
+	}
+	if got[0].Head != h1 || got[0].Damaged {
+		t.Errorf("entry[0] = %+v, want intact %s", got[0], h1)
+	}
+	if got[1].Head != h2 || !got[1].Damaged {
+		t.Errorf("entry[1] = %+v, want DAMAGED %s", got[1], h2)
+	}
+	if got[2].Head != h3 || got[2].Damaged {
+		t.Errorf("entry[2] = %+v, want intact %s (a damaged predecessor must not hide it)", got[2], h3)
+	}
+}

@@ -343,6 +343,335 @@ func (x *GetAuditStatusResponse) GetAbandoned() bool {
 	return false
 }
 
+// Pagination contract (repo convention, set here by the first paged RPCs):
+// page_size 0 = server default (64), negative = InvalidArgument, above the
+// server maximum (256) = clamped, never an error. page_token is OPAQUE and
+// versioned; a malformed token, an unversioned token, or a token issued for
+// different filter fields is InvalidArgument. The cursor advances by SCAN
+// progress, not by matches: a filtered page may legally return fewer than
+// page_size entries — even zero — with a non-empty next_page_token, so a
+// filtered listing can never livelock; clients loop until next_page_token
+// comes back empty.
+type ListAuditStatusesRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	PageSize  int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// audited_after / audited_before (optional, RFC 3339 UTC) bound the
+	// verdict timestamps; malformed values are InvalidArgument. Applied while
+	// scanning in hash order (there is no temporal index — a filtered listing
+	// scans; the token stays opaque so an index can change that freely).
+	AuditedAfter  string `protobuf:"bytes,3,opt,name=audited_after,json=auditedAfter,proto3" json:"audited_after,omitempty"`
+	AuditedBefore string `protobuf:"bytes,4,opt,name=audited_before,json=auditedBefore,proto3" json:"audited_before,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAuditStatusesRequest) Reset() {
+	*x = ListAuditStatusesRequest{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAuditStatusesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAuditStatusesRequest) ProtoMessage() {}
+
+func (x *ListAuditStatusesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAuditStatusesRequest.ProtoReflect.Descriptor instead.
+func (*ListAuditStatusesRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListAuditStatusesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListAuditStatusesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListAuditStatusesRequest) GetAuditedAfter() string {
+	if x != nil {
+		return x.AuditedAfter
+	}
+	return ""
+}
+
+func (x *ListAuditStatusesRequest) GetAuditedBefore() string {
+	if x != nil {
+		return x.AuditedBefore
+	}
+	return ""
+}
+
+// AuditStatusEntry is one enumerated head. status embeds the point-lookup
+// response: it is exactly the per-head status payload (asserted by the
+// coverage principle above), so embedding keeps ONE source of truth for the
+// verdict shape and its frozen semantics. Guard rule that keeps this sound:
+// GetAuditStatusResponse must stay pure per-head status — any future
+// point-read-only data goes in a new field/message, never into it.
+type AuditStatusEntry struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	HeadHash string                 `protobuf:"bytes,1,opt,name=head_hash,json=headHash,proto3" json:"head_hash,omitempty"`
+	// status is the recorded verdict — absent when damaged is true.
+	Status *GetAuditStatusResponse `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	// damaged marks a head whose recorded verdict could not be read back
+	// intact. The head stays ENUMERABLE — a listing must not present damage
+	// as absence, and one damaged record must not deny discovery of
+	// everything sorting after it — but the verdict itself is unavailable
+	// (a point GetAuditStatus for this head errors). Never set silently:
+	// the node logs the damage when serving it. A damaged entry ignores the
+	// time filters (it has no readable timestamp; a caller narrowing by time
+	// must still learn that part of the record set is unreadable).
+	Damaged       bool `protobuf:"varint,3,opt,name=damaged,proto3" json:"damaged,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuditStatusEntry) Reset() {
+	*x = AuditStatusEntry{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditStatusEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditStatusEntry) ProtoMessage() {}
+
+func (x *AuditStatusEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditStatusEntry.ProtoReflect.Descriptor instead.
+func (*AuditStatusEntry) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AuditStatusEntry) GetHeadHash() string {
+	if x != nil {
+		return x.HeadHash
+	}
+	return ""
+}
+
+func (x *AuditStatusEntry) GetStatus() *GetAuditStatusResponse {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *AuditStatusEntry) GetDamaged() bool {
+	if x != nil {
+		return x.Damaged
+	}
+	return false
+}
+
+type ListAuditStatusesResponse struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Entries []*AuditStatusEntry    `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	// An empty next_page_token means the listing is exhausted. (The converse
+	// is not guaranteed: the cursor tracks SCAN progress, so when the store
+	// size is an exact multiple of the scan budget the final token yields one
+	// trailing empty page — loop until the token comes back empty.)
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAuditStatusesResponse) Reset() {
+	*x = ListAuditStatusesResponse{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAuditStatusesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAuditStatusesResponse) ProtoMessage() {}
+
+func (x *ListAuditStatusesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAuditStatusesResponse.ProtoReflect.Descriptor instead.
+func (*ListAuditStatusesResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ListAuditStatusesResponse) GetEntries() []*AuditStatusEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListAuditStatusesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+type GetConsumedSourcesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// head_hash is the emitted head's content address ("sha256:<hex>").
+	HeadHash      string `protobuf:"bytes,1,opt,name=head_hash,json=headHash,proto3" json:"head_hash,omitempty"`
+	PageSize      int32  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetConsumedSourcesRequest) Reset() {
+	*x = GetConsumedSourcesRequest{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetConsumedSourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetConsumedSourcesRequest) ProtoMessage() {}
+
+func (x *GetConsumedSourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetConsumedSourcesRequest.ProtoReflect.Descriptor instead.
+func (*GetConsumedSourcesRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetConsumedSourcesRequest) GetHeadHash() string {
+	if x != nil {
+		return x.HeadHash
+	}
+	return ""
+}
+
+func (x *GetConsumedSourcesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *GetConsumedSourcesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type GetConsumedSourcesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// consumed is one page of the receipt's source content addresses,
+	// lexicographic. Never an empty first page: an absent receipt is NotFound,
+	// and a recorded receipt is never empty (all-consumed semantics include
+	// the triggering predecessor's issuer).
+	Consumed      []string `protobuf:"bytes,1,rep,name=consumed,proto3" json:"consumed,omitempty"`
+	NextPageToken string   `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetConsumedSourcesResponse) Reset() {
+	*x = GetConsumedSourcesResponse{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetConsumedSourcesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetConsumedSourcesResponse) ProtoMessage() {}
+
+func (x *GetConsumedSourcesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetConsumedSourcesResponse.ProtoReflect.Descriptor instead.
+func (*GetConsumedSourcesResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetConsumedSourcesResponse) GetConsumed() []string {
+	if x != nil {
+		return x.Consumed
+	}
+	return nil
+}
+
+func (x *GetConsumedSourcesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_dplaax_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
@@ -365,15 +694,40 @@ const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
 	"\x11source_commitment\x18\x02 \x01(\v2\x1d.dplaax.audit.v1.ScopeVerdictR\x10sourceCommitment\x12\x1d\n" +
 	"\n" +
 	"audited_at\x18\x03 \x01(\tR\tauditedAt\x12\x1c\n" +
-	"\tabandoned\x18\x04 \x01(\bR\tabandoned*v\n" +
+	"\tabandoned\x18\x04 \x01(\bR\tabandoned\"\xa2\x01\n" +
+	"\x18ListAuditStatusesRequest\x12\x1b\n" +
+	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\x12#\n" +
+	"\raudited_after\x18\x03 \x01(\tR\fauditedAfter\x12%\n" +
+	"\x0eaudited_before\x18\x04 \x01(\tR\rauditedBefore\"\x8a\x01\n" +
+	"\x10AuditStatusEntry\x12\x1b\n" +
+	"\thead_hash\x18\x01 \x01(\tR\bheadHash\x12?\n" +
+	"\x06status\x18\x02 \x01(\v2'.dplaax.audit.v1.GetAuditStatusResponseR\x06status\x12\x18\n" +
+	"\adamaged\x18\x03 \x01(\bR\adamaged\"\x80\x01\n" +
+	"\x19ListAuditStatusesResponse\x12;\n" +
+	"\aentries\x18\x01 \x03(\v2!.dplaax.audit.v1.AuditStatusEntryR\aentries\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"t\n" +
+	"\x19GetConsumedSourcesRequest\x12\x1b\n" +
+	"\thead_hash\x18\x01 \x01(\tR\bheadHash\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"`\n" +
+	"\x1aGetConsumedSourcesResponse\x12\x1a\n" +
+	"\bconsumed\x18\x01 \x03(\tR\bconsumed\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*v\n" +
 	"\n" +
 	"Confidence\x12\x1a\n" +
 	"\x16CONFIDENCE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CONFIDENCE_FAILED\x10\x01\x12\x1c\n" +
 	"\x18CONFIDENCE_INDETERMINATE\x10\x02\x12\x17\n" +
-	"\x13CONFIDENCE_VERIFIED\x10\x032\x84\x01\n" +
+	"\x13CONFIDENCE_VERIFIED\x10\x032\x86\x03\n" +
 	"\fAuditService\x12t\n" +
 	"\x0eGetAuditStatus\x12&.dplaax.audit.v1.GetAuditStatusRequest\x1a'.dplaax.audit.v1.GetAuditStatusResponse\"\x11\x82\xb5\x18\r\n" +
+	"\x05audit\x12\x04read\x12}\n" +
+	"\x11ListAuditStatuses\x12).dplaax.audit.v1.ListAuditStatusesRequest\x1a*.dplaax.audit.v1.ListAuditStatusesResponse\"\x11\x82\xb5\x18\r\n" +
+	"\x05audit\x12\x04read\x12\x80\x01\n" +
+	"\x12GetConsumedSources\x12*.dplaax.audit.v1.GetConsumedSourcesRequest\x1a+.dplaax.audit.v1.GetConsumedSourcesResponse\"\x11\x82\xb5\x18\r\n" +
 	"\x05audit\x12\x04readB;Z9github.com/provin-line/oss/gen/go/dplaax/audit/v1;auditpbb\x06proto3"
 
 var (
@@ -389,29 +743,40 @@ func file_dplaax_audit_v1_audit_proto_rawDescGZIP() []byte {
 }
 
 var file_dplaax_audit_v1_audit_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_dplaax_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_dplaax_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_dplaax_audit_v1_audit_proto_goTypes = []any{
-	(Confidence)(0),                // 0: dplaax.audit.v1.Confidence
-	(*AxisVerdict)(nil),            // 1: dplaax.audit.v1.AxisVerdict
-	(*ScopeVerdict)(nil),           // 2: dplaax.audit.v1.ScopeVerdict
-	(*GetAuditStatusRequest)(nil),  // 3: dplaax.audit.v1.GetAuditStatusRequest
-	(*GetAuditStatusResponse)(nil), // 4: dplaax.audit.v1.GetAuditStatusResponse
+	(Confidence)(0),                    // 0: dplaax.audit.v1.Confidence
+	(*AxisVerdict)(nil),                // 1: dplaax.audit.v1.AxisVerdict
+	(*ScopeVerdict)(nil),               // 2: dplaax.audit.v1.ScopeVerdict
+	(*GetAuditStatusRequest)(nil),      // 3: dplaax.audit.v1.GetAuditStatusRequest
+	(*GetAuditStatusResponse)(nil),     // 4: dplaax.audit.v1.GetAuditStatusResponse
+	(*ListAuditStatusesRequest)(nil),   // 5: dplaax.audit.v1.ListAuditStatusesRequest
+	(*AuditStatusEntry)(nil),           // 6: dplaax.audit.v1.AuditStatusEntry
+	(*ListAuditStatusesResponse)(nil),  // 7: dplaax.audit.v1.ListAuditStatusesResponse
+	(*GetConsumedSourcesRequest)(nil),  // 8: dplaax.audit.v1.GetConsumedSourcesRequest
+	(*GetConsumedSourcesResponse)(nil), // 9: dplaax.audit.v1.GetConsumedSourcesResponse
 }
 var file_dplaax_audit_v1_audit_proto_depIdxs = []int32{
-	0, // 0: dplaax.audit.v1.AxisVerdict.data_integrity:type_name -> dplaax.audit.v1.Confidence
-	0, // 1: dplaax.audit.v1.AxisVerdict.signer_authenticity:type_name -> dplaax.audit.v1.Confidence
-	0, // 2: dplaax.audit.v1.AxisVerdict.chain_consistency:type_name -> dplaax.audit.v1.Confidence
-	0, // 3: dplaax.audit.v1.ScopeVerdict.confidence:type_name -> dplaax.audit.v1.Confidence
-	1, // 4: dplaax.audit.v1.ScopeVerdict.axes:type_name -> dplaax.audit.v1.AxisVerdict
-	2, // 5: dplaax.audit.v1.GetAuditStatusResponse.linear_chain:type_name -> dplaax.audit.v1.ScopeVerdict
-	2, // 6: dplaax.audit.v1.GetAuditStatusResponse.source_commitment:type_name -> dplaax.audit.v1.ScopeVerdict
-	3, // 7: dplaax.audit.v1.AuditService.GetAuditStatus:input_type -> dplaax.audit.v1.GetAuditStatusRequest
-	4, // 8: dplaax.audit.v1.AuditService.GetAuditStatus:output_type -> dplaax.audit.v1.GetAuditStatusResponse
-	8, // [8:9] is the sub-list for method output_type
-	7, // [7:8] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	0,  // 0: dplaax.audit.v1.AxisVerdict.data_integrity:type_name -> dplaax.audit.v1.Confidence
+	0,  // 1: dplaax.audit.v1.AxisVerdict.signer_authenticity:type_name -> dplaax.audit.v1.Confidence
+	0,  // 2: dplaax.audit.v1.AxisVerdict.chain_consistency:type_name -> dplaax.audit.v1.Confidence
+	0,  // 3: dplaax.audit.v1.ScopeVerdict.confidence:type_name -> dplaax.audit.v1.Confidence
+	1,  // 4: dplaax.audit.v1.ScopeVerdict.axes:type_name -> dplaax.audit.v1.AxisVerdict
+	2,  // 5: dplaax.audit.v1.GetAuditStatusResponse.linear_chain:type_name -> dplaax.audit.v1.ScopeVerdict
+	2,  // 6: dplaax.audit.v1.GetAuditStatusResponse.source_commitment:type_name -> dplaax.audit.v1.ScopeVerdict
+	4,  // 7: dplaax.audit.v1.AuditStatusEntry.status:type_name -> dplaax.audit.v1.GetAuditStatusResponse
+	6,  // 8: dplaax.audit.v1.ListAuditStatusesResponse.entries:type_name -> dplaax.audit.v1.AuditStatusEntry
+	3,  // 9: dplaax.audit.v1.AuditService.GetAuditStatus:input_type -> dplaax.audit.v1.GetAuditStatusRequest
+	5,  // 10: dplaax.audit.v1.AuditService.ListAuditStatuses:input_type -> dplaax.audit.v1.ListAuditStatusesRequest
+	8,  // 11: dplaax.audit.v1.AuditService.GetConsumedSources:input_type -> dplaax.audit.v1.GetConsumedSourcesRequest
+	4,  // 12: dplaax.audit.v1.AuditService.GetAuditStatus:output_type -> dplaax.audit.v1.GetAuditStatusResponse
+	7,  // 13: dplaax.audit.v1.AuditService.ListAuditStatuses:output_type -> dplaax.audit.v1.ListAuditStatusesResponse
+	9,  // 14: dplaax.audit.v1.AuditService.GetConsumedSources:output_type -> dplaax.audit.v1.GetConsumedSourcesResponse
+	12, // [12:15] is the sub-list for method output_type
+	9,  // [9:12] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_audit_v1_audit_proto_init() }
@@ -425,7 +790,7 @@ func file_dplaax_audit_v1_audit_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_audit_v1_audit_proto_rawDesc), len(file_dplaax_audit_v1_audit_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

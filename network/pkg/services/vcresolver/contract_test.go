@@ -16,8 +16,9 @@ import (
 // frozen the moment vc.proto is written (slice-7 Phase A), before any handler exists.
 func TestVCResolverService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
-		"StoreVC":   {"vc", "store"},
-		"ResolveVC": {"vc", "read"},
+		"StoreVC":        {"vc", "store"},
+		"ResolveVC":      {"vc", "read"},
+		"ListSuccessors": {"vc", "read"},
 	}
 	methods := vcpb.File_dplaax_vc_v1_vc_proto.Services().ByName("VCResolverService").Methods()
 	if methods.Len() != len(want) {

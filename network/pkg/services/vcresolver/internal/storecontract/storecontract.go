@@ -9,6 +9,8 @@ package storecontract
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -23,11 +25,19 @@ func Hash(b byte) string { return "sha256:" + strings.Repeat(string("0123456789a
 // Credential builds a minimal wire-form credential whose Hash() works.
 func Credential(t *testing.T) *vc.PipelinePassCredential {
 	t.Helper()
+	return CredentialWithProcess(t, "s1")
+}
+
+// CredentialWithProcess builds a minimal wire-form credential with the given
+// processId — distinct ids yield distinct content addresses, which the
+// enumeration contract needs.
+func CredentialWithProcess(t *testing.T, processID string) *vc.PipelinePassCredential {
+	t.Helper()
 	b, err := json.Marshal(map[string]any{
 		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
 		"type":              []any{"VerifiableCredential"},
 		"issuer":            "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:s1",
-		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "s1"},
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": processID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +72,41 @@ func Store(t *testing.T, newStore func(t *testing.T) vcresolver.Store) {
 	}
 	if gh, err := got.Hash(); err != nil || gh != h {
 		t.Fatalf("roundtrip hash = %q (err %v), want %q", gh, err, h)
+	}
+
+	// Enumeration: ListHashes in lexicographic order regardless of insertion
+	// order, exclusive cursor, limit — the primitive the forward index and
+	// any future export/GC path build on.
+	lister := newStore(t)
+	var addrs []string
+	for _, id := range []string{"pD", "pA", "pC", "pB"} {
+		c := CredentialWithProcess(t, id)
+		ch, err := c.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lister.Put(ch, c); err != nil {
+			t.Fatal(err)
+		}
+		addrs = append(addrs, ch)
+	}
+	sort.Strings(addrs)
+	all, err := lister.ListHashes("", 10)
+	if err != nil {
+		t.Fatalf("ListHashes: %v", err)
+	}
+	if !reflect.DeepEqual(all, addrs) {
+		t.Fatalf("ListHashes(\"\", 10) = %v, want %v", all, addrs)
+	}
+	page, err := lister.ListHashes(addrs[0], 2)
+	if err != nil || !reflect.DeepEqual(page, addrs[1:3]) {
+		t.Fatalf("ListHashes(after first, 2) = %v (err %v), want %v", page, err, addrs[1:3])
+	}
+	if rest, err := lister.ListHashes(addrs[3], 5); err != nil || len(rest) != 0 {
+		t.Fatalf("ListHashes past the end = %v (err %v), want empty", rest, err)
+	}
+	if none, err := newStore(t).ListHashes("", 5); err != nil || len(none) != 0 {
+		t.Fatalf("ListHashes on empty store = %v (err %v), want empty", none, err)
 	}
 }
 

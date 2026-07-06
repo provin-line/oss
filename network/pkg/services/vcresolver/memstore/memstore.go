@@ -5,6 +5,7 @@ package memstore
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -42,6 +43,27 @@ func (s *Store) Get(hash string) (*vc.PipelinePassCredential, error) {
 		return nil, vcresolver.ErrNotFound
 	}
 	return c, nil
+}
+
+// ListHashes returns up to limit held content addresses in lexicographic
+// order, strictly after fromExclusive.
+func (s *Store) ListHashes(fromExclusive string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.m))
+	for h := range s.m {
+		if h > fromExclusive {
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // Pool is an in-memory vcresolver.Pool: newest-first, deduped/upserted by hash.

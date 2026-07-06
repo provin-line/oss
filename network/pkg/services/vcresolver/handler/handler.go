@@ -15,6 +15,7 @@ import (
 
 	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/vc"
 )
@@ -25,7 +26,12 @@ import (
 type Service interface {
 	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
 	ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassCredential, error)
+	ListSuccessors(ctx context.Context, hash, fromExclusive string, limit int) ([]string, bool, error)
 }
+
+// listingSuccessors binds ListSuccessors continuation tokens to this RPC
+// (see pagination.EncodeToken).
+const listingSuccessors = "dplaax.vc.v1.VCResolverService.ListSuccessors"
 
 // Handler adapts a Service to the generated VCResolverServiceHandler.
 type Handler struct {
@@ -65,6 +71,29 @@ func (h *Handler) ResolveVC(ctx context.Context, req *connect.Request[vcpb.Resol
 		return nil, mapError(err)
 	}
 	return connect.NewResponse(&vcpb.ResolveVCResponse{Credential: b}), nil
+}
+
+// ListSuccessors serves one page of the forward index. The queried hash is
+// part of the token fingerprint: a continuation replayed against a different
+// hash is InvalidArgument, never a silent cross-hash listing.
+func (h *Handler) ListSuccessors(ctx context.Context, req *connect.Request[vcpb.ListSuccessorsRequest]) (*connect.Response[vcpb.ListSuccessorsResponse], error) {
+	limit, err := pagination.ClampSize(req.Msg.GetPageSize())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	cursor, err := pagination.DecodeToken(listingSuccessors, req.Msg.GetPageToken(), req.Msg.GetHash())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	page, more, err := h.svc.ListSuccessors(ctx, req.Msg.GetHash(), cursor, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	resp := &vcpb.ListSuccessorsResponse{Successors: page}
+	if more && len(page) > 0 {
+		resp.NextPageToken = pagination.EncodeToken(listingSuccessors, page[len(page)-1], req.Msg.GetHash())
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // mapError translates domain sentinel errors to Connect codes (errors.Is, never

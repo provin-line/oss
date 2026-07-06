@@ -105,7 +105,7 @@ func registryBaseURL(urls map[string]string) func(registry string) (string, erro
 // fresh-boot ordering bug the extraction fixed).
 // ingest is the HTTP push surface of the data plane's push-enabled source loops
 // (zero-valued when none: no routes mounted).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -157,7 +157,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
-		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus)), authz)),
+		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts)), authz)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc)), authz)),
 	} {
 		mux.Handle(p.path, p.h)

@@ -145,6 +145,10 @@ func (c *capturingClient) ResolveVC(_ context.Context, _ *connect.Request[vcpb.R
 	return nil, errors.New("not used")
 }
 
+func (c *capturingClient) ListSuccessors(_ context.Context, _ *connect.Request[vcpb.ListSuccessorsRequest]) (*connect.Response[vcpb.ListSuccessorsResponse], error) {
+	return nil, errors.New("not used")
+}
+
 // StoreCredential must put the credential's JCS-canonical bytes on the wire — the same
 // bytes MarshalJSON produces (as the envelope codec does). encoding/json.Marshal would
 // re-escape <, >, & to <>&, breaking canonical-byte consumers; a field

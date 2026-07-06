@@ -288,6 +288,7 @@ func (s getErrStore) Put(hash string, c *vc.PipelinePassCredential) error {
 	return s.inner.Put(hash, c)
 }
 func (s getErrStore) Get(string) (*vc.PipelinePassCredential, error) { return nil, s.err }
+func (s getErrStore) ListHashes(string, int) ([]string, error)       { return nil, s.err }
 
 // A predecessor lookup that fails for a real reason (not a miss) must propagate,
 // not be swallowed into a silent success that drops the chain hole.

@@ -13,12 +13,14 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"connectrpc.com/connect"
 
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/vc"
 )
@@ -28,7 +30,16 @@ import (
 // it: it owns content-address validation and the store lookup, returning sentinel errors.
 type Service interface {
 	GetStatus(ctx context.Context, headHash string) (auditor.AuditRecord, error)
+	ListStatuses(ctx context.Context, fromExclusive string, scanLimit int, after, before time.Time) (entries []auditor.HeadStatus, lastScanned string, more bool, err error)
+	GetConsumed(ctx context.Context, headHash, fromExclusive string, limit int) (page []string, next string, err error)
 }
+
+// Listing identities binding continuation tokens to their issuing RPC (see
+// pagination.EncodeToken).
+const (
+	listingAuditStatuses   = "dplaax.audit.v1.AuditService.ListAuditStatuses"
+	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
+)
 
 // Handler adapts a Service to the generated AuditServiceHandler.
 type Handler struct {
@@ -47,7 +58,13 @@ func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[audit
 	if err != nil {
 		return nil, mapError(err)
 	}
+	return connect.NewResponse(statusResponse(rec)), nil
+}
 
+// statusResponse projects one recorded verdict to the wire shape — shared by
+// the point lookup and the listing (one source of truth for the coverage
+// projection).
+func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 	resp := &auditpb.GetAuditStatusResponse{
 		AuditedAt: rec.AuditedAt.UTC().Format(time.RFC3339),
 		// Lifecycle, not confidence: true == the runner exhausted its retries and
@@ -80,8 +97,89 @@ func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[audit
 			Notations:  rec.SourceCommitmentNotations,
 		}
 	}
+	return resp
+}
 
+// ListAuditStatuses enumerates recorded verdicts: pagination per the repo
+// convention (network/pkg/pagination — scan-progress cursor carrying a
+// filter fingerprint), time filters parsed here (wire strings), projection
+// shared with the point lookup.
+func (h *Handler) ListAuditStatuses(ctx context.Context, req *connect.Request[auditpb.ListAuditStatusesRequest]) (*connect.Response[auditpb.ListAuditStatusesResponse], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapError(err)
+	}
+	limit, err := pagination.ClampSize(req.Msg.GetPageSize())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	filters := []string{req.Msg.GetAuditedAfter(), req.Msg.GetAuditedBefore()}
+	cursor, err := pagination.DecodeToken(listingAuditStatuses, req.Msg.GetPageToken(), filters...)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	after, err := parseBound(req.Msg.GetAuditedAfter(), "audited_after")
+	if err != nil {
+		return nil, err
+	}
+	before, err := parseBound(req.Msg.GetAuditedBefore(), "audited_before")
+	if err != nil {
+		return nil, err
+	}
+	entries, lastScanned, more, err := h.svc.ListStatuses(ctx, cursor, limit, after, before)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	resp := &auditpb.ListAuditStatusesResponse{}
+	for _, e := range entries {
+		entry := &auditpb.AuditStatusEntry{HeadHash: e.Head, Damaged: e.Damaged}
+		if !e.Damaged {
+			entry.Status = statusResponse(e.Record)
+		}
+		resp.Entries = append(resp.Entries, entry)
+	}
+	if more {
+		resp.NextPageToken = pagination.EncodeToken(listingAuditStatuses, lastScanned, filters...)
+	}
 	return connect.NewResponse(resp), nil
+}
+
+// GetConsumedSources serves one page of a head's receipt. The head hash
+// participates in the token fingerprint: a continuation replayed against a
+// different head is InvalidArgument, never a silent cross-head listing.
+func (h *Handler) GetConsumedSources(ctx context.Context, req *connect.Request[auditpb.GetConsumedSourcesRequest]) (*connect.Response[auditpb.GetConsumedSourcesResponse], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapError(err)
+	}
+	limit, err := pagination.ClampSize(req.Msg.GetPageSize())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	cursor, err := pagination.DecodeToken(listingConsumedSources, req.Msg.GetPageToken(), req.Msg.GetHeadHash())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	page, next, err := h.svc.GetConsumed(ctx, req.Msg.GetHeadHash(), cursor, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	resp := &auditpb.GetConsumedSourcesResponse{Consumed: page}
+	if next != "" {
+		resp.NextPageToken = pagination.EncodeToken(listingConsumedSources, next, req.Msg.GetHeadHash())
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// parseBound parses an optional RFC 3339 filter bound; empty is open.
+func parseBound(raw, field string) (time.Time, error) {
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("%s %q is not an RFC 3339 timestamp: %w", field, raw, err))
+	}
+	return ts, nil
 }
 
 // mapError translates the read service's sentinel errors to Connect codes. Unrecognized

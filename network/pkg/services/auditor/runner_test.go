@@ -371,6 +371,7 @@ func (failingStatus) Put(string, AuditRecord) error { return errors.New("status 
 func (failingStatus) Get(h string) (AuditRecord, error) {
 	return AuditRecord{}, fmt.Errorf("%w: %q", ErrNotFound, h)
 }
+func (failingStatus) List(string, int) ([]HeadStatus, error) { return nil, errors.New("status boom") }
 
 // A head already holding a terminal verdict is dequeued without re-verifying (Codex #4).
 func TestAuditOne_TerminalReRegistration_NotReaudited(t *testing.T) {

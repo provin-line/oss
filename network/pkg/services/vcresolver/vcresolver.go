@@ -19,6 +19,7 @@ var ErrInvalidArgument = errors.New("vcresolver: invalid argument")
 type Service struct {
 	store Store
 	pool  Pool
+	index successorIndex
 }
 
 // New returns a Service over store and pool.
@@ -68,6 +69,11 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 	}
 	if err := s.store.Put(hash, &cred); err != nil {
 		return "", err
+	}
+	// Maintain the forward index AFTER the durable put (a crash between the
+	// two loses only the in-memory edge, which the next build re-derives).
+	if hasPrev {
+		s.index.add(prev, hash)
 	}
 	// Ordering is crash-safe for DURABLE stores: the next hole is queued
 	// BEFORE the resolved hole is removed. A crash between the two leaves the

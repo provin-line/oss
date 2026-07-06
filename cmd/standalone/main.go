@@ -146,7 +146,7 @@ func main() {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus,
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
 		pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)

@@ -42,6 +42,26 @@ service VCResolverService {
   rpc ResolveVC(ResolveVCRequest) returns (ResolveVCResponse) {
     option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
   }
+
+  // ListSuccessors returns the content addresses of credentials HELD BY THIS
+  // NODE whose previousCredential is the given hash — the forward-traversal
+  // primitive recall needs (chain links point backward; "find every
+  // descendant of contaminated lot X" walks this transitively, one step per
+  // call, the client's loop matching ResolveVC's per-node granularity). An
+  // unknown or childless hash returns an empty page, not NotFound: "no known
+  // successors" is a normal answer, and the index is explicitly scoped to
+  // this node's store — holding no successors is not a claim none exist.
+  // LINEAR edges only: an aggregate references its sources via its receipt
+  // (and derivedFrom carries issuer DIDs, not hashes), so aggregate edges
+  // are invisible here — recall across an aggregate boundary composes with
+  // AuditService.GetConsumedSources. Same L1 gate as ResolveVC: successor
+  // knowledge reveals provenance topology, the same class a VC read reveals.
+  // Pagination per the dplaax.audit.v1 convention (page_size 0 = default 64,
+  // negative = InvalidArgument, clamp at 256; opaque versioned token;
+  // lexicographic order).
+  rpc ListSuccessors(ListSuccessorsRequest) returns (ListSuccessorsResponse) {
+    option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
+  }
 }
 
 message StoreVCRequest {
@@ -64,4 +84,19 @@ message ResolveVCRequest {
 message ResolveVCResponse {
   // credential is the held VC (canonical JSON).
   bytes credential = 1;
+}
+
+message ListSuccessorsRequest {
+  // hash is the content address ("sha256:<hex>") whose successors to list;
+  // InvalidArgument if malformed.
+  string hash = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+message ListSuccessorsResponse {
+  // successors are one lexicographic page of held successor content
+  // addresses (see the RPC comment for scope semantics).
+  repeated string successors = 1;
+  // next_page_token is empty when the listing is exhausted.
+  string next_page_token = 2;
 }

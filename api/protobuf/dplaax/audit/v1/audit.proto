@@ -32,6 +32,36 @@ service AuditService {
   rpc GetAuditStatus(GetAuditStatusRequest) returns (GetAuditStatusResponse) {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
   }
+  // ListAuditStatuses enumerates the recorded verdicts — the discovery
+  // surface a relying party starts from ("what did my node audit"), where
+  // GetAuditStatus is the point lookup for a hash already known. Ordering is
+  // LEXICOGRAPHIC BY HEAD HASH, deliberately not temporal (stable under
+  // concurrent inserts; time-range questions go through the filter fields).
+  // Listings are not snapshots: an insert sorting before the cursor appears
+  // only on a fresh listing. Same L1 gate as the point read — this widens
+  // audit/read from point lookup to enumeration, which is the RPC's point;
+  // nothing is served that GetAuditStatus would not serve the same bearer.
+  rpc ListAuditStatuses(ListAuditStatusesRequest) returns (ListAuditStatusesResponse) {
+    option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
+  }
+  // GetConsumedSources returns one page of the recorded receipt for a head:
+  // the content addresses of the source credentials the emitting boundary
+  // consumed (the emit-locus record, slice-17o). NotFound means NO RECEIPT
+  // RECORDED FOR THIS HEAD ON THIS NODE — a coverage fact (the head's audit
+  // here is linear-only), never a claim that the credential is intrinsically
+  // linear; callers distinguishing "unknown head" from "linear coverage" use
+  // GetAuditStatus. Paged because a consumed set has no bounded size (an
+  // aggregate window folds every input); ordering is lexicographic (the
+  // receipt is a set — storage order is not contractual). This is the
+  // consumed-set exposure slice-17q deferred: it feeds independent
+  // consume-locus verification, aggregate-complete archive export, and
+  // recall joins across aggregate boundaries. Recall composition note: the
+  // ListAuditStatuses × GetConsumedSources join is audited-head-complete —
+  // a just-emitted head has a receipt but no verdict until the audit
+  // runner's next tick.
+  rpc GetConsumedSources(GetConsumedSourcesRequest) returns (GetConsumedSourcesResponse) {
+    option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
+  }
 }
 
 // Confidence is the wire projection of the verifier's three-state domain
@@ -86,4 +116,70 @@ message GetAuditStatusResponse {
   // the one that ran out — inspect linear_chain / source_commitment for the
   // verdicts themselves. false == the head may still be re-audited.
   bool abandoned = 4;
+}
+
+// Pagination contract (repo convention, set here by the first paged RPCs):
+// page_size 0 = server default (64), negative = InvalidArgument, above the
+// server maximum (256) = clamped, never an error. page_token is OPAQUE and
+// versioned; a malformed token, an unversioned token, or a token issued for
+// different filter fields is InvalidArgument. The cursor advances by SCAN
+// progress, not by matches: a filtered page may legally return fewer than
+// page_size entries — even zero — with a non-empty next_page_token, so a
+// filtered listing can never livelock; clients loop until next_page_token
+// comes back empty.
+message ListAuditStatusesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  // audited_after / audited_before (optional, RFC 3339 UTC) bound the
+  // verdict timestamps; malformed values are InvalidArgument. Applied while
+  // scanning in hash order (there is no temporal index — a filtered listing
+  // scans; the token stays opaque so an index can change that freely).
+  string audited_after = 3;
+  string audited_before = 4;
+}
+
+// AuditStatusEntry is one enumerated head. status embeds the point-lookup
+// response: it is exactly the per-head status payload (asserted by the
+// coverage principle above), so embedding keeps ONE source of truth for the
+// verdict shape and its frozen semantics. Guard rule that keeps this sound:
+// GetAuditStatusResponse must stay pure per-head status — any future
+// point-read-only data goes in a new field/message, never into it.
+message AuditStatusEntry {
+  string head_hash = 1;
+  // status is the recorded verdict — absent when damaged is true.
+  GetAuditStatusResponse status = 2;
+  // damaged marks a head whose recorded verdict could not be read back
+  // intact. The head stays ENUMERABLE — a listing must not present damage
+  // as absence, and one damaged record must not deny discovery of
+  // everything sorting after it — but the verdict itself is unavailable
+  // (a point GetAuditStatus for this head errors). Never set silently:
+  // the node logs the damage when serving it. A damaged entry ignores the
+  // time filters (it has no readable timestamp; a caller narrowing by time
+  // must still learn that part of the record set is unreadable).
+  bool damaged = 3;
+}
+
+message ListAuditStatusesResponse {
+  repeated AuditStatusEntry entries = 1;
+  // An empty next_page_token means the listing is exhausted. (The converse
+  // is not guaranteed: the cursor tracks SCAN progress, so when the store
+  // size is an exact multiple of the scan budget the final token yields one
+  // trailing empty page — loop until the token comes back empty.)
+  string next_page_token = 2;
+}
+
+message GetConsumedSourcesRequest {
+  // head_hash is the emitted head's content address ("sha256:<hex>").
+  string head_hash = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message GetConsumedSourcesResponse {
+  // consumed is one page of the receipt's source content addresses,
+  // lexicographic. Never an empty first page: an absent receipt is NotFound,
+  // and a recorded receipt is never empty (all-consumed semantics include
+  // the triggering predecessor's issuer).
+  repeated string consumed = 1;
+  string next_page_token = 2;
 }

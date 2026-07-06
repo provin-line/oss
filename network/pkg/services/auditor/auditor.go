@@ -14,6 +14,7 @@ package auditor
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -69,6 +70,27 @@ type AuditRecord struct {
 type StatusStore interface {
 	Put(headHash string, rec AuditRecord) error
 	Get(headHash string) (AuditRecord, error)
+	// List returns EXACTLY min(remaining, limit) entries in lexicographic
+	// hash order, strictly after fromExclusive ("" starts at the beginning)
+	// — the enumeration primitive behind the discovery surface. The full-
+	// page rule is contract, not convenience: consumers infer "listing
+	// exhausted" from a short page, so an implementation returning fewer
+	// entries than remain would silently truncate enumeration. A record
+	// that cannot be read back intact is returned as its entry with Damaged
+	// set (zero Record):
+	// the head stays enumerable and the damage stays visible — one damaged
+	// record must not deny discovery of everything sorting after it, and
+	// skipping it silently would launder damage as absence. Errors are
+	// reserved for failures of the listing itself.
+	List(fromExclusive string, limit int) ([]HeadStatus, error)
+}
+
+// HeadStatus is one enumerated head: its content address and either its
+// intact record or the Damaged marker (see StatusStore.List).
+type HeadStatus struct {
+	Head    string
+	Record  AuditRecord
+	Damaged bool
 }
 
 // MemStatusStore is the in-memory StatusStore (lost on restart; re-audited as heads
@@ -102,4 +124,30 @@ func (s *MemStatusStore) Get(headHash string) (AuditRecord, error) {
 		return AuditRecord{}, fmt.Errorf("%w: %q", ErrNotFound, headHash)
 	}
 	return rec, nil
+}
+
+// List returns up to limit entries in lexicographic hash order, strictly
+// after fromExclusive. A memory record cannot damage, so entries are always
+// intact.
+func (s *MemStatusStore) List(fromExclusive string, limit int) ([]HeadStatus, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.m))
+	for k := range s.m {
+		if k > fromExclusive {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make([]HeadStatus, len(keys))
+	for i, k := range keys {
+		out[i] = HeadStatus{Head: k, Record: s.m[k]}
+	}
+	return out, nil
 }

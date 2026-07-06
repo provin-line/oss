@@ -190,6 +190,44 @@ func (s *Store) Get(hash string) (*vc.PipelinePassCredential, error) {
 	return &cred, nil
 }
 
+// ListHashes returns up to limit held content addresses in lexicographic
+// order, strictly after fromExclusive. Listing names entries by filename
+// only — no credential body is read (damage surfaces at Get, keyed per
+// entry). Foreign filenames are ignored (not credential entries).
+func (s *Store) ListHashes(fromExclusive string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	des, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("filestore: list credentials: %w", err)
+	}
+	out := make([]string, 0, len(des))
+	for _, de := range des {
+		if de.IsDir() {
+			continue
+		}
+		base, ok := strings.CutSuffix(de.Name(), ".json")
+		if !ok {
+			continue
+		}
+		h := "sha256:" + base
+		if !vc.IsContentAddress(h) {
+			continue
+		}
+		if h > fromExclusive {
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // poolEnvelope is the on-disk shape of one unresolved-pool entry: a versioned
 // envelope so a later format change can migrate instead of guessing. Seq is
 // the newest-first ordering key (monotonic per store lifetime, recovered as

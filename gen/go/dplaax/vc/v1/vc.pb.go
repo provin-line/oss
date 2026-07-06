@@ -228,6 +228,123 @@ func (x *ResolveVCResponse) GetCredential() []byte {
 	return nil
 }
 
+type ListSuccessorsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// hash is the content address ("sha256:<hex>") whose successors to list;
+	// InvalidArgument if malformed.
+	Hash          string `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	PageSize      int32  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSuccessorsRequest) Reset() {
+	*x = ListSuccessorsRequest{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSuccessorsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSuccessorsRequest) ProtoMessage() {}
+
+func (x *ListSuccessorsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSuccessorsRequest.ProtoReflect.Descriptor instead.
+func (*ListSuccessorsRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListSuccessorsRequest) GetHash() string {
+	if x != nil {
+		return x.Hash
+	}
+	return ""
+}
+
+func (x *ListSuccessorsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListSuccessorsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListSuccessorsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// successors are one lexicographic page of held successor content
+	// addresses (see the RPC comment for scope semantics).
+	Successors []string `protobuf:"bytes,1,rep,name=successors,proto3" json:"successors,omitempty"`
+	// next_page_token is empty when the listing is exhausted.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSuccessorsResponse) Reset() {
+	*x = ListSuccessorsResponse{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSuccessorsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSuccessorsResponse) ProtoMessage() {}
+
+func (x *ListSuccessorsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSuccessorsResponse.ProtoReflect.Descriptor instead.
+func (*ListSuccessorsResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ListSuccessorsResponse) GetSuccessors() []string {
+	if x != nil {
+		return x.Successors
+	}
+	return nil
+}
+
+func (x *ListSuccessorsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_dplaax_vc_v1_vc_proto protoreflect.FileDescriptor
 
 const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
@@ -245,11 +362,24 @@ const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
 	"\x11ResolveVCResponse\x12\x1e\n" +
 	"\n" +
 	"credential\x18\x01 \x01(\fR\n" +
-	"credential2\xca\x01\n" +
+	"credential\"g\n" +
+	"\x15ListSuccessorsRequest\x12\x12\n" +
+	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"`\n" +
+	"\x16ListSuccessorsResponse\x12\x1e\n" +
+	"\n" +
+	"successors\x18\x01 \x03(\tR\n" +
+	"successors\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xb7\x02\n" +
 	"\x11VCResolverService\x12W\n" +
 	"\aStoreVC\x12\x1c.dplaax.vc.v1.StoreVCRequest\x1a\x1d.dplaax.vc.v1.StoreVCResponse\"\x0f\x82\xb5\x18\v\n" +
 	"\x02vc\x12\x05store\x12\\\n" +
 	"\tResolveVC\x12\x1e.dplaax.vc.v1.ResolveVCRequest\x1a\x1f.dplaax.vc.v1.ResolveVCResponse\"\x0e\x82\xb5\x18\n" +
+	"\n" +
+	"\x02vc\x12\x04read\x12k\n" +
+	"\x0eListSuccessors\x12#.dplaax.vc.v1.ListSuccessorsRequest\x1a$.dplaax.vc.v1.ListSuccessorsResponse\"\x0e\x82\xb5\x18\n" +
 	"\n" +
 	"\x02vc\x12\x04readB5Z3github.com/provin-line/oss/gen/go/dplaax/vc/v1;vcpbb\x06proto3"
 
@@ -265,20 +395,24 @@ func file_dplaax_vc_v1_vc_proto_rawDescGZIP() []byte {
 	return file_dplaax_vc_v1_vc_proto_rawDescData
 }
 
-var file_dplaax_vc_v1_vc_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_dplaax_vc_v1_vc_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_dplaax_vc_v1_vc_proto_goTypes = []any{
-	(*StoreVCRequest)(nil),    // 0: dplaax.vc.v1.StoreVCRequest
-	(*StoreVCResponse)(nil),   // 1: dplaax.vc.v1.StoreVCResponse
-	(*ResolveVCRequest)(nil),  // 2: dplaax.vc.v1.ResolveVCRequest
-	(*ResolveVCResponse)(nil), // 3: dplaax.vc.v1.ResolveVCResponse
+	(*StoreVCRequest)(nil),         // 0: dplaax.vc.v1.StoreVCRequest
+	(*StoreVCResponse)(nil),        // 1: dplaax.vc.v1.StoreVCResponse
+	(*ResolveVCRequest)(nil),       // 2: dplaax.vc.v1.ResolveVCRequest
+	(*ResolveVCResponse)(nil),      // 3: dplaax.vc.v1.ResolveVCResponse
+	(*ListSuccessorsRequest)(nil),  // 4: dplaax.vc.v1.ListSuccessorsRequest
+	(*ListSuccessorsResponse)(nil), // 5: dplaax.vc.v1.ListSuccessorsResponse
 }
 var file_dplaax_vc_v1_vc_proto_depIdxs = []int32{
 	0, // 0: dplaax.vc.v1.VCResolverService.StoreVC:input_type -> dplaax.vc.v1.StoreVCRequest
 	2, // 1: dplaax.vc.v1.VCResolverService.ResolveVC:input_type -> dplaax.vc.v1.ResolveVCRequest
-	1, // 2: dplaax.vc.v1.VCResolverService.StoreVC:output_type -> dplaax.vc.v1.StoreVCResponse
-	3, // 3: dplaax.vc.v1.VCResolverService.ResolveVC:output_type -> dplaax.vc.v1.ResolveVCResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	4, // 2: dplaax.vc.v1.VCResolverService.ListSuccessors:input_type -> dplaax.vc.v1.ListSuccessorsRequest
+	1, // 3: dplaax.vc.v1.VCResolverService.StoreVC:output_type -> dplaax.vc.v1.StoreVCResponse
+	3, // 4: dplaax.vc.v1.VCResolverService.ResolveVC:output_type -> dplaax.vc.v1.ResolveVCResponse
+	5, // 5: dplaax.vc.v1.VCResolverService.ListSuccessors:output_type -> dplaax.vc.v1.ListSuccessorsResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -295,7 +429,7 @@ func file_dplaax_vc_v1_vc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_vc_v1_vc_proto_rawDesc), len(file_dplaax_vc_v1_vc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
