@@ -650,3 +650,34 @@ func TestNullValueBehavior(t *testing.T) {
 //     RegisterPackageReference calls above. No additional test needed here;
 //     the suite itself IS the test — run with -count=2 to verify.
 // ─────────────────────────────────────────────────────────────────────────────
+
+func TestStringMap(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-stringmap"),
+		`provin.test.map {
+		   "dotted.key.example" = "http://a:1"
+		   plain                = "http://b:2"
+		 }
+		 provin.test.scalar = "x"
+		 provin.test.mixed { k = 1 }`)
+	cfg, err := hoconconfig.Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	m, err := cfg.StringMap("provin.test.map")
+	if err != nil {
+		t.Fatalf("StringMap: %v", err)
+	}
+	if len(m) != 2 || m["dotted.key.example"] != "http://a:1" || m["plain"] != "http://b:2" {
+		t.Errorf("StringMap = %v — dotted keys must round-trip verbatim", m)
+	}
+	if _, err := cfg.StringMap("provin.test.absent"); err == nil {
+		t.Error("StringMap(absent): want ErrMissingKey")
+	}
+	if _, err := cfg.StringMap("provin.test.scalar"); err == nil {
+		t.Error("StringMap(scalar): want ErrTypeMismatch")
+	}
+	if _, err := cfg.StringMap("provin.test.mixed"); err == nil {
+		t.Error("StringMap(non-string value): want ErrTypeMismatch")
+	}
+}

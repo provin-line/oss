@@ -61,9 +61,23 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
 	)
 	var resolverOpts []didresolver.Option
-	if chainCfg.Transport == chainconfig.TransportNATS && chainCfg.NATS.ResolverBaseURL != "" {
-		base := chainCfg.NATS.ResolverBaseURL
-		resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
+	if chainCfg.Transport == chainconfig.TransportNATS {
+		switch {
+		case len(chainCfg.NATS.RegistryURLs) > 0:
+			// Per-registry overrides; an unmapped registry falls back to the
+			// didresolver default (https://{registry}), so a partial map for
+			// local/VPC peers composes with public registries.
+			urls := chainCfg.NATS.RegistryURLs
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(registry string) (string, error) {
+				if base, ok := urls[registry]; ok {
+					return base, nil
+				}
+				return "https://" + registry, nil
+			}))
+		case chainCfg.NATS.ResolverBaseURL != "":
+			base := chainCfg.NATS.ResolverBaseURL
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
+		}
 	}
 	return guard, didresolver.New(guard, resolverOpts...)
 }

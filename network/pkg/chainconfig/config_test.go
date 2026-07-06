@@ -192,3 +192,58 @@ func TestLoad_NATS_ConnectWait(t *testing.T) {
 		t.Error("negative connect-wait: want boot error")
 	}
 }
+
+func TestLoad_NATS_RegistryURLs(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	base := natsConf("nats", "nats://h:4222",
+		seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID)
+
+	// Default: empty map.
+	c, err := chainconfig.LoadChainConfig(loadWith(t, base))
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if len(c.NATS.RegistryURLs) != 0 {
+		t.Errorf("default RegistryURLs = %v, want empty", c.NATS.RegistryURLs)
+	}
+
+	// Per-registry mapping, dotted registry ids as quoted keys.
+	mapped := base + `
+provin.network.chain.nats.registry-urls {
+  "mfg.dplaax.dev"    = "http://mfg:8443"
+  "retail.dplaax.dev" = "https://retail.example"
+}`
+	c, err = chainconfig.LoadChainConfig(loadWith(t, mapped))
+	if err != nil {
+		t.Fatalf("LoadChainConfig(registry-urls): %v", err)
+	}
+	want := map[string]string{
+		"mfg.dplaax.dev":    "http://mfg:8443",
+		"retail.dplaax.dev": "https://retail.example",
+	}
+	if len(c.NATS.RegistryURLs) != len(want) {
+		t.Fatalf("RegistryURLs = %v, want %v", c.NATS.RegistryURLs, want)
+	}
+	for k, v := range want {
+		if c.NATS.RegistryURLs[k] != v {
+			t.Errorf("RegistryURLs[%q] = %q, want %q", k, c.NATS.RegistryURLs[k], v)
+		}
+	}
+
+	// A mapping value must be an absolute http(s) URL.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.registry-urls { "mfg.dplaax.dev" = "not-a-url" }`)); err == nil {
+		t.Error("malformed registry-urls value silently accepted")
+	}
+
+	// registry-urls and resolver-base-url are mutually exclusive resolution
+	// models — both set fails boot.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.resolver-base-url = "http://one:8443"
+provin.network.chain.nats.registry-urls { "mfg.dplaax.dev" = "http://mfg:8443" }`)); err == nil {
+		t.Error("registry-urls together with resolver-base-url silently accepted")
+	}
+}

@@ -11,6 +11,7 @@ package chainconfig
 import (
 	_ "embed"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -43,6 +44,7 @@ const (
 	keyNodeDID           = "provin.network.chain.nats.node-did"
 	keyResolverBaseURL   = "provin.network.chain.nats.resolver-base-url"
 	keyConnectWait       = "provin.network.chain.nats.connect-wait"
+	keyRegistryURLs      = "provin.network.chain.nats.registry-urls"
 	keyAllowNoop         = "provin.network.chain.dev.allow-noop-transport"
 )
 
@@ -76,6 +78,10 @@ type NATSConfig struct {
 	// ConnectWait is the boot budget for the initial broker dial (transport
 	// nats.Config.ConnectWait). Zero = strict fail-fast.
 	ConnectWait time.Duration
+	// RegistryURLs maps a registry id to the base URL its DIDs resolve
+	// against. Unmapped registries use the default (https://{registry}).
+	// Mutually exclusive with ResolverBaseURL.
+	RegistryURLs map[string]string
 }
 
 // LoadChainConfig reads and validates the chain block. It fails closed: an
@@ -145,6 +151,22 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 		return n, fmt.Errorf("chain: config %s: must not be negative", keyConnectWait)
 	}
 	n.ConnectWait = wait
+	urls, err := cfg.StringMap(keyRegistryURLs)
+	if err != nil {
+		return n, fmt.Errorf("chain: config %s: %w", keyRegistryURLs, err)
+	}
+	if len(urls) > 0 {
+		if n.ResolverBaseURL != "" {
+			return n, fmt.Errorf("chain: config %s and %s are mutually exclusive resolution models — set one", keyRegistryURLs, keyResolverBaseURL)
+		}
+		for reg, raw := range urls {
+			u, err := url.Parse(raw)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return n, fmt.Errorf("chain: config %s[%q]: %q is not an absolute http(s) URL", keyRegistryURLs, reg, raw)
+			}
+		}
+		n.RegistryURLs = urls
+	}
 	return n, nil
 }
 

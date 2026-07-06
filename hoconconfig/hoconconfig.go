@@ -282,6 +282,41 @@ func (c *Config) StringList(path string) ([]string, error) {
 // and ErrTypeMismatch (wrapped) if the value is not an object. This is the
 // accessor for object-keyed config blocks (e.g. a set of named service
 // endpoints): enumerate the keys here, then read each entry's fields with the
+// StringMap returns the object at path as a key -> string-value map. It reads
+// the object's entries directly (no per-key path round-trip), so keys
+// containing dots — quoted HOCON keys like "mfg.dplaax.dev" — are returned
+// verbatim; the path parser would otherwise split them. Returns ErrMissingKey
+// if path is absent, and ErrTypeMismatch if path is not an object or any value
+// is not a string.
+//
+// Like String, a scalar parent (a non-object at path) surfaces as
+// ErrTypeMismatch rather than a library panic.
+func (c *Config) StringMap(path string) (m map[string]string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			m = nil
+			err = fmt.Errorf("%w: scalar parent at %q (library panic: %v)", ErrTypeMismatch, path, r)
+		}
+	}()
+	v := c.h.Get(path)
+	if v == nil {
+		return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	}
+	obj, ok := v.(hocon.Object)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q is not an object (got %T)", ErrTypeMismatch, path, v)
+	}
+	m = make(map[string]string, len(obj))
+	for k, val := range obj {
+		sv, ok := val.(hocon.String)
+		if !ok {
+			return nil, fmt.Errorf("%w: %q key %q is not a string (got %T)", ErrTypeMismatch, path, k, val)
+		}
+		m[k] = string(sv)
+	}
+	return m, nil
+}
+
 // scalar accessors at "path.<key>.<field>".
 //
 // Like String, a scalar parent (a non-object at path) surfaces as
