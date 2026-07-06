@@ -33,7 +33,7 @@ func TestPushIngest_Boot(t *testing.T) {
 	pipeCfg := dpPipelineCfg()
 	pipeCfg.Loops[0].Source.PushIngress = true
 
-	dp, err := buildDataPlane(chainCfg, pipeCfg, dpKeyStore(t), dataPlaneDeps{})
+	dp, err := buildDataPlane(context.Background(), chainCfg, pipeCfg, dpKeyStore(t), dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("buildDataPlane: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestPushIngest_Boot(t *testing.T) {
 	}, "health never turned 200 after dp.Run")
 
 	// Observer on the loop's output subject (second connection, same account).
-	obs, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	obs, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("observer connect: %v", err)
 	}

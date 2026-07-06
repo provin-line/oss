@@ -85,7 +85,7 @@ type dataPlane struct {
 // loop per config entry over that shared connection, dispatching on role: a source
 // loop signs FirstDrop credentials with keyStore; a sink loop verifies upstream
 // credentials through deps.Resolver and writes consumed events to deps.SinkWriter.
-func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps dataPlaneDeps) (*dataPlane, error) {
+func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps dataPlaneDeps) (*dataPlane, error) {
 	if len(pipeCfg.Loops) == 0 {
 		return &dataPlane{}, nil
 	}
@@ -93,7 +93,7 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 		return nil, fmt.Errorf("standalone: data-plane loops require the nats transport, got %q", chainCfg.Transport)
 	}
 
-	conn, err := natstransport.Connect(natstransport.Config{
+	conn, err := natstransport.Connect(ctx, natstransport.Config{
 		URL:         chainCfg.NATS.URL,
 		AccountSeed: chainCfg.NATS.AccountSeed,
 		ConnectWait: chainCfg.NATS.ConnectWait,

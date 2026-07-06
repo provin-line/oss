@@ -116,7 +116,7 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 			},
 		},
 	}}}
-	dp, err := buildDataPlane(chainCfg, cfg, ks, dataPlaneDeps{Resolver: res, VCStore: dpVCStore()})
+	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{Resolver: res, VCStore: dpVCStore()})
 	if err != nil {
 		t.Fatalf("buildDataPlane (aggregate): %v", err)
 	}
@@ -126,7 +126,7 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 	t.Cleanup(func() { cancel(); <-done })
 
 	// Observe the aggregate output + publish the two sources to their ingress subjects.
-	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("injector connect: %v", err)
 	}

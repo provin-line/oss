@@ -91,7 +91,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
 	cfg := fullChainCfg(srv.URL)
-	dp, err := buildDataPlane(chainCfg, cfg, ks, dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{
 		Resolver:          res,
 		SinkWriter:        writer,
 		VCStoreHTTPClient: srv.Client(),
@@ -113,7 +113,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 	go func() { _ = auditRunner.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("injector connect: %v", err)
 	}

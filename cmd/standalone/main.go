@@ -136,7 +136,7 @@ func main() {
 	// plane uses (dataDir/keys) and verifies (sink loops) through the shared resolver. A
 	// sink delivers consumed events to stdout as NDJSON. With zero loops this dials nothing.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
-	dp, err := buildDataPlane(chainCfg, pipeCfg, keyStore, dataPlaneDeps{
+	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
 		Resolver:   resolver,
 		SinkWriter: console.New(os.Stdout),
 		VCStore:    vcSvc,

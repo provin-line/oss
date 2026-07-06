@@ -166,7 +166,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := buildDataPlane(pubChain, capSourceCfg(), ks, dataPlaneDeps{})
+	pubDP, err := buildDataPlane(context.Background(), pubChain, capSourceCfg(), ks, dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -179,7 +179,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := buildDataPlane(subChain, capSinkCfg(), filestore.New(t.TempDir()), dataPlaneDeps{
+	subDP, err := buildDataPlane(context.Background(), subChain, capSinkCfg(), filestore.New(t.TempDir()), dataPlaneDeps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),
@@ -200,7 +200,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 	})
 
 	// Injector + publisher-side observer on the publisher account (a separate conn).
-	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: string(pubAccSeed)})
+	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: string(pubAccSeed)})
 	if err != nil {
 		t.Fatalf("injector connect: %v", err)
 	}

@@ -25,7 +25,7 @@ func TestBuildDataPlane_SinkRequiresVCStore(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 	// Resolver and SinkWriter are provided, but VCStore is nil — must fail.
-	if _, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    nil,
@@ -42,7 +42,7 @@ func TestBuildDataPlane_ChainedRequiresVCStore(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
 		VCStore:  nil,
 	}); err == nil {
@@ -58,7 +58,7 @@ func TestBuildDataPlane_SinkWithVCStoreAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    newTestVCSvc(),
@@ -84,7 +84,7 @@ func TestBuildDataPlane_ChainedWithVCStoreAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
 		VCStore:  newTestVCSvc(),
 	})

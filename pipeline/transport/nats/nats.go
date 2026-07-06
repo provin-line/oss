@@ -16,6 +16,7 @@
 package nats
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -70,8 +71,13 @@ type Conn struct {
 
 // Connect validates cfg, mints an ephemeral user JWT signed by the configured
 // account, and dials the server as that account. Construction is fail-closed: an
-// invalid URL or a seed that is not a valid account seed is an error, before any dial.
-func Connect(cfg Config) (*Conn, error) {
+// invalid URL or a seed that is not a valid account seed is an error, before any
+// dial. ctx aborts the ConnectWait boot wait (a SIGTERM-cancelled ctx must not
+// sleep the budget out); an in-flight dial attempt is not interrupted, so the
+// abort latency is bounded by one attempt's capped timeout. Validation precedes
+// the ctx gate: a malformed config reports the config error even under a
+// cancelled ctx.
+func Connect(ctx context.Context, cfg Config) (*Conn, error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("nats: invalid URL %q: %w", cfg.URL, err)
@@ -111,6 +117,13 @@ func Connect(cfg Config) (*Conn, error) {
 		return nil, fmt.Errorf("nats: encode user JWT: %w", err)
 	}
 
+	// The ctx gate sits AFTER validation (a config error outranks a shutdown
+	// signal in diagnosability) and BEFORE the first dial, so a cancelled boot
+	// never opens a connection it would immediately abandon.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("nats: connect aborted: %w", err)
+	}
+
 	// The budget clock starts before the FIRST attempt, and every attempt's
 	// dial timeout is capped to the remaining budget, so ConnectWait is a hard
 	// bound (modulo scheduler noise) rather than merely bounding when the last
@@ -147,7 +160,15 @@ func Connect(cfg Config) (*Conn, error) {
 			if remaining := time.Until(deadline); sleep > remaining {
 				sleep = remaining
 			}
-			time.Sleep(sleep)
+			// Interruptible backoff: ctx cancellation (SIGTERM at boot) aborts
+			// the wait instead of sleeping the budget out.
+			timer := time.NewTimer(sleep)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, fmt.Errorf("nats: connect aborted: %w", ctx.Err())
+			case <-timer.C:
+			}
 			if backoff < 2*time.Second {
 				backoff *= 2
 			}

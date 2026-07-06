@@ -75,7 +75,7 @@ func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -103,7 +103,7 @@ func TestBuildDataPlane_AggregateRequiresConsumerDeps(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
 		t.Fatal("aggregate without resolver/VC store: want error, got nil")
 	}
 }

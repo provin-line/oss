@@ -108,7 +108,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 
-	dp, err := buildDataPlane(chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("buildDataPlane: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 	go func() { runDone <- dp.Run(ctx) }()
 
 	// Observer + injector on a second connection to the same account.
-	obs, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	obs, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("observer connect: %v", err)
 	}
@@ -197,7 +197,7 @@ loop:
 // a Run that returns at all proves the internal child-context cancellation works.
 func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	conn, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	conn, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: "nats://192.0.2.1:4222", AccountSeed: "bogus"},
 	}
-	dp, err := buildDataPlane(chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), dataPlaneDeps{})
+	dp, err := buildDataPlane(context.Background(), chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), dataPlaneDeps{})
 	if err != nil {
 		t.Fatalf("buildDataPlane (zero loops): %v", err)
 	}
@@ -282,7 +282,7 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    dpVCStore(),
@@ -309,7 +309,7 @@ func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
 		t.Fatal("sink loop without resolver/writer: want error, got nil")
 	}
 }
@@ -349,7 +349,7 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -375,7 +375,7 @@ func TestBuildDataPlane_ChainedRequiresResolver(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{}); err == nil {
 		t.Fatal("chained loop without resolver: want error, got nil")
 	}
 }
@@ -388,7 +388,7 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), dataPlaneDeps{
+	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), dataPlaneDeps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	}); err == nil {

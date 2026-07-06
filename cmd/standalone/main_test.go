@@ -19,7 +19,7 @@ import (
 // Before the fix the failing goroutine only logged and main exited 0.
 func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	conn, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	conn, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

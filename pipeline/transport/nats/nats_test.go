@@ -1,6 +1,8 @@
 package nats_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -63,7 +65,7 @@ func newAccountServerWithSrv(t *testing.T) (srv *server.Server, url, accountSeed
 
 func mustConnect(t *testing.T, url, seed string) *natstransport.Conn {
 	t.Helper()
-	c, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: seed})
+	c, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: seed})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestPublisher_PublishErrorsWhenServerGone(t *testing.T) {
 
 func TestPublisher_HealthyReflectsConnection(t *testing.T) {
 	url, seed := newAccountServer(t)
-	c, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: seed})
+	c, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: seed})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -330,7 +332,7 @@ func TestConnect_FailClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := natstransport.Connect(tc.cfg)
+			c, err := natstransport.Connect(context.Background(), tc.cfg)
 			if err == nil {
 				_ = c.Close()
 				t.Fatalf("Connect(%s): want error, got nil", tc.name)
@@ -396,7 +398,7 @@ func TestConnect_WaitsForLateBroker(t *testing.T) {
 	// goroutine could land after the test finished and silently never run.
 	t.Cleanup(func() { (<-srvCh).Shutdown() })
 
-	c, err := natstransport.Connect(natstransport.Config{
+	c, err := natstransport.Connect(context.Background(), natstransport.Config{
 		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
 		AccountSeed: seed,
 		ConnectWait: 10 * time.Second,
@@ -412,7 +414,7 @@ func TestConnect_ZeroWaitFailsFast(t *testing.T) {
 	port := reservePort(t)
 	_, seed := newTrustedOptions(t, port)
 	start := time.Now()
-	_, err := natstransport.Connect(natstransport.Config{
+	_, err := natstransport.Connect(context.Background(), natstransport.Config{
 		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
 		AccountSeed: seed,
 	})
@@ -430,7 +432,7 @@ func TestConnect_WaitBudgetExhausted(t *testing.T) {
 	port := reservePort(t)
 	_, seed := newTrustedOptions(t, port)
 	start := time.Now()
-	_, err := natstransport.Connect(natstransport.Config{
+	_, err := natstransport.Connect(context.Background(), natstransport.Config{
 		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
 		AccountSeed: seed,
 		ConnectWait: 700 * time.Millisecond,
@@ -447,7 +449,7 @@ func TestConnect_WaitBudgetExhausted(t *testing.T) {
 // the retry budget.
 func TestConnect_ValidationSkipsWait(t *testing.T) {
 	start := time.Now()
-	_, err := natstransport.Connect(natstransport.Config{
+	_, err := natstransport.Connect(context.Background(), natstransport.Config{
 		URL:         "nats://127.0.0.1:4222",
 		AccountSeed: "not-a-seed",
 		ConnectWait: 10 * time.Second,
@@ -457,5 +459,63 @@ func TestConnect_ValidationSkipsWait(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("validation failure took %s, want immediate (no retry budget)", elapsed)
+	}
+}
+
+// Cancellation aborts the boot-budget wait promptly: a SIGTERM-cancelled ctx
+// must not sleep the budget out (graceful shutdown during an orchestrated
+// boot race — the exact scenario ConnectWait exists for).
+func TestConnect_CancelDuringWait(t *testing.T) {
+	port := reservePort(t)
+	_, seed := newTrustedOptions(t, port) // no broker is ever started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := natstransport.Connect(ctx, natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: seed,
+		ConnectWait: 30 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("Connect with a cancelled ctx: want error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want errors.Is(err, context.Canceled)", err)
+	}
+	// Prompt: bounded by one in-flight dial attempt, nowhere near the 30s budget.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancelled Connect returned after %s, want prompt abort", elapsed)
+	}
+}
+
+// A ctx already cancelled before Connect aborts before the first dial — but
+// config validation still wins: a malformed config is a config error, not a
+// cancellation.
+func TestConnect_PreCancelledCtx(t *testing.T) {
+	port := reservePort(t)
+	_, seed := newTrustedOptions(t, port)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := natstransport.Connect(ctx, natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: seed,
+		ConnectWait: 30 * time.Second,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("pre-cancelled ctx: err = %v, want context.Canceled", err)
+	}
+
+	if _, err := natstransport.Connect(ctx, natstransport.Config{
+		URL:         fmt.Sprintf("nats://127.0.0.1:%d", port),
+		AccountSeed: "not-a-seed",
+		ConnectWait: 30 * time.Second,
+	}); err == nil || errors.Is(err, context.Canceled) {
+		t.Errorf("invalid config + cancelled ctx: err = %v, want a config error", err)
 	}
 }

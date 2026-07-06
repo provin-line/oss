@@ -90,7 +90,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
 
-	dp, err := buildDataPlane(chainCfg, cfg, ks, dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{
 		Resolver: res, VCStore: localSvc, AuditQueue: queue, Receipts: receipts,
 	})
 	if err != nil {
@@ -110,7 +110,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 
 	// Observe the aggregate output to learn the emitted head content address, and drive the
 	// two sources to their ingress subjects on a retry ticker (dedup collapses retries).
-	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("injector connect: %v", err)
 	}

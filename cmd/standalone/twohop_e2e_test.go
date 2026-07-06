@@ -104,7 +104,7 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(chainCfg, twoHopCfg(converter, filters), ks, dataPlaneDeps{
+	dp, err := buildDataPlane(context.Background(), chainCfg, twoHopCfg(converter, filters), ks, dataPlaneDeps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),
@@ -119,7 +119,7 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 
 	// Injector + a source-output observer (a third subscriber on thSrcPipe, same account)
 	// so the test can capture the source's FirstDrop credential for the chain-link assert.
-	inj, err := natstransport.Connect(natstransport.Config{URL: url, AccountSeed: accSeed})
+	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
 	if err != nil {
 		t.Fatalf("injector connect: %v", err)
 	}
