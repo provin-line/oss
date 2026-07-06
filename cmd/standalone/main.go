@@ -35,9 +35,10 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	auditfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	"github.com/provin-line/oss/pipeline/sink/console"
 )
 
@@ -85,21 +86,43 @@ func main() {
 	// chain manager and the data plane's sink-loop credential verification (slice-17c).
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 
+	// The evidence substrate is DURABLE (spec: evidence-persistence; e2e finding #23 —
+	// a restart must not erase what a later audit needs): every store below is
+	// file-backed under data-dir/evidence/. An uncreatable evidence dir is a boot
+	// error — a node that cannot persist evidence must not pretend to.
+	evidenceDir := filepath.Join(coreCfg.DataDir, "evidence")
+
 	// The VC store is built once in main and shared across both planes (D-17f-5):
 	// BuildHandler mounts it under the VCResolverService RPC; buildDataPlane threads it
 	// into consuming loops' ingress store so every verified ingress credential is
 	// immediately resolvable and its predecessor is enqueued in the one shared pool. The
 	// pool is a named var so the batch resolver drains exactly the pool StoreVC feeds (D-17g-1).
-	pool := memstore.NewPool()
-	vcSvc := vcresolver.New(memstore.NewStore(), pool)
+	credStore, err := vcfilestore.NewStore(filepath.Join(evidenceDir, "credentials"))
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	pool, err := vcfilestore.NewPool(filepath.Join(evidenceDir, "pool"))
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	vcSvc := vcresolver.New(credStore, pool)
 
 	// The audit substrate (slice-17h): a registry of consumed heads (fed at ingress) and a
 	// verdict store, both shared between the ingress path and the audit runner.
-	auditQueue := auditor.NewMemQueue()
-	auditStatus := auditor.NewMemStatusStore()
+	auditQueue, err := auditfilestore.NewQueue(filepath.Join(evidenceDir, "auditqueue"))
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	auditStatus, err := auditfilestore.NewStatusStore(filepath.Join(evidenceDir, "verdicts"))
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
 	// The emit-time consumed-set receipt store (slice-17o), shared between an aggregate's
 	// self-audit registration (emit path) and the audit runner's source-commitment step.
-	auditReceipts := auditor.NewMemReceiptStore()
+	auditReceipts, err := auditfilestore.NewReceiptStore(filepath.Join(evidenceDir, "receipts"))
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
 
 	// The chain operator is built BEFORE the data plane: its construction publishes
 	// the node account's claims (findings #14), and on a fresh broker the data

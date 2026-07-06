@@ -134,8 +134,8 @@ func TestAuditOne_TransientResolverOutage_RetainedThenVerified(t *testing.T) {
 	if err := r.drainOnce(ctx); err != nil {
 		t.Fatalf("drainOnce (outage): %v", err)
 	}
-	rec, ok := status.Get(headHash)
-	if !ok {
+	rec, err := status.Get(headHash)
+	if err != nil {
 		t.Fatal("no verdict recorded during the outage")
 	}
 	if rec.Overall != vc.ConfidenceIndeterminate {
@@ -160,8 +160,8 @@ func TestAuditOne_TransientResolverOutage_RetainedThenVerified(t *testing.T) {
 	if err := r.drainOnce(ctx); err != nil {
 		t.Fatalf("drainOnce (recovered): %v", err)
 	}
-	rec, ok = status.Get(headHash)
-	if !ok {
+	rec, err = status.Get(headHash)
+	if err != nil {
 		t.Fatal("no verdict recorded after recovery")
 	}
 	if rec.Overall != vc.ConfidenceVerified {

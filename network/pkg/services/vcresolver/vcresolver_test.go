@@ -324,3 +324,41 @@ func TestStoreVC_UpsertRepairsHint(t *testing.T) {
 		t.Errorf("hint not repaired: %+v", list[0])
 	}
 }
+
+// opRecordingPool wraps the mem pool, recording Add/Remove order.
+type opRecordingPool struct {
+	*memstore.Pool
+	ops []string
+}
+
+func (p *opRecordingPool) Add(e vcresolver.UnresolvedEntry) error {
+	p.ops = append(p.ops, "add:"+e.Hash)
+	return p.Pool.Add(e)
+}
+
+func (p *opRecordingPool) Remove(hash string) error {
+	p.ops = append(p.ops, "remove:"+hash)
+	return p.Pool.Remove(hash)
+}
+
+// TestStoreVC_AddsNextHoleBeforeRemovingResolved pins the crash-safe ordering
+// for durable stores: the successor's hole is queued BEFORE the resolved hole
+// is removed, so a crash between the two leaves a re-fetchable hole (replay
+// converges via idempotent Put/Add) instead of a permanently stalled chain.
+func TestStoreVC_AddsNextHoleBeforeRemovingResolved(t *testing.T) {
+	ctx := context.Background()
+	pool := &opRecordingPool{Pool: memstore.NewPool()}
+	svc := vcresolver.New(memstore.NewStore(), pool)
+
+	// A middle credential referencing a missing predecessor: storing it must
+	// add the predecessor hole first, then remove its own (possibly queued) hash.
+	missingPrev := "sha256:" + strings.Repeat("ab", 32)
+	mid := vcBytes(t, issuer, missingPrev)
+	midHash, err := svc.StoreVC(ctx, mid, "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+	if len(pool.ops) != 2 || pool.ops[0] != "add:"+missingPrev || pool.ops[1] != "remove:"+midHash {
+		t.Fatalf("pool op order = %v, want [add:%s remove:%s]", pool.ops, missingPrev, midHash)
+	}
+}

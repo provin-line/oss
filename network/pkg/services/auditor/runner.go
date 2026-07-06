@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -43,10 +44,12 @@ type PoolLiveness interface {
 
 // ReceiptReader reads the emit-time consumed-set receipt for an aggregate head (slice-17o):
 // the exact source content addresses the emitting node folded into the head's SourceCommitment.
-// Satisfied by *MemReceiptStore. Presence is the coverage gate — a head with no receipt is
-// audited linear-only (a downstream/non-emitting node), never falsely flipping the flag.
+// Satisfied by any ReceiptStore. Presence is the coverage gate — a head with no receipt
+// (wrapped ErrNotFound) is audited linear-only (a downstream/non-emitting node), never
+// falsely flipping the flag; any other error is a DAMAGED receipt, which fails the
+// consumed-set verdict closed rather than downgrading coverage.
 type ReceiptReader interface {
-	Get(headHash string) ([]string, bool)
+	Get(headHash string) ([]string, error)
 }
 
 // SourceCommitmentVerifier recomputes a credential's SourceCommitment over the gathered
@@ -182,9 +185,13 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 	// without re-verifying — covers re-registration of a previously-audited head. A terminal
 	// linear verdict with a still-retryable source-commitment Indeterminate is NOT fully
 	// terminal: it must be re-audited so the consumed-set verdict can resolve (slice-17o).
-	if rec, ok := r.status.Get(c.HeadHash); ok && isTerminal(rec.Overall) && !scRetryable(rec) {
+	// A DAMAGED prior verdict (non-ErrNotFound read error) falls through to a fresh audit:
+	// re-verifying from evidence and overwriting the record is repair, not trust in the file.
+	if rec, err := r.status.Get(c.HeadHash); err == nil && isTerminal(rec.Overall) && !scRetryable(rec) {
 		r.remove(c.HeadHash)
 		return
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		r.logger.Printf("auditor: %s: damaged verdict record, re-auditing: %v", c.HeadHash, err)
 	}
 
 	head, err := r.head.ResolveVC(ctx, c.HeadHash)
@@ -192,10 +199,18 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		if isCtxErr(err) {
 			return
 		}
-		// The head itself is gone (e.g. an in-memory store cleared on restart) — a stale
-		// registration with nothing to audit; drop it.
-		r.logger.Printf("auditor: dropping %s: head not resolvable: %v", c.HeadHash, err)
-		r.remove(c.HeadHash)
+		// Only a DEFINITIVE miss (the head is not in the store) is a stale
+		// registration to drop. Any other error — a damaged/tampered evidence
+		// file, an unavailable store — must NOT be laundered into absence: the
+		// head stays queued (attempt-bounded) so damage surfaces as retries and
+		// logs instead of a silently vanished audit.
+		if errors.Is(err, vcresolver.ErrNotFound) {
+			r.logger.Printf("auditor: dropping %s: head not resolvable: %v", c.HeadHash, err)
+			r.remove(c.HeadHash)
+			return
+		}
+		r.logger.Printf("auditor: %s: head unreadable (damaged evidence?), retaining: %v", c.HeadHash, err)
+		r.bumpOrDrop(c, "head unreadable")
 		return
 	}
 
@@ -265,16 +280,25 @@ func truncateForNote(s string) string {
 // is an aggregate emission with a local receipt (slice-17o). It returns true ONLY to signal
 // a context cancellation mid-evaluation (the caller then records nothing and leaves the head
 // queued). With the capability disabled or no receipt present, it leaves rec linear-only.
-// Decision table (D-17o-6): no receipt → linear-only; corrupt receipt entry → fail-closed
-// Failed (no verifier call); otherwise gather the resolvable subset and record the
+// Decision table (D-17o-6): no receipt → linear-only; corrupt receipt (an unreadable record
+// or a malformed entry) → fail-closed Failed (no verifier call — damage must not silently
+// downgrade the audit to linear-only); otherwise gather the resolvable subset and record the
 // VerifySourceCommitment result (a missing source reduces the set → Indeterminate).
 func (r *Runner) evaluateSourceCommitment(ctx context.Context, headHash string, head *vc.PipelinePassCredential, rec *AuditRecord) bool {
 	if r.receipts == nil || r.scv == nil {
 		return false // capability disabled → linear-only
 	}
-	consumed, ok := r.receipts.Get(headHash)
-	if !ok {
+	consumed, err := r.receipts.Get(headHash)
+	if errors.Is(err, ErrNotFound) {
 		return false // no receipt → linear-only (downstream/non-emitting node)
+	}
+	if err != nil {
+		// A receipt exists but cannot be read — fail closed on the consumed-set
+		// verdict rather than presenting linear-only as intended coverage.
+		rec.SourceCommitment = vc.ConfidenceFailed
+		rec.Scope.SourceCommitmentEvaluated = true
+		rec.SourceCommitmentNotations = []string{scLocus + ": unreadable receipt: " + truncateForNote(err.Error())}
+		return false
 	}
 	// A malformed content address in the receipt is a corrupt receipt → fail-closed, no
 	// verifier call.

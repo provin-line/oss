@@ -2,6 +2,7 @@ package auditor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,7 +13,13 @@ import (
 
 type fakeReceipts struct{ m map[string][]string }
 
-func (f fakeReceipts) Get(h string) ([]string, bool) { c, ok := f.m[h]; return c, ok }
+func (f fakeReceipts) Get(h string) ([]string, error) {
+	c, ok := f.m[h]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, h)
+	}
+	return c, nil
+}
 
 type fakeSCV struct {
 	state      vc.ConfidenceState
@@ -65,8 +72,8 @@ func TestAuditOne_SourceCommitment_Verified(t *testing.T) {
 	if err := r.drainOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	rec, ok := status.Get(headH)
-	if !ok {
+	rec, err := status.Get(headH)
+	if err != nil {
 		t.Fatal("no record")
 	}
 	if rec.Overall != vc.ConfidenceVerified {
@@ -176,7 +183,7 @@ func TestAuditOne_SourceCommitment_CtxCancelDuringResolve_RecordsNothing(t *test
 	}
 
 	_ = r.drainOnce(context.Background())
-	if _, ok := status.Get(headH); ok {
+	if _, err := status.Get(headH); err == nil {
 		t.Error("recorded a verdict despite ctx cancel during source resolve; want none")
 	}
 	if q.Len() != 1 {

@@ -3,6 +3,7 @@ package auditor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -123,9 +124,9 @@ func TestAuditOne_CompleteVerified_RecordsAndDequeues(t *testing.T) {
 	if err := r.drainOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	rec, ok := status.Get(headH)
-	if !ok || rec.Overall != vc.ConfidenceVerified {
-		t.Errorf("status = %+v ok=%v, want Verified", rec, ok)
+	rec, err := status.Get(headH)
+	if err != nil || rec.Overall != vc.ConfidenceVerified {
+		t.Errorf("status = %+v err=%v, want Verified", rec, err)
 	}
 	if !rec.Scope.LinearChain || rec.Scope.SourceCommitmentEvaluated {
 		t.Errorf("scope = %+v, want {LinearChain:true, SourceCommitmentEvaluated:false}", rec.Scope)
@@ -184,9 +185,9 @@ func TestAuditOne_HoleInPool_RetainedNoAttemptBurn(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_ = r.drainOnce(ctx)
 	}
-	rec, ok := status.Get(headH)
-	if !ok || rec.Overall != vc.ConfidenceIndeterminate {
-		t.Fatalf("status = %+v, want Indeterminate", rec)
+	rec, err := status.Get(headH)
+	if err != nil || rec.Overall != vc.ConfidenceIndeterminate {
+		t.Fatalf("status = %+v (err %v), want Indeterminate", rec, err)
 	}
 	i := vc.ConfidenceIndeterminate
 	if rec.Axes != (vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i}) {
@@ -259,8 +260,10 @@ func TestAuditOne_StatusWriteFailure_RetainsHead(t *testing.T) {
 
 type failingStatus struct{}
 
-func (failingStatus) Put(string, AuditRecord) error  { return errors.New("status boom") }
-func (failingStatus) Get(string) (AuditRecord, bool) { return AuditRecord{}, false }
+func (failingStatus) Put(string, AuditRecord) error { return errors.New("status boom") }
+func (failingStatus) Get(h string) (AuditRecord, error) {
+	return AuditRecord{}, fmt.Errorf("%w: %q", ErrNotFound, h)
+}
 
 // A head already holding a terminal verdict is dequeued without re-verifying (Codex #4).
 func TestAuditOne_TerminalReRegistration_NotReaudited(t *testing.T) {
@@ -283,7 +286,7 @@ func TestAuditOne_CtxCancelDuringVerify_RecordsNothing(t *testing.T) {
 	r, q, status := newRunner(t, cv, headStore(), fakePool{}, okCfg())
 
 	_ = r.drainOnce(context.Background())
-	if _, ok := status.Get(headH); ok {
+	if _, err := status.Get(headH); err == nil {
 		t.Error("recorded a verdict on context cancellation; want none")
 	}
 	if q.Len() != 1 {

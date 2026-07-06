@@ -181,7 +181,7 @@ func TestFullChain_AsyncAuditRecordsVerified(t *testing.T) {
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if r, ok := fc.auditStatus.Get(rec.headHash); ok && r.Overall == vc.ConfidenceVerified {
+		if r, err := fc.auditStatus.Get(rec.headHash); err == nil && r.Overall == vc.ConfidenceVerified {
 			if !r.Scope.LinearChain || r.Scope.SourceCommitmentEvaluated {
 				t.Fatalf("audit scope = %+v, want linear-only", r.Scope)
 			}
@@ -190,8 +190,8 @@ func TestFullChain_AsyncAuditRecordsVerified(t *testing.T) {
 		select {
 		case <-tick.C:
 		case <-deadline:
-			r, ok := fc.auditStatus.Get(rec.headHash)
-			t.Fatalf("audit runner did not record Verified for head %q (got ok=%v rec=%+v)", rec.headHash, ok, r)
+			r, getErr := fc.auditStatus.Get(rec.headHash)
+			t.Fatalf("audit runner did not record Verified for head %q (get err=%v rec=%+v)", rec.headHash, getErr, r)
 		}
 	}
 }

@@ -134,7 +134,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if rec, ok := status.Get(aggHead); ok && rec.Scope.SourceCommitmentEvaluated {
+		if rec, err := status.Get(aggHead); err == nil && rec.Scope.SourceCommitmentEvaluated {
 			if rec.Overall != vc.ConfidenceVerified {
 				t.Errorf("linear Overall = %v, want Verified", rec.Overall)
 			}

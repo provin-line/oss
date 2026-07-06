@@ -37,9 +37,12 @@ func (s *StatusService) GetStatus(ctx context.Context, headHash string) (AuditRe
 	if !isContentAddress(headHash) {
 		return AuditRecord{}, fmt.Errorf("%w: head_hash %q is not a sha256:<hex> content address", ErrInvalidArgument, headHash)
 	}
-	rec, ok := s.store.Get(headHash)
-	if !ok {
-		return AuditRecord{}, fmt.Errorf("%w: %q", ErrNotFound, headHash)
+	rec, err := s.store.Get(headHash)
+	if err != nil {
+		// ErrNotFound passes through wrapped (the handler serves not_found);
+		// any other error is a damaged record and surfaces as internal —
+		// never as absence.
+		return AuditRecord{}, fmt.Errorf("audit status for %q: %w", headHash, err)
 	}
 	return rec, nil
 }

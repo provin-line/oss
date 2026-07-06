@@ -69,12 +69,13 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 	if err := s.store.Put(hash, &cred); err != nil {
 		return "", err
 	}
-	// Storing this VC resolves any queued hole for its own hash — an out-of-order
-	// submission (a successor queued this predecessor before it arrived). Remove
-	// is idempotent, so this is a no-op when the hash was never queued.
-	if err := s.pool.Remove(hash); err != nil {
-		return "", err
-	}
+	// Ordering is crash-safe for DURABLE stores: the next hole is queued
+	// BEFORE the resolved hole is removed. A crash between the two leaves the
+	// resolved hole queued — the batch resolver re-fetches it and the
+	// idempotent Put/Add converge on replay. The reverse order would let a
+	// crash permanently stall chain assembly (hole removed, successor hole
+	// never queued) — re-resolution is the recovery rule, so no boot-repair
+	// pass exists to paper over a wrong order.
 	if hasPrev {
 		switch _, err := s.store.Get(prev); {
 		case err == nil:
@@ -93,6 +94,12 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 			// silently dropping the chain hole.
 			return "", err
 		}
+	}
+	// Storing this VC resolves any queued hole for its own hash — an out-of-order
+	// submission (a successor queued this predecessor before it arrived). Remove
+	// is idempotent, so this is a no-op when the hash was never queued.
+	if err := s.pool.Remove(hash); err != nil {
+		return "", err
 	}
 	return hash, nil
 }

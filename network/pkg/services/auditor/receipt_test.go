@@ -1,6 +1,7 @@
 package auditor
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -17,8 +18,8 @@ func TestMemReceiptStore_RoundTrip(t *testing.T) {
 	if err := s.Put(head, consumed); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, ok := s.Get(head)
-	if !ok {
+	got, err := s.Get(head)
+	if err != nil {
 		t.Fatal("Get: want ok=true for a stored head")
 	}
 	if !reflect.DeepEqual(got, consumed) {
@@ -28,8 +29,8 @@ func TestMemReceiptStore_RoundTrip(t *testing.T) {
 
 func TestMemReceiptStore_AbsentMiss(t *testing.T) {
 	s := NewMemReceiptStore()
-	if _, ok := s.Get("sha256:missing"); ok {
-		t.Error("Get: want ok=false for an unstored head")
+	if _, err := s.Get("sha256:missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get: want ErrNotFound for an unstored head, got %v", err)
 	}
 }
 

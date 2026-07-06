@@ -166,7 +166,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	// runner's next tick records the verdict.
 	auditDeadline := time.After(10 * time.Second)
 	for {
-		if rec, ok := status.Get(aggHead); ok && rec.Scope.SourceCommitmentEvaluated {
+		if rec, err := status.Get(aggHead); err == nil && rec.Scope.SourceCommitmentEvaluated {
 			if rec.SourceCommitment != vc.ConfidenceVerified {
 				t.Errorf("SourceCommitment = %v, want Verified", rec.SourceCommitment)
 			}

@@ -106,8 +106,8 @@ func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 
 	// While the hole is queued: recorded Indeterminate (all axes), head RETAINED.
 	waitUntil(t, func() bool {
-		rec, ok := status.Get(headHash)
-		return ok && rec.Overall == vc.ConfidenceIndeterminate
+		rec, err := status.Get(headHash)
+		return err == nil && rec.Overall == vc.ConfidenceIndeterminate
 	}, "head recorded Indeterminate")
 	rec, _ := status.Get(headHash)
 	i := vc.ConfidenceIndeterminate
@@ -164,8 +164,8 @@ func TestAuditRunner_Integration_RealVerifyTerminal(t *testing.T) {
 	go func() { _ = r.Run(runCtx) }()
 
 	waitUntil(t, func() bool {
-		rec, ok := status.Get(headHash)
-		return ok && rec.Overall == vc.ConfidenceFailed
+		rec, err := status.Get(headHash)
+		return err == nil && rec.Overall == vc.ConfidenceFailed
 	}, "head recorded a terminal Failed verdict via the real verifier")
 	waitUntil(t, func() bool { return queue.Len() == 0 }, "terminal verdict dequeued the head")
 }

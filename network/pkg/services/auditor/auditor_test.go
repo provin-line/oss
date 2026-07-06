@@ -1,6 +1,7 @@
 package auditor_test
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -12,8 +13,8 @@ import (
 func TestMemStatusStore_RoundTrip(t *testing.T) {
 	s := auditor.NewMemStatusStore()
 
-	if _, ok := s.Get("absent"); ok {
-		t.Errorf("absent head: got ok=true, want false")
+	if _, err := s.Get("absent"); !errors.Is(err, auditor.ErrNotFound) {
+		t.Errorf("absent head: got %v, want ErrNotFound", err)
 	}
 
 	rec := auditor.AuditRecord{
@@ -30,9 +31,9 @@ func TestMemStatusStore_RoundTrip(t *testing.T) {
 	if err := s.Put("sha256:h", rec); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, ok := s.Get("sha256:h")
-	if !ok {
-		t.Fatal("present head: got ok=false, want true")
+	got, err := s.Get("sha256:h")
+	if err != nil {
+		t.Fatalf("present head: %v", err)
 	}
 	if !reflect.DeepEqual(got, rec) {
 		t.Errorf("round-trip mismatch:\n got = %+v\nwant = %+v", got, rec)

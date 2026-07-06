@@ -125,7 +125,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if rec, ok := status.Get(aggHead); ok && rec.Scope.SourceCommitmentEvaluated {
+		if rec, err := status.Get(aggHead); err == nil && rec.Scope.SourceCommitmentEvaluated {
 			break
 		}
 		select {

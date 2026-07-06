@@ -13,6 +13,7 @@
 package auditor
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -51,10 +52,15 @@ type AuditRecord struct {
 	AuditedAt                 time.Time
 }
 
-// StatusStore records the latest audit verdict per head. In-memory for the PoC.
+// StatusStore records the latest audit verdict per head.
+//
+// Get distinguishes absence from damage: a head with no recorded verdict is a
+// wrapped ErrNotFound (definitive — the RPC layer serves not_found); any other
+// error is a damaged/unreadable record and MUST surface as an error — treating
+// damage as absence would launder a tampered verdict file into "never audited".
 type StatusStore interface {
 	Put(headHash string, rec AuditRecord) error
-	Get(headHash string) (AuditRecord, bool)
+	Get(headHash string) (AuditRecord, error)
 }
 
 // MemStatusStore is the in-memory StatusStore (lost on restart; re-audited as heads
@@ -79,10 +85,13 @@ func (s *MemStatusStore) Put(headHash string, rec AuditRecord) error {
 	return nil
 }
 
-// Get returns the recorded verdict for headHash and whether one exists.
-func (s *MemStatusStore) Get(headHash string) (AuditRecord, bool) {
+// Get returns the recorded verdict for headHash, or a wrapped ErrNotFound.
+func (s *MemStatusStore) Get(headHash string) (AuditRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rec, ok := s.m[headHash]
-	return rec, ok
+	if !ok {
+		return AuditRecord{}, fmt.Errorf("%w: %q", ErrNotFound, headHash)
+	}
+	return rec, nil
 }

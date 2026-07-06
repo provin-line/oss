@@ -8,7 +8,6 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
@@ -28,11 +27,11 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 // audit chainwalk's MaxDepth equals the batch resolver's max-depth (D-17h-4): neither
 // component rejects a chain the other accepts.
 func buildAuditRunner(
-	queue *auditor.MemQueue,
-	status *auditor.MemStatusStore,
-	receipts *auditor.MemReceiptStore,
+	queue auditor.AuditQueue,
+	status auditor.StatusStore,
+	receipts auditor.ReceiptReader,
 	vcSvc *vcresolver.Service,
-	pool *memstore.Pool,
+	pool auditor.PoolLiveness,
 	didResolver resolver.Resolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*auditor.Runner, error) {
