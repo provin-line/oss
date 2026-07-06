@@ -47,6 +47,12 @@ which verifies nothing (`VerificationNone` is definitional for a Source) and sig
 the bytes verbatim. A self-contained variant fusing the endpoint and the signer
 into one process conforms to `pipeline/contract` the same way.
 
+The standalone node mounts one adapter per source loop with `push-ingress = true`
+at `/ingest/<loop-name>/…`: the push route sits behind the node's L1 PDP check
+(resource `ingest`, action `push`); health is public. A successful push returns
+`202 Accepted` with the payload's content address (`payload_hash`), which equals
+the issued FirstDrop's input/output hash — issuance itself is asynchronous.
+
 The signing runtime is **transform-free** by design: filter / convert / enrich is
 the Chained Process's responsibility, so re-shaping for boundary translation is the
 adapter's own logic *before* the bytes reach the signer (above). Letting a Source

@@ -42,7 +42,11 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, status, 1<<20)
+	chainOp, err := chainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("chainOperator: %v", err)
+	}
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, 1<<20, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

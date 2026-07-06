@@ -72,6 +72,10 @@ type dataPlane struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
 	aggregates []*aggregate.Process // self-triggered aggregate processes (contract.Process)
+	// pushBindings are the HTTP ingest surfaces of push-enabled source loops
+	// (push-ingress = true): BuildHandler mounts one apipush adapter per binding.
+	// The bound publishers ride the shared conn — no separate teardown path.
+	pushBindings []pushBinding
 }
 
 // buildDataPlane assembles the node's pipeline loops from the pipeline config. When
@@ -145,7 +149,20 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 		var loop *transport.Loop
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
-			loop, err = buildSourceLoop(conn, builder, publisher, lc)
+			// The loop's ingress subscription; push-enabled loops get a readiness
+			// latch on it plus an HTTP binding publishing to the same subject —
+			// HTTP ingest rides the exact NATS path NATS ingest uses.
+			var sub transport.Subscriber = conn.Subscriber(lc.IngressSubject)
+			if lc.Source.PushIngress {
+				rs := newReadySubscriber(sub)
+				sub = rs
+				dp.pushBindings = append(dp.pushBindings, pushBinding{
+					name:      lc.Name,
+					publisher: conn.Publisher(lc.IngressSubject),
+					ready:     rs.Ready(),
+				})
+			}
+			loop, err = buildSourceLoop(sub, conn, builder, publisher, lc)
 		case pipelineconfig.RoleSink:
 			if deps.SinkWriter == nil {
 				_ = conn.Close()
@@ -201,8 +218,10 @@ func buildDataPlane(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config
 
 // buildSourceLoop assembles one source (FirstDrop) loop: ingress Subscriber → ingest
 // processor (vcdid signer over the keystore) → output Publisher, with a memlog
-// emission log. The config layer has already validated that lc.Role is source.
-func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+// emission log. The config layer has already validated that lc.Role is source. The
+// caller supplies the ingress Subscriber (push-enabled loops wrap it with a
+// readiness latch).
+func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	if src.TransformationClaim == vc.ClaimAggregate {
 		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
@@ -237,7 +256,7 @@ func buildSourceLoop(conn *natstransport.Conn, builder *vc.Builder, publisher cr
 		Behavior:   contract.ChainFirstDrop,
 		Strategy:   contract.VerificationNone,
 		Processor:  proc,
-		Subscriber: conn.Subscriber(lc.IngressSubject),
+		Subscriber: sub,
 		Publisher:  conn.Publisher(src.OutputSubject),
 		Codec:      envelopecodec.New(),
 		Emission:   memlog.New(),

@@ -56,6 +56,7 @@ const (
 	vcStoreEndpointKey   = pipelineKey + ".vc-store-endpoint"
 	vcStoreBearerKey     = pipelineKey + ".vc-store-bearer"
 	maxCredentialSizeKey = pipelineKey + ".max-credential-size"
+	maxPushBodySizeKey   = pipelineKey + ".max-push-body-size"
 	batchResolverKey     = pipelineKey + ".batch-resolver"
 	brIntervalKey        = batchResolverKey + ".interval"
 	brBatchSizeKey       = batchResolverKey + ".batch-size"
@@ -98,6 +99,11 @@ type Config struct {
 	// bloated body. Node-level: it governs every fetch/store, not just the async resolver.
 	// Sourced from reference.conf (no Go default); a non-positive value fails startup.
 	MaxCredentialSize int
+	// MaxPushBodySize bounds an HTTP push request body (the apipush adapter). Distinct
+	// from MaxCredentialSize: that key bounds credentials on the fetch/store path, this
+	// one bounds a raw ingest payload. Sourced from reference.conf (no Go default); a
+	// non-positive value fails startup.
+	MaxPushBodySize int
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
@@ -194,6 +200,10 @@ type SourceConfig struct {
 	TransformationClaim vc.TransformationClaim
 	// SchemaRef is the (currently empty-only) schema reference; non-empty is rejected.
 	SchemaRef string
+	// PushIngress exposes this loop's ingress as an HTTP push endpoint on the node
+	// listener (the apipush adapter, mounted at /ingest/<loop-name>/). The loop name
+	// enters URL space, so loading validates it as a safe segment when set.
+	PushIngress bool
 }
 
 // SinkConfig is a terminating sink loop's verification + write policy (Role == RoleSink).
@@ -302,6 +312,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
 		return nil, err
 	}
+	if out.MaxPushBodySize, err = loadPositiveInt(cfg, maxPushBodySizeKey); err != nil {
+		return nil, err
+	}
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
@@ -348,12 +361,19 @@ func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
 // config. The value lives in reference.conf, so it is always present; a non-positive
 // override fails closed (a zero/negative cap would admit any size or reject everything).
 func loadMaxCredentialSize(cfg *hoconconfig.Config) (int, error) {
-	n, err := cfg.Int(maxCredentialSizeKey)
+	return loadPositiveInt(cfg, maxCredentialSizeKey)
+}
+
+// loadPositiveInt reads a required positive integer key from the (layered) config. The
+// value lives in reference.conf, so it is always present; a non-positive override fails
+// closed (a zero/negative byte cap would admit any size or reject everything).
+func loadPositiveInt(cfg *hoconconfig.Config, key string) (int, error) {
+	n, err := cfg.Int(key)
 	if err != nil {
-		return 0, fmt.Errorf("pipeline: config %s: %w", maxCredentialSizeKey, err)
+		return 0, fmt.Errorf("pipeline: config %s: %w", key, err)
 	}
 	if n <= 0 {
-		return 0, fmt.Errorf("pipeline: config %s must be positive, got %d", maxCredentialSizeKey, n)
+		return 0, fmt.Errorf("pipeline: config %s must be positive, got %d", key, n)
 	}
 	return n, nil
 }
@@ -422,7 +442,7 @@ func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
 // not use (e.g. an issuer block under a sink, or a sink block under a chained loop).
 // Source fields are top-level (17b shape); sink and chained fields nest under their block.
 var (
-	sourceKeys    = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref"}
+	sourceKeys    = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref", "push-ingress"}
 	sinkKeys      = []string{"sink"}
 	chainedKeys   = []string{"chained"}
 	aggregateKeys = []string{"aggregate"}
@@ -531,6 +551,19 @@ func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig,
 
 	if sc.TransformationClaim, err = loadClaim(cfg, base+".transformation-claim", name); err != nil {
 		return sc, err
+	}
+
+	// push-ingress (optional, default false) exposes the loop's ingress as an HTTP
+	// push endpoint. The loop name becomes a URL path segment (/ingest/<name>/), so
+	// it must satisfy the safe-segment rule — but only when the name actually enters
+	// URL space (no retroactive breakage for NATS-only loops).
+	if cfg.Has(base + ".push-ingress") {
+		if sc.PushIngress, err = cfg.Bool(base + ".push-ingress"); err != nil {
+			return sc, fmt.Errorf("pipeline: loop %q: config push-ingress: %w", name, err)
+		}
+		if sc.PushIngress && !dplaax.IsSafeSegment(name) {
+			return sc, fmt.Errorf("pipeline: loop %q: push-ingress requires a URL-safe loop name ([a-zA-Z0-9._-], not all dots) — the name becomes the /ingest/<name>/ path segment", name)
+		}
 	}
 
 	// schema-ref must be empty (ingest does no schema validation; a single-string ->

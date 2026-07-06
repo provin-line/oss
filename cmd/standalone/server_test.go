@@ -92,7 +92,11 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), maxCredentialSize)
+	chainOp, err := chainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("chainOperator: %v", err)
+	}
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), maxCredentialSize, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

@@ -29,7 +29,7 @@ func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {
 			PipelineID: "p", ProcessID: "s", TransformationClaim: vc.ClaimAggregate,
 		},
 	}
-	_, err := buildSourceLoop(nil, nil, nil, lc)
+	_, err := buildSourceLoop(nil, nil, nil, nil, lc)
 	if err == nil {
 		t.Fatal("aggregate claim on ingest source loop: want boot error, got nil")
 	}

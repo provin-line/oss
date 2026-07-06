@@ -101,9 +101,12 @@ func main() {
 	// self-audit registration (emit path) and the audit runner's source-commitment step.
 	auditReceipts := auditor.NewMemReceiptStore()
 
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, verifier, guard, resolver, vcSvc, auditStatus, pipeCfg.MaxCredentialSize)
+	// The chain operator is built BEFORE the data plane: its construction publishes
+	// the node account's claims (findings #14), and on a fresh broker the data
+	// plane's NATS connect needs those claims to be resolvable.
+	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
-		log.Fatalf("standalone: build server: %v", err)
+		log.Fatalf("standalone: %v", err)
 	}
 
 	// The data plane signs (source loops) with the same file-backed keystore the control
@@ -119,6 +122,12 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
+	}
+
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus,
+		pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
+	if err != nil {
+		log.Fatalf("standalone: build server: %v", err)
 	}
 
 	// The async chain-audit resolver drains the pool the consuming loops populate. It is

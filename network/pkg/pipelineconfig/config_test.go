@@ -112,6 +112,78 @@ func TestLoad_SourceOnlyWithoutBearerLoads(t *testing.T) {
 	}
 }
 
+// push-ingress exposes a source loop's NATS ingress as an HTTP push endpoint on the
+// node listener (apipush). Source-only; the loop name enters URL space, so it must be
+// a safe segment. Absent = false.
+func TestLoad_PushIngress(t *testing.T) {
+	withPush := strings.Replace(validSourceLoop, `role = "source"`,
+		"role = \"source\"\n    push-ingress = true", 1)
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(withPush)))
+	if err != nil {
+		t.Fatalf("source with push-ingress: %v", err)
+	}
+	if !pc.Loops[0].Source.PushIngress {
+		t.Error("PushIngress = false, want true")
+	}
+
+	// Absent key defaults to false.
+	pc, err = pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validSourceLoop)))
+	if err != nil {
+		t.Fatalf("source without push-ingress: %v", err)
+	}
+	if pc.Loops[0].Source.PushIngress {
+		t.Error("PushIngress = true, want false (absent key)")
+	}
+}
+
+func TestLoad_PushIngress_NonSourceRejected(t *testing.T) {
+	for name, body := range map[string]string{
+		"sink":      strings.Replace(validSinkLoop, `role = "sink"`, "role = \"sink\"\n    push-ingress = true", 1),
+		"chained":   strings.Replace(validChainedLoop, `role = "chained"`, "role = \"chained\"\n    push-ingress = true", 1),
+		"aggregate": strings.Replace(validAggregateLoop, `role = "aggregate"`, "role = \"aggregate\"\n    push-ingress = true", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(body))))
+			if err == nil || !strings.Contains(err.Error(), "push-ingress") {
+				t.Fatalf("push-ingress on %s: want push-ingress error, got %v", name, err)
+			}
+		})
+	}
+}
+
+// A push-enabled loop's name becomes a URL path segment (/ingest/<name>/…), so it
+// must satisfy the safe-segment rule; a name that does not is a boot error. The same
+// name WITHOUT push-ingress stays legal (no retroactive breakage).
+func TestLoad_PushIngress_UnsafeLoopNameRejected(t *testing.T) {
+	unsafe := strings.Replace(validSourceLoop, "  src {", `  "src loop" {`, 1)
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(unsafe))); err != nil {
+		t.Fatalf("unsafe name without push-ingress should load: %v", err)
+	}
+	unsafePush := strings.Replace(unsafe, `role = "source"`,
+		"role = \"source\"\n    push-ingress = true", 1)
+	_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(unsafePush)))
+	if err == nil || !strings.Contains(err.Error(), "push-ingress") {
+		t.Fatalf("unsafe name with push-ingress: want boot error naming push-ingress, got %v", err)
+	}
+}
+
+func TestLoad_MaxPushBodySizeDefault(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validSourceLoop)))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if pc.MaxPushBodySize != 1<<20 {
+		t.Errorf("max-push-body-size default = %d, want %d", pc.MaxPushBodySize, 1<<20)
+	}
+}
+
+func TestLoad_MaxPushBodySize_NonPositiveFails(t *testing.T) {
+	conf := loopsConf(validSourceLoop) + "provin.network.pipeline.max-push-body-size = 0\n"
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, conf)); err == nil {
+		t.Fatal("max-push-body-size = 0: want error, got nil")
+	}
+}
+
 // HasConsumingLoop classifies the population that drives the async chain audit: any
 // sink/chained/aggregate loop, regardless of siblings; never source-only or zero loops.
 func TestHasConsumingLoop(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	chainyaml "github.com/provin-line/oss/network/pkg/services/chainmanager/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
@@ -98,7 +99,13 @@ func registryBaseURL(urls map[string]string) func(registry string) (string, erro
 // auditStatus is the audit-verdict store the async runner writes (slice-17h) and the
 // AuditService reads (slice-17i, D-17i-7); main builds it once and shares the one instance
 // across both. A read-only surface — the API never mutates it.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, maxCredentialSize int) (http.Handler, error) {
+// chainOp is the chain transport operator, built by main via chainOperator BEFORE the
+// data plane (its construction publishes the node account's claims — a broker
+// side-effect the data plane's connect depends on; hiding it here would re-create the
+// fresh-boot ordering bug the extraction fixed).
+// ingest is the HTTP push surface of the data plane's push-enabled source loops
+// (zero-valued when none: no routes mounted).
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -114,17 +121,6 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// and peer/L2) from one Service instance with the subscriber side fully wired.
 	chainRoot := filepath.Join(coreCfg.DataDir, "chain")
 
-	chainOp, err := chainOperator(chainCfg)
-	if err != nil {
-		return nil, err
-	}
-	// KNOWN LIMITATION (deferred to C2b-2b — operator claim-state persistence):
-	// the nats operator starts with EMPTY in-memory claims and is not rehydrated
-	// from the persisted subscription store / existing account JWT. After a restart
-	// with pre-existing subscriptions, a Remove will no-op and the next Add will
-	// re-publish an account JWT carrying only the new grant (dropping prior live
-	// grants). C2b-2b adds rehydration (replay the store, or load the published
-	// JWT on New) alongside the live-update publisher.
 	// The subscriber-side peer client signs as the node's DID with its keystore
 	// #auth key (composed here — the service layer stays proto-free, slice-13
 	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
@@ -177,7 +173,21 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	mux.Handle("/did/", didhandler.NewResolutionHandler(didSvc, regCfg.ID))
 	mux.HandleFunc("/healthz", healthz)
 
+	// HTTP push ingest (apipush) for push-enabled source loops: /ingest/<loop>/push
+	// (PDP-guarded) and /ingest/<loop>/health (public). Zero bindings mount nothing.
+	if err := mountPushRoutes(mux, ingest.bindings, verifier, ingest.maxBodySize); err != nil {
+		return nil, err
+	}
+
 	return mux, nil
+}
+
+// ingestMounts is the HTTP push surface BuildHandler mounts for the data plane's
+// push-enabled source loops. The zero value mounts nothing; maxBodySize must be
+// positive when bindings exist (apipush.New fails closed otherwise).
+type ingestMounts struct {
+	bindings    []pushBinding
+	maxBodySize int
 }
 
 type handlerPair struct {
