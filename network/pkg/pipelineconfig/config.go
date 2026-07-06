@@ -90,6 +90,8 @@ type Config struct {
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set —
 	// a tokenless client would be rejected at runtime, so LoadPipelineConfig fails closed.
+	// The async batch resolver presents the same token for peer predecessor fetches, so
+	// a consuming-only node that assembles cross-node chains sets it WITHOUT an endpoint.
 	VCStoreBearer string
 	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
 	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
