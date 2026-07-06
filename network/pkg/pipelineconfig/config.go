@@ -217,7 +217,29 @@ type SinkConfig struct {
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
 	UpstreamEndpoint string
+	// Output is where this loop delivers consumed events (per-loop: each sink
+	// loop is one delivery target).
+	Output SinkOutputConfig
 }
+
+// SinkOutputConfig selects a sink loop's delivery surface. The in-repo surfaces
+// are reference implementations (console for inspection, file for a durable
+// NDJSON stream a consumer can tail without scraping process stdout); vendor
+// adapters (EDC, warehouses, …) implement pipeline/contract in extension repos.
+type SinkOutputConfig struct {
+	// Type is SinkOutputConsole (default when the output block is absent) or
+	// SinkOutputFile.
+	Type string
+	// Path is the NDJSON file to append to (file type only; required there, and
+	// rejected on console — a path on a console output is a misconfig).
+	Path string
+}
+
+// Sink output types.
+const (
+	SinkOutputConsole = "console"
+	SinkOutputFile    = "file"
+)
 
 // ChainedConfig is a relay loop's producing identity + consuming verification + optional
 // transform (Role == RoleChained). A chained loop both consumes (verifies its ingress,
@@ -608,7 +630,46 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, err
 	}
 
+	if sc.Output, err = loadSinkOutput(cfg, base, name); err != nil {
+		return sc, err
+	}
+
 	return sc, nil
+}
+
+// loadSinkOutput reads the optional sink.output block. Absent == console (the
+// pre-existing stdout behaviour); file requires a path; a path on console is
+// rejected as a misconfig (the operator almost certainly meant type = "file").
+func loadSinkOutput(cfg *hoconconfig.Config, base, name string) (SinkOutputConfig, error) {
+	out := SinkOutputConfig{Type: SinkOutputConsole}
+	typeKey, pathKey := base+".sink.output.type", base+".sink.output.path"
+	if cfg.Has(typeKey) {
+		t, err := requireString(cfg, typeKey)
+		if err != nil {
+			return out, err
+		}
+		out.Type = t
+	}
+	if cfg.Has(pathKey) {
+		p, err := cfg.String(pathKey)
+		if err != nil {
+			return out, fmt.Errorf("pipeline: config %s: %w", pathKey, err)
+		}
+		out.Path = p
+	}
+	switch out.Type {
+	case SinkOutputConsole:
+		if out.Path != "" {
+			return out, fmt.Errorf("pipeline: loop %q: sink.output.path is set but type is %q — a console output takes no path (want type = %q?)", name, SinkOutputConsole, SinkOutputFile)
+		}
+	case SinkOutputFile:
+		if out.Path == "" {
+			return out, fmt.Errorf("pipeline: loop %q: sink.output.type %q requires sink.output.path", name, SinkOutputFile)
+		}
+	default:
+		return out, fmt.Errorf("pipeline: loop %q: unknown sink.output.type %q (want %q|%q)", name, out.Type, SinkOutputConsole, SinkOutputFile)
+	}
+	return out, nil
 }
 
 // rejectKeys errors if any key from the given sets is present under the loop — used to

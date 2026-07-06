@@ -45,7 +45,7 @@ contract/        Pipeline Contract — the public contract; external adapter rep
                  implement this. Custom Processes are expressed here (no dir).
 chained/         Chained Process runtime (filter + converter steps, VC signing)
 source/          Source Process mechanics (ingest/ + aggregate/)
-sink/            Sink Process (console reference implementation)
+sink/            Sink Process (console + file reference implementations)
 provenance/      shared mechanics: VC signing/verification providers
 observer/        shared mechanics: process-event observers (log, VC store)
 transport/       shared mechanics: pub-sub abstraction (NATS impl; Hub swap point)
@@ -58,7 +58,7 @@ signing path (FirstDrop vs carried `previousCredential`), not by its directory.
 
 ## Reference implementations vs extension adapters
 
-This repository ships reference implementations only (`apipush`, `console`).
+This repository ships reference implementations only (`apipush`, `console`, `file`).
 Vendor/ecosystem adapters (EDC, Kafka, SNS, …) live in **separate repositories**
 implementing `contract/` — keeping that contract stable is this layer's primary
 API obligation.

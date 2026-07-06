@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/sink/console"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -298,6 +301,87 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	cancel()
 	if err := dp.Run(ctx); err != nil {
 		t.Fatalf("sink Run drain: %v", err)
+	}
+}
+
+// Sink delivery writers come from per-loop config when no override is injected:
+// file outputs share ONE writer per cleaned path (two loops on one file must
+// never interleave lines), console is the default, junk types fail closed, and
+// an injected deps.SinkWriter (the test seam) overrides everything.
+func TestSinkWriters_ProviderSemantics(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.ndjson")
+	sw := newSinkWriters(nil)
+
+	w1, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path})
+	if err != nil {
+		t.Fatalf("writerFor(file): %v", err)
+	}
+	// Same file spelled differently must resolve to the SAME writer instance.
+	w2, err := sw.writerFor(pipelineconfig.SinkOutputConfig{
+		Type: pipelineconfig.SinkOutputFile, Path: filepath.Join(dir, "sub", "..", "out.ndjson")})
+	if err != nil {
+		t.Fatalf("writerFor(file, uncleaned): %v", err)
+	}
+	if w1 != w2 {
+		t.Error("two loops on one path got distinct writers — lines could interleave")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file not created at construction (boot): %v", err)
+	}
+
+	// Console: the default for a zero-value Output (typed-config construction)
+	// and the explicit type; one shared instance.
+	c1, err := sw.writerFor(pipelineconfig.SinkOutputConfig{})
+	if err != nil {
+		t.Fatalf("writerFor(zero): %v", err)
+	}
+	c2, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputConsole})
+	if err != nil {
+		t.Fatalf("writerFor(console): %v", err)
+	}
+	if c1 != c2 {
+		t.Error("console writers not shared")
+	}
+
+	if _, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: "warehouse"}); err == nil {
+		t.Error("unknown output type: want error (fail closed)")
+	}
+
+	// The injection seam wins over any config.
+	inj := console.New(io.Discard)
+	swo := newSinkWriters(inj)
+	if w, err := swo.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path}); err != nil || w != sink.Writer(inj) {
+		t.Errorf("override: got %v (err %v), want the injected writer", w, err)
+	}
+}
+
+// A sink loop with a file output assembles with NO injected writer: the surface
+// comes from config, and the file exists after boot (fail-closed construction).
+func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	cfg := dpSinkCfg()
+	path := filepath.Join(t.TempDir(), "consumed.ndjson")
+	cfg.Loops[0].Sink.Output = pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path}
+
+	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, dpKeyStore(t), dataPlaneDeps{
+		Resolver: stubResolver{},
+		VCStore:  dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (file sink, no injected writer): %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("output file not created at boot: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("drain: %v", err)
 	}
 }
 

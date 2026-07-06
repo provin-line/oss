@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -23,6 +25,8 @@ import (
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
+	sinkconsole "github.com/provin-line/oss/pipeline/sink/console"
+	sinkfile "github.com/provin-line/oss/pipeline/sink/file"
 	"github.com/provin-line/oss/pipeline/source/aggregate"
 	"github.com/provin-line/oss/pipeline/source/ingest"
 	"github.com/provin-line/oss/pipeline/transport"
@@ -40,10 +44,14 @@ var _ chainwalk.CredentialResolver = (*vcresolverclient.Resolver)(nil)
 
 // dataPlaneDeps are the cross-plane dependencies a data plane needs beyond its own
 // keystore: the shared DID resolver (sink loops verify upstream credentials through it)
-// and the sink Writer (where a sink delivers consumed events). They are zero for a
-// source-only node — a source loop uses neither.
+// and an optional sink Writer override. They are zero for a source-only node — a
+// source loop uses neither.
 type dataPlaneDeps struct {
-	Resolver   resolver.Resolver
+	Resolver resolver.Resolver
+	// SinkWriter, when non-nil, overrides every sink loop's config-selected
+	// delivery surface — the test seam (assert on a buffer instead of a real
+	// surface). Deployment leaves it nil: each loop's writer comes from its
+	// sink.output config (console default, file per path).
 	SinkWriter sink.Writer
 	// VCStore is the node's local VC store (the local *vcresolver.Service StoreVC seam).
 	// Consuming loops (sink, chained) store every verified ingress credential through it,
@@ -145,6 +153,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	if vcClient != nil {
 		publisher = vcClient
 	}
+	sinkWriters := newSinkWriters(deps.SinkWriter)
 	for _, lc := range pipeCfg.Loops {
 		var loop *transport.Loop
 		switch lc.Role {
@@ -164,12 +173,11 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			}
 			loop, err = buildSourceLoop(sub, conn, builder, publisher, lc)
 		case pipelineconfig.RoleSink:
-			if deps.SinkWriter == nil {
-				_ = conn.Close()
-				return nil, fmt.Errorf("standalone: loop %q: sink role requires a sink writer", lc.Name)
-			}
-			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildSinkLoop(conn, verifier, ingressStore, deps.SinkWriter, lc)
+			var w sink.Writer
+			if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
+				err = fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
+			} else if err = ensureConsumer(lc.Name); err == nil {
+				loop, err = buildSinkLoop(conn, verifier, ingressStore, w, lc)
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
@@ -517,4 +525,49 @@ func (d *dataPlane) Run(ctx context.Context) error {
 		}
 	}
 	return closeErr
+}
+
+// sinkWriters builds per-loop sink delivery writers from config. One console
+// writer is shared (stdout is one stream), and file writers are shared per
+// CLEANED path — two loops delivering to one file must go through one mutex or
+// their lines could interleave. A non-nil override (deps.SinkWriter, the test
+// seam) wins over all config.
+type sinkWriters struct {
+	override sink.Writer
+	console  sink.Writer
+	files    map[string]sink.Writer
+}
+
+func newSinkWriters(override sink.Writer) *sinkWriters {
+	return &sinkWriters{override: override, files: map[string]sink.Writer{}}
+}
+
+// writerFor resolves one loop's delivery surface. The zero-value Output (typed
+// construction without the config loader) means console — same default the
+// loader applies. Unknown types fail closed: config validation catches them at
+// load, so one here is a programming error surfaced loudly, not defaulted.
+func (s *sinkWriters) writerFor(out pipelineconfig.SinkOutputConfig) (sink.Writer, error) {
+	if s.override != nil {
+		return s.override, nil
+	}
+	switch out.Type {
+	case pipelineconfig.SinkOutputFile:
+		key := filepath.Clean(out.Path)
+		if w, ok := s.files[key]; ok {
+			return w, nil
+		}
+		w, err := sinkfile.New(key)
+		if err != nil {
+			return nil, err
+		}
+		s.files[key] = w
+		return w, nil
+	case pipelineconfig.SinkOutputConsole, "":
+		if s.console == nil {
+			s.console = sinkconsole.New(os.Stdout)
+		}
+		return s.console, nil
+	default:
+		return nil, fmt.Errorf("unknown sink output type %q", out.Type)
+	}
 }

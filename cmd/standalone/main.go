@@ -39,7 +39,6 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
-	"github.com/provin-line/oss/pipeline/sink/console"
 )
 
 // httpShutdownTimeout bounds the graceful HTTP drain on shutdown.
@@ -133,12 +132,12 @@ func main() {
 	}
 
 	// The data plane signs (source loops) with the same file-backed keystore the control
-	// plane uses (dataDir/keys) and verifies (sink loops) through the shared resolver. A
-	// sink delivers consumed events to stdout as NDJSON. With zero loops this dials nothing.
+	// plane uses (dataDir/keys) and verifies (sink loops) through the shared resolver. Each
+	// sink loop's delivery surface comes from its sink.output config (console/stdout
+	// default, file per path). With zero loops this dials nothing.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
 		Resolver:   resolver,
-		SinkWriter: console.New(os.Stdout),
 		VCStore:    vcSvc,
 		AuditQueue: auditQueue,
 		Receipts:   auditReceipts,

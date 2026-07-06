@@ -30,3 +30,12 @@ Subscribes to an output subject, verifies each received VC (signature / DID
 resolution / schema axes), and writes one NDJSON record per event to stdout —
 development and inspection tooling. Vendor sinks (EDC, warehouses, …) live in
 extension repositories implementing `pipeline/contract`.
+
+## Reference implementation: file/ (durable NDJSON stream)
+
+The same line shape as `console/` (by construction — it embeds the console
+writer over an append-mode file handle), delivered to a file a consumer can
+tail without scraping process stdout. Selected per sink loop via
+`sink.output { type = "file", path = ... }`; loops sharing one path share one
+writer, so lines never interleave. A delivery stream, not an evidence store —
+evidence durability lives in the VC/verdict stores.

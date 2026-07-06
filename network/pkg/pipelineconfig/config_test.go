@@ -363,6 +363,57 @@ func TestLoad_ValidSink(t *testing.T) {
 	}
 }
 
+// Sink output destination: absent block defaults to console (stdout — today's
+// only behaviour, preserved); "file" requires a path.
+func TestLoad_SinkOutput(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(validSinkLoop))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if out := pc.Loops[0].Sink.Output; out.Type != pipelineconfig.SinkOutputConsole || out.Path != "" {
+		t.Fatalf("default output = %+v, want console with no path", out)
+	}
+
+	fileLoop := strings.Replace(validSinkLoop,
+		`upstream-endpoint = "https://acme.example/pipelines/pipe"`,
+		`upstream-endpoint = "https://acme.example/pipelines/pipe"
+      output { type = "file", path = "/var/provin/consumed.ndjson" }`, 1)
+	pc, err = pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(fileLoop))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig(file output): %v", err)
+	}
+	if out := pc.Loops[0].Sink.Output; out.Type != pipelineconfig.SinkOutputFile || out.Path != "/var/provin/consumed.ndjson" {
+		t.Fatalf("file output = %+v", out)
+	}
+}
+
+func TestLoad_FailClosed_SinkOutput(t *testing.T) {
+	withOutput := func(block string) string {
+		return strings.Replace(validSinkLoop,
+			`upstream-endpoint = "https://acme.example/pipelines/pipe"`,
+			`upstream-endpoint = "https://acme.example/pipelines/pipe"
+      `+block, 1)
+	}
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"file output without path", withOutput(`output { type = "file" }`)},
+		{"file output with empty path", withOutput(`output { type = "file", path = "" }`)},
+		{"unknown output type", withOutput(`output { type = "warehouse" }`)},
+		// A path on a console output is a misconfig (probably meant type=file) —
+		// fail closed instead of silently writing to stdout.
+		{"console output with a path", withOutput(`output { type = "console", path = "/var/x" }`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(tc.body)))); err == nil {
+				t.Fatalf("%s: want error, got nil", tc.name)
+			}
+		})
+	}
+}
+
 func TestLoad_FailClosed_Sink(t *testing.T) {
 	mut := func(field, value string) string {
 		return strings.Replace(validSinkLoop, field, value, 1)
