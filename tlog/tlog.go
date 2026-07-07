@@ -21,8 +21,17 @@ package tlog
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrUnsignedLog is the CONTRACT-LEVEL condition "this log cannot produce
+// the signed commitment Checkpoint requires" (no signing capability was
+// armed). Implementations wrap it in their own typed errors so a caller
+// holding only the tlog.Log interface can detect the condition with
+// errors.Is — two lookalike per-package sentinels would be silent false
+// negatives across implementations.
+var ErrUnsignedLog = errors.New("tlog: log has no checkpoint signer")
 
 // Record is one immutable log entry.
 type Record struct {
@@ -31,10 +40,12 @@ type Record struct {
 	// Payload is the opaque record content; consumers define the encoding.
 	Payload []byte
 	// Hash is an implementation-defined commitment to this record: the chain
-	// hash — sha256 over (previous record's Hash ‖ canonical record bytes),
-	// the genesis record chaining from a zero hash — for hash-chain logs, or
-	// the Merkle leaf hash for tree logs. Any retroactive modification breaks
-	// every subsequent commitment.
+	// hash — sha256 over ( []byte(previous record's Hash, as hex text) ‖ the
+	// opaque payload bytes ), the genesis record chaining from the EMPTY
+	// STRING (not 32 zero bytes; pinned byte-exactly by the log contract
+	// suite's vector) — for hash-chain logs, or the Merkle leaf hash for
+	// tree logs. Any retroactive modification breaks every subsequent
+	// commitment.
 	Hash string
 }
 

@@ -46,7 +46,7 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	if err != nil {
 		t.Fatalf("chainOperator: %v", err)
 	}
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), 1<<20, ingestMounts{})
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), nil, 1<<20, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

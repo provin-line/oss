@@ -13,6 +13,7 @@ import (
 	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	schemapbconnect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -35,8 +36,11 @@ import (
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/signer"
 	signerhandler "github.com/provin-line/oss/network/pkg/services/signer/handler"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice"
+	tloghandler "github.com/provin-line/oss/network/pkg/services/tlogservice/handler"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
+	"github.com/provin-line/oss/tlog"
 
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
@@ -105,7 +109,7 @@ func registryBaseURL(urls map[string]string) func(registry string) (string, erro
 // fresh-boot ordering bug the extraction fixed).
 // ingest is the HTTP push surface of the data plane's push-enabled source loops
 // (zero-valued when none: no routes mounted).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
@@ -158,6 +162,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts)), authz)),
+		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc)), authz)),
 	} {
 		mux.Handle(p.path, p.h)

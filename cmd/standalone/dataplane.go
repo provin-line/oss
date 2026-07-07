@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +37,8 @@ import (
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/tlog"
+	"github.com/provin-line/oss/tlog/filelog"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -58,6 +64,11 @@ type dataPlaneDeps struct {
 	// populating the unresolved pool for the async chain-audit path (D-17f-1, D-17f-7).
 	// Nil is a boot error for any consuming loop; a source-only node needs none.
 	VCStore ingressStorer
+	// TlogDir is the root directory for durable per-loop emission logs
+	// (data-dir/tlog). Empty falls back to in-memory logs — the unit-test
+	// seam; the node always sets it (emission logs are durable by default,
+	// no config knob).
+	TlogDir string
 	// VCStoreHTTPClient is the transport for the VC-store client; nil => http.DefaultClient.
 	// Tests inject an embedded server's client here. The VC-store endpoint and bearer are
 	// node config (pipelineconfig.Config), not deps — so main, which loads and passes that
@@ -80,6 +91,12 @@ type dataPlane struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
 	aggregates []*aggregate.Process // self-triggered aggregate processes (contract.Process)
+	// tlogs is the emission-log registry (log id = producing output subject →
+	// log) that BuildHandler mounts the TlogService over.
+	tlogs map[string]tlog.Log
+	// tlogClosers releases the durable logs' file handles at teardown (the
+	// memlog fallback has nothing to close).
+	tlogClosers []io.Closer
 	// pushBindings are the HTTP ingest surfaces of push-enabled source loops
 	// (push-ingress = true): BuildHandler mounts one apipush adapter per binding.
 	// The bound publishers ride the shared conn — no separate teardown path.
@@ -111,8 +128,38 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		return nil, fmt.Errorf("standalone: data-plane nats connect: %w", err)
 	}
 
-	dp := &dataPlane{conn: conn}
+	dp := &dataPlane{conn: conn, tlogs: map[string]tlog.Log{}}
 	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
+	// newEmission builds one producing loop's emission log and registers it
+	// under its log id (the output subject). Durable + checkpoint-armed when
+	// TlogDir is set (the node path); in-memory otherwise (unit-test seam).
+	// The directory derives from sha256(log id), NOT the loop name: a loop
+	// rename must not fork the durable log while the id consumers reconcile
+	// against is unchanged.
+	newEmission := func(loopName, subject string, issuer pipelineconfig.IssuerConfig) (tlog.Log, error) {
+		var l tlog.Log
+		if deps.TlogDir == "" {
+			l = memlog.New()
+		} else {
+			sum := sha256.Sum256([]byte(subject))
+			dir := filepath.Join(deps.TlogDir, hex.EncodeToString(sum[:]))
+			fl, err := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+				Signer:             ed25519.NewSigner(keyStore),
+				SignerDID:          issuer.DID,
+				KeyID:              issuer.KeyID,
+				VerificationMethod: issuer.VerificationMethod,
+				LogID:              subject,
+			}))
+			if err != nil {
+				return nil, fmt.Errorf("standalone: loop %q: emission log: %w", loopName, err)
+			}
+			slog.Info("standalone: emission log opened", "loop", loopName, "log_id", subject, "dir", dir)
+			dp.tlogClosers = append(dp.tlogClosers, fl)
+			l = fl
+		}
+		dp.tlogs[subject] = l
+		return l, nil
+	}
 	// When a vc-store-endpoint is configured, build the network VC-store client once:
 	// producing loops publish issued credentials through it. Absent => no publication.
 	var vcClient *vcresolverclient.Resolver
@@ -172,7 +219,10 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 					ready:     rs.Ready(),
 				})
 			}
-			loop, err = buildSourceLoop(sub, conn, builder, publisher, lc)
+			var emission tlog.Log
+			if emission, err = newEmission(lc.Name, lc.Source.OutputSubject, lc.Source.Issuer); err == nil {
+				loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, lc)
+			}
 		case pipelineconfig.RoleSink:
 			var w sink.Writer
 			if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
@@ -182,7 +232,10 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, lc)
+				var emission tlog.Log
+				if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
+					loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, lc)
+				}
 			}
 		case pipelineconfig.RoleAggregate:
 			// An aggregate is a consuming producer (verifies+stores N ingress inputs,
@@ -202,7 +255,10 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 						publisher: publisher,
 					}
 				}
-				agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, lc)
+				var emission tlog.Log
+				if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
+					agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, lc)
+				}
 			}
 			if err != nil {
 				_ = conn.Close()
@@ -230,7 +286,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 // emission log. The config layer has already validated that lc.Role is source. The
 // caller supplies the ingress Subscriber (push-enabled loops wrap it with a
 // readiness latch).
-func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, emission tlog.Log, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	if src.TransformationClaim == vc.ClaimAggregate {
 		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
@@ -268,7 +324,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 		Subscriber: sub,
 		Publisher:  conn.Publisher(src.OutputSubject),
 		Codec:      envelopecodec.New(),
-		Emission:   memlog.New(),
+		Emission:   emission,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -320,7 +376,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -379,7 +435,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		Subscriber: conn.Subscriber(lc.IngressSubject),
 		Publisher:  conn.Publisher(cc.OutputSubject),
 		Codec:      envelopecodec.New(),
-		Emission:   memlog.New(),
+		Emission:   emission,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -393,7 +449,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
 // wired. When a VC store is configured the signer publishes each issued FirstDrop
 // (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
-func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
+func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
 	ac := lc.Aggregate
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -414,7 +470,7 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		Store:     store,
 		Publisher: conn.Publisher(ac.OutputSubject),
 		Codec:     envelopecodec.New(),
-		Emission:  memlog.New(),
+		Emission:  emission,
 		Fold:      aggregate.ManifestFold{},
 		Window:    ac.Window,
 		// SelfAudit registers each emitted head (local store + receipt + queue + optional
@@ -517,8 +573,13 @@ func (d *dataPlane) Run(ctx context.Context) error {
 	close(errs)
 
 	// All processes have drained (Subscriber.Drain + Publisher.Close); only now tear the
-	// shared connection down.
+	// shared connection down and release the emission logs' file handles.
 	closeErr := d.conn.Close()
+	for _, c := range d.tlogClosers {
+		if err := c.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
 
 	for err := range errs {
 		if err != nil {

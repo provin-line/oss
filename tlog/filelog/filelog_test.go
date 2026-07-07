@@ -1,0 +1,339 @@
+package filelog_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/tlog"
+	"github.com/provin-line/oss/tlog/filelog"
+	"github.com/provin-line/oss/tlog/internal/logcontract"
+)
+
+func newLog(t *testing.T) tlog.Log {
+	t.Helper()
+	l, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return l
+}
+
+func TestLogContract(t *testing.T) {
+	logcontract.Suite(t, newLog)
+}
+
+// The whole point of the file log: records outlive the process. A reopened
+// log serves the old records and CONTINUES the chain — the third append
+// after reopen produces exactly the pinned vector's third hash.
+func TestReopen_ReplaysAndContinuesChain(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	l1, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range logcontract.Vector[:2] {
+		if _, err := l1.Append(ctx, []byte(v.Payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	l2, err := filelog.New(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if n, err := l2.Size(ctx); err != nil || n != 2 {
+		t.Fatalf("reopened Size = %d (err %v), want 2", n, err)
+	}
+	if rec, err := l2.Get(ctx, 1); err != nil || rec.Hash != logcontract.Vector[1].Hash {
+		t.Fatalf("reopened Get(1) = %+v (err %v), want vector hash", rec, err)
+	}
+	rec, err := l2.Append(ctx, []byte(logcontract.Vector[2].Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Index != 2 || rec.Hash != logcontract.Vector[2].Hash {
+		t.Fatalf("post-reopen append = %+v, want index 2 with the vector chain hash — the chain must CONTINUE, not restart", rec)
+	}
+}
+
+// A damaged line fails open-time: a log that cannot prove its own chain
+// must not serve (evidence doctrine).
+func TestOpen_DamagedEntryFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	l, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := l.Append(ctx, []byte{byte('a' + i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "log.ndjson")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(lines))
+	}
+	// Tamper the MIDDLE record's payload: its own hash stays, the chain breaks.
+	var env map[string]any
+	// decoder-hygiene-exempt: test-side tamper helper on fixture bytes.
+	if err := json.Unmarshal([]byte(lines[1]), &env); err != nil {
+		t.Fatal(err)
+	}
+	env["payload"] = "dGFtcGVyZWQ" // base64 "tampered"
+	// canonicalizer-hygiene-exempt: deliberate tamper fixture.
+	tampered, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines[1] = string(tampered)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filelog.New(dir); err == nil {
+		t.Fatal("open over a tampered chain: want error")
+	}
+}
+
+func TestOpen_GarbageLineFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "log.ndjson"), []byte("{not json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filelog.New(dir); err == nil {
+		t.Fatal("open over garbage: want error")
+	}
+}
+
+func TestCheckpoint_UnsignedIsTypedError(t *testing.T) {
+	l, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Checkpoint(context.Background()); !errors.Is(err, filelog.ErrUnsignedLog) {
+		t.Fatalf("unarmed Checkpoint: err=%v, want ErrUnsignedLog", err)
+	}
+}
+
+// --- signed checkpoints ------------------------------------------------------
+
+type memKS struct{ keys map[string][]byte }
+
+func (m *memKS) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair) error {
+	for id, kp := range keys {
+		m.keys[did+"#"+string(id)] = kp.PrivateKey
+	}
+	return nil
+}
+func (m *memKS) GetPrivateKey(did string, keyID keystore.KeyID) ([]byte, error) {
+	k, ok := m.keys[did+"#"+string(keyID)]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	return k, nil
+}
+func (m *memKS) DeleteKeys(string) error { return nil }
+
+func TestCheckpoint_SignedViewVerifies(t *testing.T) {
+	ctx := context.Background()
+	const (
+		logID     = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
+		signerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:s1"
+		vm        = signerDID + "#signing"
+	)
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer:             ed25519.NewSigner(ks),
+		SignerDID:          signerDID,
+		KeyID:              string(keystore.KeyIDSigning),
+		VerificationMethod: vm,
+		LogID:              logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var head string
+	for _, p := range []string{"r1", "r2"} {
+		rec, err := l.Append(ctx, []byte(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		head = rec.Hash
+	}
+
+	cp, err := l.Checkpoint(ctx)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if cp.Size != 2 || cp.Head != head || cp.SignedBy != vm {
+		t.Fatalf("checkpoint = %+v, want size 2 / head %s / signedBy %s", cp, head, vm)
+	}
+	if time.Since(cp.Timestamp) > time.Minute || cp.Timestamp.Location() != time.UTC {
+		t.Errorf("timestamp %v: want recent UTC", cp.Timestamp)
+	}
+
+	// A verifier reconstructs the domain-separated view from public fields
+	// and checks the signature — logId INSIDE the signature means a
+	// checkpoint can never be presented as another log's.
+	view, err := jcs.Canonicalize(map[string]any{
+		"v":         1,
+		"purpose":   "dplaax-tlog-checkpoint",
+		"logId":     logID,
+		"head":      cp.Head,
+		"signedBy":  cp.SignedBy,
+		"size":      "2",
+		"timestamp": cp.Timestamp.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := (ed25519.Verifier{}).Verify(kp.PublicKey, view, cp.Signature)
+	if err != nil || !ok {
+		t.Fatalf("signature does not verify over the reconstructed view (ok=%v err=%v)", ok, err)
+	}
+	// And NOT over a view claiming a different log.
+	otherView, err := jcs.Canonicalize(map[string]any{
+		"v":         1,
+		"purpose":   "dplaax-tlog-checkpoint",
+		"logId":     "did:dplaax:poc.dplaax.dev:org:acme:pipeline:other",
+		"head":      cp.Head,
+		"signedBy":  cp.SignedBy,
+		"size":      "2",
+		"timestamp": cp.Timestamp.Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := (ed25519.Verifier{}).Verify(kp.PublicKey, otherView, cp.Signature); ok {
+		t.Fatal("signature verified for a DIFFERENT log id — the binding is broken")
+	}
+}
+
+// A crash mid-append leaves an unterminated final fragment. Every COMPLETE
+// line was fsynced, so the torn tail is provably an uncommitted append:
+// reopen truncates it loudly and the log keeps working — it must not refuse
+// to boot forever. Interior damage stays fail-closed (see
+// TestOpen_DamagedEntryFailsClosed).
+func TestOpen_TornTailTruncatedAndLogContinues(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	l, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range logcontract.Vector[:2] {
+		if _, err := l.Append(ctx, []byte(v.Payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "log.ndjson")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"v":1,"index":2,"pay`); err != nil { // no newline: torn
+		t.Fatal(err)
+	}
+	f.Close()
+
+	l2, err := filelog.New(dir)
+	if err != nil {
+		t.Fatalf("reopen over a torn tail must succeed: %v", err)
+	}
+	if n, _ := l2.Size(ctx); n != 2 {
+		t.Fatalf("size after torn-tail truncate = %d, want 2", n)
+	}
+	rec, err := l2.Append(ctx, []byte(logcontract.Vector[2].Payload))
+	if err != nil || rec.Hash != logcontract.Vector[2].Hash {
+		t.Fatalf("append after truncate = %+v (err %v), want the vector chain to continue", rec, err)
+	}
+}
+
+// Close releases the handle; a closed log refuses appends, and an append
+// whose write fails poisons only when rollback is impossible.
+func TestClose_AppendsRefused(t *testing.T) {
+	ctx := context.Background()
+	l, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(ctx, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("second Close must be a no-op: %v", err)
+	}
+	if _, err := l.Append(ctx, []byte("b")); err == nil {
+		t.Fatal("append on a closed log: want error")
+	}
+	// Reads still serve the committed memory state.
+	if n, err := l.Size(ctx); err != nil || n != 1 {
+		t.Fatalf("Size after close = %d (err %v), want 1", n, err)
+	}
+}
+
+// Emission records are evidence: local permissions must not hand out what
+// the tlog/read authorization surface protects.
+func TestNew_PrivatePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "log")
+	l, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(context.Background(), []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if di.Mode().Perm()&0o077 != 0 {
+		t.Errorf("dir mode = %v, want no group/other bits", di.Mode().Perm())
+	}
+	fi, err := os.Stat(filepath.Join(dir, "log.ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		t.Errorf("file mode = %v, want no group/other bits", fi.Mode().Perm())
+	}
+}
+
+// The unsigned condition is detectable at the CONTRACT level: a caller
+// holding only tlog.Log must not need to import the implementation.
+func TestCheckpoint_UnsignedIsContractSentinel(t *testing.T) {
+	l, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Checkpoint(context.Background()); !errors.Is(err, tlog.ErrUnsignedLog) {
+		t.Fatalf("err=%v, want errors.Is(tlog.ErrUnsignedLog)", err)
+	}
+}

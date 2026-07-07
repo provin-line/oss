@@ -15,7 +15,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -26,7 +25,7 @@ import (
 // cannot produce the signed commitment the tlog.Log contract requires. Returning a
 // typed error (rather than an unsigned value that looks like a checkpoint) keeps a
 // caller from mistaking the absence of a signature for a verified log head.
-var ErrUnsignedLog = errors.New("memlog: signed checkpoints require the tree-log implementation")
+var ErrUnsignedLog = fmt.Errorf("memlog: signed checkpoints require the tree-log implementation: %w", tlog.ErrUnsignedLog)
 
 // Log is an in-memory, append-only, hash-chained tlog.Log. The zero value is not
 // usable; construct with New.

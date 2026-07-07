@@ -194,11 +194,17 @@ func New(cfg Config) (*Process, error) {
 	if now == nil {
 		now = time.Now
 	}
+	// Construction-time seed read; New has no ctx (the process owns its
+	// lifecycle from Run) — Background is deliberate here.
+	emitter, err := transport.NewEmitter(context.Background(), cfg.Publisher, cfg.Codec, cfg.Emission, logger)
+	if err != nil {
+		return nil, err
+	}
 	return &Process{
 		cfg:     cfg,
 		logger:  logger,
 		now:     now,
-		emitter: transport.NewEmitter(cfg.Publisher, cfg.Codec, cfg.Emission, logger),
+		emitter: emitter,
 		seen:    map[string]bool{},
 	}, nil
 }

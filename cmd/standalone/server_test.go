@@ -96,7 +96,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	if err != nil {
 		t.Fatalf("chainOperator: %v", err)
 	}
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), maxCredentialSize, ingestMounts{})
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), nil, maxCredentialSize, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

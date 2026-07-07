@@ -140,7 +140,11 @@ func (l *Loop) Run(ctx context.Context) error {
 	// counter is race-free without a mutex.
 	var emitter *Emitter
 	if isProducing(l.cfg.Behavior) {
-		emitter = NewEmitter(l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger)
+		var err error
+		emitter, err = NewEmitter(ctx, l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := l.cfg.Subscriber.Subscribe(func(data []byte) {

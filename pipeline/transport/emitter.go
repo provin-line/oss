@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
@@ -50,13 +52,68 @@ type Emitter struct {
 	seq      uint64
 }
 
-// NewEmitter constructs an Emitter with the sequence counter initialised to 1.
+// NewEmitter constructs an Emitter, SEEDING the sequence counter from the
+// emission log's tail: an empty log starts at 1; a log already holding
+// records resumes at lastRecordedSequence+1, so — PROVIDED THE LOG KEPT
+// PACE WITH PUBLISHES — a restarted node with a durable log does not fork
+// the sequence space (new records claiming numbers the log already carries
+// would make "which sequence numbers exist" unanswerable — the
+// loss-accounting question the log exists to answer).
+//
+// Declared residual: Emit's append-after-publish is logged-only on failure
+// (and a crash can land between the two), so the tail can lag the counter
+// by the tail of un-appended PUBLISHED sequences. A restart then re-issues
+// those numbers to NEW events: a reconciling consumer holding the original
+// envelope sees the same sequence number committed with a DIFFERENT
+// credential hash. That signature means "producer restarted inside a loss
+// window", NOT necessarily tampering — reconciliation tooling must treat
+// it as an integrity WARNING to investigate, never an automatic tamper
+// verdict. Hardening (intent records before publish / a WAL'd counter) is
+// the recorded follow-up.
+//
+// The log is the discipline's own carrier, so recovery needs no external
+// seam; a tail record that cannot be read back as an emission record fails
+// construction (the open-time damage doctrine extended to the seed).
 // A nil logger defaults to slog.Default().
-func NewEmitter(pub Publisher, codec contract.EnvelopeCodec, emission tlog.Log, logger *slog.Logger) *Emitter {
+func NewEmitter(ctx context.Context, pub Publisher, codec contract.EnvelopeCodec, emission tlog.Log, logger *slog.Logger) (*Emitter, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Emitter{pub: pub, codec: codec, emission: emission, logger: logger, seq: 1}
+	seq, err := recoverSequence(ctx, emission)
+	if err != nil {
+		return nil, err
+	}
+	return &Emitter{pub: pub, codec: codec, emission: emission, logger: logger, seq: seq}, nil
+}
+
+// recoverSequence reads the emission log tail and returns the next sequence
+// number (1 for an empty log).
+func recoverSequence(ctx context.Context, emission tlog.Log) (uint64, error) {
+	size, err := emission.Size(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("transport: emission log size: %w", err)
+	}
+	if size == 0 {
+		return 1, nil
+	}
+	tail, err := emission.Get(ctx, size-1)
+	if err != nil {
+		return 0, fmt.Errorf("transport: emission log tail: %w", err)
+	}
+	var rec emissionRecord
+	if err := canon.NewStrictDecoder(tail.Payload).Decode(&rec); err != nil {
+		return 0, fmt.Errorf("transport: emission log tail record damaged: %w", err)
+	}
+	last, err := strconv.ParseUint(rec.SequenceNo, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("transport: emission log tail sequenceNo %q: %w", rec.SequenceNo, err)
+	}
+	if last == math.MaxUint64 {
+		// last+1 would wrap to 0 — an invalid sequence. An exhausted (or
+		// absurdly damaged-but-parseable) tail fails closed.
+		return 0, fmt.Errorf("transport: emission log tail sequenceNo %d: sequence space exhausted", last)
+	}
+	return last + 1, nil
 }
 
 // Emit publishes one produced credential+payload and records it on the
@@ -91,6 +148,8 @@ func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, pay
 		return fmt.Errorf("transport: credential hash (sequenceNo %d): %w", next, err)
 	}
 
+	// Deterministic by struct declaration order; a local log record, not a
+	// signing scope (canonicalizer-hygiene-exempt).
 	rec, err := json.Marshal(emissionRecord{
 		CredentialHash: hash,
 		SequenceNo:     strconv.FormatUint(next, 10),

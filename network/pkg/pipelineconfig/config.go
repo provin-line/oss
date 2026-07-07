@@ -312,6 +312,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		}
 		out.Loops = append(out.Loops, lc)
 	}
+	if err := validateProducingIdentities(out.Loops); err != nil {
+		return nil, err
+	}
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
 		return nil, err
 	}
@@ -433,6 +436,58 @@ func loadBatchResolver(cfg *hoconconfig.Config) (BatchResolverConfig, error) {
 	}
 	br.Interval = interval
 	return br, nil
+}
+
+// producingIdentity extracts a producing loop's (output subject, issuer DID);
+// ok is false for consuming-only roles.
+func producingIdentity(lc LoopConfig) (subject, issuer string, ok bool) {
+	switch lc.Role {
+	case RoleSource:
+		return lc.Source.OutputSubject, lc.Source.Issuer.DID, true
+	case RoleChained:
+		return lc.Chained.OutputSubject, lc.Chained.Issuer.DID, true
+	case RoleAggregate:
+		return lc.Aggregate.OutputSubject, lc.Aggregate.Issuer.DID, true
+	}
+	return "", "", false
+}
+
+// validateProducingIdentities enforces the two cross-loop boot invariants the
+// emission-log exposure rests on (tlog spec):
+//
+//	(a) producing output-subjects are unique per node — the output subject is
+//	    the loop's emission-log identity, and two loops sharing one would
+//	    interleave two sequence spaces into one "log";
+//	(b) each producing issuer structurally belongs to its output subject
+//	    (issuer.PipelineDID() == output-subject) — the property that lets a
+//	    consumer check a tlog checkpoint's signed_by against its log id.
+func validateProducingIdentities(loops []LoopConfig) error {
+	bySubject := map[string]string{}
+	for _, lc := range loops {
+		subject, issuer, ok := producingIdentity(lc)
+		if !ok {
+			continue
+		}
+		if other, dup := bySubject[subject]; dup {
+			return fmt.Errorf("pipeline: loops %q and %q share output-subject %q — a producing output subject is the loop's emission-log identity and must be unique per node", other, lc.Name, subject)
+		}
+		bySubject[subject] = lc.Name
+		d, err := dplaax.Parse(issuer)
+		if err != nil {
+			// loadIssuer already validated the shape; defensive.
+			return fmt.Errorf("pipeline: loop %q: issuer %q: %w", lc.Name, issuer, err)
+		}
+		pipelineDID := d.PipelineDID()
+		if pipelineDID == nil {
+			// loadIssuer requires a process DID, which always has a pipeline
+			// ancestor; defensive against a future load-path change.
+			return fmt.Errorf("pipeline: loop %q: issuer %q has no pipeline ancestor", lc.Name, issuer)
+		}
+		if pipelineDID.String() != subject {
+			return fmt.Errorf("pipeline: loop %q: issuer %q does not belong to output-subject %q — the issuer's pipeline DID must equal the output subject (a tlog checkpoint's signed_by must be verifiable against its log id)", lc.Name, issuer, subject)
+		}
+	}
+	return nil
 }
 
 // loadVCStoreEndpoint reads the optional node-level vc-store-endpoint. Absent is "" (no

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +30,7 @@ import (
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
+	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -215,11 +218,11 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	badLC.Name = "bad"
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
 
-	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, goodLC)
+	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, memlog.New(), goodLC)
 	if err != nil {
 		t.Fatalf("build good loop: %v", err)
 	}
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, badLC)
+	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}
@@ -478,5 +481,42 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 		VCStore:  dpVCStore(),
 	}); err == nil {
 		t.Fatal("malformed converter expression: want build error, got nil")
+	}
+}
+
+// The durable node path: with TlogDir set, buildDataPlane opens a filelog
+// per producing loop under sha256(log id), registers it under the OUTPUT
+// SUBJECT, and arms it with the loop's issuer key — a signed checkpoint
+// must verify as coming from that identity.
+func TestDataPlane_DurableEmissionLog(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	tlogDir := t.TempDir()
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{TlogDir: tlogDir})
+	if err != nil {
+		t.Fatalf("buildDataPlane: %v", err)
+	}
+	t.Cleanup(func() { _ = dp.conn.Close() })
+
+	l, ok := dp.tlogs[dpPipelineDID]
+	if !ok {
+		t.Fatalf("registry keys = %v, want the output subject %s", dp.tlogs, dpPipelineDID)
+	}
+	sum := sha256.Sum256([]byte(dpPipelineDID))
+	if _, err := os.Stat(filepath.Join(tlogDir, hex.EncodeToString(sum[:]), "log.ndjson")); err != nil {
+		t.Fatalf("durable log file at the identity-derived path: %v", err)
+	}
+	cp, err := l.Checkpoint(context.Background())
+	if err != nil {
+		t.Fatalf("Checkpoint on the armed durable log: %v", err)
+	}
+	if cp.SignedBy != dpIssuerDID+"#signing" {
+		t.Fatalf("checkpoint signed_by = %s, want the loop issuer's verification method", cp.SignedBy)
+	}
+	if len(dp.tlogClosers) != 1 {
+		t.Fatalf("tlogClosers = %d, want 1 (teardown must release the handle)", len(dp.tlogClosers))
 	}
 }

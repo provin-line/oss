@@ -9,6 +9,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/pipeline/transport"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
+	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -26,7 +27,7 @@ func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	builder := vc.NewBuilder(ed25519.NewSigner(dpKeyStore(t)))
 	badLC := dpPipelineCfg().Loops[0]
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, badLC)
+	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}

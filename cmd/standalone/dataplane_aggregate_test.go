@@ -9,6 +9,7 @@ import (
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -29,7 +30,7 @@ func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {
 			PipelineID: "p", ProcessID: "s", TransformationClaim: vc.ClaimAggregate,
 		},
 	}
-	_, err := buildSourceLoop(nil, nil, nil, nil, lc)
+	_, err := buildSourceLoop(nil, nil, nil, nil, memlog.New(), lc)
 	if err == nil {
 		t.Fatal("aggregate claim on ingest source loop: want boot error, got nil")
 	}

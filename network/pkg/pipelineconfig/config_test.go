@@ -607,3 +607,32 @@ func TestLoad_CrossRoleChainedBlock(t *testing.T) {
 		})
 	}
 }
+
+// A producing output subject is the loop's emission-log identity: two loops
+// sharing one would interleave two sequence spaces into one "log" (tlog
+// spec boot invariant a).
+func TestLoad_DuplicateProducingOutputSubject_Fails(t *testing.T) {
+	// Renames the loop key and process id but NOT the output subject (the
+	// subject string contains no "src"), so both loops share one log id.
+	second := strings.ReplaceAll(validSourceLoop, "src", "src2")
+	_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validSourceLoop+second)))
+	if err == nil || !strings.Contains(err.Error(), "share output-subject") {
+		t.Fatalf("duplicate producing output-subject: want the uniqueness boot error, got %v", err)
+	}
+}
+
+// The issuer must structurally belong to its output subject
+// (issuer.PipelineDID() == output-subject): the property that makes a tlog
+// checkpoint's signed_by verifiable against its log id (boot invariant b).
+func TestLoad_IssuerOutsideOutputSubject_Fails(t *testing.T) {
+	foreign := strings.Replace(validSourceLoop,
+		`did = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`,
+		`did = "did:dplaax:reg:org:acme:pipeline:OTHER:process:src"`, 1)
+	foreign = strings.Replace(foreign,
+		`verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:src#signing"`,
+		`verification-method = "did:dplaax:reg:org:acme:pipeline:OTHER:process:src#signing"`, 1)
+	_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(foreign)))
+	if err == nil || !strings.Contains(err.Error(), "output-subject") {
+		t.Fatalf("issuer outside its output subject: want boot error, got %v", err)
+	}
+}

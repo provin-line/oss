@@ -1,0 +1,98 @@
+// dplaax.tlog.v1 is the read surface for per-loop emission transparency
+// logs: after every successful publish, a producing loop appends
+// {credentialHash, sequenceNo} to its hash-chained log. This service serves
+// signed checkpoints and record ranges so a relying party can reconcile
+// what it RECEIVED against what the loop EMITTED — at-most-once transport
+// loss becomes detectable and the lost events nameable.
+//
+// Reconciliation scope (declared, not assumed): this proves DIRECT envelope
+// delivery per producing loop. Across an aggregate boundary, "did every
+// source reading make it into the aggregate?" is a different question,
+// answered by joining this log with dplaax.audit.v1.GetConsumedSources.
+//
+// Trust model (hash-chain PoC posture): the chain hash makes retroactive
+// mutation detectable GIVEN an honest earlier checkpoint; the signature
+// makes the operator non-repudiably committed to a head. Merkle inclusion
+// proofs are the production extension; a future proof RPC is additive.
+syntax = "proto3";
+
+package dplaax.tlog.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/tlog/v1;tlogpb";
+
+import "o3co/authz/v1/policy.proto";
+
+// TlogService serves emission-log checkpoints and records. Every RPC
+// declares its authorization policy via the o3co.authz.v1 method option
+// (enforced by the network interceptor, asserted by a descriptor test).
+// The resource "tlog" is deliberately distinct from "audit" and "vc":
+// emission metadata is its own grant surface — a deployment may grant
+// reconciliation access without credential-read access.
+service TlogService {
+  // GetLogCheckpoint returns the signed head commitment of one emission
+  // log. The signature covers the JCS canonicalization of the versioned,
+  // domain-separated view {v:1, purpose:"dplaax-tlog-checkpoint", logId,
+  // head, signedBy, size, timestamp} (size and timestamp string-encoded):
+  // log_id is INSIDE the signature, so a checkpoint from one log can never
+  // be presented as another's. A consumer additionally checks signed_by's
+  // pipeline DID == log_id — an invariant the node enforces at boot.
+  // NotFound when this node runs no producing loop with that log id.
+  rpc GetLogCheckpoint(GetLogCheckpointRequest) returns (GetLogCheckpointResponse) {
+    option (o3co.authz.v1.policy) = {resource: "tlog", action: "read"};
+  }
+  // ListLogRecords returns records [start_index, start_index + count) of
+  // one emission log, index-ascending. count follows the pagination
+  // convention's size rules (0 = 64, negative = InvalidArgument, clamped at
+  // 256). Fewer records than count means the log currently ends there — an
+  // append-only log's index IS the public, stable cursor, so this RPC
+  // deliberately uses it instead of an opaque token (the token convention
+  // hides UNSTABLE scan positions; hiding a stable public index would only
+  // obscure reconciliation, whose whole point is "which sequence numbers
+  // exist").
+  rpc ListLogRecords(ListLogRecordsRequest) returns (ListLogRecordsResponse) {
+    option (o3co.authz.v1.policy) = {resource: "tlog", action: "read"};
+  }
+}
+
+message GetLogCheckpointRequest {
+  // log_id is the producing loop's output subject (its pipeline DID) — the
+  // same name the consumer already holds as its granted ingress subject.
+  string log_id = 1;
+}
+message GetLogCheckpointResponse {
+  // log_id echoes the request so a stored or forwarded checkpoint is
+  // self-contained (it is also INSIDE the signature).
+  string log_id = 1;
+  // size / timestamp are string-encoded (uint64 survives IEEE-754 JSON
+  // consumers past 2^53; the codebase avoids google.protobuf.Timestamp).
+  string size = 2;
+  // head is the chain-head hash after `size` records; empty for an empty log.
+  string head = 3;
+  string timestamp = 4; // RFC 3339 UTC
+  // signed_by is the verification-method DID URL of the producing loop's
+  // issuer key — the same identity that signs the loop's credentials.
+  string signed_by = 5;
+  bytes signature = 6;
+}
+
+message ListLogRecordsRequest {
+  string log_id = 1;
+  // start_index is a decimal uint64; empty means 0. Malformed values are
+  // InvalidArgument.
+  string start_index = 2;
+  int32 count = 3;
+}
+message LogRecord {
+  string index = 1; // decimal uint64
+  // payload is the emission record bytes: {"credentialHash","sequenceNo"}.
+  bytes payload = 2;
+  // hash is the chain commitment, EXACTLY as the implementations compute
+  // it: sha256( []byte(prevHashHex) ‖ payload ), the genesis record using
+  // the EMPTY STRING as prevHashHex (not 32 zero bytes) — pinned by a
+  // shared test vector in the log contract suite so external replay
+  // verification has exact bytes.
+  string hash = 3;
+}
+message ListLogRecordsResponse {
+  repeated LogRecord records = 1;
+}
