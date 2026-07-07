@@ -67,6 +67,14 @@ import (
 // previousCredential chain and nothing beyond it.
 const ScopeLinear = "linear"
 
+// ScopeAggregateComplete is the v2 manifest scope: the bundle additionally
+// carries, for every commitment-bearing credential, the consumed source
+// credentials (and their whole linear subchains), so the source-commitment
+// axis re-verifies offline. "Complete" means complete WITH RESPECT TO THE
+// SIGNED CLAIMED SOURCE SET — it does not (and cryptographically cannot)
+// prove the signer omitted nothing from the actual world.
+const ScopeAggregateComplete = "aggregate-complete"
+
 // DefaultMaxDepth bounds the export chain walk when ExportOptions.MaxDepth
 // is unset — the same DoS backstop rationale as the batch resolver's
 // max-depth: a hostile chain must not make the exporter walk forever.
@@ -98,11 +106,44 @@ type Manifest struct {
 	V            int               `json:"v"`
 	Scope        string            `json:"scope"`
 	Head         string            `json:"head"`
-	Chain        []string          `json:"chain"` // origin-first content addresses
+	Chain        []string          `json:"chain"` // origin-first content addresses of the MAIN spine
 	DIDDocuments []string          `json:"didDocuments"`
 	Files        map[string]string `json:"files"` // slash-separated rel path -> sha256 of the file bytes
 	CreatedAt    string            `json:"createdAt"`
 	Source       string            `json:"source,omitempty"`
+	// Receipts (v2 / ScopeAggregateComplete only) maps every
+	// aggregate-shaped commitment-bearing credential to its recorded
+	// consumed set (lexicographic). Receipts are UNTRUSTED discovery hints,
+	// never authority: verification recomputes the SIGNED Merkle root from
+	// the bundled source credentials — a lying receipt cannot produce a
+	// false Verified, it can only fail. nil on v1 manifests.
+	Receipts map[string][]string `json:"receipts,omitempty"`
+}
+
+// The wire shapes are PER-VERSION EXACT structs: a v1 manifest carrying any
+// v2-only member (receipts, even null) is rejected by the strict decoder by
+// construction, so "v1 means exactly the shipped semantics" cannot erode.
+type manifestWireV1 struct {
+	V            int               `json:"v"`
+	Scope        string            `json:"scope"`
+	Head         string            `json:"head"`
+	Chain        []string          `json:"chain"`
+	DIDDocuments []string          `json:"didDocuments"`
+	Files        map[string]string `json:"files"`
+	CreatedAt    string            `json:"createdAt"`
+	Source       string            `json:"source,omitempty"`
+}
+
+type manifestWireV2 struct {
+	V            int                 `json:"v"`
+	Scope        string              `json:"scope"`
+	Head         string              `json:"head"`
+	Chain        []string            `json:"chain"`
+	DIDDocuments []string            `json:"didDocuments"`
+	Files        map[string]string   `json:"files"`
+	CreatedAt    string              `json:"createdAt"`
+	Source       string              `json:"source,omitempty"`
+	Receipts     map[string][]string `json:"receipts"`
 }
 
 // digest returns the content address of b — the same "sha256:<hex>" grammar

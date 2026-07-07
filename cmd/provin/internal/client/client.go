@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
@@ -46,6 +47,23 @@ func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconn
 		httpClient = http.DefaultClient
 	}
 	return vcpbconnect.NewVCResolverServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
+}
+
+// Audit returns an AuditService client for a node base URL, presenting token
+// as the L1 bearer on every RPC — the receipt-read surface the
+// aggregate-complete exporter walks consumed sets over. Same validation and
+// injection rules as DID.
+func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.AuditServiceClient, error) {
+	if err := validateBaseURL(base); err != nil {
+		return nil, fmt.Errorf("client: audit base URL: %w", err)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("client: bearer token must not be empty (--token / PROVIN_TOKEN)")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return auditpbconnect.NewAuditServiceClient(httpClient, base, connect.WithInterceptors(bearer(token))), nil
 }
 
 // validateBaseURL rejects a base URL that is empty, scheme-less, not http(s),

@@ -30,7 +30,8 @@ Implemented:
   pipeline create  --did <target-did> --owner-key <path>  issue a pipeline DID
   process  create  --did <target-did> --owner-key <path>  issue a process DID
   bundle   export  --head <sha256:hex> --out <dir>        archive a chain + its authority documents
-                   [--did-base <registry>=<url>]... [--allow-loopback] [--allow-private] [--max-depth <n>]
+                   [--aggregate-complete] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]...
+                   [--allow-loopback] [--allow-private] [--max-depth <n>]
   bundle   verify  --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
                                                           re-verify a bundle offline (no network)
 
@@ -139,6 +140,16 @@ func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
 		didBases[reg] = base
 		return nil
 	})
+	aggregateComplete := fs.Bool("aggregate-complete", false, "walk through aggregate boundaries: bundle consumed sources so source commitments re-verify offline (complete w.r.t. the SIGNED claimed sets)")
+	vcResolverBases := map[string]string{}
+	fs.Func("vc-resolver-base", "override the DID-advertised #vc-resolver endpoint for a registry, <registry>=<url> (repeatable; the split-horizon seam — advertised URLs may be reachable only inside the emitting network)", func(v string) error {
+		reg, base, ok := strings.Cut(v, "=")
+		if !ok || reg == "" || base == "" {
+			return fmt.Errorf("want <registry>=<url>, got %q", v)
+		}
+		vcResolverBases[reg] = base
+		return nil
+	})
 	allowLoopback := fs.Bool("allow-loopback", false, "permit loopback DID-resolution targets (local development)")
 	allowPrivate := fs.Bool("allow-private", false, "permit RFC 1918 private DID-resolution targets")
 	maxDepth := fs.Int("max-depth", 0, "chain walk bound (0 = default)")
@@ -153,12 +164,14 @@ func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
 	return commands.BundleExport(ctx, env, commands.BundleExportConfig{
-		Head:          *head,
-		Out:           *out,
-		DIDBases:      didBases,
-		AllowLoopback: *allowLoopback,
-		AllowPrivate:  *allowPrivate,
-		MaxDepth:      *maxDepth,
+		Head:              *head,
+		Out:               *out,
+		DIDBases:          didBases,
+		AllowLoopback:     *allowLoopback,
+		AllowPrivate:      *allowPrivate,
+		MaxDepth:          *maxDepth,
+		AggregateComplete: *aggregateComplete,
+		VCResolverBases:   vcResolverBases,
 	})
 }
 
