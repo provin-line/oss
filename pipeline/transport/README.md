@@ -27,10 +27,13 @@ event processor.
   `Loop` (in `loop.go`) implements `contract.Process` and drives one subscription:
   - **Sequence-on-success**: the publisher-assigned sequence number is advanced
     only after a successful `Publish` call; a failed publish reuses the same
-    number on the next attempt. A gap in the subscriber's view is protocol
-    evidence of foul play — the publisher must never create one by its own failure.
-    Handlers are sequential per subscription (Subscriber contract), so
-    reuse-on-failure is race-free without a mutex.
+    number on the next attempt, so in normal operation the publisher never
+    creates a gap by its own failure. A gap in the subscriber's view is
+    evidence to investigate — POSSIBLE LOSS (at-most-once transport, or a
+    producer crash inside the emit window; see `Emitter`) — not an automatic
+    foul-play verdict, and distinct from the worse signal of a repeated number
+    with different content. Handlers are sequential per subscription
+    (Subscriber contract), so reuse-on-failure is race-free without a mutex.
   - **Emission append-after-publish**: the emission log entry (credential hash +
     sequence number) is appended to the `tlog` *after* a successful `Publish`.
     `Append` receives a detached context (`context.WithoutCancel`) so that

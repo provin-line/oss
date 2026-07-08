@@ -231,7 +231,12 @@ type Envelope struct {
 	Payload []byte
 	// SequenceNo is the publisher-assigned, strictly increasing sequence
 	// number. It makes append-only emission wire-verifiable: a gap or
-	// reordering in a subscriber's view is evidence, not a glitch.
+	// reordering in a subscriber's view is evidence to investigate, not a
+	// glitch. In normal operation the publisher never creates a gap by its own
+	// failure (a failed publish reuses the number), so a gap means POSSIBLE
+	// LOSS — at-most-once transport, or a producer crash inside its emit window
+	// (see transport.Emitter) — NOT an automatic tamper verdict, and distinct
+	// from the worse signal of a repeated number carrying different content.
 	SequenceNo uint64
 }
 

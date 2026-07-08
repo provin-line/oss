@@ -43,7 +43,22 @@ import (
 // absence of a signature for a verified log head.
 var ErrUnsignedLog = fmt.Errorf("filelog: signed checkpoints require WithCheckpointSigner: %w", tlog.ErrUnsignedLog)
 
+// ErrLocked is returned by New when another live opener already holds the
+// directory's single-opener lock (an flock on the append file). It is a
+// filelog-LOCAL sentinel — single-opener locking is a durable-file mechanism
+// with no memlog analogue, so unlike ErrUnsignedLog it is not a tlog contract
+// condition. Detect with errors.Is; a second node process on one data-dir
+// fails boot with it instead of silently forking the chain.
+var ErrLocked = errors.New("filelog: log directory is locked by another opener")
+
 const logFile = "log.ndjson"
+
+// intentFile holds the durable emission-sequence high-water (see RecordIntent);
+// intentTmpFile is its atomic-rename staging name.
+const (
+	intentFile    = "intent"
+	intentTmpFile = "intent.tmp"
+)
 
 // checkpointPurpose domain-separates checkpoint signatures from every other
 // signature the same key produces.
@@ -80,16 +95,23 @@ func WithCheckpointSigner(cs CheckpointSigner) Option {
 }
 
 // Log is the file-backed tlog.Log. Construct with New; Close releases the
-// file handle. A directory must have at most ONE opener at a time — two
-// processes appending to one log would interleave two chains and brick the
-// next open (single-opener is the node's boot invariant; an flock-style
-// guard is a recorded follow-up).
+// file handle AND the single-opener lock. A directory has at most ONE live
+// opener: New takes an exclusive advisory flock on the append file before
+// touching the chain, so a second opener gets ErrLocked rather than
+// interleaving two chains and bricking the next open. The guard is
+// cross-process (and cross-open); it does not stop a caller from sharing one
+// *Log across goroutines — that is what mu is for.
 type Log struct {
 	mu      sync.Mutex
 	file    *os.File
+	dir     string
 	size    int64 // committed file length in bytes
 	records []*tlog.Record
 	signer  *CheckpointSigner
+	// intent is the durable emission-sequence high-water loaded at New and
+	// advanced by RecordIntent (0 if none). It is the ONLY in-memory copy of
+	// the last DURABLY persisted value — advanced strictly after the fsync.
+	intent uint64
 	// broken poisons Append after a failed write could not be rolled back:
 	// continuing would append after a partial line, making the log
 	// unreadable at the next open.
@@ -105,6 +127,15 @@ var _ tlog.Log = (*Log)(nil)
 // (evidence doctrine: damage is loud, never absence). O(n) open cost is
 // the PoC trade; the contract lets an implementation add snapshotting.
 func New(dir string, opts ...Option) (*Log, error) {
+	// Pin dir to an absolute path up front: the Log holds it for the life of
+	// the process (persistIntent joins against it on every RecordIntent), and
+	// a caller-relative path would silently re-resolve against a LATER working
+	// directory — writing the intent sidecar beside the wrong dir and losing
+	// the anti-reuse high-water exactly when recovery needs it.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("filelog: resolve %s: %w", dir, err)
+	}
 	// 0700/0600: emission records are evidence, gated on the wire by
 	// tlog/read — local permissions must not hand out what the
 	// authorization surface protects.
@@ -112,13 +143,29 @@ func New(dir string, opts ...Option) (*Log, error) {
 		return nil, fmt.Errorf("filelog: create %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, logFile)
-	records, keep, err := replay(path)
-	if err != nil {
-		return nil, err
-	}
+	// Open BEFORE replay so the single-opener lock is held over the whole
+	// read/truncate: two concurrent New calls must not both replay and both
+	// grow the same chain.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("filelog: open %s for append: %w", path, err)
+	}
+	// Every constructor error path AFTER this point runs holding the flock;
+	// each must release the fd (closing it drops the lock) or the lock leaks
+	// until GC/process exit and blocks later openers. One defer covers them
+	// all — success flips only on the fully constructed Log.
+	success := false
+	defer func() {
+		if !success {
+			_ = f.Close()
+		}
+	}()
+	if err := lockFile(f); err != nil {
+		return nil, fmt.Errorf("filelog: open %s: %w", dir, err)
+	}
+	records, keep, err := replay(path)
+	if err != nil {
+		return nil, err
 	}
 	if keep >= 0 {
 		// Torn tail from a crash mid-append: every COMPLETE line was
@@ -126,32 +173,57 @@ func New(dir string, opts ...Option) (*Log, error) {
 		// uncommitted append — truncate it loudly instead of refusing to
 		// boot forever. (Interior damage still fails open above.)
 		if err := f.Truncate(keep); err != nil {
-			_ = f.Close()
 			return nil, fmt.Errorf("filelog: truncate torn tail of %s: %w", path, err)
 		}
 		slog.Warn("filelog: truncated torn tail (uncommitted append from a crash)", "path", path, "kept_bytes", keep)
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
 		return nil, fmt.Errorf("filelog: stat %s: %w", path, err)
 	}
 	// Durability of the CREATION itself: Append fsyncs the file, but a
 	// fresh directory entry (and the hashed dir under its parent) needs its
 	// own fsync or a crash can lose an acknowledged log wholesale.
 	if err := fsyncDir(dir); err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	if err := fsyncDir(filepath.Dir(dir)); err != nil {
-		_ = f.Close()
 		return nil, err
 	}
-	l := &Log{file: f, size: fi.Size(), records: records}
+	intent, err := loadIntent(dir)
+	if err != nil {
+		return nil, err
+	}
+	l := &Log{file: f, dir: dir, size: fi.Size(), records: records, intent: intent}
 	for _, opt := range opts {
 		opt(l)
 	}
+	success = true
 	return l, nil
+}
+
+// loadIntent reads the durable emission-sequence high-water. The load is
+// 3-way (see RecordIntent for the doctrine): a MISSING file is 0 (normal first
+// run); a PRESENT but unparseable file degrades to 0 with a loud log — the
+// explicit availability-over-anti-reuse exception, since a corrupt operational
+// hint must not brick a node whose chain evidence may be intact, and recovery
+// then falls back to the tail (never below it); a real READ I/O error fails
+// New — a sick disk should be loud, not silently trusted.
+func loadIntent(dir string) (uint64, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, intentFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("filelog: read intent %s: %w", dir, err)
+	}
+	seq, perr := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if perr != nil {
+		slog.Error("filelog: intent high-water unparseable — anti-reuse degraded to baseline (chain evidence unaffected)",
+			"dir", dir, "err", perr)
+		return 0, nil
+	}
+	return seq, nil
 }
 
 // fsyncDir flushes a directory entry (file/dir creation durability).
@@ -296,6 +368,75 @@ func (l *Log) rollback() {
 		l.broken = true
 		slog.Error("filelog: rollback truncate failed — log poisoned for further appends", "err", err)
 	}
+}
+
+// RecordIntent durably records seq as the highest emission sequence number an
+// emitter is ABOUT TO publish, so a crash in the emitter's publish→append
+// window can never let recovery re-issue seq to a different event (see
+// pipeline/transport.Emitter). It is the optional durable-sequence-intent
+// capability the emitter probes for; memlog does not provide it.
+//
+// The in-memory high-water advances ONLY after the full fsync chain succeeds,
+// and l.intent is the last DURABLY persisted value: a seq at or below it is a
+// no-op, but a seq above it that fails to persist leaves l.intent unchanged so
+// the emitter's retry re-persists rather than short-circuiting — otherwise a
+// failed RecordIntent could let a publish proceed with no durable intent
+// behind it.
+func (l *Log) RecordIntent(_ context.Context, seq uint64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return errors.New("filelog: record intent on a closed log")
+	}
+	if seq <= l.intent {
+		return nil // monotonic; never regress below the last durable value.
+	}
+	// Deliberately NOT gated on l.broken: the intent sidecar is independent of
+	// chain integrity — a poisoned chain refuses APPENDS, but recording the
+	// anti-reuse high-water stays both safe and useful for the next boot.
+	if err := l.persistIntent(seq); err != nil {
+		return err // cache NOT advanced → a retry re-persists, not a no-op.
+	}
+	l.intent = seq
+	return nil
+}
+
+// HighestIntent returns the durable high-water (0 if none) — the read half of
+// the intent capability, used by emitter recovery to skip past sequence
+// numbers that were attempted but not yet committed to the chain.
+func (l *Log) HighestIntent(_ context.Context) (uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.intent, nil
+}
+
+// persistIntent atomically replaces the intent file with seq: same-dir temp →
+// write → fsync → checked close → rename → fsync(dir). Atomic rename keeps the
+// intent file always holding a COMPLETE prior value (never a torn write); the
+// fsync chain makes the new value durable before return, so if RecordIntent
+// returns before the caller publishes, a post-crash reopen reads high-water
+// >= seq. Caller holds l.mu.
+func (l *Log) persistIntent(seq uint64) error {
+	tmp := filepath.Join(l.dir, intentTmpFile)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("filelog: create intent tmp: %w", err)
+	}
+	if _, err := f.Write([]byte(strconv.FormatUint(seq, 10))); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("filelog: write intent tmp: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("filelog: fsync intent tmp: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("filelog: close intent tmp: %w", err)
+	}
+	if err := os.Rename(tmp, filepath.Join(l.dir, intentFile)); err != nil {
+		return fmt.Errorf("filelog: rename intent: %w", err)
+	}
+	return fsyncDir(l.dir)
 }
 
 // Get returns the record at index, or an error if index is out of range.
