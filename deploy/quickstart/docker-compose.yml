@@ -1,0 +1,132 @@
+# dPLaaX self-host quickstart — a full authenticated stack in one command:
+#
+#   docker compose up --build
+#
+# Topology: a standalone provin node behind the REAL three-layer auth stack —
+# an auth.provider (JWT issuance) and an o3co policy-verifier (the PDP: JWT
+# verification + policy), over a NATS broker. The `provision` init container
+# generates the NATS operator-mode trust material first; nothing cryptographic
+# is committed to the repo.
+#
+# Dev/evaluation only — NOT a production reference. It shares one HS256 secret
+# across the auth layer and runs everything on one host; see the README.
+
+name: dplaax-quickstart
+
+services:
+  # One-shot: generate NATS trust material + the node's service-token overlay
+  # into the shared volume, then exit.
+  provision:
+    build:
+      context: ../..
+      dockerfile: deploy/quickstart/provision.Dockerfile
+    environment:
+      # The node's service token is HS256-signed with the same shared secret the
+      # provider/verifier use, so it mints against the same value.
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
+      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
+    volumes:
+      - provisioned:/provisioned
+
+  nats:
+    image: nats:2.10
+    command: ["-c", "/provisioned/nats/nats-server.conf"]
+    volumes:
+      - provisioned:/provisioned
+    ports:
+      - "8222:8222" # monitoring (optional)
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+
+  # PDP: verifies the caller's JWT (HS256, shared secret) and evaluates policy.
+  policy-verifier:
+    build:
+      context: .
+      dockerfile: policy-verifier.Dockerfile
+      secrets:
+        - github_token
+    environment:
+      OAUTH_JWT_ALGORITHM: HS256
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
+      HTTP_PORT: "3001"
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001/healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # JWT issuer: mints tokens from the DID grant (owner-key-signed assertion).
+  auth-provider:
+    build:
+      context: .
+      dockerfile: auth-provider.Dockerfile
+      secrets:
+        - github_token
+    environment:
+      OAUTH_JWT_ALGORITHM: HS256
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
+      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
+      HTTP_PORT: "3000"
+      # The provider resolves the owner DID against the node during a DID grant.
+      # Reach the node at its registry-id alias so the DID's {registry} segment
+      # ("poc.dplaax.dev") matches the base URL host — no allowedRegistries
+      # override needed (that env override injects a string where the config
+      # schema wants an array).
+      DPLAAX_REGISTRY_BASE_URL: http://poc.dplaax.dev:8443
+      # Custom DID grant is not OIDC; allow the non-OIDC token path.
+      OAUTH_OIDC_MODE: dual
+    volumes:
+      - ./auth-provider/clients.yaml:/app/config/clients.yaml:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      node:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/_healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # The provin node: control plane (registry RPCs) + data plane (pipeline loops).
+  node:
+    build:
+      context: ../..
+      dockerfile: cmd/standalone/Dockerfile
+    environment:
+      # Layer the provision step's service-token overlay over the base config
+      # (sets pipeline.vc-store-bearer to the node's minted service token).
+      CONFIG_OVERLAY: /provisioned/overlay.conf
+    volumes:
+      - ./node/config:/app/config:ro
+      - provisioned:/provisioned
+    networks:
+      default:
+        # The provider resolves owner DIDs at http://poc.dplaax.dev:8443; that
+        # host must equal the DID's {registry} segment, so alias the node to it.
+        aliases:
+          - poc.dplaax.dev
+    ports:
+      - "8443:8443"
+    restart: on-failure
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+      policy-verifier:
+        condition: service_healthy
+
+volumes:
+  provisioned:
+
+# GitHub token for cloning the (currently private) provin.auth during the
+# policy-verifier / auth-provider builds. Read from $GITHUB_TOKEN; leave it
+# unset once the repos are public (the Dockerfiles skip the auth rewrite when
+# the secret is empty).
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN

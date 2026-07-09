@@ -76,7 +76,7 @@ func main() {
 		log.Fatalf("standalone: %v", err)
 	}
 
-	verifier, err := auth.NewVerifier(authCfg.PolicyVerifierURL)
+	verifier, err := auth.NewVerifier(authCfg)
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}

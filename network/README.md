@@ -38,7 +38,32 @@ store satisfies only the plain PoC posture.
 - **L2 (peer-facing)**: every ChainPeerService RPC carries an `AuthProof` — Ed25519
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
   epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no
-  auth-off mode for L2.**
+  auth-off mode for L2.** L2 is independent of the PDP — it needs no policy-verifier.
+
+### PDP backends & the locus of authentication
+
+L1 authorization is a three-way separation: **token issuance** (`auth.provider`),
+the **decision** (the PDP), and **enforcement** (`pkg/auth`, in-process here). The
+node only depends on a PDP, selected by `provin.network.auth.backend` — every
+backend is fail-closed (missing required config → the node does not boot):
+
+| backend | decision point | authenticates the caller? |
+| --- | --- | --- |
+| `o3co` (default) | external o3co `auth.policy-verifier` | **yes** — verifies the JWT |
+| `opa` | external Open Policy Agent | yes, if the policy checks the token |
+| `cedar` | external Cedar-agent | principal = the **raw bearer** (no JWT verification unless the policy adds it) |
+| `static` | in-process allow-list | **no** — checks bearer *presence* only, never validity |
+
+`static` is authorization, **not authentication**: use it only where the perimeter
+already authenticates (single-tenant / dev), never where the PDP is expected to
+identify the caller. See `pkg/auth/reference.conf` for the config surface and the
+per-backend godoc.
+
+For an authenticated self-host — a real `auth.provider` + real policy-verifier +
+node + NATS in one command, walking a record to a `VERIFIED` audit verdict — see
+[`deploy/quickstart/`](../deploy/quickstart/README.md). Its README also covers the
+**first-owner bootstrap** (the chicken-and-egg where `RegisterOwner` is L1-gated
+but the DID grant needs an already-registered owner) and its production options.
 
 ## Layout
 

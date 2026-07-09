@@ -30,22 +30,43 @@ func Interceptors(verifier endpoint.VerifierEndpoint) []connect.Interceptor {
 	}
 }
 
-// NewVerifier builds the production VerifierEndpoint — the configured
-// policy-verifier (PDP) client — for the given base URL. It returns the
-// backend-neutral endpoint.VerifierEndpoint interface so callers depend on this
-// seam, not on a concrete backend: swapping the PDP backend stays internal to
-// this constructor. The URL must carry an explicit http:// or https:// scheme
-// (the backend would otherwise silently prepend http://; requiring the scheme
-// keeps a plaintext PDP call a deliberate choice, not an accidental default).
+// NewVerifier builds the production VerifierEndpoint — the configured PDP
+// client — dispatching on cfg.Backend. It returns the backend-neutral
+// endpoint.VerifierEndpoint interface so callers depend on this seam, not on a
+// concrete backend, and it keeps this package free of any backend's option type.
 //
-// Backend tunables are deliberately not exposed here yet: adding a
-// backend-neutral option later (auth.VerifierOption translated internally, or
-// AuthConfig fields) keeps this seam free of any concrete backend's option type.
-func NewVerifier(policyVerifierURL string) (endpoint.VerifierEndpoint, error) {
-	if err := validateVerifierURL(policyVerifierURL); err != nil {
-		return nil, fmt.Errorf("auth: policy-verifier URL: %w", err)
+// Every backend is fail-closed: the selected backend's required config must
+// validate or NewVerifier returns an error (no verifier is built), and an
+// unknown backend errors rather than silently picking one. The o3co/opa/cedar
+// backends require an explicit http(s):// base URL (the backends would otherwise
+// silently prepend http://; requiring the scheme keeps a plaintext PDP call a
+// deliberate choice). The static backend builds an in-process allow-list — an
+// empty list denies everything (the safe default). Note that static does NOT
+// authenticate: it checks only bearer presence, so it is for single-tenant or
+// perimeter-authenticated deployments, never one relying on the PDP to
+// authenticate callers (see the config godoc and reference.conf).
+func NewVerifier(cfg *AuthConfig) (endpoint.VerifierEndpoint, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
 	}
-	return endpoint.NewO3coEndpoint(policyVerifierURL)
+	switch cfg.Backend {
+	case BackendO3co:
+		return endpoint.NewO3coEndpoint(cfg.PolicyVerifierURL)
+	case BackendOPA:
+		return endpoint.NewOPAEndpoint(cfg.OPA.BaseURL, cfg.OPA.PolicyPath)
+	case BackendCedar:
+		return endpoint.NewCedarEndpoint(cfg.Cedar.BaseURL)
+	case BackendStatic:
+		rules := make([]endpoint.StaticRule, len(cfg.Static.Allow))
+		for i, r := range cfg.Static.Allow {
+			rules[i] = endpoint.StaticRule{Resource: r.Resource, Action: r.Action}
+		}
+		return endpoint.NewStaticEndpoint(rules), nil
+	default:
+		// Unreachable: validate() already rejects an unknown backend. Kept so
+		// the switch stays total if a backend is added without wiring here.
+		return nil, fmt.Errorf("auth: unknown backend %q", cfg.Backend)
+	}
 }
 
 // validateVerifierURL rejects a URL that is empty, scheme-less, not http(s), or

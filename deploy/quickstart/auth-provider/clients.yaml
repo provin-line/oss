@@ -1,0 +1,11 @@
+# OAuth client registry for the quickstart auth.provider (mounted over the
+# generated instance's config/clients.yaml). Dev/evaluation only.
+#
+# The `quickstart` client is the one the did-token helper names when exchanging
+# a DID-signed assertion for a JWT at /oauth/token. It is public (no client
+# secret) — acceptable for a single-tenant local stack, never for production.
+
+quickstart:
+  tokenEndpointAuthMethod: "none"
+  allowedRedirectUris: []
+  allowedScopes: []
