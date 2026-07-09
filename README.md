@@ -6,6 +6,14 @@ cryptographically signed as a W3C Verifiable Credential, forming a linear proven
 chain that any participant can verify independently. DB-free, YAML-driven,
 self-hostable.
 
+Self-hosting a node means standing up its authorization layer too: the node is
+fail-closed and needs a policy decision point (PDP). For an authenticated stack —
+real `auth.provider` + policy-verifier + node + NATS in one command, driving a
+record to a `VERIFIED` verdict — see [`deploy/quickstart/`](deploy/quickstart/README.md).
+The PDP backend is pluggable (`o3co` | `opa` | `cedar` | `static`); `static` is an
+authorization allow-list, **not authentication** (see
+[network/README.md](network/README.md#pdp-backends--the-locus-of-authentication)).
+
 > **Status: PoC skeleton.** Directory structure and per-layer conventions are in place;
 > interfaces and implementations land incrementally.
 
