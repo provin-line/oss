@@ -107,9 +107,9 @@ func LoadAuthConfig(cfg *hoconconfig.Config) (*AuthConfig, error) {
 		}
 		*dst = v
 	}
-	if ac.Backend == "" {
-		ac.Backend = BackendO3co // explicit default, independent of reference.conf
-	}
+	// Backend defaulting is centralized in validate() (the single source), so a
+	// caller who constructs AuthConfig directly and calls NewVerifier gets the
+	// same "" -> o3co default the field godoc promises.
 
 	allow, err := cfg.StringList(keyStaticAllow)
 	if err != nil {
@@ -151,7 +151,12 @@ func parseStaticAllow(entry string) (StaticAllowRule, error) {
 // validate checks that the selected backend's required config is present and
 // well-formed. Fail-closed: an unknown backend, or a missing/invalid required
 // field, is an error. static needs nothing (an empty allow-list is deny-all).
+// An empty Backend defaults to o3co here (the single source of that default, so
+// it holds for both LoadAuthConfig and a directly-constructed AuthConfig).
 func (cfg *AuthConfig) validate() error {
+	if cfg.Backend == "" {
+		cfg.Backend = BackendO3co
+	}
 	switch cfg.Backend {
 	case BackendO3co:
 		if err := validateVerifierURL(cfg.PolicyVerifierURL); err != nil {
@@ -160,6 +165,11 @@ func (cfg *AuthConfig) validate() error {
 	case BackendOPA:
 		if err := validateVerifierURL(cfg.OPA.BaseURL); err != nil {
 			return fmt.Errorf("opa base-url: %w", err)
+		}
+		if cfg.OPA.PolicyPath == "" {
+			// Required by upstream NewOPAEndpoint; check it here so the boot
+			// error carries config-key context instead of a bare upstream string.
+			return fmt.Errorf("opa policy-path: must not be empty")
 		}
 	case BackendCedar:
 		if err := validateVerifierURL(cfg.Cedar.BaseURL); err != nil {

@@ -19,10 +19,13 @@ RUN apk add --no-cache git && npm install -g corepack --force && corepack enable
 WORKDIR /src
 ARG AUTH_REF
 RUN --mount=type=secret,id=github_token \
-    if [ -s /run/secrets/github_token ]; then \
-      git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/"; \
-    fi \
- && git clone https://github.com/provin-line/auth.git . \
+    tok="$(cat /run/secrets/github_token 2>/dev/null || true)"; \
+    if [ -n "$tok" ]; then \
+      export GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0="url.https://x-access-token:${tok}@github.com/.insteadOf" \
+        GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi; \
+    git clone https://github.com/provin-line/auth.git . \
  && git checkout "${AUTH_REF}" \
  && pnpm install --frozen-lockfile \
  && pnpm --filter @provin-line/create-auth-provider build \
@@ -37,10 +40,13 @@ RUN apk add --no-cache git && npm install -g corepack --force && corepack enable
 WORKDIR /app
 COPY --from=gen /instance/ ./
 RUN --mount=type=secret,id=github_token \
-    if [ -s /run/secrets/github_token ]; then \
-      git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/"; \
-    fi \
- && pnpm install \
+    tok="$(cat /run/secrets/github_token 2>/dev/null || true)"; \
+    if [ -n "$tok" ]; then \
+      export GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0="url.https://x-access-token:${tok}@github.com/.insteadOf" \
+        GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi; \
+    pnpm install \
  && pnpm run build
 
 # --- runtime: the built app copied wholesale from the builder ---

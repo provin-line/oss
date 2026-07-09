@@ -21,8 +21,10 @@
 
 ARG AUTH_REF=d430cf1d3311e094d212e1eabc64daa835a1932a
 
-# A token, if mounted as the `github_token` secret, rewrites github.com HTTPS
-# fetches to authenticate — covers both `git clone` and pnpm's git-subdir deps.
+# A token, if mounted as the `github_token` secret, authenticates github.com
+# HTTPS fetches — covering both `git clone` and pnpm's git-subdir deps. It is
+# injected via GIT_CONFIG_* env for the duration of the RUN only, so the token
+# is NEVER written to disk (no ~/.gitconfig layer to leak on a cache export).
 # No token (public repos): the rewrite is skipped and anonymous fetch is used.
 
 # --- gen: clone provin.auth, build the generator, scaffold the instance ---
@@ -31,10 +33,13 @@ RUN apk add --no-cache git && npm install -g corepack --force && corepack enable
 WORKDIR /src
 ARG AUTH_REF
 RUN --mount=type=secret,id=github_token \
-    if [ -s /run/secrets/github_token ]; then \
-      git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/"; \
-    fi \
- && git clone https://github.com/provin-line/auth.git . \
+    tok="$(cat /run/secrets/github_token 2>/dev/null || true)"; \
+    if [ -n "$tok" ]; then \
+      export GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0="url.https://x-access-token:${tok}@github.com/.insteadOf" \
+        GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi; \
+    git clone https://github.com/provin-line/auth.git . \
  && git checkout "${AUTH_REF}" \
  && pnpm install --frozen-lockfile \
  && pnpm --filter @provin-line/create-policy-verifier build \
@@ -48,10 +53,13 @@ RUN apk add --no-cache git && npm install -g corepack --force && corepack enable
 WORKDIR /app
 COPY --from=gen /instance/ ./
 RUN --mount=type=secret,id=github_token \
-    if [ -s /run/secrets/github_token ]; then \
-      git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/"; \
-    fi \
- && pnpm install \
+    tok="$(cat /run/secrets/github_token 2>/dev/null || true)"; \
+    if [ -n "$tok" ]; then \
+      export GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0="url.https://x-access-token:${tok}@github.com/.insteadOf" \
+        GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi; \
+    pnpm install \
  && pnpm run build
 
 # --- runtime: the built app copied wholesale from the builder ---

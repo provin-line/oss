@@ -101,3 +101,18 @@ func TestNewVerifier_UnknownBackendFailsClosed(t *testing.T) {
 		t.Error("unknown backend must error (fail-closed — never silently pick one)")
 	}
 }
+
+func TestNewVerifier_UnsetBackendDefaultsO3co(t *testing.T) {
+	// A directly-constructed AuthConfig with an unset Backend must behave as the
+	// field godoc promises — default to o3co — not be rejected as an unknown
+	// backend. (The default lives in validate(), so it holds without going
+	// through LoadAuthConfig.)
+	cfg := &auth.AuthConfig{PolicyVerifierURL: "https://policy-verifier.internal:3001"}
+	v, err := auth.NewVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewVerifier with unset backend: %v", err)
+	}
+	if v == nil {
+		t.Error("NewVerifier returned nil verifier for the defaulted o3co backend")
+	}
+}

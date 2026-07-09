@@ -62,7 +62,7 @@ func main() {
 	flag.StringVar(&cfg.jwtSecret, "jwt-secret", os.Getenv("OAUTH_JWT_SECRET"), "HS256 shared secret for the node's service token (empty = skip the service overlay)")
 	flag.StringVar(&cfg.jwtIssuer, "jwt-issuer", os.Getenv("OAUTH_JWT_ISSUER"), "iss claim for the node's service token")
 	flag.StringVar(&cfg.serviceSubject, "service-subject", "did:dplaax:poc.dplaax.dev:org:acme", "sub claim for the node's service token")
-	flag.DurationVar(&cfg.serviceTTL, "service-ttl", 87600*time.Hour, "lifetime of the node's service token (default ~10y — dev)")
+	flag.DurationVar(&cfg.serviceTTL, "service-ttl", 720*time.Hour, "lifetime of the node's service token (default 30d — dev; bound the blast radius of a no-scope shared-secret token)")
 	flag.Parse()
 
 	if err := provision(cfg); err != nil {

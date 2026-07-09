@@ -57,6 +57,10 @@ func TestLoadAuthConfig_FailsClosed(t *testing.T) {
 		"hostless":        `provin.network.auth.policy-verifier-url = "https://"`,         // scheme set, no host
 		"unknown backend": `provin.network.auth.backend = "bogus"`,
 		"opa empty url":   `provin.network.auth.backend = "opa"`, // opa selected, no base-url
+		"opa missing policy-path": `
+provin.network.auth.backend = "opa"
+provin.network.auth.opa.base-url = "https://opa.internal:8181"
+`, // base-url set but policy-path (required by the opa backend) empty
 	}
 	for name, body := range cases {
 		if _, err := auth.LoadAuthConfig(loadWith(t, body)); err == nil {
