@@ -1,0 +1,466 @@
+// Tranche 2 of the dplaax conformance harness: behavior-fixture families driven
+// against real implementation seams. Registration lives in allvectors_test.go;
+// each runner takes an already-loaded vector.
+//
+// Some tranche-2 vectors have no drivable implementation surface and stay in
+// the skip ledger with a blocked-on reason rather than a runner — the coverage
+// guard keeps them visible (see allvectors_test.go): resolver-006 (no eviction
+// API exists, so the forbidden Resolved->NotFound transition cannot be
+// constructed) and resolver-007 (no batch-lookup RPC in vc.proto). Those are
+// recorded gaps, not silent omissions.
+package conformance_test
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/did/dplaax"
+	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
+	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/vc"
+)
+
+// --- commitment.store.persistence (commitment-012) ---
+//
+// The durable evidence substrate must survive a process restart. Driven exactly
+// per filestore's own proven restart pattern: store under a temp dir, then open
+// a SECOND store instance over the same dir (no shared in-memory state — the
+// restart) and resolve. The vector's key is a placeholder with no reconstructable
+// preimage, so the driver stores a real fixture credential and looks it up by its
+// own content address; the property under test (survives restart -> Resolved) is
+// key-agnostic. memstore would fail this same test — the negative control.
+func runCommitmentPersistence(t *testing.T, v dplaaxVector) {
+	var e struct {
+		State string `json:"state"`
+	}
+	mustParse(t, v.Expect, &e)
+
+	dir := t.TempDir()
+	s, err := vcfilestore.NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	cred, _ := signedFixtureCred(t)
+	hash, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if err := s.Put(hash, cred); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	restarted, err := vcfilestore.NewStore(dir) // a fresh instance over the same dir
+	if err != nil {
+		t.Fatalf("NewStore (restart): %v", err)
+	}
+	_, getErr := restarted.Get(hash)
+	resolved := getErr == nil
+	if want := e.State == "Resolved"; resolved != want {
+		t.Errorf("post-restart Get resolved=%v (err=%v), want state %q", resolved, getErr, e.State)
+	}
+}
+
+// --- resolver.address.form (resolver-001, 002) ---
+//
+// A content address is sha256 over the proof-excluded canonical body: the key
+// MUST equal the recomputed hash of the served body. resolver-002 carries a
+// deliberately-wrong key and must be rejected. Drives the real vc.Hash.
+func runResolverAddress(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Key  string `json:"key"`
+		Body string `json:"body"`
+	}
+	mustParse(t, v.Input, &input)
+	match := credAddressesTo(t, []byte(input.Body), input.Key)
+	if want := expectString(t, v); match != (want == "accept") {
+		t.Errorf("address match=%v, want %s", match, want)
+	}
+}
+
+// --- resolver.immutability (resolver-003) ---
+//
+// The same key must always return the same document. Each returned body MUST
+// content-address to the queried key; a second lookup returning a different body
+// (different outputHash) recomputes to a different hash — the immutability
+// violation the vector rejects.
+func runResolverImmutability(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Sequence []struct {
+			Op           string `json:"op"`
+			Key          string `json:"key"`
+			ReturnedBody string `json:"returned_body"`
+		} `json:"sequence"`
+	}
+	mustParse(t, v.Input, &input)
+	allConsistent := true
+	for _, step := range input.Sequence {
+		if step.Op != "lookup" {
+			continue
+		}
+		if !credAddressesTo(t, []byte(step.ReturnedBody), step.Key) {
+			allConsistent = false
+		}
+	}
+	if want := expectString(t, v); allConsistent != (want == "accept") {
+		t.Errorf("all returned bodies content-address to their key=%v, want %s", allConsistent, want)
+	}
+}
+
+// --- resolver.body.encoding (resolver-008) ---
+//
+// The served body is base64url (unpadded). Decode, then it must content-address
+// to the entry hash. Drives real base64url + vc.Hash.
+func runResolverBodyEncoding(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Entry struct {
+			Hash  string `json:"hash"`
+			State string `json:"state"`
+			Body  string `json:"body"`
+		} `json:"entry"`
+	}
+	mustParse(t, v.Input, &input)
+	raw, err := base64.RawURLEncoding.DecodeString(input.Entry.Body)
+	if err != nil {
+		if expectString(t, v) == "accept" {
+			t.Errorf("base64url decode of an accept vector failed: %v", err)
+		}
+		return
+	}
+	match := credAddressesTo(t, raw, input.Entry.Hash)
+	if want := expectString(t, v); match != (want == "accept") {
+		t.Errorf("decoded body content-addresses to entry hash=%v, want %s", match, want)
+	}
+}
+
+// --- resolver.states (resolver-004, 005) ---
+//
+// A resolver's lookup state maps to a confidence: Unavailable (transient) ->
+// indeterminate, NotFound (definitive) -> failed. Driven through the real
+// vc.Verifier confidence discipline: a fake resolver returns a transient error
+// (Unavailable) or one wrapping resolver.ErrNotFound (NotFound), and the
+// verifier's weakest-link overall reflects the state. This exercises the
+// DID-resolution axis — the one resolver in the tree that implements the full
+// Resolved/Unavailable/NotFound trichotomy (VC-content consumers fold both
+// misses to indeterminate; see gap-backlog).
+func runResolverStates(t *testing.T, v dplaaxVector) {
+	var input struct {
+		ResolverState string `json:"resolver_state"`
+	}
+	mustParse(t, v.Input, &input)
+
+	var r resolver.Resolver
+	switch input.ResolverState {
+	case "Unavailable":
+		r = errResolver{err: errors.New("resolver: transport failure")}
+	case "NotFound":
+		r = errResolver{err: resolver.ErrNotFound}
+	default:
+		t.Fatalf("unhandled resolver_state %q", input.ResolverState)
+	}
+
+	cred, _ := signedFixtureCred(t)
+	res, err := vc.NewVerifier(r, ed25519.Verifier{}).Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got, want := res.Overall, expectConfidence(t, v); got != want {
+		t.Errorf("Overall = %v, want %v (axes %+v)", got, want, res.Axes)
+	}
+}
+
+// errResolver is a resolver.Resolver that fails every lookup with a fixed error,
+// used to drive the resolver-state -> confidence mapping.
+type errResolver struct{ err error }
+
+func (e errResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	return nil, e.err
+}
+
+// --- registry.append-only (registry-001, 002) ---
+//
+// A registered (name, version) is immutable: a second commit of the same version
+// with different content MUST be rejected (registry-001), and deprecation is a
+// soft flag that retains the body (registry-002). Driven against the real
+// file-backed yamlstore, whose Save enforces the version key with O_EXCL. Notes:
+// the vector's key "schema/orders" is sanitized (yamlstore rejects "/" in a name
+// for path-traversal safety), and this drives the store layer directly — the
+// production schemaregistry.Service.Register auto-computes versions and cannot
+// express a caller-chosen re-committed version (recorded in gap-backlog).
+func runRegistry(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Sequence []struct {
+			Op          string `json:"op"`
+			Key         string `json:"key"`
+			Version     string `json:"version"`
+			ContentHash string `json:"contentHash"`
+		} `json:"sequence"`
+	}
+	mustParse(t, v.Input, &input)
+	st := yamlstore.New(t.TempDir())
+
+	switch vecNum(t, v.ID) {
+	case 1: // two commits of the same version with different content -> reject
+		var lastErr error
+		for _, step := range input.Sequence {
+			if step.Op != "commit" {
+				t.Fatalf("registry-001: unexpected op %q", step.Op)
+			}
+			lastErr = st.Save(&schemastore.Schema{
+				Name:       registryName(step.Key),
+				Version:    step.Version,
+				SchemaBody: []byte(step.ContentHash),
+			})
+		}
+		rejected := errors.Is(lastErr, schemastore.ErrExists)
+		if want := expectString(t, v); rejected != (want == "reject") {
+			t.Errorf("second commit rejected=%v (err=%v), want %s", rejected, lastErr, want)
+		}
+	case 2: // commit -> deprecate -> get: body retained, flag set
+		var name, version string
+		for _, step := range input.Sequence {
+			switch step.Op {
+			case "commit":
+				name, version = registryName(step.Key), step.Version
+				if err := st.Save(&schemastore.Schema{Name: name, Version: version, SchemaBody: []byte(step.ContentHash)}); err != nil {
+					t.Fatalf("commit: %v", err)
+				}
+			case "deprecate":
+				if err := st.Deprecate(registryName(step.Key), step.Version); err != nil {
+					t.Fatalf("deprecate: %v", err)
+				}
+			case "get":
+				got, err := st.Get(registryName(step.Key), step.Version)
+				if err != nil {
+					t.Fatalf("get: %v", err)
+				}
+				var e struct {
+					ContentHash string `json:"contentHash"`
+					Deprecated  bool   `json:"deprecated"`
+				}
+				mustParse(t, v.Expect, &e)
+				if string(got.SchemaBody) != e.ContentHash {
+					t.Errorf("retained body = %q, want %q", got.SchemaBody, e.ContentHash)
+				}
+				if got.Deprecated != e.Deprecated {
+					t.Errorf("deprecated = %v, want %v", got.Deprecated, e.Deprecated)
+				}
+			default:
+				t.Fatalf("registry-002: unexpected op %q", step.Op)
+			}
+		}
+	default:
+		t.Fatalf("registry runner: no branch for %s", v.ID)
+	}
+}
+
+// registryName sanitizes a vector's schema key for the file-backed store, which
+// rejects "/" in a name (path-traversal defense). The append-only property under
+// test is orthogonal to the name spelling.
+func registryName(key string) string {
+	return strings.ReplaceAll(key, "/", "-")
+}
+
+// --- chain.trigger.retention (chain-001..005) ---
+//
+// A single-conformant-predecessor trigger MUST carry previousCredential; any
+// other trigger MUST be a chain origin (no previousCredential). There is no
+// runtime trigger-classifier to call — the decision is embodied by which static
+// process type is deployed (pipeline/chained vs pipeline/source). The driver
+// therefore pins the wire-shape invariant the classifier must guarantee, read
+// through the real cred.PreviousCredential accessor. chain-005 is fan-out: N
+// credentials off one predecessor, all sharing that previousCredential.
+//
+// TODO: re-point at a runtime trigger classifier if one is ever exported
+// (gap-backlog: chain trigger classification has no callable seam today).
+func runChainTrigger(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Trigger     string            `json:"trigger"`
+		Credential  json.RawMessage   `json:"credential"`
+		Credentials []json.RawMessage `json:"credentials"`
+	}
+	mustParse(t, v.Input, &input)
+	preserving := input.Trigger == "single-conformant-event"
+
+	var accept bool
+	if len(input.Credentials) > 0 {
+		accept = true
+		prev := ""
+		for i, raw := range input.Credentials {
+			p := mustCred(t, raw).PreviousCredential()
+			if p == "" {
+				accept = false // a preserving fan-out member must carry a predecessor
+			}
+			if i == 0 {
+				prev = p
+			} else if p != prev {
+				accept = false // fan-out is off a SINGLE predecessor
+			}
+		}
+		accept = accept && preserving
+	} else {
+		hasPrev := mustCred(t, input.Credential).PreviousCredential() != ""
+		accept = hasPrev == preserving
+	}
+	if want := expectString(t, v); accept != (want == "accept") {
+		t.Errorf("trigger/shape accept=%v, want %s", accept, want)
+	}
+}
+
+// --- audit.attribution.segment / origin-default (audit-001..004) ---
+//
+// Attribution resolves each chain segment's issuer to its Owner DID, and
+// attributes everything preceding the chain origin to the origin's Owner
+// (unconditionally — a source commitment does not shed it). On the did:dplaax
+// plane the Owner is a structural prefix of the issuer, so the driver composes
+// the real dplaax.Parse().OwnerDID() over each segment. No exported "attribution"
+// function exists in the tree (recorded in gap-backlog); this pins the vectors
+// against the real structural-owner derivation.
+func runAuditAttribution(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Chain       []json.RawMessage `json:"chain"`
+		Controllers map[string]string `json:"controllers"`
+	}
+	mustParse(t, v.Input, &input)
+	var e struct {
+		Attribution struct {
+			Segments []struct {
+				Index int    `json:"index"`
+				Owner string `json:"owner"`
+			} `json:"segments"`
+			PreChain string `json:"pre_chain"`
+		} `json:"attribution"`
+	}
+	mustParse(t, v.Expect, &e)
+
+	if len(e.Attribution.Segments) != len(input.Chain) {
+		t.Fatalf("expect has %d segments, chain has %d", len(e.Attribution.Segments), len(input.Chain))
+	}
+	wantOwner := make(map[int]string, len(e.Attribution.Segments))
+	for _, s := range e.Attribution.Segments {
+		wantOwner[s.Index] = s.Owner
+	}
+
+	originIndex := -1
+	for i, raw := range input.Chain {
+		cred := mustCred(t, raw)
+		structural := ownerOf(t, cred.Issuer())
+		if structural != wantOwner[i] {
+			t.Errorf("segment %d owner = %q, want %q", i, structural, wantOwner[i])
+		}
+		// Cross-check the explicit controller chain the vector supplies against
+		// the structural prefix derivation. On the did:dplaax plane they must
+		// agree; asserting it future-proofs a vector where a controller is not
+		// the issuer's structural parent (which structural derivation alone
+		// would silently miss).
+		if len(input.Controllers) > 0 {
+			if viaCtl := ownerViaControllers(input.Controllers, cred.Issuer()); viaCtl != structural {
+				t.Errorf("segment %d: controllers-derived owner %q != structural owner %q", i, viaCtl, structural)
+			}
+		}
+		if cred.PreviousCredential() == "" {
+			originIndex = i
+		}
+	}
+	if originIndex < 0 {
+		t.Fatal("no chain origin: every credential carries previousCredential")
+	}
+	originOwner := ownerOf(t, mustCred(t, input.Chain[originIndex]).Issuer())
+	if originOwner != e.Attribution.PreChain {
+		t.Errorf("pre_chain = %q, want %q", originOwner, e.Attribution.PreChain)
+	}
+}
+
+// ownerOf structurally reduces a did:dplaax issuer to its Owner DID.
+func ownerOf(t *testing.T, issuer string) string {
+	t.Helper()
+	d, err := dplaax.Parse(issuer)
+	if err != nil {
+		t.Fatalf("parse issuer %q: %v", issuer, err)
+	}
+	return d.OwnerDID().String()
+}
+
+// ownerViaControllers walks the explicit controller chain from issuer to its
+// fixpoint (an id with no controller entry is the Owner), cycle-guarded.
+func ownerViaControllers(controllers map[string]string, issuer string) string {
+	seen := map[string]bool{}
+	cur := issuer
+	for {
+		next, ok := controllers[cur]
+		if !ok || seen[cur] {
+			return cur
+		}
+		seen[cur] = true
+		cur = next
+	}
+}
+
+// --- process catalog (process-005, 006) ---
+//
+// Only the wire-shape process vectors are drivable: process-005 (a sink receipt
+// MUST be wire-valid AND reference its upstream via previousCredential) and
+// process-006 (a Custom Process at a chain origin MUST NOT carry
+// previousCredential). The catalog/behavior-classification vectors
+// (process-001..003) and the sink-runtime sequence vector (process-004) have no
+// callable seam and stay in the skip ledger with their true blockers.
+func runProcess(t *testing.T, v dplaaxVector) {
+	var input struct {
+		ProcessType string          `json:"process_type"`
+		ChainRole   string          `json:"chain_role"`
+		Credential  json.RawMessage `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	want := expectString(t, v)
+
+	switch vecNum(t, v.ID) {
+	case 5: // sink.receipt: wire-valid AND carries previousCredential
+		var cred vc.PipelinePassCredential
+		if err := cred.UnmarshalJSON(input.Credential); err != nil {
+			if want != "reject" {
+				t.Errorf("decode rejected an accept vector: %v", err)
+			}
+			return
+		}
+		conforms := cred.ValidateWireForm() == nil && cred.PreviousCredential() != ""
+		if conforms != (want == "accept") {
+			t.Errorf("receipt conforms (wire-form + previousCredential)=%v, want %s", conforms, want)
+		}
+	case 6: // custom.interop: a chain origin MUST NOT carry previousCredential
+		hasPrev := mustCred(t, input.Credential).PreviousCredential() != ""
+		var ok bool
+		switch input.ChainRole {
+		case "origin":
+			ok = !hasPrev
+		default: // a continuing Custom Process MUST retain previousCredential (not exercised here)
+			ok = hasPrev
+		}
+		if ok != (want == "accept") {
+			t.Errorf("custom-process role=%q hasPrev=%v ok=%v, want %s", input.ChainRole, hasPrev, ok, want)
+		}
+	default:
+		t.Fatalf("process runner: no branch for %s (only 005/006 are drivable; 001-004 are ledgered skips)", v.ID)
+	}
+}
+
+// credAddressesTo reports whether body decodes to a credential whose content
+// address equals key.
+func credAddressesTo(t *testing.T, body []byte, key string) bool {
+	t.Helper()
+	var cred vc.PipelinePassCredential
+	if err := cred.UnmarshalJSON(body); err != nil {
+		return false
+	}
+	h, err := cred.Hash()
+	if err != nil {
+		return false
+	}
+	return h == key
+}

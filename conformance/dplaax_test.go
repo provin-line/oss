@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -128,52 +129,51 @@ func stateFromName(t *testing.T, id, name string) vc.ConfidenceState {
 	return 0
 }
 
+// The tranche-1 runners below are dispatched per vector by TestDplaaxAllVectors
+// (see allvectors_test.go for the registry and completeness guard). Each takes
+// an already-loaded vector; the dispatcher owns loading, the subtest, and skips.
+
 // --- canon family: strict decoding + JCS canonicalization ---
 
-func TestDplaaxCanonVectors(t *testing.T) {
-	for i := 1; i <= 8; i++ {
-		v := loadDplaax(t, vecID("canon", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Document    string `json:"document"`
-				DocumentB64 string `json:"document_b64"`
-			}
-			if err := json.Unmarshal(v.Input, &input); err != nil {
-				t.Fatalf("input: %v", err)
-			}
-			doc := []byte(input.Document)
-			if input.DocumentB64 != "" {
-				var err error
-				if doc, err = base64.StdEncoding.DecodeString(input.DocumentB64); err != nil {
-					t.Fatalf("decode document_b64: %v", err)
-				}
-			}
-			var parsed any
-			decodeErr := canon.NewStrictDecoder(doc).Decode(&parsed)
+func runCanon(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Document    string `json:"document"`
+		DocumentB64 string `json:"document_b64"`
+	}
+	if err := json.Unmarshal(v.Input, &input); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+	doc := []byte(input.Document)
+	if input.DocumentB64 != "" {
+		var err error
+		if doc, err = base64.StdEncoding.DecodeString(input.DocumentB64); err != nil {
+			t.Fatalf("decode document_b64: %v", err)
+		}
+	}
+	var parsed any
+	decodeErr := canon.NewStrictDecoder(doc).Decode(&parsed)
 
-			var e struct {
-				Canonical string `json:"canonical"`
-			}
-			if err := json.Unmarshal(v.Expect, &e); err == nil && e.Canonical != "" {
-				if decodeErr != nil {
-					t.Fatalf("strict decode rejected an accept vector: %v", decodeErr)
-				}
-				got, err := jcs.Canonicalize(parsed)
-				if err != nil {
-					t.Fatalf("Canonicalize: %v", err)
-				}
-				if string(got) != e.Canonical {
-					t.Errorf("canonical = %s, want %s", got, e.Canonical)
-				}
-				return
-			}
-			if expectString(t, v) != "reject" {
-				t.Fatalf("unhandled expect %s", v.Expect)
-			}
-			if decodeErr == nil {
-				t.Error("strict decode accepted a reject vector")
-			}
-		})
+	var e struct {
+		Canonical string `json:"canonical"`
+	}
+	if err := json.Unmarshal(v.Expect, &e); err == nil && e.Canonical != "" {
+		if decodeErr != nil {
+			t.Fatalf("strict decode rejected an accept vector: %v", decodeErr)
+		}
+		got, err := jcs.Canonicalize(parsed)
+		if err != nil {
+			t.Fatalf("Canonicalize: %v", err)
+		}
+		if string(got) != e.Canonical {
+			t.Errorf("canonical = %s, want %s", got, e.Canonical)
+		}
+		return
+	}
+	if expectString(t, v) != "reject" {
+		t.Fatalf("unhandled expect %s", v.Expect)
+	}
+	if decodeErr == nil {
+		t.Error("strict decode accepted a reject vector")
 	}
 }
 
@@ -185,38 +185,33 @@ func TestDplaaxCanonVectors(t *testing.T) {
 // part of this family's verdict: cred-020 pins that an unknown proof member is
 // accepted as-received at wire-form level (the signer-authenticity axis owns
 // what a verifier honours).
-func TestDplaaxCredVectors(t *testing.T) {
-	for i := 1; i <= 32; i++ {
-		v := loadDplaax(t, vecID("cred", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Credential json.RawMessage `json:"credential"`
-			}
-			if err := json.Unmarshal(v.Input, &input); err != nil {
-				t.Fatalf("input: %v", err)
-			}
-			want := expectString(t, v)
-			var cred vc.PipelinePassCredential
-			if err := cred.UnmarshalJSON(input.Credential); err != nil {
-				if want != "reject" {
-					t.Errorf("decode rejected an accept vector: %v", err)
-				}
-				return
-			}
-			err := cred.ValidateWireForm()
-			switch want {
-			case "accept":
-				if err != nil {
-					t.Errorf("ValidateWireForm rejected an accept vector: %v", err)
-				}
-			case "reject":
-				if err == nil {
-					t.Error("ValidateWireForm accepted a reject vector")
-				}
-			default:
-				t.Fatalf("unhandled expect %q", want)
-			}
-		})
+func runCred(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	if err := json.Unmarshal(v.Input, &input); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+	want := expectString(t, v)
+	var cred vc.PipelinePassCredential
+	if err := cred.UnmarshalJSON(input.Credential); err != nil {
+		if want != "reject" {
+			t.Errorf("decode rejected an accept vector: %v", err)
+		}
+		return
+	}
+	err := cred.ValidateWireForm()
+	switch want {
+	case "accept":
+		if err != nil {
+			t.Errorf("ValidateWireForm rejected an accept vector: %v", err)
+		}
+	case "reject":
+		if err == nil {
+			t.Error("ValidateWireForm accepted a reject vector")
+		}
+	default:
+		t.Fatalf("unhandled expect %q", want)
 	}
 }
 
@@ -268,102 +263,97 @@ func TestDplaaxProcessSinkReceipt(t *testing.T) {
 
 // --- commitment family ---
 
-func TestDplaaxCommitmentVectors(t *testing.T) {
+func runCommitment(t *testing.T, v dplaaxVector) {
 	verifier := vc.NewVerifier(local.New(), ed25519.Verifier{})
-	for i := 1; i <= 13; i++ {
-		v := loadDplaax(t, vecID("commitment", i))
-		t.Run(v.ID, func(t *testing.T) {
-			switch i {
-			case 1, 3, 4: // wire-form shape of the commitment attributes
-				var input struct {
-					Credential json.RawMessage `json:"credential"`
-				}
-				mustParse(t, v.Input, &input)
-				var cred vc.PipelinePassCredential
-				if err := cred.UnmarshalJSON(input.Credential); err != nil {
-					if expectString(t, v) != "reject" {
-						t.Errorf("decode rejected an accept vector: %v", err)
-					}
-					return
-				}
-				err := cred.ValidateWireForm()
-				if want := expectString(t, v); (err == nil) != (want == "accept") {
-					t.Errorf("ValidateWireForm err=%v, want %s", err, want)
-				}
-			case 2: // all-consumed: predecessor's issuer must be in derived_from
-				var input struct {
-					Credential  json.RawMessage `json:"credential"`
-					Predecessor json.RawMessage `json:"predecessor"`
-				}
-				mustParse(t, v.Input, &input)
-				pred := mustCred(t, input.Predecessor)
-				cred := mustCred(t, input.Credential)
-				res, err := verifier.VerifyChain(context.Background(), []*vc.PipelinePassCredential{pred, cred})
-				if err != nil {
-					t.Fatalf("VerifyChain: %v", err)
-				}
-				want := expectString(t, v)
-				if got := res.Axes.DataIntegrity == vc.ConfidenceVerified; got != (want == "accept") {
-					t.Errorf("DataIntegrity=%v, want %s", res.Axes.DataIntegrity, want)
-				}
-			case 5, 6, 7: // construction: sources -> commitment
-				var input struct {
-					Sources             []json.RawMessage `json:"sources"`
-					SourceRootCanonical string            `json:"source_root_canonical"`
-				}
-				mustParse(t, v.Input, &input)
-				sources := make([]*vc.PipelinePassCredential, len(input.Sources))
-				for j, raw := range input.Sources {
-					sources[j] = mustCred(t, raw)
-				}
-				sc, err := vc.NewSourceCommitment(sources, input.SourceRootCanonical)
-				if err != nil {
-					t.Fatalf("NewSourceCommitment: %v", err)
-				}
-				var e struct {
-					DerivedFrom         []string `json:"derived_from"`
-					SourceRoot          string   `json:"source_root"`
-					SourceRootCanonical string   `json:"source_root_canonical"`
-				}
-				mustParse(t, v.Expect, &e)
-				if len(sc.DerivedFrom) != len(e.DerivedFrom) {
-					t.Fatalf("derived_from = %v, want %v", sc.DerivedFrom, e.DerivedFrom)
-				}
-				for j := range e.DerivedFrom {
-					if sc.DerivedFrom[j] != e.DerivedFrom[j] {
-						t.Errorf("derived_from[%d] = %q, want %q", j, sc.DerivedFrom[j], e.DerivedFrom[j])
-					}
-				}
-				if sc.SourceRoot != e.SourceRoot {
-					t.Errorf("source_root = %s, want %s", sc.SourceRoot, e.SourceRoot)
-				}
-				if sc.SourceRootCanonical != e.SourceRootCanonical {
-					t.Errorf("source_root_canonical = %s, want %s", sc.SourceRootCanonical, e.SourceRootCanonical)
-				}
-			case 8, 9, 10, 11, 13: // verification: credential + gathered sources -> confidence (13 = the verified positive path)
-				var input struct {
-					Credential json.RawMessage   `json:"credential"`
-					Sources    []json.RawMessage `json:"sources"`
-				}
-				mustParse(t, v.Input, &input)
-				sources := make([]*vc.PipelinePassCredential, len(input.Sources))
-				for j, raw := range input.Sources {
-					sources[j] = mustCred(t, raw)
-				}
-				got, sErr := verifier.VerifySourceCommitment(context.Background(), mustCred(t, input.Credential), sources)
-				if sErr != nil {
-					// Advisory in the API contract, but visible here so a
-					// driver-side parse defect cannot silently satisfy a
-					// failed-expectation (review note).
-					t.Logf("VerifySourceCommitment advisory error: %v", sErr)
-				}
-				if want := expectConfidence(t, v); got != want {
-					t.Errorf("VerifySourceCommitment = %v, want %v", got, want)
-				}
-			case 12:
-				t.Skip("commitment-012 needs a durable VC store (restart persistence) — tranche 2, durable-stores epic")
+	switch vecNum(t, v.ID) {
+	case 1, 3, 4: // wire-form shape of the commitment attributes
+		var input struct {
+			Credential json.RawMessage `json:"credential"`
+		}
+		mustParse(t, v.Input, &input)
+		var cred vc.PipelinePassCredential
+		if err := cred.UnmarshalJSON(input.Credential); err != nil {
+			if expectString(t, v) != "reject" {
+				t.Errorf("decode rejected an accept vector: %v", err)
 			}
-		})
+			return
+		}
+		err := cred.ValidateWireForm()
+		if want := expectString(t, v); (err == nil) != (want == "accept") {
+			t.Errorf("ValidateWireForm err=%v, want %s", err, want)
+		}
+	case 2: // all-consumed: predecessor's issuer must be in derived_from
+		var input struct {
+			Credential  json.RawMessage `json:"credential"`
+			Predecessor json.RawMessage `json:"predecessor"`
+		}
+		mustParse(t, v.Input, &input)
+		pred := mustCred(t, input.Predecessor)
+		cred := mustCred(t, input.Credential)
+		res, err := verifier.VerifyChain(context.Background(), []*vc.PipelinePassCredential{pred, cred})
+		if err != nil {
+			t.Fatalf("VerifyChain: %v", err)
+		}
+		want := expectString(t, v)
+		if got := res.Axes.DataIntegrity == vc.ConfidenceVerified; got != (want == "accept") {
+			t.Errorf("DataIntegrity=%v, want %s", res.Axes.DataIntegrity, want)
+		}
+	case 5, 6, 7: // construction: sources -> commitment
+		var input struct {
+			Sources             []json.RawMessage `json:"sources"`
+			SourceRootCanonical string            `json:"source_root_canonical"`
+		}
+		mustParse(t, v.Input, &input)
+		sources := make([]*vc.PipelinePassCredential, len(input.Sources))
+		for j, raw := range input.Sources {
+			sources[j] = mustCred(t, raw)
+		}
+		sc, err := vc.NewSourceCommitment(sources, input.SourceRootCanonical)
+		if err != nil {
+			t.Fatalf("NewSourceCommitment: %v", err)
+		}
+		var e struct {
+			DerivedFrom         []string `json:"derived_from"`
+			SourceRoot          string   `json:"source_root"`
+			SourceRootCanonical string   `json:"source_root_canonical"`
+		}
+		mustParse(t, v.Expect, &e)
+		if len(sc.DerivedFrom) != len(e.DerivedFrom) {
+			t.Fatalf("derived_from = %v, want %v", sc.DerivedFrom, e.DerivedFrom)
+		}
+		for j := range e.DerivedFrom {
+			if sc.DerivedFrom[j] != e.DerivedFrom[j] {
+				t.Errorf("derived_from[%d] = %q, want %q", j, sc.DerivedFrom[j], e.DerivedFrom[j])
+			}
+		}
+		if sc.SourceRoot != e.SourceRoot {
+			t.Errorf("source_root = %s, want %s", sc.SourceRoot, e.SourceRoot)
+		}
+		if sc.SourceRootCanonical != e.SourceRootCanonical {
+			t.Errorf("source_root_canonical = %s, want %s", sc.SourceRootCanonical, e.SourceRootCanonical)
+		}
+	case 8, 9, 10, 11, 13: // verification: credential + gathered sources -> confidence (13 = the verified positive path)
+		var input struct {
+			Credential json.RawMessage   `json:"credential"`
+			Sources    []json.RawMessage `json:"sources"`
+		}
+		mustParse(t, v.Input, &input)
+		sources := make([]*vc.PipelinePassCredential, len(input.Sources))
+		for j, raw := range input.Sources {
+			sources[j] = mustCred(t, raw)
+		}
+		got, sErr := verifier.VerifySourceCommitment(context.Background(), mustCred(t, input.Credential), sources)
+		if sErr != nil {
+			// Advisory in the API contract, but visible here so a
+			// driver-side parse defect cannot silently satisfy a
+			// failed-expectation (review note).
+			t.Logf("VerifySourceCommitment advisory error: %v", sErr)
+		}
+		if want := expectConfidence(t, v); got != want {
+			t.Errorf("VerifySourceCommitment = %v, want %v", got, want)
+		}
+	default:
+		t.Fatalf("commitment runner: no branch for %s", v.ID)
 	}
 }
 
@@ -373,50 +363,40 @@ func TestDplaaxCommitmentVectors(t *testing.T) {
 // tranche 2; 006..008 are chain verification and run against the real
 // VerifyChain. The fixtures carry synthetic proofs, so only the resolver-free
 // DataIntegrity axis carries the verdict (continuity, linkage, origin rule).
-func TestDplaaxChainContinuityVectors(t *testing.T) {
+func runChainContinuity(t *testing.T, v dplaaxVector) {
 	verifier := vc.NewVerifier(local.New(), ed25519.Verifier{})
-	for i := 6; i <= 8; i++ {
-		v := loadDplaax(t, vecID("chain", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Chain []json.RawMessage `json:"chain"`
-			}
-			mustParse(t, v.Input, &input)
-			chain := make([]*vc.PipelinePassCredential, len(input.Chain))
-			for j, raw := range input.Chain {
-				chain[j] = mustCred(t, raw)
-			}
-			res, err := verifier.VerifyChain(context.Background(), chain)
-			if err != nil {
-				t.Fatalf("VerifyChain: %v", err)
-			}
-			want := expectString(t, v)
-			if got := res.Axes.DataIntegrity == vc.ConfidenceVerified; got != (want == "accept") {
-				t.Errorf("DataIntegrity=%v, want %s", res.Axes.DataIntegrity, want)
-			}
-		})
+	var input struct {
+		Chain []json.RawMessage `json:"chain"`
+	}
+	mustParse(t, v.Input, &input)
+	chain := make([]*vc.PipelinePassCredential, len(input.Chain))
+	for j, raw := range input.Chain {
+		chain[j] = mustCred(t, raw)
+	}
+	res, err := verifier.VerifyChain(context.Background(), chain)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	want := expectString(t, v)
+	if got := res.Axes.DataIntegrity == vc.ConfidenceVerified; got != (want == "accept") {
+		t.Errorf("DataIntegrity=%v, want %s", res.Axes.DataIntegrity, want)
 	}
 }
 
 // --- confidence family ---
 
-func TestDplaaxConfidenceSynthesisVectors(t *testing.T) {
-	for i := 1; i <= 3; i++ {
-		v := loadDplaax(t, vecID("confidence", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Axes map[string]string `json:"axes"`
-			}
-			mustParse(t, v.Input, &input)
-			axes := vc.AxisResult{
-				SignerAuthenticity: stateFromName(t, v.ID, input.Axes["signer-authenticity"]),
-				ChainConsistency:   stateFromName(t, v.ID, input.Axes["chain-consistency"]),
-				DataIntegrity:      stateFromName(t, v.ID, input.Axes["data-integrity"]),
-			}
-			if got, want := vc.EvaluateConfidence(axes), expectConfidence(t, v); got != want {
-				t.Errorf("EvaluateConfidence = %v, want %v", got, want)
-			}
-		})
+func runConfidenceSynthesis(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Axes map[string]string `json:"axes"`
+	}
+	mustParse(t, v.Input, &input)
+	axes := vc.AxisResult{
+		SignerAuthenticity: stateFromName(t, v.ID, input.Axes["signer-authenticity"]),
+		ChainConsistency:   stateFromName(t, v.ID, input.Axes["chain-consistency"]),
+		DataIntegrity:      stateFromName(t, v.ID, input.Axes["data-integrity"]),
+	}
+	if got, want := vc.EvaluateConfidence(axes), expectConfidence(t, v); got != want {
+		t.Errorf("EvaluateConfidence = %v, want %v", got, want)
 	}
 }
 
@@ -468,58 +448,53 @@ func phaseFromName(t *testing.T, id, name string) vc.LifecyclePhase {
 // between created and the transition instants — the only thing PhaseAt reads —
 // are preserved exactly, and the whole path stays real (real signature, real
 // resolver, real verifier).
-func TestDplaaxConfidenceLifecycleVectors(t *testing.T) {
-	for i := 4; i <= 6; i++ {
-		v := loadDplaax(t, vecID("confidence", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Registry []struct {
-					ID            string `json:"id"`
-					Phase         string `json:"phase"`
-					EffectiveDate string `json:"effectiveDate"`
-				} `json:"registry"`
-				Cryptosuite  string `json:"cryptosuite"`
-				ProofCreated string `json:"proof_created"`
-			}
-			mustParse(t, v.Input, &input)
-			proofCreated, err := time.Parse(time.RFC3339, input.ProofCreated)
-			if err != nil {
-				t.Fatalf("proof_created: %v", err)
-			}
-			delta := time.Since(proofCreated)
-			reg := entriesRegistry{}
-			for _, e := range input.Registry {
-				ed, err := time.Parse(time.RFC3339, e.EffectiveDate)
-				if err != nil {
-					t.Fatalf("effectiveDate: %v", err)
-				}
-				reg.entries = append(reg.entries, registryEntry{
-					ID:            e.ID,
-					Phase:         phaseFromName(t, v.ID, e.Phase),
-					EffectiveDate: ed.Add(delta),
-				})
-			}
-
-			cred, pub := signedFixtureCred(t)
-			if input.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
-				// The suite under test is unsignable by construction (only
-				// eddsa-jcs-2022 is registered); carry it via wire mutation. The
-				// verifier's lifecycle gate is evaluated before the signature, so
-				// the vector's verdict still hinges on the registry state.
-				cred = mutateWire(t, cred, func(m map[string]any) {
-					m["proof"].(map[string]any)["cryptosuite"] = input.Cryptosuite
-				})
-			}
-			verifier := vc.NewVerifier(fixtureResolver(t, pub), ed25519.Verifier{},
-				vc.WithLifecycleRegistry(reg))
-			res, err := verifier.Verify(context.Background(), cred)
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
-			if want := expectConfidence(t, v); res.Overall != want {
-				t.Errorf("Overall = %v, want %v (axes %+v)", res.Overall, want, res.Axes)
-			}
+func runConfidenceLifecycle(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Registry []struct {
+			ID            string `json:"id"`
+			Phase         string `json:"phase"`
+			EffectiveDate string `json:"effectiveDate"`
+		} `json:"registry"`
+		Cryptosuite  string `json:"cryptosuite"`
+		ProofCreated string `json:"proof_created"`
+	}
+	mustParse(t, v.Input, &input)
+	proofCreated, err := time.Parse(time.RFC3339, input.ProofCreated)
+	if err != nil {
+		t.Fatalf("proof_created: %v", err)
+	}
+	delta := time.Since(proofCreated)
+	reg := entriesRegistry{}
+	for _, e := range input.Registry {
+		ed, err := time.Parse(time.RFC3339, e.EffectiveDate)
+		if err != nil {
+			t.Fatalf("effectiveDate: %v", err)
+		}
+		reg.entries = append(reg.entries, registryEntry{
+			ID:            e.ID,
+			Phase:         phaseFromName(t, v.ID, e.Phase),
+			EffectiveDate: ed.Add(delta),
 		})
+	}
+
+	cred, pub := signedFixtureCred(t)
+	if input.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
+		// The suite under test is unsignable by construction (only
+		// eddsa-jcs-2022 is registered); carry it via wire mutation. The
+		// verifier's lifecycle gate is evaluated before the signature, so
+		// the vector's verdict still hinges on the registry state.
+		cred = mutateWire(t, cred, func(m map[string]any) {
+			m["proof"].(map[string]any)["cryptosuite"] = input.Cryptosuite
+		})
+	}
+	verifier := vc.NewVerifier(fixtureResolver(t, pub), ed25519.Verifier{},
+		vc.WithLifecycleRegistry(reg))
+	res, err := verifier.Verify(context.Background(), cred)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if want := expectConfidence(t, v); res.Overall != want {
+		t.Errorf("Overall = %v, want %v (axes %+v)", res.Overall, want, res.Axes)
 	}
 }
 
@@ -530,110 +505,116 @@ func TestDplaaxConfidenceLifecycleVectors(t *testing.T) {
 // (grafting the fields Build refuses to produce), and serves the issuer's
 // document from a fixture resolver. Structural defects checked before the
 // signature (purpose, scope, foreign subject) survive the re-signing.
-func TestDplaaxDelegationVectors(t *testing.T) {
-	for i := 1; i <= 5; i++ {
-		v := loadDplaax(t, vecID("delegation", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Credential json.RawMessage `json:"credential"`
-			}
-			mustParse(t, v.Input, &input)
-			var wire delegation.DelegationCredential
-			if err := json.Unmarshal(input.Credential, &wire); err != nil {
-				t.Fatalf("parse delegation credential: %v", err)
-			}
-			want := expectString(t, v)
+func runDelegation(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	var wire delegation.DelegationCredential
+	if err := json.Unmarshal(input.Credential, &wire); err != nil {
+		t.Fatalf("parse delegation credential: %v", err)
+	}
+	want := expectString(t, v)
 
-			ks, signer := fixtureSigner(t, wire.Issuer)
-			built, err := delegation.Build(signer, wire.Issuer, delegation.DelegationSubject{
-				ID:          wire.CredentialSubject.ID,
-				DelegatedBy: wire.CredentialSubject.DelegatedBy,
-			})
-			if err != nil {
-				// Build refuses what Verify would refuse (e.g. delegatedBy != issuer);
-				// a reject vector may legitimately end here.
-				if want != "reject" {
-					t.Errorf("Build rejected an accept vector: %v", err)
-				}
-				return
-			}
-			// Graft the vector's unsigned/structural deviations onto the signed
-			// credential: scope is outside the signed body by design; the proof
-			// fields under test are checked before the signature.
-			built.CredentialSubject.Scope = wire.CredentialSubject.Scope
-			if wire.Proof != nil && wire.Proof.ProofPurpose != built.Proof.ProofPurpose {
-				built.Proof.ProofPurpose = wire.Proof.ProofPurpose
-			}
+	ks, signer := fixtureSigner(t, wire.Issuer)
+	built, err := delegation.Build(signer, wire.Issuer, delegation.DelegationSubject{
+		ID:          wire.CredentialSubject.ID,
+		DelegatedBy: wire.CredentialSubject.DelegatedBy,
+	})
+	if err != nil {
+		// Build refuses what Verify would refuse (e.g. delegatedBy != issuer);
+		// a reject vector may legitimately end here.
+		if want != "reject" {
+			t.Errorf("Build rejected an accept vector: %v", err)
+		}
+		return
+	}
+	// Graft the vector's unsigned/structural deviations onto the signed
+	// credential: scope is outside the signed body by design; the proof
+	// fields under test are checked before the signature.
+	built.CredentialSubject.Scope = wire.CredentialSubject.Scope
+	if wire.Proof != nil && wire.Proof.ProofPurpose != built.Proof.ProofPurpose {
+		built.Proof.ProofPurpose = wire.Proof.ProofPurpose
+	}
 
-			r := local.New()
-			r.Add(ownerDoc(t, wire.Issuer, ks))
-			err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, built)
-			if (err == nil) != (want == "accept") {
-				t.Errorf("Verify err=%v, want %s", err, want)
-			}
-		})
+	r := local.New()
+	r.Add(ownerDoc(t, wire.Issuer, ks))
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, built)
+	if (err == nil) != (want == "accept") {
+		t.Errorf("Verify err=%v, want %s", err, want)
 	}
 }
 
 // --- signer family ---
+//
+// signer-001..002 gate on VerifyProof (mandatory member / no-op cryptosuite);
+// signer-003 gates on the RegisterCryptosuite no-op identifier check.
 
-func TestDplaaxSignerVectors(t *testing.T) {
-	for i := 1; i <= 2; i++ {
-		v := loadDplaax(t, vecID("signer", i))
-		t.Run(v.ID, func(t *testing.T) {
-			var input struct {
-				Credential json.RawMessage `json:"credential"`
-			}
-			mustParse(t, v.Input, &input)
-			cred := mustCred(t, input.Credential)
-			proof := cred.Proof()
-			if proof == nil {
-				t.Fatal("vector credential carries no proof")
-			}
-			// The mandatory-member and no-op-identifier gates fire in
-			// VerifyProof before any key material is consulted, so the fixture
-			// proofValue never has to verify. Non-vacuity: the fixture proof
-			// would ALSO fail later for incidental reasons (nil key, synthetic
-			// proofValue), so the reject must be pinned to the cryptosuite
-			// gate, not merely to any error.
-			err := vc.VerifyProof(ed25519.Verifier{}, nil, proof, cred.Body())
-			want := expectString(t, v)
-			if (err == nil) != (want == "accept") {
-				t.Errorf("VerifyProof err=%v, want %s", err, want)
-			}
-			if err != nil && !strings.Contains(err.Error(), "cryptosuite") {
-				t.Errorf("rejected at the wrong gate (want the cryptosuite gate): %v", err)
-			}
-		})
+func runSignerProof(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential json.RawMessage `json:"credential"`
 	}
+	mustParse(t, v.Input, &input)
+	cred := mustCred(t, input.Credential)
+	proof := cred.Proof()
+	if proof == nil {
+		t.Fatal("vector credential carries no proof")
+	}
+	// The mandatory-member and no-op-identifier gates fire in VerifyProof
+	// before any key material is consulted, so the fixture proofValue never
+	// has to verify. Non-vacuity: the fixture proof would ALSO fail later for
+	// incidental reasons (nil key, synthetic proofValue), so the reject must
+	// be pinned to the cryptosuite gate, not merely to any error.
+	err := vc.VerifyProof(ed25519.Verifier{}, nil, proof, cred.Body())
+	want := expectString(t, v)
+	if (err == nil) != (want == "accept") {
+		t.Errorf("VerifyProof err=%v, want %s", err, want)
+	}
+	if err != nil && !strings.Contains(err.Error(), "cryptosuite") {
+		t.Errorf("rejected at the wrong gate (want the cryptosuite gate): %v", err)
+	}
+}
 
-	v := loadDplaax(t, "signer-003")
-	t.Run(v.ID, func(t *testing.T) {
-		var input struct {
-			RegistryOp struct {
-				Op string `json:"op"`
-				ID string `json:"id"`
-			} `json:"registry_op"`
-		}
-		mustParse(t, v.Input, &input)
-		if input.RegistryOp.Op != "register" {
-			t.Fatalf("unhandled registry op %q", input.RegistryOp.Op)
-		}
-		rejected := func() (r bool) {
-			defer func() { r = recover() != nil }()
-			vc.RegisterCryptosuite(input.RegistryOp.ID, jcs.Canonicalizer{})
-			return false
-		}()
-		if want := expectString(t, v); rejected != (want == "reject") {
-			t.Errorf("RegisterCryptosuite(%q) rejected=%v, want %s", input.RegistryOp.ID, rejected, want)
-		}
-	})
+func runSignerRegister(t *testing.T, v dplaaxVector) {
+	var input struct {
+		RegistryOp struct {
+			Op string `json:"op"`
+			ID string `json:"id"`
+		} `json:"registry_op"`
+	}
+	mustParse(t, v.Input, &input)
+	if input.RegistryOp.Op != "register" {
+		t.Fatalf("unhandled registry op %q", input.RegistryOp.Op)
+	}
+	rejected := func() (r bool) {
+		defer func() { r = recover() != nil }()
+		vc.RegisterCryptosuite(input.RegistryOp.ID, jcs.Canonicalizer{})
+		return false
+	}()
+	if want := expectString(t, v); rejected != (want == "reject") {
+		t.Errorf("RegisterCryptosuite(%q) rejected=%v, want %s", input.RegistryOp.ID, rejected, want)
+	}
 }
 
 // --- shared fixture helpers ---
 
 func vecID(family string, n int) string {
 	return fmt.Sprintf("%s-%03d", family, n)
+}
+
+// vecNum parses the numeric suffix of a vector id (e.g. "commitment-013" -> 13),
+// used by family runners whose per-vector behavior varies by number.
+func vecNum(t *testing.T, id string) int {
+	t.Helper()
+	idx := strings.LastIndex(id, "-")
+	if idx < 0 {
+		t.Fatalf("vector id %q has no numeric suffix", id)
+	}
+	n, err := strconv.Atoi(id[idx+1:])
+	if err != nil {
+		t.Fatalf("vector id %q: %v", id, err)
+	}
+	return n
 }
 
 func mustParse(t *testing.T, raw json.RawMessage, v any) {
