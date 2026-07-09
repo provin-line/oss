@@ -15,11 +15,12 @@
 # (the compose file wires it from $GITHUB_TOKEN). Once the repos are public this
 # step is inert — an anonymous clone just works and the secret can be dropped.
 #
-# AUTH_REF pins provin.auth. Default is the surface-sync commit (provin-line/
-# auth#1, adds tlog:read + ingest:push to the PDP surface) so the quickstart's
-# HTTP push ingest is not denied. Bump it to a release tag once that PR merges.
+# AUTH_REF pins provin.auth. Default is the merged commit of provin-line/auth#1
+# (the scaffold fixes the real auth path needs: tlog:read + ingest:push in the
+# PDP surface, and @noble/ed25519 in the generated provider). Bump it to a
+# release tag once provin.auth cuts one.
 
-ARG AUTH_REF=d430cf1d3311e094d212e1eabc64daa835a1932a
+ARG AUTH_REF=f7e6d6fee8db63ce88725394c656bd23c6d34f55
 
 # A token, if mounted as the `github_token` secret, authenticates github.com
 # HTTPS fetches — covering both `git clone` and pnpm's git-subdir deps. It is
