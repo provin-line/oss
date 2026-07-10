@@ -83,8 +83,14 @@ func rawHash(data []byte) string {
 // the binding the sink enforces.
 func boundCred(t *testing.T, payload []byte) *vc.PipelinePassCredential {
 	t.Helper()
+	return boundCredIssuer(t, payload, "did:example:upstream")
+}
+
+// boundCredIssuer is boundCred with an explicit issuer DID (for allow-list tests).
+func boundCredIssuer(t *testing.T, payload []byte, issuer string) *vc.PipelinePassCredential {
+	t.Helper()
 	cred, err := vc.New(vc.CredentialFields{
-		Issuer:    "did:example:upstream",
+		Issuer:    issuer,
 		ValidFrom: time.Now(),
 		Subject: vc.CredentialSubjectFields{
 			PipelineID:          "p",
@@ -94,7 +100,7 @@ func boundCred(t *testing.T, payload []byte) *vc.PipelinePassCredential {
 		},
 	})
 	if err != nil {
-		t.Fatalf("boundCred: %v", err)
+		t.Fatalf("boundCredIssuer: %v", err)
 	}
 	return cred
 }
@@ -610,5 +616,303 @@ func TestProcess_ObserverNotifiedOnErrored(t *testing.T) {
 	// surfaced to the observer (decode succeeded, so consumedRef is known).
 	if obs.events[0].ConsumedVCRef == "" {
 		t.Error("ConsumedVCRef should be set on the errored path once the credential is decoded")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Allow-list gate (production/archival): the consumed credential's issuer DID
+// must match a configured allow-issuers pattern, else reject before write.
+// ---------------------------------------------------------------------------
+
+func TestProcess_Production_AllowList(t *testing.T) {
+	payload := []byte(`{"x":1}`)
+	const allowedIssuer = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:readings:process:s1"
+	const disallowedIssuer = "did:dplaax:poc.dplaax.dev:org:evil:pipeline:readings:process:s1"
+
+	run := func(t *testing.T, issuer string) (*contract.Result, *fakeWriter) {
+		t.Helper()
+		cred := boundCredIssuer(t, payload, issuer)
+		w := &fakeWriter{}
+		cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w)
+		cfg.Kind = contract.SinkProduction
+		cfg.AllowIssuers = []string{"did:dplaax:poc.dplaax.dev:org:acme:*"}
+		p, err := sink.New(cfg)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		r, err := p.Process(context.Background(), encode(t, cred, payload))
+		if err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		return r, w
+	}
+
+	t.Run("allowed issuer passes and writes", func(t *testing.T) {
+		r, w := run(t, allowedIssuer)
+		if r.Status != contract.StatusPassed {
+			t.Errorf("status = %v (%s), want Passed", r.Status, r.Error)
+		}
+		if len(w.records) != 1 {
+			t.Errorf("writer got %d records, want 1", len(w.records))
+		}
+	})
+
+	t.Run("disallowed issuer rejected before write", func(t *testing.T) {
+		r, w := run(t, disallowedIssuer)
+		if r.Status != contract.StatusErrored {
+			t.Errorf("status = %v, want Errored (issuer not allow-listed)", r.Status)
+		}
+		if len(w.records) != 0 {
+			t.Errorf("writer got %d records, want 0 (rejected before write)", len(w.records))
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Receipt issuance (D-1): after a successful external write, a receipt-issuing
+// sink signs + registers a provin:sink-receipt over the consumed credential.
+// ---------------------------------------------------------------------------
+
+type fakeReceiptIssuer struct {
+	calls    int
+	consumed []*vc.PipelinePassCredential
+	err      error
+}
+
+func (f *fakeReceiptIssuer) IssueReceipt(_ context.Context, consumed *vc.PipelinePassCredential) error {
+	f.calls++
+	f.consumed = append(f.consumed, consumed)
+	return f.err
+}
+
+func TestProcess_Receipt_IssuedAfterWrite(t *testing.T) {
+	payload := []byte(`{"x":1}`)
+	cred := boundCred(t, payload)
+
+	ri := &fakeReceiptIssuer{}
+	w := &fakeWriter{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w)
+	cfg.Kind = contract.SinkProduction // AllowIssuers empty ⇒ gate skipped (receipt behavior isolated)
+	cfg.Receipts = ri
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r, err := p.Process(context.Background(), encode(t, cred, payload))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if r.Status != contract.StatusPassed {
+		t.Fatalf("status = %v (%s), want Passed", r.Status, r.Error)
+	}
+	if len(w.records) != 1 {
+		t.Errorf("writer records = %d, want 1", len(w.records))
+	}
+	// Receipt issued after the write, for the consumed credential.
+	if ri.calls != 1 {
+		t.Fatalf("IssueReceipt calls = %d, want 1", ri.calls)
+	}
+	consumedHash, _ := cred.Hash()
+	gotHash, _ := ri.consumed[0].Hash()
+	if gotHash != consumedHash {
+		t.Errorf("receipt consumed = %q, want the consumed credential %q", gotHash, consumedHash)
+	}
+}
+
+func TestProcess_Receipt_FailureIsErrored(t *testing.T) {
+	payload := []byte(`{"x":1}`)
+	cred := boundCred(t, payload)
+
+	ri := &fakeReceiptIssuer{err: errors.New("tlog append failed")}
+	w := &fakeWriter{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w)
+	cfg.Kind = contract.SinkProduction
+	cfg.Receipts = ri
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r, err := p.Process(context.Background(), encode(t, cred, payload))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	// The external write happened (at-most-once, not rolled back)...
+	if len(w.records) != 1 {
+		t.Errorf("writer records = %d, want 1 (write not rolled back)", len(w.records))
+	}
+	// ...but a receipt failure surfaces as StatusErrored.
+	if r.Status != contract.StatusErrored {
+		t.Errorf("status = %v, want Errored (receipt failed)", r.Status)
+	}
+}
+
+func TestProcess_NoReceiptIssuerNoCall(t *testing.T) {
+	payload := []byte(`{"x":1}`)
+	cred := boundCred(t, payload)
+	w := &fakeWriter{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w) // observation-only, no Receipts
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := p.Process(context.Background(), encode(t, cred, payload)); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(w.records) != 1 {
+		t.Errorf("writer records = %d, want 1", len(w.records))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reject log (D-3): every reject path durably records a RejectRecord with a
+// closed-set reason. Post-acceptance failures (write) do NOT record.
+// ---------------------------------------------------------------------------
+
+type fakeRejectLog struct {
+	records []sink.RejectRecord
+	err     error
+}
+
+func (f *fakeRejectLog) RecordReject(_ context.Context, rec sink.RejectRecord) error {
+	f.records = append(f.records, rec)
+	return f.err
+}
+
+func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
+	good := []byte(`{"v":1}`)
+
+	cases := []struct {
+		name       string
+		verifier   *fakeVerifier
+		store      *fakeStore
+		allow      []string
+		wire       func(t *testing.T) []byte
+		wantReason sink.RejectReason
+	}{
+		{
+			name:       "decode-failure",
+			verifier:   &fakeVerifier{result: verified()},
+			store:      &fakeStore{},
+			wire:       func(t *testing.T) []byte { return []byte("not-an-envelope") },
+			wantReason: sink.RejectDecodeFailure,
+		},
+		{
+			name:       "verdict",
+			verifier:   &fakeVerifier{result: &vc.VerifyResult{Overall: vc.ConfidenceFailed}},
+			store:      &fakeStore{},
+			wire:       func(t *testing.T) []byte { return encode(t, boundCred(t, good), good) },
+			wantReason: sink.RejectVerdict,
+		},
+		{
+			name:     "allow-list",
+			verifier: &fakeVerifier{result: verified()},
+			store:    &fakeStore{},
+			allow:    []string{"did:dplaax:reg:org:acme:*"},
+			wire: func(t *testing.T) []byte {
+				c := boundCredIssuer(t, good, "did:dplaax:reg:org:evil:pipeline:p:process:up")
+				return encode(t, c, good)
+			},
+			wantReason: sink.RejectAllowList,
+		},
+		{
+			name:       "ingress-store-failure",
+			verifier:   &fakeVerifier{result: verified()},
+			store:      &fakeStore{returnErr: errors.New("store down")},
+			wire:       func(t *testing.T) []byte { return encode(t, boundCred(t, good), good) },
+			wantReason: sink.RejectIngressStoreFailure,
+		},
+		{
+			name:       "binding-gate",
+			verifier:   &fakeVerifier{result: verified()},
+			store:      &fakeStore{},
+			wire:       func(t *testing.T) []byte { return encode(t, boundCred(t, good), []byte(`{"tampered":true}`)) },
+			wantReason: sink.RejectBindingGate,
+		},
+		{
+			// A verified, allow-listed credential declaring NO outputHash reaches
+			// the binding gate as malformed (binding undecidable).
+			name:     "malformed-credential",
+			verifier: &fakeVerifier{result: verified()},
+			store:    &fakeStore{},
+			wire: func(t *testing.T) []byte {
+				cred, err := vc.New(vc.CredentialFields{
+					Issuer: "did:example:upstream", ValidFrom: time.Now(),
+					Subject: vc.CredentialSubjectFields{PipelineID: "p", ProcessID: "u", TransformationClaim: vc.ClaimConvert, OutputHash: ""},
+				})
+				if err != nil {
+					t.Fatalf("unbound cred: %v", err)
+				}
+				return encode(t, cred, good)
+			},
+			wantReason: sink.RejectMalformedCredential,
+		},
+		{
+			name:     "by-reference-unsupported",
+			verifier: &fakeVerifier{result: verified()},
+			store:    &fakeStore{},
+			wire: func(t *testing.T) []byte {
+				wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: boundCred(t, good), Payload: nil, SequenceNo: 1})
+				if err != nil {
+					t.Fatalf("encode nil payload: %v", err)
+				}
+				return wire
+			},
+			wantReason: sink.RejectByReferenceUnsupported,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(string(tc.wantReason), func(t *testing.T) {
+			rl := &fakeRejectLog{}
+			cfg := baseConfig(tc.verifier, tc.store, &fakeWriter{})
+			cfg.Kind = contract.SinkArchival
+			cfg.AllowIssuers = tc.allow
+			cfg.RejectLog = rl
+			p, err := sink.New(cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			r, err := p.Process(context.Background(), tc.wire(t))
+			if err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+			if r.Status != contract.StatusErrored {
+				t.Fatalf("status = %v, want Errored", r.Status)
+			}
+			if len(rl.records) != 1 {
+				t.Fatalf("reject records = %d, want 1", len(rl.records))
+			}
+			if rl.records[0].Reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", rl.records[0].Reason, tc.wantReason)
+			}
+			if rl.records[0].Detail == "" {
+				t.Error("reject record has empty Detail")
+			}
+		})
+	}
+}
+
+// A post-acceptance external-write failure is StatusErrored but NOT a reject:
+// the credential was accepted, so it writes no reject-log record.
+func TestProcess_RejectLog_WriteFailureNotRecorded(t *testing.T) {
+	good := []byte(`{"v":1}`)
+	rl := &fakeRejectLog{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, &fakeWriter{returnErr: errors.New("archive down")})
+	cfg.Kind = contract.SinkArchival
+	cfg.RejectLog = rl
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r, err := p.Process(context.Background(), encode(t, boundCred(t, good), good))
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if r.Status != contract.StatusErrored {
+		t.Fatalf("status = %v, want Errored", r.Status)
+	}
+	if len(rl.records) != 0 {
+		t.Errorf("reject records = %d, want 0 (write failure is not a reject)", len(rl.records))
 	}
 }

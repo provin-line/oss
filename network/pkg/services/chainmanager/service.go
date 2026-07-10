@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/allowlist"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )

@@ -18,7 +18,8 @@ func TestTransformationClaimValidateGrammar(t *testing.T) {
 	valid := []vc.TransformationClaim{
 		vc.ClaimFilter, vc.ClaimConvert, vc.ClaimFilterConvert,
 		vc.ClaimAggregate, vc.ClaimEnrich, vc.ClaimGenerate,
-		"acme:distill", // foreign namespace, well-formed
+		vc.ClaimSinkReceipt, // sink consumption receipt (identity claim)
+		"acme:distill",      // foreign namespace, well-formed
 	}
 	for _, tc := range valid {
 		if err := tc.Validate(); err != nil {

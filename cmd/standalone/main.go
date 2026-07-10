@@ -137,11 +137,12 @@ func main() {
 	// default, file per path). With zero loops this dials nothing.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
-		Resolver:   resolver,
-		VCStore:    vcSvc,
-		AuditQueue: auditQueue,
-		Receipts:   auditReceipts,
-		TlogDir:    filepath.Join(coreCfg.DataDir, "tlog"),
+		Resolver:     resolver,
+		VCStore:      vcSvc,
+		AuditQueue:   auditQueue,
+		Receipts:     auditReceipts,
+		TlogDir:      filepath.Join(coreCfg.DataDir, "tlog"),
+		RejectLogDir: filepath.Join(evidenceDir, "sink-rejects"),
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)

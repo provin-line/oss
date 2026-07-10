@@ -14,10 +14,10 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/allowlist"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/allowlist"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 

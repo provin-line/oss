@@ -89,11 +89,18 @@ const (
 	// tooling); relaxed allow-list; no receipt obligation.
 	SinkObservationOnly
 	// SinkProduction — invalid emit prohibited; MUST reject; MUST enforce
-	// the mutual allow-list; MAY emit receipts.
+	// the local issuer allow-list; MAY emit receipts.
 	SinkProduction
 	// SinkArchival — invalid emit prohibited; MUST reject with an audit
-	// log; MUST enforce the mutual allow-list; MUST emit receipts.
+	// log; MUST enforce the local issuer allow-list; MUST emit receipts.
 	SinkArchival
+	//
+	// "local issuer allow-list" (not "mutual"): the sink enforces its own
+	// allow-issuers config against a consumed credential's issuer DID. The pairing
+	// that makes it "mutual" is the publisher-side chainmanager subscription
+	// allow-list — each is its own local config. A federation-layer negotiated
+	// list is spec-undecided (sink README / gap-backlog); if defined it becomes
+	// the supplier of this local config, not a new enforcement point.
 )
 
 // Status is the outcome of processing one event.

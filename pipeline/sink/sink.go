@@ -35,15 +35,19 @@
 // contract's IngressVCStore persists *verified* ingress VCs. An observation
 // sink that writes an invalid-verdict credential does not store it.
 //
-// # Deferred (PoC posture)
+// # production / archival obligations
 //
-// production/archival's receipt issuance (provin:sink-receipt), the mutual
-// allow-list enforcement, and archival's reject-with-audit-log obligation are
-// not implemented here — they need the network registration / signing layer.
-// A production/archival sink built on this runtime enforces the verdict policy
-// and the binding gate but is NOT yet conformant to those additional MUSTs.
-// By-reference (nil) payload ingress is likewise not implemented; it lands with
-// the resolver client.
+// A production/archival sink enforces, beyond the verdict policy and binding
+// gate: the local issuer allow-list (AllowIssuers — a consumed credential whose
+// issuer DID matches no pattern is rejected before any store or write); receipt
+// issuance (the ReceiptIssuer seam, called after the external write — MAY for
+// production, MUST for archival); and, for archival, a durable reject log (the
+// RejectLog seam — every reject records a RejectRecord). The signing, storage,
+// audit-queue registration, and durable logging behind those seams live in the
+// composition root, not this runtime.
+//
+// Still deferred: by-reference (nil) payload ingress is not implemented — it
+// lands with the resolver client.
 //
 // # Result error split (mirrors chained)
 //
@@ -61,6 +65,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
@@ -79,6 +84,65 @@ type Record struct {
 // (console, warehouse, EDC, …) live in subpackages or extension repositories.
 type Writer interface {
 	Write(ctx context.Context, rec Record) error
+}
+
+// RejectReason classifies why an archival sink refused a consumed event. It is a
+// closed set covering every reject stage — recording only some (e.g. verdict) would
+// let an archival sink boot while under-delivering its "reject with audit log"
+// obligation. A post-acceptance failure (external write, receipt) is NOT a reject
+// and carries no reason: it is StatusErrored + slog, never a reject-log record.
+type RejectReason string
+
+const (
+	// RejectDecodeFailure — the input envelope did not decode.
+	RejectDecodeFailure RejectReason = "decode-failure"
+	// RejectMalformedCredential — the credential's subject is unreadable or
+	// declares no outputHash (binding undecidable).
+	RejectMalformedCredential RejectReason = "malformed-credential"
+	// RejectVerdict — a non-verified verdict at a fail-closed sink.
+	RejectVerdict RejectReason = "verdict"
+	// RejectAllowList — the consumed credential's issuer is not allow-listed.
+	RejectAllowList RejectReason = "allow-list"
+	// RejectBindingGate — the payload does not match the credential's outputHash.
+	RejectBindingGate RejectReason = "binding-gate"
+	// RejectByReferenceUnsupported — by-reference (nil payload) ingress, unimplemented.
+	RejectByReferenceUnsupported RejectReason = "by-reference-unsupported"
+	// RejectIngressStoreFailure — the verified ingress VC could not be stored.
+	RejectIngressStoreFailure RejectReason = "ingress-store-failure"
+)
+
+// RejectRecord is one durable reject-log entry. Identity fields are best-effort —
+// empty when unknown at the reject point (e.g. a decode failure yields no
+// credential hash or issuer). The record NEVER carries the payload: a sink must
+// not hoard the bytes it refused in its evidence store.
+type RejectRecord struct {
+	// Timestamp is when the reject occurred.
+	Timestamp time.Time `json:"timestamp"`
+	// Reason is the closed-set reject class.
+	Reason RejectReason `json:"reason"`
+	// Detail is the human-readable reject message (no payload bytes).
+	Detail string `json:"detail"`
+	// CredentialHash is the consumed credential's content address, if it decoded.
+	CredentialHash string `json:"credentialHash,omitempty"`
+	// IssuerDID is the consumed credential's issuer, if readable.
+	IssuerDID string `json:"issuerDid,omitempty"`
+}
+
+// RejectLog durably records an archival sink's rejects (hash-chained, durable).
+// Configured only for the archival kind; nil disables reject recording.
+type RejectLog interface {
+	RecordReject(ctx context.Context, rec RejectRecord) error
+}
+
+// ReceiptIssuer signs and registers a sink receipt for one consumed credential.
+// It is the sink runtime's seam to the network signing + registration layer:
+// the sink itself neither signs nor stores. A receipt attests consumption (it is
+// chain-preserving-signed over the consumed credential, transforms nothing) and
+// is published to the local audit substrate — VC store + a dedicated tlog + the
+// audit queue — and optionally to a remote store, but NEVER in-band on the chain
+// (the ChainTerminating invariant). Implementations live in the composition root.
+type ReceiptIssuer interface {
+	IssueReceipt(ctx context.Context, consumed *vc.PipelinePassCredential) error
 }
 
 // Typed construction errors.
@@ -107,8 +171,27 @@ type Config struct {
 	Store contract.IngressVCStore
 	// Writer delivers the consumed event externally. Required.
 	Writer Writer
+	// Receipts, when non-nil, issues a sink receipt for each consumed event after
+	// the external write. Required for archival (MUST emit receipts), optional for
+	// production (MAY), nil for observation-only. The sink calls it; the signing,
+	// local store, tlog append, audit-queue registration, and optional remote
+	// publish are all its concern (see ReceiptIssuer).
+	Receipts ReceiptIssuer
+	// RejectLog, when non-nil, durably records every reject (archival's
+	// reject-with-audit-log obligation). A reject-log write failure does not
+	// change the reject outcome (the event is already refused); it is logged.
+	RejectLog RejectLog
 	// UpstreamEndpoint names where the ingress VC can later be fetched. Required.
 	UpstreamEndpoint string
+	// AllowIssuers is the sink's local issuer allow-list: a consumed credential is
+	// admitted only if its issuer DID matches one of these patterns (segment-aware
+	// globs, allowlist.Match; default-distrust). Empty means unrestricted — the
+	// observation-only default. production/archival require a non-empty list at
+	// boot (loadSinkConfig), so a misconfigured deployment fails closed rather
+	// than silently accepting every issuer. This is the consumer-side half of the
+	// "mutual" allow-list; the publisher side is the chainmanager subscription
+	// allow-list — each is its own local config (see the sink README).
+	AllowIssuers []string
 	// Observers are notified after every outcome (passed/errored).
 	Observers []contract.ProcessObserver
 	// Logger receives diagnostic output. nil = slog.Default().
@@ -173,7 +256,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// Stage 1 — Decode.
 	envelope, err := p.cfg.Codec.UnmarshalEnvelope(input)
 	if err != nil {
-		return p.errored(ctx, fmt.Sprintf("decode envelope: %v", err), nil, "", ""), nil
+		return p.reject(ctx, RejectDecodeFailure, fmt.Sprintf("decode envelope: %v", err), nil, "", "", ""), nil
 	}
 	cred := envelope.Credential
 
@@ -211,7 +294,22 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// Stage 3 — SinkKind verdict policy. Observation writes regardless;
 	// production/archival reject any non-verified verdict.
 	if p.cfg.Kind != contract.SinkObservationOnly && verdict != vc.ConfidenceVerified {
-		return p.errored(ctx, fmt.Sprintf("verification verdict %v: a %v sink rejects non-verified credentials (fail-closed)", verdict, kindName(p.cfg.Kind)), &verdict, consumedRef, ""), nil
+		return p.reject(ctx, RejectVerdict, fmt.Sprintf("verification verdict %v: a %v sink rejects non-verified credentials (fail-closed)", verdict, kindName(p.cfg.Kind)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+	}
+
+	// Stage 3.5 — Issuer allow-list. When configured (production/archival admit
+	// only allow-listed issuers), reject a credential whose issuer DID matches no
+	// pattern BEFORE any store or write. An empty list is unrestricted
+	// (observation-only). A nil credential yields an empty issuer, which never
+	// matches — fail-closed.
+	if len(p.cfg.AllowIssuers) > 0 {
+		issuer := ""
+		if cred != nil {
+			issuer = cred.Issuer()
+		}
+		if !p.issuerAllowed(issuer) {
+			return p.reject(ctx, RejectAllowList, fmt.Sprintf("issuer %q is not in the sink allow-list (fail-closed)", issuer), &verdict, consumedRef, "", issuer), nil
+		}
 	}
 
 	// Stage 4 — Store the ingress VC (only when verified — the store persists
@@ -224,14 +322,14 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("store ingress VC: %v — never continue without the audit trail", err), &verdict, consumedRef, ""), nil
+			return p.reject(ctx, RejectIngressStoreFailure, fmt.Sprintf("store ingress VC: %v — never continue without the audit trail", err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 	}
 
 	// Stage 5 — Payload extraction. By-reference (nil) ingress fetch is not
 	// implemented in the PoC sink runtime.
 	if envelope.Payload == nil {
-		return p.errored(ctx, "by-reference ingress fetch is not implemented in the PoC sink runtime (lands with the resolver client)", &verdict, consumedRef, ""), nil
+		return p.reject(ctx, RejectByReferenceUnsupported, "by-reference ingress fetch is not implemented in the PoC sink runtime (lands with the resolver client)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 	}
 	payload := envelope.Payload
 	// inputHash is the hash of the bytes flowing into the sink — its observer
@@ -243,13 +341,13 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// not describe. Observation leniency covers the verdict, not this gate.
 	subject, err := cred.Subject()
 	if err != nil {
-		return p.errored(ctx, fmt.Sprintf("credential subject unreadable: %v", err), &verdict, consumedRef, inputHash), nil
+		return p.reject(ctx, RejectMalformedCredential, fmt.Sprintf("credential subject unreadable: %v", err), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 	if subject.OutputHash == "" {
-		return p.errored(ctx, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, inputHash), nil
+		return p.reject(ctx, RejectMalformedCredential, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 	if inputHash != subject.OutputHash {
-		return p.errored(ctx, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash), nil
+		return p.reject(ctx, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 
 	// Stage 7 — External write.
@@ -258,6 +356,23 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			return nil, err
 		}
 		return p.errored(ctx, fmt.Sprintf("external write: %v", err), &verdict, consumedRef, inputHash), nil
+	}
+
+	// Stage 7.5 — Receipt issuance. After the external write, a receipt-configured
+	// sink signs a provin:sink-receipt over the consumed credential and registers
+	// it (local store → tlog → audit queue → optional remote — the issuer's
+	// concern). The write is at-most-once and is NOT rolled back on a receipt
+	// failure: the receipt path only ADDS an audit trail, and its local-before-
+	// remote ordering means a "remote-visible but no local trail" state cannot
+	// occur. A receipt failure is StatusErrored — the "write-done, receipt-absent"
+	// residual is detectable via audit not_found + tlog diff (spec D-1).
+	if p.cfg.Receipts != nil {
+		if err := p.cfg.Receipts.IssueReceipt(ctx, cred); err != nil {
+			if isCtxErr(err) {
+				return nil, err
+			}
+			return p.errored(ctx, fmt.Sprintf("issue sink receipt: %v (external write already completed — at-most-once, not rolled back)", err), &verdict, consumedRef, inputHash), nil
+		}
 	}
 
 	// Stage 8 — Terminal Result: a sink produces nothing in-network.
@@ -282,6 +397,18 @@ func hashBytes(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// issuerAllowed reports whether issuer matches any configured allow-issuers
+// pattern. A malformed pattern (which loadSinkConfig rejects at boot) is treated
+// as non-matching here — fail-closed, never trust an unvalidatable rule.
+func (p *Processor) issuerAllowed(issuer string) bool {
+	for _, pat := range p.cfg.AllowIssuers {
+		if ok, err := allowlist.Match(pat, issuer); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 func kindName(k contract.SinkKind) string {
 	switch k {
 	case contract.SinkObservationOnly:
@@ -293,6 +420,37 @@ func kindName(k contract.SinkKind) string {
 	default:
 		return "unknown"
 	}
+}
+
+// reject records a credential-rejection outcome to the reject log (when
+// configured — archival's obligation) and returns the StatusErrored Result. Only
+// the closed set of reject stages calls this; a post-acceptance failure (external
+// write, receipt) uses errored, which records nothing. A reject-log write failure
+// does not change the reject outcome — the event is already refused — but is
+// logged loudly so a broken archival audit trail is visible.
+func (p *Processor) reject(ctx context.Context, reason RejectReason, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash, issuerDID string) *contract.Result {
+	if p.cfg.RejectLog != nil {
+		rec := RejectRecord{
+			Timestamp:      p.now(),
+			Reason:         reason,
+			Detail:         msg,
+			CredentialHash: consumedVCRef,
+			IssuerDID:      issuerDID,
+		}
+		if err := p.cfg.RejectLog.RecordReject(ctx, rec); err != nil {
+			p.logger.Error("sink: reject-log write failed", "reason", reason, "err", err)
+		}
+	}
+	return p.errored(ctx, msg, confidence, consumedVCRef, inputHash)
+}
+
+// issuerDIDOf returns cred's issuer DID, or "" when cred is nil (best-effort
+// identity for a reject record).
+func issuerDIDOf(cred *vc.PipelinePassCredential) string {
+	if cred == nil {
+		return ""
+	}
+	return cred.Issuer()
 }
 
 func (p *Processor) errored(ctx context.Context, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash string) *contract.Result {

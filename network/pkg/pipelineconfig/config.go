@@ -18,6 +18,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/vc"
@@ -208,7 +209,9 @@ type SourceConfig struct {
 }
 
 // SinkConfig is a terminating sink loop's verification + write policy (Role == RoleSink).
-// A sink produces nothing in-network, so it has no issuer and no output subject.
+// A sink produces nothing in-network, so it has no output subject. It carries no
+// source identity, but a receipt-issuing sink (Receipt.Issue) does hold a signing
+// identity — the receipt is a side-channel credential, not an in-network emission.
 type SinkConfig struct {
 	// Kind is the verdict policy: SinkObservationOnly | SinkProduction | SinkArchival.
 	Kind string
@@ -217,9 +220,37 @@ type SinkConfig struct {
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
 	UpstreamEndpoint string
+	// AllowIssuers is the local issuer allow-list (allowlist patterns matched
+	// against a consumed credential's issuer DID). Required non-empty for
+	// production/archival; optional (unrestricted) for observation-only.
+	AllowIssuers []string
+	// Receipt configures sink-receipt issuance. Optional for production (MAY);
+	// required for archival (MUST). Zero value = no receipts.
+	Receipt SinkReceiptConfig
 	// Output is where this loop delivers consumed events (per-loop: each sink
 	// loop is one delivery target).
 	Output SinkOutputConfig
+}
+
+// SinkReceiptConfig configures a sink's receipt issuance. When Issue is true, the
+// sink signs a provin:sink-receipt credential per consumed event under Issuer.
+type SinkReceiptConfig struct {
+	// Issue reports whether this sink emits receipts (a receipt block is present).
+	Issue bool
+	// Issuer is the process identity the receipt is signed under (same shape as a
+	// producing loop's issuer). Zero when Issue is false.
+	Issuer IssuerConfig
+	// PipelineID / ProcessID are the receipt subject's constant metadata.
+	// DELIBERATELY derived from the Issuer process DID's segments rather than
+	// configured independently (as producing loops do): a receipt carries the
+	// issuing sink process's OWN ids, which the process DID already names, so a
+	// separate key would only invite a mismatch with the DID it must agree with.
+	// (process-005's fixture uses subject ids that differ from its DID segments;
+	// nothing cross-checks them, so any valid ids are wire-conformant — the
+	// derivation is our profile choice, not a wire requirement.) Empty when
+	// Issue is false.
+	PipelineID string
+	ProcessID  string
 }
 
 // SinkOutputConfig selects a sink loop's delivery surface. The in-repo surfaces
@@ -666,13 +697,9 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, err
 	}
 	switch sc.Kind {
-	case SinkObservationOnly:
-	case SinkProduction, SinkArchival:
-		// production/archival carry contract MUST obligations beyond verdict filtering
-		// (mutual allow-list, receipts, audit log — contract.SinkKind) that the sink
-		// runtime does not yet wire. Fail closed until they exist rather than boot a
-		// sink that silently under-delivers its kind's guarantees.
-		return sc, fmt.Errorf("pipeline: loop %q: sink.kind %q is unsupported in slice-17c (%q only; production/archival obligations not yet wired)", name, sc.Kind, SinkObservationOnly)
+	case SinkObservationOnly, SinkProduction, SinkArchival:
+		// valid — the per-kind obligations (allow-list, receipts, reject log) are
+		// enforced below and wired by buildSinkLoop.
 	default:
 		return sc, fmt.Errorf("pipeline: loop %q: unknown sink.kind %q (want %q|%q|%q)", name, sc.Kind, SinkObservationOnly, SinkProduction, SinkArchival)
 	}
@@ -683,6 +710,53 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 
 	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
 		return sc, err
+	}
+
+	// allow-issuers: the local issuer allow-list. Every pattern is validated at the
+	// load boundary (allowlist.ValidatePattern), the same discipline the chainmanager
+	// applies at its write boundary — a malformed pattern is a boot error, never a
+	// first-event surprise.
+	allowKey := base + ".sink.allow-issuers"
+	if cfg.Has(allowKey) {
+		if sc.AllowIssuers, err = cfg.StringList(allowKey); err != nil {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.allow-issuers: %w", name, err)
+		}
+	}
+	for _, pat := range sc.AllowIssuers {
+		if verr := allowlist.ValidatePattern(pat); verr != nil {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.allow-issuers pattern %q: %w", name, pat, verr)
+		}
+	}
+	// production/archival require a non-empty allow-list: an empty one denies every
+	// event (default-distrust), which is a misconfiguration to catch at boot rather
+	// than a silent all-reject at runtime. observation-only leaves it unrestricted.
+	if sc.Kind != SinkObservationOnly && len(sc.AllowIssuers) == 0 {
+		return sc, fmt.Errorf("pipeline: loop %q: sink.kind %q requires a non-empty sink.allow-issuers", name, sc.Kind)
+	}
+
+	// receipt issuer: MAY for production, MUST for archival. Presence of the block
+	// (its issuer.did) turns receipt issuance on; loadIssuer validates the process
+	// DID and verification-method exactly as a producing loop's issuer.
+	if cfg.Has(base + ".sink.receipt.issuer.did") {
+		issuer, ierr := loadIssuer(cfg, base+".sink.receipt", name, "sink.receipt.issuer")
+		if ierr != nil {
+			return sc, ierr
+		}
+		// loadIssuer guarantees a process DID (…:pipeline:<pid>:process:<procid>);
+		// the receipt subject's pipeline/process ids are those segments.
+		d, perr := dplaax.Parse(issuer.DID)
+		if perr != nil || !d.IsProcess() {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.receipt.issuer.did %q must be a process DID", name, issuer.DID)
+		}
+		sc.Receipt = SinkReceiptConfig{
+			Issue:      true,
+			Issuer:     issuer,
+			PipelineID: d.ResourcePath[1],
+			ProcessID:  d.ResourcePath[3],
+		}
+	}
+	if sc.Kind == SinkArchival && !sc.Receipt.Issue {
+		return sc, fmt.Errorf("pipeline: loop %q: sink.kind %q MUST emit receipts — configure sink.receipt.issuer", name, sc.Kind)
 	}
 
 	if sc.Output, err = loadSinkOutput(cfg, base, name); err != nil {
