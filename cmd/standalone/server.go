@@ -33,7 +33,6 @@ import (
 	didyaml "github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemahandler "github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
-	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/signer"
 	signerhandler "github.com/provin-line/oss/network/pkg/services/signer/handler"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
@@ -109,12 +108,11 @@ func registryBaseURL(urls map[string]string) func(registry string) (string, erro
 // fresh-boot ordering bug the extraction fixed).
 // ingest is the HTTP push surface of the data plane's push-enabled source loops
 // (zero-valued when none: no routes mounted).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
-	schemaStore := schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
-	schemaSvc := schemaregistry.New(schemaStore)
+	// schemaSvc is built by main (shared with the data plane's schema wiring).
 	signerSvc := signer.New(ed25519.NewSigner(keyStore))
 	didSvc := didregistry.New(
 		didStore, keyStore, ed25519.Generator{}, ed25519.Verifier{}, regCfg.ID,

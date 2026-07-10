@@ -722,3 +722,37 @@ func TestLoad_IssuerOutsideOutputSubject_Fails(t *testing.T) {
 		t.Fatalf("issuer outside its output subject: want boot error, got %v", err)
 	}
 }
+
+func TestLoad_ValidSourceSchemaRef(t *testing.T) {
+	withRef := strings.Replace(validSourceLoop, `schema-ref = ""`,
+		`schema-ref = "orders@2026-07-10-abcdef0123456789"`, 1)
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(withRef)))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if got := pc.Loops[0].Source.SchemaRef; got != "orders@2026-07-10-abcdef0123456789" {
+		t.Errorf("Source.SchemaRef = %q, want the configured short-form", got)
+	}
+}
+
+func TestLoad_MalformedSchemaRefRejected(t *testing.T) {
+	for _, bad := range []string{"noversion", "has space@1", "@1", "orders@"} {
+		withRef := strings.Replace(validSourceLoop, `schema-ref = ""`,
+			`schema-ref = "`+bad+`"`, 1)
+		if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(withRef))); err == nil {
+			t.Errorf("schema-ref %q: want boot error, got nil", bad)
+		}
+	}
+}
+
+func TestLoad_ChainedSchemaRef(t *testing.T) {
+	withRef := strings.Replace(validChainedLoop, `transformation-claim = "convert"`,
+		`transformation-claim = "convert"`+"\n      "+`schema-ref = "readings@2026-07-10-abcdef0123456789"`, 1)
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(withRef))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if got := pc.Loops[0].Chained.SchemaRef; got != "readings@2026-07-10-abcdef0123456789" {
+		t.Errorf("Chained.SchemaRef = %q, want the configured short-form", got)
+	}
+}

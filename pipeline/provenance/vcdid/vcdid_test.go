@@ -237,3 +237,50 @@ func TestNewSigner_RequiresFields(t *testing.T) {
 		}
 	}
 }
+
+// TestSigner_SignFirstDrop_EmitsSchema pins that a signer configured with an
+// output-schema reference emits it into the credential subject (and none when
+// unset). The data-plane wires a boot-resolved SchemaRef here; a verifier then
+// resolves and content-hash-compares it (credential.schema-ref).
+func TestSigner_SignFirstDrop_EmitsSchema(t *testing.T) {
+	b, _ := fixture(t)
+	ref := vc.SchemaRef{
+		ID:          "dplaax:schema/readings@2026-07-10-abcdef0123456789",
+		Type:        "JsonSchema",
+		ContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	s := newSigner(t, b, func(c *vcdid.Config) { c.Schema = ref })
+	cred, err := s.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:out")
+	if err != nil {
+		t.Fatalf("SignFirstDrop: %v", err)
+	}
+	subj, err := cred.Subject()
+	if err != nil {
+		t.Fatalf("Subject: %v", err)
+	}
+	if subj.Schema != ref {
+		t.Errorf("emitted schema = %+v, want %+v", subj.Schema, ref)
+	}
+
+	none := newSigner(t, b, nil)
+	c2, err := none.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:out")
+	if err != nil {
+		t.Fatalf("SignFirstDrop (no schema): %v", err)
+	}
+	s2, _ := c2.Subject()
+	if s2.Schema != (vc.SchemaRef{}) {
+		t.Errorf("no-schema signer emitted %+v, want zero", s2.Schema)
+	}
+
+	// A chained (re-signing) loop emits the reference too — chained loops declare
+	// the shape of what they re-emit, so the same Config.Schema flows through
+	// SignChainPreserving.
+	chained, err := s.SignChainPreserving(context.Background(), []byte(`{"x":2}`), "sha256:out", "sha256:out2", cred)
+	if err != nil {
+		t.Fatalf("SignChainPreserving: %v", err)
+	}
+	cs, _ := chained.Subject()
+	if cs.Schema != ref {
+		t.Errorf("chained emitted schema = %+v, want %+v", cs.Schema, ref)
+	}
+}

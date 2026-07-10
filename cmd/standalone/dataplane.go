@@ -86,6 +86,14 @@ type dataPlaneDeps struct {
 	// unit-test seam; the node always sets it (reject logs are durable by default,
 	// no config knob).
 	RejectLogDir string
+	// SchemaResolver refines the consuming loops' data-integrity axis with schema
+	// content-hash resolution (credential.schema-ref). Nil leaves schema references
+	// shape-checked only. main wires the local registry bridge.
+	SchemaResolver vc.SchemaResolver
+	// SchemaGetter resolves a producing loop's config schema-ref against the
+	// registry at boot (fail-closed). Nil is a boot error for any loop that
+	// declares a non-empty schema-ref; a loop without one needs none.
+	SchemaGetter schemaGetter
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -217,9 +225,30 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		if deps.VCStore == nil {
 			return fmt.Errorf("standalone: loop %q: consuming role requires a VC store", loopName)
 		}
-		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{})
+		var vopts []vc.VerifierOption
+		if deps.SchemaResolver != nil {
+			vopts = append(vopts, vc.WithSchemaResolver(deps.SchemaResolver))
+		}
+		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{}, vopts...)
 		ingressStore = &serviceIngressStore{store: deps.VCStore, audit: deps.AuditQueue}
 		return nil
+	}
+	// resolveSchema turns a producing loop's config schema-ref short-form into the
+	// full signed reference embedded in its issued credentials. Empty = none;
+	// non-empty with no registry available, or an unregistered/deprecated schema,
+	// is a boot error (fail-closed).
+	resolveSchema := func(loopName, shortForm string) (vc.SchemaRef, error) {
+		if shortForm == "" {
+			return vc.SchemaRef{}, nil
+		}
+		if deps.SchemaGetter == nil {
+			return vc.SchemaRef{}, fmt.Errorf("standalone: loop %q: schema-ref set but no schema registry is available", loopName)
+		}
+		ref, err := resolveSchemaRefAtBoot(ctx, deps.SchemaGetter, shortForm)
+		if err != nil {
+			return vc.SchemaRef{}, fmt.Errorf("standalone: loop %q: %w", loopName, err)
+		}
+		return ref, nil
 	}
 	// publisher is non-nil exactly when a vc-store-endpoint is configured; producing loops
 	// wrap their signer with it so issued credentials reach the store (fail-closed).
@@ -245,9 +274,12 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 					ready:     rs.Ready(),
 				})
 			}
-			var emission tlog.Log
-			if emission, err = newEmission(lc.Name, lc.Source.OutputSubject, lc.Source.Issuer); err == nil {
-				loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, lc)
+			var schemaRef vc.SchemaRef
+			if schemaRef, err = resolveSchema(lc.Name, lc.Source.SchemaRef); err == nil {
+				var emission tlog.Log
+				if emission, err = newEmission(lc.Name, lc.Source.OutputSubject, lc.Source.Issuer); err == nil {
+					loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, schemaRef, lc)
+				}
 			}
 		case pipelineconfig.RoleSink:
 			var w sink.Writer
@@ -273,9 +305,12 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
-				var emission tlog.Log
-				if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
-					loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, lc)
+				var schemaRef vc.SchemaRef
+				if schemaRef, err = resolveSchema(lc.Name, lc.Chained.SchemaRef); err == nil {
+					var emission tlog.Log
+					if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
+						loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, schemaRef, lc)
+					}
 				}
 			}
 		case pipelineconfig.RoleAggregate:
@@ -327,7 +362,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 // emission log. The config layer has already validated that lc.Role is source. The
 // caller supplies the ingress Subscriber (push-enabled loops wrap it with a
 // readiness latch).
-func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, emission tlog.Log, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, emission tlog.Log, schema vc.SchemaRef, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	if src.TransformationClaim == vc.ClaimAggregate {
 		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
@@ -344,6 +379,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 		PipelineID:          src.PipelineID,
 		ProcessID:           src.ProcessID,
 		TransformationClaim: src.TransformationClaim,
+		Schema:              schema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: source signer: %w", lc.Name, err)
@@ -420,7 +456,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, schema vc.SchemaRef, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -430,6 +466,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		PipelineID:          cc.PipelineID,
 		ProcessID:           cc.ProcessID,
 		TransformationClaim: cc.TransformationClaim,
+		Schema:              schema,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: chained signer: %w", lc.Name, err)

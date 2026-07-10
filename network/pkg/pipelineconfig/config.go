@@ -276,12 +276,17 @@ const (
 // transform (Role == RoleChained). A chained loop both consumes (verifies its ingress,
 // like a sink) and produces (re-signs a ChainPreserving credential, like a source).
 type ChainedConfig struct {
-	// Producing side (mirrors SourceConfig minus SchemaRef).
+	// Producing side (mirrors SourceConfig).
 	OutputSubject       string
 	Issuer              IssuerConfig
 	PipelineID          string
 	ProcessID           string
 	TransformationClaim vc.TransformationClaim
+	// SchemaRef is the optional output-schema reference in "<name>@<version>"
+	// short-form (validated at load, resolved against the registry at boot). A
+	// chained loop that transforms declares the shape of what it re-emits, like
+	// a source. Empty means no reference.
+	SchemaRef string
 	// Consuming side (mirrors SinkConfig minus Kind).
 	VerificationStrategy string
 	UpstreamEndpoint     string
@@ -308,6 +313,9 @@ type AggregateIngress struct {
 // source-root canonical (JCS) are fixed by the runtime, not config keys.
 type AggregateConfig struct {
 	// Producing side (mirrors SourceConfig minus SchemaRef/TransformationClaim).
+	// No SchemaRef by design (this slice): an aggregate's fold-output schema is a
+	// deferred follow-up — the vcdid emit path already carries it, so adding it is
+	// a later config-key + boot-resolve reuse, not new machinery.
 	OutputSubject string
 	Issuer        IssuerConfig
 	PipelineID    string
@@ -323,7 +331,7 @@ type AggregateConfig struct {
 
 // LoadPipelineConfig reads and validates the pipeline block. It fails closed: an
 // unknown role, a missing required field, a malformed output/issuer DID, an unknown
-// transformation-claim/sink-kind/verification-strategy, a non-empty schema-ref, or a
+// transformation-claim/sink-kind/verification-strategy, a malformed schema-ref, or a
 // field that does not belong to the loop's role is a boot error naming the loop and key.
 // An absent or empty loops map is valid (zero loops): the node runs the HTTP control
 // plane only.
@@ -675,18 +683,36 @@ func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig,
 		}
 	}
 
-	// schema-ref must be empty (ingest does no schema validation; a single-string ->
-	// vc.SchemaRef mapping is deferred to a chained loop). Absent is treated as empty.
-	if cfg.Has(base + ".schema-ref") {
-		if sc.SchemaRef, err = cfg.String(base + ".schema-ref"); err != nil {
-			return sc, fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
-		}
-		if sc.SchemaRef != "" {
-			return sc, fmt.Errorf("pipeline: loop %q: schema-ref must be empty (got %q)", name, sc.SchemaRef)
-		}
+	// schema-ref (optional) names the loop's output schema in the registry. The
+	// value is validated here and resolved against the registry at boot; absent
+	// or empty is "no reference".
+	if sc.SchemaRef, err = loadSchemaRef(cfg, base+".schema-ref", name); err != nil {
+		return sc, err
 	}
 
 	return sc, nil
+}
+
+// loadSchemaRef reads an optional schema-ref at key and validates it as a
+// "<name>@<version>" short-form (vc.SplitSchemaRef — url-safe segments). It
+// returns the raw validated short-form; the composition root resolves it
+// against the registry at boot (fail-closed there if the schema is absent or
+// deprecated). Absent or empty is "no reference".
+func loadSchemaRef(cfg *hoconconfig.Config, key, name string) (string, error) {
+	if !cfg.Has(key) {
+		return "", nil
+	}
+	raw, err := cfg.String(key)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: loop %q: config schema-ref: %w", name, err)
+	}
+	if raw == "" {
+		return "", nil
+	}
+	if _, _, err := vc.SplitSchemaRef(raw); err != nil {
+		return "", fmt.Errorf("pipeline: loop %q: schema-ref: %w", name, err)
+	}
+	return raw, nil
 }
 
 func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, error) {
@@ -894,6 +920,9 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 		return cc, err
 	}
 	if cc.TransformationClaim, err = loadClaim(cfg, cbase+".transformation-claim", name); err != nil {
+		return cc, err
+	}
+	if cc.SchemaRef, err = loadSchemaRef(cfg, cbase+".schema-ref", name); err != nil {
 		return cc, err
 	}
 	if cc.VerificationStrategy, err = loadStrategy(cfg, cbase+".verification-strategy", name); err != nil {

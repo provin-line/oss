@@ -96,7 +96,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDataPlane (aggregate self-audit): %v", err)
 	}
-	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, cfg)
+	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, nil, cfg)
 	if err != nil || runner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", runner, err)
 	}

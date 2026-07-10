@@ -113,7 +113,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 		BatchResolver: pipelineconfig.BatchResolverConfig{Interval: time.Second, BatchSize: 16, MaxRetries: 3, MaxDepth: 1024},
 		AuditRunner:   pipelineconfig.AuditRunnerConfig{Interval: 5 * time.Millisecond, BatchSize: 16, MaxAttempts: 20},
 	}
-	runner, err := buildAuditRunner(queue, status, receipts, localSvc, pool, res, auditCfg)
+	runner, err := buildAuditRunner(queue, status, receipts, localSvc, pool, res, nil, auditCfg)
 	if err != nil || runner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", runner, err)
 	}

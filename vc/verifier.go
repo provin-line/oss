@@ -32,9 +32,10 @@ var allowedProofMembers = map[string]bool{
 // Verifier performs credential verification: wire-form checks, issuer DID
 // resolution, proof verification, and confidence evaluation.
 type Verifier struct {
-	resolver    resolver.Resolver
-	sigVerifier crypto.Verifier
-	lifecycle   LifecycleRegistry
+	resolver       resolver.Resolver
+	sigVerifier    crypto.Verifier
+	lifecycle      LifecycleRegistry
+	schemaResolver SchemaResolver
 }
 
 // VerifierOption configures a Verifier.
@@ -87,26 +88,29 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 	}
 	var notations []string
 	axes := AxisResult{
-		DataIntegrity:      v.evalDataIntegrity(cred),
+		DataIntegrity:      v.evalDataIntegrity(ctx, cred),
 		SignerAuthenticity: v.evalSignerAuthenticity(ctx, cred, &notations),
 		ChainConsistency:   v.evalChainConsistency(ctx, cred),
 	}
 	return &VerifyResult{Overall: EvaluateConfidence(axes), Axes: axes, Notations: notations}, nil
 }
 
-// evalDataIntegrity evaluates the data-integrity axis from this credential
-// alone by delegating to ValidateWireForm — the single implementation of the
-// wire-form verdict, so a standalone wire-form check and the axis can never
-// drift. The cross-credential binding (outputHash[n] == inputHash[n+1]) and
-// schema content-hash resolution refine this axis in VerifyChain and the
-// schema layer respectively; in isolation a well-formed credential is
-// verified, a malformed one failed (no input is missing, so there is no
-// indeterminate at this level).
-func (v *Verifier) evalDataIntegrity(cred *PipelinePassCredential) ConfidenceState {
+// evalDataIntegrity evaluates the data-integrity axis for one credential: the
+// wire-form verdict (via ValidateWireForm — the single implementation, so a
+// standalone check and the axis can never drift) refined by the schema
+// reference. The cross-credential binding (outputHash[n] == inputHash[n+1])
+// refines this axis further in VerifyChain. A malformed credential is failed;
+// a well-formed one is verified unless its schema reference resolves to a
+// mismatch (failed) or cannot be checked (indeterminate) — see evalSchema.
+func (v *Verifier) evalDataIntegrity(ctx context.Context, cred *PipelinePassCredential) ConfidenceState {
 	if err := cred.ValidateWireForm(); err != nil {
 		return ConfidenceFailed
 	}
-	return ConfidenceVerified
+	subject, err := cred.Subject()
+	if err != nil {
+		return ConfidenceFailed // unreadable subject after a passing wire-form is a defect
+	}
+	return v.evalSchema(ctx, subject.Schema)
 }
 
 // Required VC type tokens — every PipelinePassCredential carries both.

@@ -36,7 +36,7 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := memstore.NewPool()
 			svc := vcresolver.New(memstore.NewStore(), pool)
-			r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(),
+			r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil,
 				auditCfg([]pipelineconfig.LoopConfig{{Role: tc.role}}))
 			if err != nil {
 				t.Fatalf("buildAuditRunner: %v", err)
@@ -49,7 +49,7 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 	// No loops → nil.
 	pool := memstore.NewPool()
 	svc := vcresolver.New(memstore.NewStore(), pool)
-	if r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), auditCfg(nil)); err != nil || r != nil {
+	if r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg(nil)); err != nil || r != nil {
 		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
 }
@@ -96,7 +96,7 @@ func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 		t.Fatalf("precondition: hole not queued in pool")
 	}
 
-	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
+	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
 	if err != nil || r == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", r, err)
 	}
@@ -155,7 +155,7 @@ func TestAuditRunner_Integration_RealVerifyTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
+	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
 	if err != nil || r == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", r, err)
 	}
