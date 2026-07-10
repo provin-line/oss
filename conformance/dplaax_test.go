@@ -215,51 +215,12 @@ func runCred(t *testing.T, v dplaaxVector) {
 	}
 }
 
-// --- process family: sink receipt wire-form (process-005) ---
-//
-// process.sink.receipt: a Sink Process's delivery receipt is a well-formed
-// PipelinePassCredential that references the last upstream credential via
-// previousCredential. This exercises the same receive-path wire contract as the
-// cred family (decode + ValidateWireForm) plus the receipt's identity shape —
-// transformationClaim provin:sink-receipt with inputHash == outputHash (a receipt
-// transforms nothing). Enabled by the ClaimSinkReceipt registration (this slice).
-//
-// process-004 (process.sink.verify — a sink must not terminate without verifying)
-// is an op-SEQUENCE rule; its driver needs an instrumented sink fixture and lands
-// with the tranche-2 conformance registry (gap-backlog). The runtime guarantee is
-// pinned in pipeline/sink (a sink always verifies before writing).
-func TestDplaaxProcessSinkReceipt(t *testing.T) {
-	v := loadDplaax(t, "process-005")
-	var input struct {
-		Credential json.RawMessage `json:"credential"`
-	}
-	if err := json.Unmarshal(v.Input, &input); err != nil {
-		t.Fatalf("input: %v", err)
-	}
-	if want := expectString(t, v); want != "accept" {
-		t.Fatalf("process-005 expect = %q, want accept", want)
-	}
-	var cred vc.PipelinePassCredential
-	if err := cred.UnmarshalJSON(input.Credential); err != nil {
-		t.Fatalf("receipt decode: %v", err)
-	}
-	if err := cred.ValidateWireForm(); err != nil {
-		t.Fatalf("receipt ValidateWireForm rejected an accept vector: %v", err)
-	}
-	subject, err := cred.Subject()
-	if err != nil {
-		t.Fatalf("receipt subject: %v", err)
-	}
-	if subject.TransformationClaim != vc.ClaimSinkReceipt {
-		t.Errorf("transformationClaim = %q, want %q", subject.TransformationClaim, vc.ClaimSinkReceipt)
-	}
-	if cred.PreviousCredential() == "" {
-		t.Error("receipt has no previousCredential (must reference the consumed credential)")
-	}
-	if subject.InputHash != subject.OutputHash {
-		t.Errorf("receipt inputHash %q != outputHash %q (a receipt transforms nothing)", subject.InputHash, subject.OutputHash)
-	}
-}
+// The process family is driven through the coverage-guarded registry: the
+// wire-shape receipt/custom-origin vectors (process-005/006) by runProcess and
+// the verify-sequencing vector (process-004) by runProcessSinkVerify against the
+// real sink runtime — all in tranche2_test.go. The standalone
+// TestDplaaxProcessSinkReceipt was folded into runProcess case 5 when the
+// registry landed (its checks now run as TestDplaaxAllVectors/process-005).
 
 // --- commitment family ---
 

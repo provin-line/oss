@@ -59,6 +59,7 @@ func init() {
 	registerRunner(runResolverStates, "resolver", 4, 5)
 	dplaaxRunners["resolver-008"] = runResolverBodyEncoding
 	registerRunner(runProcess, "process", 5, 6)
+	dplaaxRunners["process-004"] = runProcessSinkVerify
 
 	// Blocked on missing implementation surface — ledgered so the coverage
 	// guard keeps the gap visible rather than silently uncovered. These are
@@ -67,7 +68,6 @@ func init() {
 	dplaaxSkips["resolver-006"] = "blocked-on: no eviction/delete API in vcresolver.Store — the forbidden Resolved->NotFound transition cannot be constructed"
 	dplaaxSkips["resolver-007"] = "blocked-on: no batch-lookup RPC in dplaax.vc.v1 — batchresolver is an internal async worker, not a client endpoint"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
-	dplaaxSkips["process-004"] = "blocked-on: sink verify-sequencing needs an instrumented sink runtime — unblocks with the sink production/archival slice"
 }
 
 // TestDplaaxAllVectors is the single CI-facing entry point. It first proves the

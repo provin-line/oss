@@ -12,11 +12,14 @@ package conformance_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
@@ -24,6 +27,9 @@ import (
 	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
+	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/sink"
+	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
 )
@@ -405,12 +411,13 @@ func ownerViaControllers(controllers map[string]string, issuer string) string {
 
 // --- process catalog (process-005, 006) ---
 //
-// Only the wire-shape process vectors are drivable: process-005 (a sink receipt
-// MUST be wire-valid AND reference its upstream via previousCredential) and
-// process-006 (a Custom Process at a chain origin MUST NOT carry
-// previousCredential). The catalog/behavior-classification vectors
-// (process-001..003) and the sink-runtime sequence vector (process-004) have no
-// callable seam and stay in the skip ledger with their true blockers.
+// The wire-shape process vectors: process-005 (a sink receipt MUST be wire-valid,
+// reference its upstream via previousCredential, and — as the provin:sink-receipt
+// identity claim — transform nothing: inputHash == outputHash) and process-006 (a
+// Custom Process at a chain origin MUST NOT carry previousCredential). process-004
+// (verify sequencing) is driven separately against the real sink runtime
+// (runProcessSinkVerify); the catalog/behavior-classification vectors
+// (process-001..003) have no callable seam and stay in the skip ledger.
 func runProcess(t *testing.T, v dplaaxVector) {
 	var input struct {
 		ProcessType string          `json:"process_type"`
@@ -421,7 +428,7 @@ func runProcess(t *testing.T, v dplaaxVector) {
 	want := expectString(t, v)
 
 	switch vecNum(t, v.ID) {
-	case 5: // sink.receipt: wire-valid AND carries previousCredential
+	case 5: // sink.receipt: wire-valid, carries previousCredential, transforms nothing
 		var cred vc.PipelinePassCredential
 		if err := cred.UnmarshalJSON(input.Credential); err != nil {
 			if want != "reject" {
@@ -432,6 +439,21 @@ func runProcess(t *testing.T, v dplaaxVector) {
 		conforms := cred.ValidateWireForm() == nil && cred.PreviousCredential() != ""
 		if conforms != (want == "accept") {
 			t.Errorf("receipt conforms (wire-form + previousCredential)=%v, want %s", conforms, want)
+		}
+		if want == "accept" {
+			// The receipt's identity shape (folded from the standalone
+			// TestDplaaxProcessSinkReceipt): the sink-receipt claim over an
+			// input==output hash — a receipt attests consumption, transforms nothing.
+			subject, err := cred.Subject()
+			if err != nil {
+				t.Fatalf("receipt subject: %v", err)
+			}
+			if subject.TransformationClaim != vc.ClaimSinkReceipt {
+				t.Errorf("receipt transformationClaim = %q, want %q", subject.TransformationClaim, vc.ClaimSinkReceipt)
+			}
+			if subject.InputHash != subject.OutputHash {
+				t.Errorf("receipt inputHash %q != outputHash %q (a receipt transforms nothing)", subject.InputHash, subject.OutputHash)
+			}
 		}
 	case 6: // custom.interop: a chain origin MUST NOT carry previousCredential
 		hasPrev := mustCred(t, input.Credential).PreviousCredential() != ""
@@ -446,8 +468,181 @@ func runProcess(t *testing.T, v dplaaxVector) {
 			t.Errorf("custom-process role=%q hasPrev=%v ok=%v, want %s", input.ChainRole, hasPrev, ok, want)
 		}
 	default:
-		t.Fatalf("process runner: no branch for %s (only 005/006 are drivable; 001-004 are ledgered skips)", v.ID)
+		t.Fatalf("process runner: no branch for %s (005/006 are wire-shape; 004 is runProcessSinkVerify; 001-003 are ledgered skips)", v.ID)
 	}
+}
+
+// --- process.sink.verify (process-004) ---
+//
+// process.sink.verify: a Sink Process MUST NOT terminate (deliver externally)
+// without verifying the received chain. The vector's input is an op-SEQUENCE —
+// [receive, terminate] with no verify step, expect: reject — describing a
+// NON-conformant sink. That sink cannot be instantiated from the real runtime
+// (sink.Process always calls Verifier.Verify before Writer.Write), so the
+// invariant is pinned positively against a real sink.Processor: an
+// order-recording Verifier and Writer share one op trace, and a bound envelope
+// driven through the sink MUST record "verify" strictly before "write". A
+// refactor that terminated without verifying (write before, or without, verify)
+// reorders the trace to ["write", …] and fails here — the exact regression the
+// vector guards. Unblocked by the sink production/archival slice (PR #7), which
+// gave the sink its injectable Verifier/Writer seams; before it, no instrumented
+// sink runtime existed to drive.
+//
+// Two teeth beyond ordering: the driver asserts the sink verified the RECEIVED
+// credential (identity, not just that some verify ran — else a regression to
+// Verify(ctx, nil) or a substituted credential would still pass), and it ties
+// back to THIS vector's forbidden shape (the input sequence carries no verify
+// op). It drives both the fail-closed production kind (writes only a Verified
+// verdict) and the lenient observation-only kind (writes regardless of verdict):
+// verify precedes write in BOTH, because process.sink.verify is about the
+// presence/sequencing of the verify step, never the verdict policy.
+func runProcessSinkVerify(t *testing.T, v dplaaxVector) {
+	if want := expectString(t, v); want != "reject" {
+		t.Fatalf("process-004 expect = %q, want reject (the forbidden receive→terminate with no verify)", want)
+	}
+	// Bind to this vector's forbidden shape: an op-sequence with no verify step.
+	var input struct {
+		Sequence []struct {
+			Op string `json:"op"`
+		} `json:"sequence"`
+	}
+	mustParse(t, v.Input, &input)
+	for _, s := range input.Sequence {
+		if s.Op == "verify" {
+			t.Fatalf("process-004 vector carries a verify op (%+v); the driver pins the no-verify terminate shape", input.Sequence)
+		}
+	}
+
+	payload := []byte("process-004 conformance payload")
+	cred := sinkBoundCred(t, payload)
+	wantHash, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("hash consumed credential: %v", err)
+	}
+	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+		Credential: cred,
+		Payload:    payload,
+		SequenceNo: 1,
+	})
+	if err != nil {
+		t.Fatalf("encode envelope: %v", err)
+	}
+
+	cases := []struct {
+		label   string
+		kind    contract.SinkKind
+		verdict vc.ConfidenceState
+	}{
+		{"production/verified", contract.SinkProduction, vc.ConfidenceVerified},
+		{"observation/indeterminate", contract.SinkObservationOnly, vc.ConfidenceIndeterminate},
+	}
+	for _, tc := range cases {
+		order := &[]string{}
+		verifier := &recordingVerifier{order: order, verdict: tc.verdict}
+		proc, err := sink.New(sink.Config{
+			Strategy:         contract.VerificationAdjacent,
+			Kind:             tc.kind,
+			Codec:            envelopecodec.New(),
+			Verifier:         verifier,
+			Store:            noopIngressStore{},
+			Writer:           &recordingWriter{order: order},
+			UpstreamEndpoint: "https://example.com/upstream",
+		})
+		if err != nil {
+			t.Fatalf("[%s] sink.New: %v", tc.label, err)
+		}
+		result, err := proc.Process(context.Background(), wire)
+		if err != nil {
+			t.Fatalf("[%s] sink.Process: %v", tc.label, err)
+		}
+		if result.Status != contract.StatusPassed {
+			t.Fatalf("[%s] sink Status=%v, want StatusPassed (the terminating path)", tc.label, result.Status)
+		}
+		if !verifiedBeforeWrote(*order) {
+			t.Errorf("[%s] sink terminated without verifying first: op order = %v; process.sink.verify requires verify before the external write", tc.label, *order)
+		}
+		// The sink must verify the RECEIVED chain — not nil, not a substitute.
+		// Ordering alone would still pass a regression to Verify(ctx, nil).
+		switch {
+		case verifier.gotCred == nil:
+			t.Errorf("[%s] sink verified a nil credential — the received chain was not verified", tc.label)
+		default:
+			gotHash, err := verifier.gotCred.Hash()
+			if err != nil {
+				t.Errorf("[%s] hash verified credential: %v", tc.label, err)
+			} else if gotHash != wantHash {
+				t.Errorf("[%s] sink verified credential %s, want the consumed %s (must verify the received chain, not a substitute)", tc.label, gotHash, wantHash)
+			}
+		}
+	}
+}
+
+// verifiedBeforeWrote reports whether the recorded op trace ran a verify strictly
+// before the (first) external write — the process.sink.verify invariant. Absent
+// either op, or write-before-verify, is a violation (false).
+func verifiedBeforeWrote(order []string) bool {
+	verifyAt, writeAt := -1, -1
+	for i, op := range order {
+		if op == "verify" && verifyAt == -1 {
+			verifyAt = i
+		}
+		if op == "write" && writeAt == -1 {
+			writeAt = i
+		}
+	}
+	return verifyAt != -1 && writeAt != -1 && verifyAt < writeAt
+}
+
+// recordingVerifier and recordingWriter append their invocation to a shared op
+// trace so a driver can assert the sink's call ORDER, not just its outcome.
+// recordingVerifier also captures the credential it was handed (gotCred) so the
+// driver can assert the sink verified the RECEIVED chain, not a substitute.
+type recordingVerifier struct {
+	order   *[]string
+	verdict vc.ConfidenceState
+	gotCred *vc.PipelinePassCredential
+}
+
+func (r *recordingVerifier) Verify(_ context.Context, cred *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
+	*r.order = append(*r.order, "verify")
+	r.gotCred = cred
+	return &vc.VerifyResult{Overall: r.verdict}, nil
+}
+
+type recordingWriter struct{ order *[]string }
+
+func (r *recordingWriter) Write(context.Context, sink.Record) error {
+	*r.order = append(*r.order, "write")
+	return nil
+}
+
+// noopIngressStore accepts every ingress VC — the process-004 driver pins the
+// verify→write order, not the store.
+type noopIngressStore struct{}
+
+func (noopIngressStore) StoreIngressVC(context.Context, *vc.PipelinePassCredential, string) error {
+	return nil
+}
+
+// sinkBoundCred builds a credential whose outputHash == sha256(payload) — the
+// payload↔credential binding the sink enforces before it writes (Stage 6).
+func sinkBoundCred(t *testing.T, payload []byte) *vc.PipelinePassCredential {
+	t.Helper()
+	sum := sha256.Sum256(payload)
+	cred, err := vc.New(vc.CredentialFields{
+		Issuer:    "did:example:upstream",
+		ValidFrom: time.Now(),
+		Subject: vc.CredentialSubjectFields{
+			PipelineID:          "p",
+			ProcessID:           "upstream",
+			TransformationClaim: vc.ClaimConvert,
+			OutputHash:          "sha256:" + hex.EncodeToString(sum[:]),
+		},
+	})
+	if err != nil {
+		t.Fatalf("sinkBoundCred: %v", err)
+	}
+	return cred
 }
 
 // credAddressesTo reports whether body decodes to a credential whose content

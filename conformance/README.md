@@ -78,9 +78,10 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `registry-001..002` | `schemaregistry/store/yamlstore` append-only (O_EXCL) + deprecate-retains-body |
 | `chain-001..005` | trigger↔`PreviousCredential` wire-shape invariant (no runtime classifier exists — see below) |
 | `audit-001..004` | `did/dplaax.Parse().OwnerDID()` per-segment structural attribution + origin default, cross-checked against the vector's controller chain |
-| `process-005..006` | receipt wire-form + `PreviousCredential` presence; Custom-origin must not carry `previousCredential` |
+| `process-004` | real `sink.Processor`: order-recording `Verifier`+`Writer` assert the sink verifies the received credential strictly before its external write (driven for both production and observation-only kinds — verify precedes write regardless of verdict policy) |
+| `process-005..006` | receipt wire-form + `PreviousCredential` presence + the receipt identity shape (`transformationClaim == provin:sink-receipt`, `inputHash == outputHash`); Custom-origin must not carry `previousCredential` |
 
-**Ledgered skips (6)** — visible via the guard, recorded in the scope's
+**Ledgered skips (5)** — visible via the guard, recorded in the scope's
 gap-backlog, each with its own true blocker (not a blanket family reason):
 
 - `resolver-006` — blocked: no eviction/delete API exists, so the forbidden
@@ -89,8 +90,6 @@ gap-backlog, each with its own true blocker (not a blanket family reason):
 - `resolver-007` — blocked: no batch-lookup RPC in `dplaax.vc.v1`.
 - `process-001..003` — blocked: no process-type/behavior classifier seam (the
   four-type catalog is a static deployment attribute, not a callable classifier).
-- `process-004` — blocked: sink verify-sequencing needs an instrumented sink
-  runtime; unblocks with the sink production/archival slice.
 
 Where a tranche-2 driver reconstructs a rule the implementation embodies
 structurally rather than in a callable function (chain trigger classification;
