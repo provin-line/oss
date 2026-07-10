@@ -780,7 +780,6 @@ func (f *fakeRejectLog) RecordReject(_ context.Context, rec sink.RejectRecord) e
 
 func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 	good := []byte(`{"v":1}`)
-	dplaaxIssuer := "did:dplaax:reg:org:acme:pipeline:p:process:up"
 
 	cases := []struct {
 		name       string
@@ -830,6 +829,24 @@ func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 			wantReason: sink.RejectBindingGate,
 		},
 		{
+			// A verified, allow-listed credential declaring NO outputHash reaches
+			// the binding gate as malformed (binding undecidable).
+			name:     "malformed-credential",
+			verifier: &fakeVerifier{result: verified()},
+			store:    &fakeStore{},
+			wire: func(t *testing.T) []byte {
+				cred, err := vc.New(vc.CredentialFields{
+					Issuer: "did:example:upstream", ValidFrom: time.Now(),
+					Subject: vc.CredentialSubjectFields{PipelineID: "p", ProcessID: "u", TransformationClaim: vc.ClaimConvert, OutputHash: ""},
+				})
+				if err != nil {
+					t.Fatalf("unbound cred: %v", err)
+				}
+				return encode(t, cred, good)
+			},
+			wantReason: sink.RejectMalformedCredential,
+		},
+		{
 			name:     "by-reference-unsupported",
 			verifier: &fakeVerifier{result: verified()},
 			store:    &fakeStore{},
@@ -874,7 +891,6 @@ func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 			}
 		})
 	}
-	_ = dplaaxIssuer
 }
 
 // A post-acceptance external-write failure is StatusErrored but NOT a reject:

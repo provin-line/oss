@@ -168,7 +168,12 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	// newRejectLog builds one archival sink loop's durable reject log under
 	// RejectLogDir/<loop> (data-dir/evidence/sink-rejects/<loop>). In-memory when
 	// RejectLogDir is empty (unit-test seam). No checkpoint signer: the reject log
-	// needs durable, hash-chained append, not signed tree heads.
+	// needs durable, hash-chained append, not signed tree heads. The directory is
+	// keyed by the raw loop NAME, not a hash — unlike newEmission (whose log id is
+	// a DID reconciled against by external consumers, so it hashes to survive a
+	// rename): a reject log is operator-facing local evidence that nothing external
+	// reconciles against, so a human-readable per-loop directory is the better
+	// trade, and a rename simply starts a fresh log.
 	newRejectLog := func(loopName string) (sink.RejectLog, error) {
 		if deps.RejectLogDir == "" {
 			return &sinkRejectLog{log: memlog.New()}, nil

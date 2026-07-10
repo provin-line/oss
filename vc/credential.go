@@ -118,16 +118,19 @@ const (
 	// digest, prompt, and per-material roles are payload concerns pinned
 	// via SchemaRef.
 	ClaimGenerate TransformationClaim = "provin:generate"
-	// ClaimSinkReceipt — closed, identity: the credential is a Sink Process's
-	// receipt attesting it consumed the predecessor credential, NOT a
-	// transformation of a payload. A sink produces nothing in-network; the
-	// receipt exists only to make the consumption audit-reachable (it is signed
-	// chain-preserving over the consumed credential, published to the local VC
-	// store + a dedicated tlog + the audit queue, never in-band on the chain).
-	// It transforms nothing, so inputHash == outputHash == the consumed
-	// credential's outputHash — the output IS the input, the trivial closed-world
-	// case. Grammar-valid and grounded by the provin: prefix like every claim;
-	// the identity constraint is what distinguishes it from a content transform.
+	// ClaimSinkReceipt — identity: the credential is a Sink Process's receipt
+	// attesting it consumed the predecessor credential, NOT a transformation of a
+	// payload. A sink produces nothing in-network; the receipt exists only to make
+	// the consumption audit-reachable (it is signed chain-preserving over the
+	// consumed credential, published to the local VC store + a dedicated tlog +
+	// the audit queue, never in-band on the chain). Its identity shape —
+	// previousCredential = the consumed credential, and inputHash == outputHash ==
+	// the consumed credential's outputHash (it transforms nothing) — is
+	// established by the ISSUER (the sink receipt registrar), exactly as every
+	// other claim's shape is a signer obligation, not a wire-form check: like all
+	// TransformationClaims this is grammar-validated and open-world (a verifier
+	// draws no closed-world inference from a claim it does not itself enforce). A
+	// consumer that relies on the identity must check the two hashes.
 	ClaimSinkReceipt TransformationClaim = "provin:sink-receipt"
 )
 

@@ -35,15 +35,19 @@
 // contract's IngressVCStore persists *verified* ingress VCs. An observation
 // sink that writes an invalid-verdict credential does not store it.
 //
-// # Deferred (PoC posture)
+// # production / archival obligations
 //
-// production/archival's receipt issuance (provin:sink-receipt), the mutual
-// allow-list enforcement, and archival's reject-with-audit-log obligation are
-// not implemented here — they need the network registration / signing layer.
-// A production/archival sink built on this runtime enforces the verdict policy
-// and the binding gate but is NOT yet conformant to those additional MUSTs.
-// By-reference (nil) payload ingress is likewise not implemented; it lands with
-// the resolver client.
+// A production/archival sink enforces, beyond the verdict policy and binding
+// gate: the local issuer allow-list (AllowIssuers — a consumed credential whose
+// issuer DID matches no pattern is rejected before any store or write); receipt
+// issuance (the ReceiptIssuer seam, called after the external write — MAY for
+// production, MUST for archival); and, for archival, a durable reject log (the
+// RejectLog seam — every reject records a RejectRecord). The signing, storage,
+// audit-queue registration, and durable logging behind those seams live in the
+// composition root, not this runtime.
+//
+// Still deferred: by-reference (nil) payload ingress is not implemented — it
+// lands with the resolver client.
 //
 // # Result error split (mirrors chained)
 //

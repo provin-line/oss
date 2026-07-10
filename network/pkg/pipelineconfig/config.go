@@ -240,9 +240,15 @@ type SinkReceiptConfig struct {
 	// Issuer is the process identity the receipt is signed under (same shape as a
 	// producing loop's issuer). Zero when Issue is false.
 	Issuer IssuerConfig
-	// PipelineID / ProcessID are the receipt subject's constant metadata, derived
-	// from the Issuer process DID's segments (a receipt carries the issuing sink
-	// process's own ids, like every other credential). Empty when Issue is false.
+	// PipelineID / ProcessID are the receipt subject's constant metadata.
+	// DELIBERATELY derived from the Issuer process DID's segments rather than
+	// configured independently (as producing loops do): a receipt carries the
+	// issuing sink process's OWN ids, which the process DID already names, so a
+	// separate key would only invite a mismatch with the DID it must agree with.
+	// (process-005's fixture uses subject ids that differ from its DID segments;
+	// nothing cross-checks them, so any valid ids are wire-conformant — the
+	// derivation is our profile choice, not a wire requirement.) Empty when
+	// Issue is false.
 	PipelineID string
 	ProcessID  string
 }
