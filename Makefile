@@ -2,16 +2,17 @@
 
 DIST := dist
 
-.PHONY: help build test vet lint proto clean
+.PHONY: help build test vet lint proto conformance clean
 
 help:
 	@echo "Targets:"
-	@echo "  make build   — build all binaries into $(DIST)/"
-	@echo "  make test    — go test ./..."
-	@echo "  make vet     — go vet ./..."
-	@echo "  make lint    — vet + hygiene scripts"
-	@echo "  make proto   — regenerate gen/ from api/protobuf (requires buf)"
-	@echo "  make clean   — remove $(DIST)/"
+	@echo "  make build        — build all binaries into $(DIST)/"
+	@echo "  make test         — go test ./..."
+	@echo "  make vet          — go vet ./..."
+	@echo "  make lint         — vet + hygiene scripts"
+	@echo "  make proto        — regenerate gen/ from api/protobuf (requires buf)"
+	@echo "  make conformance  — run the dplaax conformance harness (every vector runs or is ledgered)"
+	@echo "  make clean        — remove $(DIST)/"
 
 # Binaries land here as their packages materialize:
 #   cmd/standalone                → $(DIST)/standalone   [built]
@@ -38,6 +39,13 @@ proto:
 	# compiled for import resolution but not regenerated (their Go comes from the
 	# upstream module — regenerating would double-register proto extensions).
 	cd api/protobuf && buf generate --path dplaax
+
+# The dplaax conformance harness: TestDplaaxAllVectors proves every vector in
+# MANIFEST.sha256 runs or is ledgered as a reasoned skip, then executes them.
+# TestCheckCoverage pins the completeness guard; TestDplaaxVendoredManifest pins
+# the vendored copies byte-exact. Run standalone so a red here is unambiguous.
+conformance:
+	go test ./conformance/ -v
 
 clean:
 	rm -rf $(DIST)
