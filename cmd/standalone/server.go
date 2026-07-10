@@ -11,6 +11,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	chainpbconnect "github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	payloadpbconnect "github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapbconnect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
@@ -31,6 +32,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/didregistry"
 	didhandler "github.com/provin-line/oss/network/pkg/services/didregistry/handler"
 	didyaml "github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadhandler "github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemahandler "github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
 	"github.com/provin-line/oss/network/pkg/services/signer"
@@ -108,7 +111,17 @@ func registryBaseURL(urls map[string]string) func(registry string) (string, erro
 // fresh-boot ordering bug the extraction fixed).
 // ingest is the HTTP push surface of the data plane's push-enabled source loops
 // (zero-valued when none: no routes mounted).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
+// nodeDIDOf returns the node's subscriber identity DID, or "" for the noop/dev
+// transport (no subscriber identity). Shared by the chain peer client and the
+// payload fetch client.
+func nodeDIDOf(chainCfg *chainconfig.Config) string {
+	if chainCfg.Transport == chainconfig.TransportNATS {
+		return chainCfg.NATS.NodeDID
+	}
+	return ""
+}
+
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -126,10 +139,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// The subscriber-side peer client signs as the node's DID with its keystore
 	// #auth key (composed here — the service layer stays proto-free, slice-13
 	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
-	nodeDID := ""
-	if chainCfg.Transport == chainconfig.TransportNATS {
-		nodeDID = chainCfg.NATS.NodeDID
-	}
+	nodeDID := nodeDIDOf(chainCfg)
 	peerCli := peerclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient())
 
 	chainSvc := chainmanager.New(
@@ -138,6 +148,8 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		chainmanager.WithDIDResolver(resolver),
 		chainmanager.WithPeerClient(peerCli),
 		chainmanager.WithEndpointGuard(guard),
+		// This node runs the by-reference payload serving boundary (mounted below).
+		chainmanager.WithPayloadServing(),
 	)
 
 	// The peer surface verifies each RPC in-band via L2 wireauth (signer #auth key
@@ -170,6 +182,12 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11).
 	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(chainSvc, peerVerifier))
 	mux.Handle(peerPath, peerHandler)
+
+	// PayloadService is the internet-facing L2 by-reference payload serving
+	// boundary: same wireauth proof + allow-list admission (chainSvc.Admit) as the
+	// chain peer surface, likewise no L1 interceptor.
+	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, peerVerifier, chainSvc))
+	mux.Handle(payloadPath, payloadHandler)
 
 	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4) and
 	// liveness. These deliberately carry no authz interceptor.

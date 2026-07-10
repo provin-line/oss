@@ -27,6 +27,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
@@ -36,11 +37,15 @@ import (
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadclient "github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
+	payloadfilestore "github.com/provin-line/oss/network/pkg/services/payloadresolver/filestore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
+	"github.com/provin-line/oss/pipeline/contract"
 )
 
 // httpShutdownTimeout bounds the graceful HTTP drain on shutdown.
@@ -144,22 +149,41 @@ func main() {
 	// content-hash resolution (verify) — one store, no divergent handles.
 	schemaSvc := schemaregistry.New(schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas")))
 	schemaBridge := schemaResolver{svc: schemaSvc} // the one registry->vc.SchemaResolver bridge, shared by both verifiers
+	// The by-reference payload serving boundary: producing loops retain their
+	// payload here (data-dir/payloads), and BuildHandler mounts a PayloadService
+	// serving them back by content address. One store backs both the retain
+	// (data plane) and serve (control plane) sides.
+	payloadStore, err := payloadfilestore.NewStore(filepath.Join(coreCfg.DataDir, "payloads"))
+	if err != nil {
+		log.Fatalf("standalone: build payload store: %v", err)
+	}
+	payloadSvc := payloadresolver.New(payloadStore)
+	// The consumer-side fetch client signs as the node identity (like the chain
+	// peer client). It is nil for a node without a DID (dev/noop transport):
+	// inline loops need no resolver, and a by-reference loop on an identity-less
+	// node fails closed at boot (ErrMissingPayloadResolver).
+	var payloadClient contract.PayloadResolver
+	if nodeDID := nodeDIDOf(chainCfg); nodeDID != "" {
+		payloadClient = payloadclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient(), 0)
+	}
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
-		Resolver:       resolver,
-		VCStore:        vcSvc,
-		AuditQueue:     auditQueue,
-		Receipts:       auditReceipts,
-		TlogDir:        filepath.Join(coreCfg.DataDir, "tlog"),
-		RejectLogDir:   filepath.Join(evidenceDir, "sink-rejects"),
-		SchemaResolver: schemaBridge,
-		SchemaGetter:   schemaSvc,
+		Resolver:        resolver,
+		VCStore:         vcSvc,
+		AuditQueue:      auditQueue,
+		Receipts:        auditReceipts,
+		TlogDir:         filepath.Join(coreCfg.DataDir, "tlog"),
+		RejectLogDir:    filepath.Join(evidenceDir, "sink-rejects"),
+		SchemaResolver:  schemaBridge,
+		SchemaGetter:    schemaSvc,
+		PayloadStore:    payloadSvc,
+		PayloadResolver: payloadClient,
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}
 
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
+		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}

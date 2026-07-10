@@ -88,6 +88,44 @@ func TestPeer_PublisherInfo_Admitted(t *testing.T) {
 	}
 }
 
+// The advertised modes offer inline but WITHHOLD by-reference — even when the
+// node serves payloads — because the export seam cannot yet apply the mode
+// (offeredPayloadModes / exportSeamAppliesDeliveryMode). Advertising a mode whose
+// subscriptions would fail every event would be false advertising.
+func TestPeer_PublisherInfo_WithholdsByReference(t *testing.T) {
+	for _, serving := range []bool{false, true} {
+		subs := memstore.NewSubscriptionStore()
+		allows := memstore.NewAllowListStore()
+		if err := allows.Save(pubPipeline, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}}); err != nil {
+			t.Fatal(err)
+		}
+		opts := []Option{WithInfraOperator(&fakeInfra{})}
+		if serving {
+			opts = append(opts, WithPayloadServing())
+		}
+		svc := New(subs, allows, opts...)
+		_, modes, err := svc.PublisherInfo(context.Background(), pubPipeline, subOwner)
+		if err != nil {
+			t.Fatalf("serving=%v PublisherInfo: %v", serving, err)
+		}
+		var inline, byref bool
+		for _, m := range modes {
+			switch m {
+			case "inline":
+				inline = true
+			case "by-reference":
+				byref = true
+			}
+		}
+		if !inline {
+			t.Errorf("serving=%v: modes %v omit inline", serving, modes)
+		}
+		if byref {
+			t.Errorf("serving=%v: modes %v advertise by-reference (export seam cannot apply the mode)", serving, modes)
+		}
+	}
+}
+
 func TestPeer_PublisherInfo_NotAdmitted(t *testing.T) {
 	svc, _ := svcWith(t, &fakeInfra{})
 	_, _, err := svc.PublisherInfo(context.Background(), pubPipeline, "did:dplaax:reg:org:stranger")
@@ -111,7 +149,7 @@ func TestPeer_NoInfra_Unavailable(t *testing.T) {
 	if _, _, err := svc.PublisherInfo(context.Background(), pubPipeline, subOwner); !errors.Is(err, ErrInfraUnavailable) {
 		t.Errorf("PublisherInfo err = %v, want ErrInfraUnavailable", err)
 	}
-	if _, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, ""); !errors.Is(err, ErrInfraUnavailable) {
+	if _, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline"); !errors.Is(err, ErrInfraUnavailable) {
 		t.Errorf("RegisterSubscription err = %v, want ErrInfraUnavailable", err)
 	}
 	if err := svc.Disconnect(context.Background(), "id", subOwner); !errors.Is(err, ErrInfraUnavailable) {
@@ -140,14 +178,18 @@ func TestPeer_RegisterSubscription_Success(t *testing.T) {
 	}
 }
 
-func TestPeer_RegisterSubscription_EmptyModeDefaults(t *testing.T) {
-	svc, _ := svcWith(t, &fakeInfra{})
-	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
-	if err != nil {
-		t.Fatalf("RegisterSubscription: %v", err)
+// An empty requested mode normalizes to by-reference, which this CM does NOT
+// offer (the export seam cannot yet apply the mode), so registration is
+// rejected — not silently agreed to a subscription that would fail every event.
+// A subscriber must explicitly request "inline".
+func TestPeer_RegisterSubscription_EmptyModeRejected(t *testing.T) {
+	svc, subs := svcWith(t, &fakeInfra{})
+	_, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	if !errors.Is(err, ErrPayloadModeUnsupported) {
+		t.Fatalf("empty mode err = %v, want ErrPayloadModeUnsupported (by-reference not offered)", err)
 	}
-	if sub.PayloadDelivery != "by-reference" {
-		t.Errorf("empty mode → %q, want by-reference", sub.PayloadDelivery)
+	if all, _ := subs.List(); len(all) != 0 {
+		t.Error("subscription persisted despite an unsupported (normalized by-reference) mode")
 	}
 }
 
@@ -188,7 +230,7 @@ func TestPeer_RegisterSubscription_SaveFailureCompensates(t *testing.T) {
 	}
 	failing := &failingSubStore{SubscriptionStore: memstore.NewSubscriptionStore(), saveErr: errors.New("disk full")}
 	svc := New(failing, allows, WithInfraOperator(inf))
-	_, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	_, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline")
 	if err == nil {
 		t.Fatal("RegisterSubscription succeeded despite Save failure")
 	}
@@ -200,7 +242,7 @@ func TestPeer_RegisterSubscription_SaveFailureCompensates(t *testing.T) {
 func TestPeer_Disconnect_Owner_LastSubscription(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, _ := svcWith(t, inf)
-	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +267,11 @@ func TestPeer_Disconnect_SiblingRemains(t *testing.T) {
 	if err := svc.allows.Save(pubPipeline, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}, {Pattern: "did:dplaax:*:org:sub2"}}); err != nil {
 		t.Fatal(err)
 	}
-	s1, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	s1, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.RegisterSubscription(context.Background(), subTwo, pubPipeline, ""); err != nil {
+	if _, err := svc.RegisterSubscription(context.Background(), subTwo, pubPipeline, "inline"); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Disconnect(context.Background(), s1.ID, subOwner); err != nil {
@@ -246,7 +288,7 @@ func TestPeer_Disconnect_SiblingRemains(t *testing.T) {
 func TestPeer_Disconnect_RemoveExportFailureKeepsSubscription(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, subs := svcWith(t, inf)
-	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +311,7 @@ func TestPeer_Disconnect_NotFound(t *testing.T) {
 func TestPeer_Disconnect_NotOwner(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, subs := svcWith(t, inf)
-	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")
+	sub, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "inline")
 	if err != nil {
 		t.Fatal(err)
 	}

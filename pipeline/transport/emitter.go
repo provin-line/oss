@@ -58,9 +58,33 @@ type Emitter struct {
 	// intent is the emission log's optional durable-sequence-intent capability
 	// (nil when the log does not provide it, e.g. memlog). When present, Emit
 	// records the sequence it is about to publish BEFORE publishing.
-	intent intentLog
-	logger *slog.Logger
-	seq    uint64
+	intent   intentLog
+	retainer PayloadRetainer
+	logger   *slog.Logger
+	seq      uint64
+}
+
+// PayloadRetainer is the optional publisher-side capability that retains a
+// producing loop's payload bytes before they are published, so a by-reference
+// subscriber can later dereference them from the publisher's serving boundary.
+// Retain returns the content address the bytes were stored at, which Emit
+// compares to the credential's declared outputHash — the emit-side binding gate.
+//
+// It is wired per producing loop (bound to that loop's owner pipeline DID at the
+// composition root), so its method needs no owner argument. A loop with no
+// retainer is an ordinary inline-only producer.
+type PayloadRetainer interface {
+	Retain(ctx context.Context, payload []byte) (contentHash string, err error)
+}
+
+// EmitterOption configures an Emitter at construction.
+type EmitterOption func(*Emitter)
+
+// WithPayloadRetainer attaches a PayloadRetainer so Emit durably retains each
+// payload before publishing (see PayloadRetainer and Emit). Omitting it leaves
+// the Emitter an ordinary inline producer.
+func WithPayloadRetainer(r PayloadRetainer) EmitterOption {
+	return func(e *Emitter) { e.retainer = r }
 }
 
 // intentLog is the optional durable-sequence-intent capability an Emitter's
@@ -112,7 +136,7 @@ type intentLog interface {
 // construction (the open-time damage doctrine extended to the seed). memlog
 // provides no intent capability, so its recovery is exactly the tail-based
 // behavior (in-memory, no restart). A nil logger defaults to slog.Default().
-func NewEmitter(ctx context.Context, pub Publisher, codec contract.EnvelopeCodec, emission tlog.Log, logger *slog.Logger) (*Emitter, error) {
+func NewEmitter(ctx context.Context, pub Publisher, codec contract.EnvelopeCodec, emission tlog.Log, logger *slog.Logger, opts ...EmitterOption) (*Emitter, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -121,7 +145,11 @@ func NewEmitter(ctx context.Context, pub Publisher, codec contract.EnvelopeCodec
 	if err != nil {
 		return nil, err
 	}
-	return &Emitter{pub: pub, codec: codec, emission: emission, intent: intent, logger: logger, seq: seq}, nil
+	e := &Emitter{pub: pub, codec: codec, emission: emission, intent: intent, logger: logger, seq: seq}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e, nil
 }
 
 // recoverSequence returns the next sequence number: max(committed tail,
@@ -234,6 +262,35 @@ func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, pay
 	})
 	if err != nil {
 		return fmt.Errorf("transport: marshal envelope (sequenceNo %d): %w", next, err)
+	}
+
+	// Retain the payload BEFORE publishing (fail-closed) when a retainer is
+	// wired. A by-reference subscriber dereferences these bytes from the serving
+	// boundary by the credential's outputHash, so they must be durably servable
+	// before the envelope goes out — and a payload not retained at emit time is
+	// unrecoverable (the by-reference subscriber's chain would break permanently).
+	// A retain error aborts the attempt before any publish; the sequence is not
+	// advanced and the number is reused next time (an idempotent re-retain).
+	if e.retainer != nil {
+		subj, err := cred.Subject()
+		if err != nil {
+			return fmt.Errorf("transport: emit subject unreadable (sequenceNo %d): %w", next, err)
+		}
+		if subj.OutputHash == "" {
+			return fmt.Errorf("transport: emit with payload retention but credential declares no outputHash (sequenceNo %d): binding undecidable, fail closed", next)
+		}
+		got, err := e.retainer.Retain(ctx, payload)
+		if err != nil {
+			return fmt.Errorf("transport: retain payload (sequenceNo %d): %w", next, err)
+		}
+		// Emit-side binding gate: the store keys the bytes by their own content
+		// address, which MUST equal the outputHash a consumer will fetch by. A
+		// mismatch is a producing-process bug — the payload does not match the
+		// credential it is paired with — caught at the cheapest point, the mirror
+		// of the consumer's binding gate.
+		if got != subj.OutputHash {
+			return fmt.Errorf("transport: retained payload hashes to %s but credential declares outputHash %s (sequenceNo %d): producing process paired mismatched bytes", got, subj.OutputHash, next)
+		}
 	}
 
 	// Durably record the intent to use this sequence BEFORE publishing. It

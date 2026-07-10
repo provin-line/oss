@@ -119,19 +119,33 @@ func TestSubscriberE2E_RoundTrip(t *testing.T) {
 	}
 }
 
-// Empty requested mode rides verbatim and the publisher normalizes it to
-// by-reference — proving the empty→default normalization is the publisher's
-// post-Verify step (the subscriber's signed bytes match what it sent).
-func TestSubscriberE2E_EmptyModeNegotiated(t *testing.T) {
+// An empty requested mode normalizes to by-reference, which the publisher does
+// not offer (the export seam cannot yet apply the mode), so the subscriber's own
+// pre-registration offered-modes check rejects it — nothing is persisted. A
+// subscriber must explicitly request "inline".
+func TestSubscriberE2E_EmptyModeRejected(t *testing.T) {
 	ctx := context.Background()
 	subSvc, _ := subscriberE2E(t, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}})
-	id, err := subSvc.Subscribe(ctx, e2eSub, e2ePub, "")
+	_, err := subSvc.Subscribe(ctx, e2eSub, e2ePub, "")
+	if !errors.Is(err, chainmanager.ErrPayloadModeUnsupported) {
+		t.Fatalf("empty mode err = %v, want ErrPayloadModeUnsupported (by-reference not offered)", err)
+	}
+	if list, _ := subSvc.ListSubscriptions(ctx); len(list) != 0 {
+		t.Errorf("persisted despite an unsupported (normalized by-reference) mode = %+v", list)
+	}
+}
+
+// An explicit inline request succeeds end-to-end.
+func TestSubscriberE2E_InlineNegotiated(t *testing.T) {
+	ctx := context.Background()
+	subSvc, _ := subscriberE2E(t, []store.AllowRule{{Pattern: "did:dplaax:*:org:sub"}})
+	id, err := subSvc.Subscribe(ctx, e2eSub, e2ePub, "inline")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	list, _ := subSvc.ListSubscriptions(ctx)
-	if len(list) != 1 || list[0].ID != id || list[0].PayloadDelivery != "by-reference" {
-		t.Errorf("negotiated mode = %+v, want by-reference", list)
+	if len(list) != 1 || list[0].ID != id || list[0].PayloadDelivery != "inline" {
+		t.Errorf("negotiated mode = %+v, want inline", list)
 	}
 }
 

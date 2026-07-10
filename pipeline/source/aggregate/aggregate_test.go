@@ -197,7 +197,12 @@ func newHarness(t *testing.T, opts func(*Config)) *harness {
 
 // feed drives one ingress input synchronously through the handler.
 func (h *harness) feed(wire []byte) {
-	h.p.handleIngress(context.Background(), wire, "https://up.example/src")
+	h.p.handleIngress(context.Background(), wire, Ingress{UpstreamEndpoint: "https://up.example/src"})
+}
+
+// feedIngress drives one ingress input under a specific ingress (delivery mode).
+func (h *harness) feedIngress(wire []byte, ing Ingress) {
+	h.p.handleIngress(context.Background(), wire, ing)
 }
 
 // --- tests ------------------------------------------------------------------

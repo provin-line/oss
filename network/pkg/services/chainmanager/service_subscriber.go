@@ -115,8 +115,10 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	}
 
 	// Discover + negotiate before committing: a mode the publisher does not offer
-	// is rejected locally (no wasted registration / nonce). Empty means
-	// by-reference, which every publisher offers.
+	// is rejected locally (no wasted registration / nonce). An empty request
+	// normalizes to by-reference, which is NOT currently offered (the export seam
+	// cannot yet apply the mode), so an empty or explicit by-reference request is
+	// rejected here — the subscriber must request "inline".
 	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, subscriberDID, publisherDID)
 	if err != nil {
 		return "", fmt.Errorf("%w: get publisher info: %w", ErrRemotePeer, err)
@@ -283,18 +285,22 @@ func (s *Service) resolveEndpoint(ctx context.Context, publisherDID string) (str
 	return endpoint, nil
 }
 
-// assertModeOffered rejects a non-empty requested mode the publisher does not
-// list. Empty (by-reference, the conservative default) is always accepted.
+// assertModeOffered rejects a requested mode the publisher does not list. An
+// empty request is NORMALIZED to by-reference (the wire negotiation default)
+// before the check — it is not accepted unconditionally. So when the publisher
+// does not offer by-reference, an empty or explicit by-reference request is
+// rejected locally, before any wasted registration.
 func assertModeOffered(requested string, offered []string) error {
-	if requested == "" {
-		return nil
+	mode := requested
+	if mode == "" {
+		mode = "by-reference"
 	}
 	for _, m := range offered {
-		if m == requested {
+		if m == mode {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, requested)
+	return fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, mode)
 }
 
 // importTargets derives the AddImport/RemoveImport arguments from a publisher's

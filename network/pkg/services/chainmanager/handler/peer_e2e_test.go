@@ -224,8 +224,8 @@ func TestPeerE2E_NotOwner(t *testing.T) {
 	client, sub, stranger := e2eSetup(t)
 	rs, err := client.RegisterSubscription(ctx, connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
 		AuthProof: authProof(t, sub, e2eSub, "RegisterSubscription",
-			map[string]any{"subscriber_did": e2eSub, "publisher_did": e2ePub, "payload_delivery": ""}, e2eNonce(t)),
-		SubscriberDid: e2eSub, PublisherDid: e2ePub,
+			map[string]any{"subscriber_did": e2eSub, "publisher_did": e2ePub, "payload_delivery": "inline"}, e2eNonce(t)),
+		SubscriberDid: e2eSub, PublisherDid: e2ePub, PayloadDelivery: "inline",
 	}))
 	if err != nil {
 		t.Fatalf("RegisterSubscription: %v", err)

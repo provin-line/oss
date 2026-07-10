@@ -220,6 +220,10 @@ type SinkConfig struct {
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
 	UpstreamEndpoint string
+	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
+	// "inline" (default) or "by-reference". A by-reference sink dereferences a
+	// nil envelope payload from UpstreamEndpoint at consume time.
+	PayloadDelivery string
 	// AllowIssuers is the local issuer allow-list (allowlist patterns matched
 	// against a consumed credential's issuer DID). Required non-empty for
 	// production/archival; optional (unrestricted) for observation-only.
@@ -290,6 +294,9 @@ type ChainedConfig struct {
 	// Consuming side (mirrors SinkConfig minus Kind).
 	VerificationStrategy string
 	UpstreamEndpoint     string
+	// PayloadDelivery is the agreed payload-delivery mode of the ingress:
+	// "inline" (default) or "by-reference".
+	PayloadDelivery string
 	// Transform (optional). Converter is a whole-document JSONata expression ("" =
 	// passthrough); Filters are JSONata predicates (empty = no filtering). Both are
 	// compiled at loop-build time — a malformed expression is a boot error there.
@@ -303,6 +310,9 @@ type ChainedConfig struct {
 type AggregateIngress struct {
 	Subject          string
 	UpstreamEndpoint string
+	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
+	// "inline" (default) or "by-reference".
+	PayloadDelivery string
 }
 
 // AggregateConfig is an aggregate loop's producing identity + N-ary consuming side +
@@ -693,6 +703,31 @@ func loadSourceConfig(cfg *hoconconfig.Config, base, name string) (SourceConfig,
 	return sc, nil
 }
 
+// loadPayloadDelivery reads the optional per-ingress payload-delivery mode. An
+// ABSENT key defaults to "inline" — the in-org expectation, since a producing
+// process always emits the full inline envelope; by-reference is opted into
+// explicitly where a consuming ingress is wired to a by-reference cross-org
+// subscription. This config default is deliberately the opposite of the wire
+// negotiation default (empty = by-reference): the two live at different layers.
+// A present value must be "inline" or "by-reference"; anything else is a boot
+// error. The canonical string is parsed to a contract.PayloadDelivery at
+// composition.
+func loadPayloadDelivery(cfg *hoconconfig.Config, key, name string) (string, error) {
+	if !cfg.Has(key) {
+		return "inline", nil
+	}
+	raw, err := cfg.String(key)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: loop %q: config payload-delivery: %w", name, err)
+	}
+	switch raw {
+	case "inline", "by-reference":
+		return raw, nil
+	default:
+		return "", fmt.Errorf("pipeline: loop %q: payload-delivery %q is not %q or %q", name, raw, "inline", "by-reference")
+	}
+}
+
 // loadSchemaRef reads an optional schema-ref at key and validates it as a
 // "<name>@<version>" short-form (vc.SplitSchemaRef — url-safe segments). It
 // returns the raw validated short-form; the composition root resolves it
@@ -735,6 +770,10 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 	}
 
 	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
+		return sc, err
+	}
+
+	if sc.PayloadDelivery, err = loadPayloadDelivery(cfg, base+".sink.payload-delivery", name); err != nil {
 		return sc, err
 	}
 
@@ -931,6 +970,9 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 	if cc.UpstreamEndpoint, err = requireString(cfg, cbase+".upstream-endpoint"); err != nil {
 		return cc, err
 	}
+	if cc.PayloadDelivery, err = loadPayloadDelivery(cfg, cbase+".payload-delivery", name); err != nil {
+		return cc, err
+	}
 
 	// Transform is optional: an absent converter is a passthrough relay; absent filters
 	// means no filtering.
@@ -1013,6 +1055,9 @@ func loadAggregateConfig(cfg *hoconconfig.Config, base, name string) (AggregateC
 			return ac, err
 		}
 		if ing.UpstreamEndpoint, err = requireString(cfg, ibase+".upstream-endpoint"); err != nil {
+			return ac, err
+		}
+		if ing.PayloadDelivery, err = loadPayloadDelivery(cfg, ibase+".payload-delivery", name); err != nil {
 			return ac, err
 		}
 		if seen[ing.Subject] {

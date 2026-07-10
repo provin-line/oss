@@ -46,6 +46,13 @@ type Service struct {
 	// store locks (and the mutex-less yamlstore) do NOT make atomic. The
 	// operator-surface methods are lock-free.
 	mu sync.Mutex
+
+	// payloadServing reports whether this node runs a by-reference payload
+	// serving boundary (payloadresolver). It is one input to the advertised
+	// payload-delivery modes (offeredPayloadModes) — NOT sufficient on its own,
+	// because advertising by-reference also requires the export seam to apply the
+	// agreed mode, which is not yet implemented.
+	payloadServing bool
 }
 
 // Option configures a Service at construction.
@@ -54,6 +61,13 @@ type Option func(*Service)
 // WithInfraOperator supplies the transport operator the peer operations require.
 func WithInfraOperator(op infra.Operator) Option {
 	return func(s *Service) { s.infra = op }
+}
+
+// WithPayloadServing declares that this node serves by-reference payloads. It is
+// necessary but not sufficient for advertising the by-reference mode — see
+// offeredPayloadModes.
+func WithPayloadServing() Option {
+	return func(s *Service) { s.payloadServing = true }
 }
 
 // New returns a Service backed by the given stores. Pass WithInfraOperator to

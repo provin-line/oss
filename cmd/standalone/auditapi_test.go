@@ -15,6 +15,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -49,7 +51,7 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), schemaSvc, nil, 1<<20, ingestMounts{})
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
