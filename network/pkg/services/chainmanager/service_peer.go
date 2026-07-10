@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/allowlist"
+	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
