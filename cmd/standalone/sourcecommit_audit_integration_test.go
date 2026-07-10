@@ -120,7 +120,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 	}
 	aggHead, _ := aggCred.Hash()
 
-	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res,
+	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, nil,
 		auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleAggregate}}))
 	if err != nil || runner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", runner, err)

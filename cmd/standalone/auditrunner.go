@@ -33,12 +33,20 @@ func buildAuditRunner(
 	vcSvc *vcresolver.Service,
 	pool auditor.PoolLiveness,
 	didResolver resolver.Resolver,
+	schemaRes vc.SchemaResolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*auditor.Runner, error) {
 	if !pipeCfg.HasConsumingLoop() {
 		return nil, nil
 	}
-	verifier := vc.NewVerifier(didResolver, ed25519.Verifier{})
+	// The async re-verification applies the same schema content-hash discipline
+	// as the ingress verifier, so a chain that was verified on the consume path
+	// re-verifies identically out of band.
+	var vopts []vc.VerifierOption
+	if schemaRes != nil {
+		vopts = append(vopts, vc.WithSchemaResolver(schemaRes))
+	}
+	verifier := vc.NewVerifier(didResolver, ed25519.Verifier{}, vopts...)
 	cv, err := chainwalk.New(localChainResolver{svc: vcSvc}, verifier, chainwalk.WithMaxDepth(pipeCfg.BatchResolver.MaxDepth))
 	if err != nil {
 		return nil, fmt.Errorf("standalone: audit chain verifier: %w", err)

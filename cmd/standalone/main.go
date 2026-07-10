@@ -36,6 +36,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
+	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
@@ -136,20 +138,28 @@ func main() {
 	// sink loop's delivery surface comes from its sink.output config (console/stdout
 	// default, file per path). With zero loops this dials nothing.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
+	// The schema registry is built here (not inside BuildHandler) so a single
+	// instance backs the control plane's SchemaService RPC, the data plane's
+	// boot-time schema-ref resolution (issuance), and the verifier's schema
+	// content-hash resolution (verify) — one store, no divergent handles.
+	schemaSvc := schemaregistry.New(schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas")))
+	schemaBridge := schemaResolver{svc: schemaSvc} // the one registry->vc.SchemaResolver bridge, shared by both verifiers
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
-		Resolver:     resolver,
-		VCStore:      vcSvc,
-		AuditQueue:   auditQueue,
-		Receipts:     auditReceipts,
-		TlogDir:      filepath.Join(coreCfg.DataDir, "tlog"),
-		RejectLogDir: filepath.Join(evidenceDir, "sink-rejects"),
+		Resolver:       resolver,
+		VCStore:        vcSvc,
+		AuditQueue:     auditQueue,
+		Receipts:       auditReceipts,
+		TlogDir:        filepath.Join(coreCfg.DataDir, "tlog"),
+		RejectLogDir:   filepath.Join(evidenceDir, "sink-rejects"),
+		SchemaResolver: schemaBridge,
+		SchemaGetter:   schemaSvc,
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}
 
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
+		schemaSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -163,7 +173,7 @@ func main() {
 
 	// The async audit runner verifies the assembled chains and records per-head verdicts.
 	// Also nil for a source-only node (no consumed heads register).
-	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditReceipts, vcSvc, pool, resolver, pipeCfg)
+	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditReceipts, vcSvc, pool, resolver, schemaBridge, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build audit runner: %v", err)
 	}

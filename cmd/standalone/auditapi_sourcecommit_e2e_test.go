@@ -111,7 +111,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 	if err := reg.RegisterEmission(ctx, aggCred, []string{hA, hB}); err != nil {
 		t.Fatalf("RegisterEmission: %v", err)
 	}
-	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res,
+	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, nil,
 		auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleAggregate}}))
 	if err != nil || runner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", runner, err)
