@@ -118,6 +118,17 @@ const (
 	// digest, prompt, and per-material roles are payload concerns pinned
 	// via SchemaRef.
 	ClaimGenerate TransformationClaim = "provin:generate"
+	// ClaimSinkReceipt — closed, identity: the credential is a Sink Process's
+	// receipt attesting it consumed the predecessor credential, NOT a
+	// transformation of a payload. A sink produces nothing in-network; the
+	// receipt exists only to make the consumption audit-reachable (it is signed
+	// chain-preserving over the consumed credential, published to the local VC
+	// store + a dedicated tlog + the audit queue, never in-band on the chain).
+	// It transforms nothing, so inputHash == outputHash == the consumed
+	// credential's outputHash — the output IS the input, the trivial closed-world
+	// case. Grammar-valid and grounded by the provin: prefix like every claim;
+	// the identity constraint is what distinguishes it from a content transform.
+	ClaimSinkReceipt TransformationClaim = "provin:sink-receipt"
 )
 
 // SchemaRef is the content-hashed reference to the registered output schema.

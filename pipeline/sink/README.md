@@ -6,23 +6,43 @@ no in-network output.
 
 ## Conventions
 
-- Sinks verify what they consume (typically full-chain strategy — the sink is the
-  last in-network observer) and surface the verification verdict alongside the
-  payload in whatever they emit externally.
+- Sinks verify the credential they consume (adjacent strategy — the immediately
+  preceding credential; full-chain audit is the async audit runner's job) and
+  surface the verification verdict alongside the payload in whatever they emit
+  externally.
 - A sink never re-publishes to pipeline subjects; doing so would make it a
-  Chained Process or Source Process in disguise.
+  Chained Process or Source Process in disguise. A receipt (below) is NOT an
+  in-band re-publish: it goes to the local VC store + a dedicated tlog + the
+  audit queue, never onto a chain subject.
 
 ## Sink kinds (deploy-layer attribute, `contract.SinkKind`)
 
-| Kind | invalid emit | reject | mutual allow-list | receipt |
-|---|---|---|---|---|
-| observation-only | MAY | not required | relaxed | not required |
-| production | PROHIBITED | MUST | MUST enforce | MAY |
-| archival | PROHIBITED | MUST + audit log | MUST enforce | MUST |
+| Kind | invalid emit | reject | issuer allow-list | receipt |
+| --- | --- | --- | --- | --- |
+| observation-only | MAY | not required | optional (unrestricted) | not required |
+| production | PROHIBITED | MUST | MUST enforce (non-empty) | MAY |
+| archival | PROHIBITED | MUST + audit log | MUST enforce (non-empty) | MUST |
 
 A sink kind is a config-driven attribute of a deployed process, not a separate
 process type. Idempotency checks on re-delivered events are a sink-side
 obligation (production / archival).
+
+**Issuer allow-list (local, not "mutual").** `sink.allow-issuers` matches a
+consumed credential's issuer DID against segment-aware glob patterns
+(`allowlist`, default-distrust). production/archival require a non-empty list
+(an empty one denies everything — caught at boot). This is the consumer-side
+half; the publisher-side half is the chainmanager subscription allow-list. Each
+is its own local config — there is no spec-defined federation-layer negotiated
+list yet (gap-backlog). Previous "mutual allow-list MUST" wording overstated a
+mechanism the protocol has not defined.
+
+**Receipt.** A receipt-issuing sink (`sink.receipt.issuer`, MAY for production /
+MUST for archival) signs a `provin:sink-receipt` credential per consumed event —
+chain-preserving over the consumed credential, `inputHash == outputHash` (it
+transforms nothing). It is registered local-first (VC store → tlog → audit queue)
+and only then optionally published remotely, so a receipt is never externally
+visible without a local audit trail. Relying parties reach it via ResolveVC /
+ListAuditStatuses / bundle export.
 
 ## Reference implementation: console/ (observation-only)
 

@@ -81,6 +81,11 @@ type dataPlaneDeps struct {
 	// (slice-17o), enabling emit-locus source-commitment self-audit. Nil (with AuditQueue)
 	// leaves an aggregate broadcast-only (no self-audit); main always wires it.
 	Receipts receiptWriter
+	// RejectLogDir is the root directory for archival sinks' durable reject logs
+	// (data-dir/evidence/sink-rejects). Empty falls back to in-memory logs — the
+	// unit-test seam; the node always sets it (reject logs are durable by default,
+	// no config knob).
+	RejectLogDir string
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -153,12 +158,28 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			if err != nil {
 				return nil, fmt.Errorf("standalone: loop %q: emission log: %w", loopName, err)
 			}
-			slog.Info("standalone: emission log opened", "loop", loopName, "log_id", subject, "dir", dir)
+			slog.Info("standalone: durable loop log opened", "loop", loopName, "log_id", subject, "dir", dir)
 			dp.tlogClosers = append(dp.tlogClosers, fl)
 			l = fl
 		}
 		dp.tlogs[subject] = l
 		return l, nil
+	}
+	// newRejectLog builds one archival sink loop's durable reject log under
+	// RejectLogDir/<loop> (data-dir/evidence/sink-rejects/<loop>). In-memory when
+	// RejectLogDir is empty (unit-test seam). No checkpoint signer: the reject log
+	// needs durable, hash-chained append, not signed tree heads.
+	newRejectLog := func(loopName string) (sink.RejectLog, error) {
+		if deps.RejectLogDir == "" {
+			return &sinkRejectLog{log: memlog.New()}, nil
+		}
+		fl, ferr := filelog.New(filepath.Join(deps.RejectLogDir, loopName))
+		if ferr != nil {
+			return nil, fmt.Errorf("standalone: loop %q: reject log: %w", loopName, ferr)
+		}
+		dp.tlogClosers = append(dp.tlogClosers, fl)
+		slog.Info("standalone: sink reject log opened", "loop", loopName, "dir", filepath.Join(deps.RejectLogDir, loopName))
+		return &sinkRejectLog{log: fl}, nil
 	}
 	// When a vc-store-endpoint is configured, build the network VC-store client once:
 	// producing loops publish issued credentials through it. Absent => no publication.
@@ -228,7 +249,22 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
 				err = fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
 			} else if err = ensureConsumer(lc.Name); err == nil {
-				loop, err = buildSinkLoop(conn, verifier, ingressStore, w, lc)
+				// A receipt-issuing sink (MAY production / MUST archival) registers each
+				// receipt local-first (store → tlog → audit queue) before optional remote
+				// publish — the emissionRegistrar ordering doctrine. Needs the audit
+				// substrate; a receipt-configured sink without it is a wiring error.
+				var receipts sink.ReceiptIssuer
+				if lc.Sink.Receipt.Issue {
+					receipts, err = buildSinkReceiptRegistrar(builder, deps.VCStore, deps.AuditQueue, publisher, newEmission, lc)
+				}
+				// Archival's reject-with-audit-log obligation: a durable reject log.
+				var rejectLog sink.RejectLog
+				if err == nil && lc.Sink.Kind == pipelineconfig.SinkArchival {
+					rejectLog, err = newRejectLog(lc.Name)
+				}
+				if err == nil {
+					loop, err = buildSinkLoop(conn, verifier, ingressStore, w, receipts, rejectLog, lc)
+				}
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
@@ -336,7 +372,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
@@ -353,6 +389,9 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 		Store:            store,
 		Writer:           writer,
 		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,
+		AllowIssuers:     lc.Sink.AllowIssuers,
+		Receipts:         receipts,
+		RejectLog:        rejectLog,
 	}
 	proc, err := sink.New(cfg)
 	if err != nil {

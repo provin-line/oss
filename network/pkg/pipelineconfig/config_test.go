@@ -363,6 +363,83 @@ func TestLoad_ValidSink(t *testing.T) {
 	}
 }
 
+// A production sink boots once it carries the obligations its kind requires:
+// a non-empty issuer allow-list. Receipts are MAY for production (a receipt
+// block is optional).
+const validProductionSinkLoop = `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink {
+      kind = "production"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+      allow-issuers = ["did:dplaax:reg:org:acme:*"]
+    }
+  }
+`
+
+// An archival sink additionally MUST emit receipts, so it carries a receipt
+// issuer block (a process identity it signs receipts under).
+const validArchivalSinkLoop = `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink {
+      kind = "archival"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+      allow-issuers = ["did:dplaax:reg:org:acme:*"]
+      receipt {
+        issuer {
+          did = "did:dplaax:reg:org:acme:pipeline:pipe:process:archive"
+          key-id = "signing"
+          verification-method = "did:dplaax:reg:org:acme:pipeline:pipe:process:archive#signing"
+        }
+      }
+    }
+  }
+`
+
+func TestLoad_ValidProductionSink(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(validProductionSinkLoop))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig(production): %v", err)
+	}
+	s := pc.Loops[0].Sink
+	if s.Kind != pipelineconfig.SinkProduction {
+		t.Errorf("kind = %q, want production", s.Kind)
+	}
+	if len(s.AllowIssuers) != 1 || s.AllowIssuers[0] != "did:dplaax:reg:org:acme:*" {
+		t.Errorf("AllowIssuers = %v", s.AllowIssuers)
+	}
+	// Receipt is MAY for production and absent here.
+	if s.Receipt.Issue {
+		t.Errorf("Receipt.Issue = true, want false (no receipt block configured)")
+	}
+}
+
+func TestLoad_ValidArchivalSink(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(validArchivalSinkLoop))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig(archival): %v", err)
+	}
+	s := pc.Loops[0].Sink
+	if s.Kind != pipelineconfig.SinkArchival {
+		t.Errorf("kind = %q, want archival", s.Kind)
+	}
+	if !s.Receipt.Issue {
+		t.Fatalf("Receipt.Issue = false, want true (archival MUST emit receipts)")
+	}
+	if s.Receipt.Issuer.DID != "did:dplaax:reg:org:acme:pipeline:pipe:process:archive" {
+		t.Errorf("Receipt.Issuer.DID = %q", s.Receipt.Issuer.DID)
+	}
+	// pipeline/process ids derive from the issuer process DID's segments.
+	if s.Receipt.PipelineID != "pipe" || s.Receipt.ProcessID != "archive" {
+		t.Errorf("Receipt pipeline/process = %q/%q, want pipe/archive", s.Receipt.PipelineID, s.Receipt.ProcessID)
+	}
+}
+
 // Sink output destination: absent block defaults to console (stdout — today's
 // only behaviour, preserved); "file" requires a path.
 func TestLoad_SinkOutput(t *testing.T) {
@@ -424,8 +501,17 @@ func TestLoad_FailClosed_Sink(t *testing.T) {
 	}{
 		{"unknown sink kind", mut(`kind = "observation-only"`, `kind = "warehouse"`)},
 		{"missing sink kind", mut(`kind = "observation-only"`, `kind = ""`)},
-		{"production kind unsupported in 17c", mut(`kind = "observation-only"`, `kind = "production"`)},
-		{"archival kind unsupported in 17c", mut(`kind = "observation-only"`, `kind = "archival"`)},
+		// production/archival require a non-empty issuer allow-list; without one
+		// they fail closed (default-distrust would otherwise reject every event).
+		{"production without allow-issuers", mut(`kind = "observation-only"`, `kind = "production"`)},
+		{"archival without allow-issuers", mut(`kind = "observation-only"`, `kind = "archival"`)},
+		// A malformed allow-issuers pattern is caught at boot (allowlist.ValidatePattern),
+		// not deferred to the first non-matching event.
+		{"production malformed allow-issuers pattern", strings.Replace(validProductionSinkLoop,
+			`allow-issuers = ["did:dplaax:reg:org:acme:*"]`, `allow-issuers = ["not-a-did:*"]`, 1)},
+		// archival MUST emit receipts, so a receipt issuer block is required.
+		{"archival without receipt issuer", strings.Replace(validProductionSinkLoop,
+			`kind = "production"`, `kind = "archival"`, 1)},
 		{"sink ingress not a pipeline DID", mut(
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"`,
 			`ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"`)},
@@ -526,8 +612,8 @@ func TestLoad_ValidChained(t *testing.T) {
 	if len(c.Filters) != 1 || c.Filters[0] != "reading > 0" {
 		t.Fatalf("filters: %+v", c.Filters)
 	}
-	// A chained loop carries no source/sink identity.
-	if l.Source != (pipelineconfig.SourceConfig{}) || l.Sink != (pipelineconfig.SinkConfig{}) {
+	// A chained loop carries no source/sink identity (a real sink has a Kind).
+	if l.Source != (pipelineconfig.SourceConfig{}) || l.Sink.Kind != "" {
 		t.Fatalf("chained loop has non-zero Source/Sink: %+v / %+v", l.Source, l.Sink)
 	}
 }
