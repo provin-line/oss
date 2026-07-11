@@ -61,6 +61,14 @@ func init() {
 	registerRunner(runProcess, "process", 5, 6)
 	dplaaxRunners["process-004"] = runProcessSinkVerify
 
+	// transfer family: audit-reachable transfer evidence records (emission,
+	// ingress, relationship) — the federation-layer domain settled 2026-07-11.
+	// Each vector has a distinct expect shape, so each is its own driver.
+	dplaaxRunners["transfer-001"] = runTransferEvidenceDefinition
+	dplaaxRunners["transfer-002"] = runTransferEmissionAppendOnly
+	dplaaxRunners["transfer-003"] = runTransferIngressRetention
+	dplaaxRunners["transfer-004"] = runTransferRelationshipRecord
+
 	// Blocked on missing implementation surface — ledgered so the coverage
 	// guard keeps the gap visible rather than silently uncovered. These are
 	// recorded in the gap-backlog, not driver TODOs. Each reason names its own

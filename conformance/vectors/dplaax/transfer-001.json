@@ -1,0 +1,12 @@
+{
+  "id": "transfer-001",
+  "rule": "transfer.evidence.definition",
+  "description": "A credential that was emitted and then retained at ingress is transfer evidence: the emission record and the ingress record share the content-hash join key that reconciliation uses",
+  "input": {
+    "sequence": [
+      { "op": "emit" },
+      { "op": "receive" }
+    ]
+  },
+  "expect": { "join": "content-hash-consistent" }
+}

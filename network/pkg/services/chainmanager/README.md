@@ -62,9 +62,9 @@ legitimate signer's nonce):
 
 **L2 identities and the audit horizon.** The signed view is access control at
 the moment of the call, but the stored record doubles as audit evidence for the
-audit horizon. When a deployment admits web-anchored DID methods for L2 parties
-(e.g. did:web consumers), the CM records a snapshot of the resolved DID
-document (the key binding) alongside the signed view in its tlog — the
+audit horizon (see evidence/ below). When a deployment admits web-anchored DID
+methods for L2 parties (e.g. did:web consumers), the CM records a snapshot of
+the resolved DID document (the key binding) alongside the signed view — the
 signature stays re-verifiable against the snapshotted key forever, and the only
 residual claim is that the binding was authentically served at registration
 time. Methods with verifiable key history close that residue; audit-sensitive
@@ -74,3 +74,29 @@ glossary).
 In-memory nonce store + restart epoch barrier is the accepted PoC posture (persistent
 nonce store is a documented follow-up). All wireauth failures are typed sentinel
 errors; handlers map them with `errors.Is`.
+
+## evidence/ — relationship-evidence log
+
+`evidence.Log` (`New(tlog.Log) *Log`) is the durable, append-only retained
+record of a counterparty-signed control-plane request plus the key material
+used to verify it (transfer.relationship.record): `Record` JSON-marshals an
+`evidence.Record` (op, signerDID, nonce, issuedAt, signature, the exact signed
+fields, and a `KeyMaterial` snapshot of the verifying key) and appends it;
+`Get`/`Size` read it back. Durability, append-only ordering, and tamper-
+evidence all come from the wrapped `tlog.Log` (filelog in production); this
+package owns only the retained shape.
+
+The handler wires it in as an optional capability: `NewPeerWithEvidence(svc, v,
+rec)` configures a `RelationshipRecorder` (nil = disabled, `NewPeer`'s
+behavior unchanged), and the standalone server wires a durable filelog under
+`chain/relationship-evidence`. RegisterSubscription and Disconnect each record
+evidence AFTER the domain call succeeds — so a rejected/failed relationship
+change (unknown publisher, ownership failure) is never retained as an
+established relationship; a record failure then surfaces as `Internal`
+(fail-closed) after the domain mutation. The retained record carries the
+signed-view version (`wireauth.ViewVersion`, the `"v"` member of the JCS view),
+the exact signed fields, and the key material — extracted from the resolved DID
+document exactly as the verifier resolved it (`did.ExtractPublicKey` under the
+`#auth` `RelationshipAuthentication` relationship) — so a third party can
+reconstruct the signed view and re-verify the counterparty signature from the
+record alone.

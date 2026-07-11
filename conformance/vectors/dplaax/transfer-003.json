@@ -1,0 +1,13 @@
+{
+  "id": "transfer-003",
+  "rule": "transfer.ingress.retention",
+  "description": "A received credential is retained byte-preserving across a process restart and is enumerable for audit",
+  "input": {
+    "sequence": [
+      { "op": "receive" },
+      { "op": "process-restart" },
+      { "op": "enumerate" }
+    ]
+  },
+  "expect": { "state": "retained-byte-identical" }
+}

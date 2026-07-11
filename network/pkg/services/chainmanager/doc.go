@@ -12,6 +12,7 @@
 // ChainPeerService RPC does, and every ChainPeerService request carries an
 // auth_proof field. The subpackages beneath this one supply the data layer the
 // services build on: store (subscription + allow-list persistence), allowlist
-// (DID-glob trust matching), wireauth (L2 proof signing/verification), and infra
+// (DID-glob trust matching), wireauth (L2 proof signing/verification), evidence
+// (durable relationship-evidence log — transfer.relationship.record), and infra
 // (transport operators).
 package chainmanager

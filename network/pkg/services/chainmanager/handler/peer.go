@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -10,8 +12,10 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/tlog"
 )
 
 // PeerService is the consumer-side view of the chainmanager peer domain the
@@ -29,6 +33,13 @@ type Verifier interface {
 	Verify(ctx context.Context, op string, fields map[string]any, proof wireauth.Proof, authorize wireauth.Authorizer) error
 }
 
+// RelationshipRecorder is the relationship-evidence seam the handler depends
+// on (an interface so a spy can be injected in tests). *evidence.Log satisfies
+// it.
+type RelationshipRecorder interface {
+	Record(ctx context.Context, r evidence.Record) (*tlog.Record, error)
+}
+
 // errSignerMismatch is the signer-to-actor binding failure (the proof's signer is
 // not the actor the request claims). Mapped to PermissionDenied.
 var errSignerMismatch = errors.New("chainmanager: signer is not the claimed actor")
@@ -38,15 +49,26 @@ var errSignerMismatch = errors.New("chainmanager: signer is not the claimed acto
 // signed view, verifies it in-band via wireauth (L2 — no L1 interceptor), and
 // only then calls the domain.
 type PeerHandler struct {
-	svc PeerService
-	v   Verifier
+	svc      PeerService
+	v        Verifier
+	evidence RelationshipRecorder // nil = disabled (unchanged behavior)
 }
 
 var _ chainpbconnect.ChainPeerServiceHandler = (*PeerHandler)(nil)
 
-// NewPeer returns a PeerHandler backed by svc and the wireauth verifier.
+// NewPeer returns a PeerHandler backed by svc and the wireauth verifier, with
+// relationship-evidence recording disabled.
 func NewPeer(svc PeerService, v Verifier) *PeerHandler {
 	return &PeerHandler{svc: svc, v: v}
+}
+
+// NewPeerWithEvidence returns a PeerHandler that additionally records
+// relationship evidence (transfer.relationship.record) for RegisterSubscription
+// and Disconnect via rec — AFTER the domain call succeeds, so a rejected/failed
+// relationship change is never recorded as established, fail-closed (see
+// RegisterSubscription / Disconnect). A nil rec behaves exactly like NewPeer.
+func NewPeerWithEvidence(svc PeerService, v Verifier, rec RelationshipRecorder) *PeerHandler {
+	return &PeerHandler{svc: svc, v: v, evidence: rec}
 }
 
 func (h *PeerHandler) GetPublisherInfo(ctx context.Context, req *connect.Request[chainpb.GetPublisherInfoRequest]) (*connect.Response[chainpb.GetPublisherInfoResponse], error) {
@@ -82,10 +104,14 @@ func (h *PeerHandler) RegisterSubscription(ctx context.Context, req *connect.Req
 		"payload_delivery": req.Msg.GetPayloadDelivery(),
 	}
 	// Signer-to-actor binding: the signer must be the subscriber it claims to be.
-	bind := func(signerDID string, _ *did.DIDDocument, f map[string]any) error {
+	// It also captures the resolved doc so a configured evidence log can
+	// snapshot the verifying key material below.
+	var signerDoc *did.DIDDocument
+	bind := func(signerDID string, doc *did.DIDDocument, f map[string]any) error {
 		if f["subscriber_did"] != signerDID {
 			return errSignerMismatch
 		}
+		signerDoc = doc
 		return nil
 	}
 	if err := h.v.Verify(ctx, "RegisterSubscription", fields, proof, bind); err != nil {
@@ -94,6 +120,14 @@ func (h *PeerHandler) RegisterSubscription(ctx context.Context, req *connect.Req
 	sub, err := h.svc.RegisterSubscription(ctx, req.Msg.GetSubscriberDid(), req.Msg.GetPublisherDid(), req.Msg.GetPayloadDelivery())
 	if err != nil {
 		return nil, peerMapError(err)
+	}
+	// Record relationship evidence only AFTER the domain call succeeds: a
+	// rejected/failed registration must never be retained as an established
+	// relationship. signerDoc, captured by bind above, stays valid here.
+	if h.evidence != nil {
+		if err := h.recordEvidence(ctx, "RegisterSubscription", proof, fields, signerDoc); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
 	}
 	return connect.NewResponse(&chainpb.RegisterSubscriptionResponse{
 		SubscriptionId:  sub.ID,
@@ -110,14 +144,67 @@ func (h *PeerHandler) Disconnect(ctx context.Context, req *connect.Request[chain
 	}
 	fields := map[string]any{"subscription_id": req.Msg.GetSubscriptionId()}
 	// Ownership requires stored state, so it is checked in the domain (the actor
-	// is the signer; no separate actor field to bind here).
-	if err := h.v.Verify(ctx, "Disconnect", fields, proof, nil); err != nil {
+	// is the signer; no separate actor field to bind here). When evidence is
+	// configured, a capturing authorizer stands in for the usual nil — it
+	// authorizes unconditionally (returns nil) and only captures the resolved
+	// doc for recordEvidence below.
+	var authorize wireauth.Authorizer
+	var signerDoc *did.DIDDocument
+	if h.evidence != nil {
+		authorize = func(_ string, doc *did.DIDDocument, _ map[string]any) error {
+			signerDoc = doc
+			return nil
+		}
+	}
+	if err := h.v.Verify(ctx, "Disconnect", fields, proof, authorize); err != nil {
 		return nil, peerMapError(err)
 	}
 	if err := h.svc.Disconnect(ctx, req.Msg.GetSubscriptionId(), proof.SignerDID); err != nil {
 		return nil, peerMapError(err)
 	}
+	// Record relationship evidence only AFTER the domain call succeeds: a
+	// rejected/failed disconnect (unknown subscription, non-owner) must never
+	// be retained as a relationship change. signerDoc, captured above, stays
+	// valid here.
+	if h.evidence != nil {
+		if err := h.recordEvidence(ctx, "Disconnect", proof, fields, signerDoc); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	}
 	return connect.NewResponse(&chainpb.DisconnectResponse{}), nil
+}
+
+// recordEvidence builds and durably records the relationship-evidence entry
+// for a just-verified RegisterSubscription/Disconnect proof — the counterparty-
+// signed request, the signed-view version, the exact fields it was signed over,
+// and a snapshot of the verifying key material (extracted from doc exactly as
+// the wireauth verifier resolved it, so the retained record is self-contained
+// for re-verification). Callers invoke this AFTER the domain call succeeds, so
+// a rejected/failed relationship change is never recorded as established.
+func (h *PeerHandler) recordEvidence(ctx context.Context, op string, proof wireauth.Proof, fields map[string]any, doc *did.DIDDocument) error {
+	keyID := proof.SignerDID + "#auth"
+	pub, err := did.ExtractPublicKey(doc, keyID, did.RelationshipAuthentication)
+	if err != nil {
+		return fmt.Errorf("chainmanager: extract signer auth key for evidence: %w", err)
+	}
+	rec := evidence.Record{
+		Op:          op,
+		ViewVersion: wireauth.ViewVersion,
+		SignerDID:   proof.SignerDID,
+		Nonce:       proof.Nonce,
+		IssuedAt:    proof.IssuedAt.UTC().Format(time.RFC3339),
+		Signature:   proof.Signature,
+		Fields:      fields,
+		KeyMaterial: evidence.KeyMaterial{
+			Method:    keyID,
+			PublicKey: pub,
+			Type:      string(did.RelationshipAuthentication),
+		},
+	}
+	if _, err := h.evidence.Record(ctx, rec); err != nil {
+		return fmt.Errorf("chainmanager: record relationship evidence: %w", err)
+	}
+	return nil
 }
 
 // decodeProof converts the wire AuthProof to a wireauth.Proof, parsing issued_at
