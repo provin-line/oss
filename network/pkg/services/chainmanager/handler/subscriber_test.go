@@ -100,6 +100,7 @@ func TestOperatorHandler_Subscribe_ErrorMapping(t *testing.T) {
 		{"no endpoint", chainmanager.ErrNoChainManagerEndpoint, connect.CodeFailedPrecondition},
 		{"unsafe endpoint", chainmanager.ErrEndpointNotAllowed, connect.CodeInvalidArgument},
 		{"unsupported mode", chainmanager.ErrPayloadModeUnsupported, connect.CodeInvalidArgument},
+		{"duplicate subscription", chainmanager.ErrDuplicateSubscription, connect.CodeAlreadyExists},
 		{"unconfigured", chainmanager.ErrSubscriberUnconfigured, connect.CodeInternal},
 		{"remote peer", chainmanager.ErrRemotePeer, connect.CodeUnavailable},
 		{"not found", store.ErrNotFound, connect.CodeNotFound},

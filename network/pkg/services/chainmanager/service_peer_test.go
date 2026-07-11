@@ -22,6 +22,7 @@ type fakeInfra struct {
 	addErr          error
 	removeErr       error
 	imported        []string // remote subjects passed to AddImport
+	importedLocal   []string // local subjects passed to AddImport (same index as imported)
 	removedImports  []string // remote subjects passed to RemoveImport
 	importErr       error
 	removeImportErr error
@@ -42,11 +43,12 @@ func (f *fakeInfra) RemoveExport(s string) error {
 	f.removed = append(f.removed, s)
 	return nil
 }
-func (f *fakeInfra) AddImport(remoteSubject, _, _ string) error {
+func (f *fakeInfra) AddImport(remoteSubject, _, localSubject string) error {
 	if f.importErr != nil {
 		return f.importErr
 	}
 	f.imported = append(f.imported, remoteSubject)
+	f.importedLocal = append(f.importedLocal, localSubject)
 	return nil
 }
 func (f *fakeInfra) RemoveImport(remoteSubject, _ string) error {
@@ -88,11 +90,11 @@ func TestPeer_PublisherInfo_Admitted(t *testing.T) {
 	}
 }
 
-// The advertised modes offer inline but WITHHOLD by-reference — even when the
-// node serves payloads — because the export seam cannot yet apply the mode
-// (offeredPayloadModes / exportSeamAppliesDeliveryMode). Advertising a mode whose
-// subscriptions would fail every event would be false advertising.
-func TestPeer_PublisherInfo_WithholdsByReference(t *testing.T) {
+// The advertised modes always offer inline; by-reference is additionally
+// offered IFF the node serves payloads — the export seam now applies the
+// agreed mode structurally (exportSeamAppliesDeliveryMode; see its doc),
+// so payload serving is both necessary and sufficient once again.
+func TestPeer_PublisherInfo_ByReferenceTracksServing(t *testing.T) {
 	for _, serving := range []bool{false, true} {
 		subs := memstore.NewSubscriptionStore()
 		allows := memstore.NewAllowListStore()
@@ -120,8 +122,8 @@ func TestPeer_PublisherInfo_WithholdsByReference(t *testing.T) {
 		if !inline {
 			t.Errorf("serving=%v: modes %v omit inline", serving, modes)
 		}
-		if byref {
-			t.Errorf("serving=%v: modes %v advertise by-reference (export seam cannot apply the mode)", serving, modes)
+		if byref != serving {
+			t.Errorf("serving=%v: modes %v — by-reference presence must track serving", serving, modes)
 		}
 	}
 }
@@ -179,9 +181,12 @@ func TestPeer_RegisterSubscription_Success(t *testing.T) {
 }
 
 // An empty requested mode normalizes to by-reference, which this CM does NOT
-// offer (the export seam cannot yet apply the mode), so registration is
-// rejected — not silently agreed to a subscription that would fail every event.
-// A subscriber must explicitly request "inline".
+// offer (svcWith does not configure WithPayloadServing — a non-serving
+// publisher), so registration is rejected — not silently agreed to a
+// subscription that would fail every event. A subscriber must explicitly
+// request "inline". See TestPeer_RegisterSubscription_ByReference_
+// ExportsPrefixedSubject for the SERVING-publisher case, where an empty/
+// by-reference request now succeeds.
 func TestPeer_RegisterSubscription_EmptyModeRejected(t *testing.T) {
 	svc, subs := svcWith(t, &fakeInfra{})
 	_, err := svc.RegisterSubscription(context.Background(), subOwner, pubPipeline, "")

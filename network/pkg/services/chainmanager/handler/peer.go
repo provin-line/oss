@@ -250,11 +250,18 @@ func peerMapError(err error) error {
 		return connect.NewError(connect.CodePermissionDenied, err)
 	// Invalid arguments.
 	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported),
-		errors.Is(err, chainmanager.ErrInvalidPipelineDID):
+		errors.Is(err, chainmanager.ErrInvalidPipelineDID),
+		errors.Is(err, chainmanager.ErrUnsafeSubject):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	// Conflicts with existing subscription state (D-4 mixed-mode invariant,
+	// publisher-side defense-in-depth): the system is not in a state that
+	// permits this registration.
+	case errors.Is(err, chainmanager.ErrMixedModeSubscription):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, store.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, chainmanager.ErrInfraUnavailable):
+	case errors.Is(err, chainmanager.ErrInfraUnavailable),
+		errors.Is(err, chainmanager.ErrExportSubjectMissing):
 		return connect.NewError(connect.CodeInternal, err)
 	case errors.Is(err, context.Canceled):
 		return connect.NewError(connect.CodeCanceled, err)

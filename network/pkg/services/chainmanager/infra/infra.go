@@ -10,6 +10,10 @@ package infra
 type Operator interface {
 	// AddExport exposes outputSubject to subscribers and returns
 	// transport-specific connection parameters for the subscriber side.
+	// The returned map MUST include "subject" (the exact subject exported —
+	// normally outputSubject echoed back): the chain manager persists it and
+	// keys export ref-counting and Disconnect teardown on the stored value,
+	// and rejects a registration whose connectionInfo omits it.
 	AddExport(outputSubject string) (connectionInfo map[string]string, err error)
 	RemoveExport(outputSubject string) error
 

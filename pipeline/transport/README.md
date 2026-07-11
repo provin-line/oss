@@ -59,10 +59,25 @@ event processor.
 - **Payload delivery modes**: inside their own organization, processes always
   produce the full (inline) envelope. The per-subscription agreed mode
   (`inline` / `by-reference` — see the `Envelope` contract and the chainmanager
-  `Subscription` record) is applied at the cross-organization export seam,
-  where each backend realizes it its own way (per-mode subjects / topics, or a
-  stripping transform). Stripping the payload for by-reference delivery is
-  one-way cheap; the reverse is impossible without a fetch.
+  `Subscription` record) is applied at the cross-organization export seam.
+  Because an account export/import is a routing grant, not a message
+  transform, the seam cannot rewrite an in-flight envelope — so a serving
+  producing loop instead **dual-emits**: `Emitter`'s optional
+  `WithStrippedPublisher` capability additionally publishes a stripped
+  (`Payload: nil`) form of every event, under the SAME sequence number as the
+  primary publish, to a second `Publisher` bound at the composition root to
+  the mode-scoped subject chainmanager exports for that loop's by-reference
+  subscribers (NATS: a `"byref."`-prefixed subject). Which form a given
+  subscriber's account can see is then entirely a matter of the export/import
+  grant, never a runtime branch. A stripped-publish failure never fails
+  `Emit` — the primary already delivered, so failing here would force a
+  seq-reuse retry that DUPLICATES the primary delivery, which is worse than
+  the stripped form's own at-most-once loss (the existing emission-log
+  sequence-gap detection already accounts for it as POSSIBLE LOSS); the
+  failure instead increments `Emitter.StrippedPublishFailures()` (+
+  `LastStrippedPublishFailure()`) — the wiring point for a future health/
+  metrics surface. Stripping the payload is one-way cheap; the reverse is
+  impossible without a fetch.
 - **Emission logging**: the publisher side records each published event
   (credential hash + sequence number) to a `tlog` log — the "what was
   delivered" record the audit reconciliation model depends on. The recorded

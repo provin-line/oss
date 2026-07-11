@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
@@ -51,6 +53,14 @@ type emissionRecord struct {
 // one log and forking the sequence — the node's output-subject-uniqueness boot
 // invariant (one producing loop, one log, one emitter per identity) is what
 // prevents that.
+//
+// Dual-emit (optional, see WithStrippedPublisher): a serving node additionally
+// publishes a stripped (Payload: nil) form of every event under the same
+// sequence number, to a second Publisher bound to the export seam's
+// mode-scoped subject — this is how the cross-organization export seam
+// applies an agreed by-reference delivery mode, since it cannot transform a
+// message in flight. It rides the exact same publish→append ordering; a
+// stripped-publish failure never perturbs it (see Emit).
 type Emitter struct {
 	pub      Publisher
 	codec    contract.EnvelopeCodec
@@ -60,8 +70,20 @@ type Emitter struct {
 	// records the sequence it is about to publish BEFORE publishing.
 	intent   intentLog
 	retainer PayloadRetainer
+	// stripped is the optional cross-org export-seam dual-emit capability (see
+	// WithStrippedPublisher). nil leaves Emit a single-publish (inline-only)
+	// producer, byte-for-byte the pre-dual-emit behavior.
+	stripped Publisher
 	logger   *slog.Logger
 	seq      uint64
+	// strippedFailures / lastStrippedFailure back the read accessors
+	// StrippedPublishFailures / LastStrippedPublishFailure. They are accessed
+	// with atomics (not the single-goroutine Emit discipline the seq counter
+	// relies on) because they are the intended wiring point for a health/
+	// metrics surface polling from a DIFFERENT goroutine than the one calling
+	// Emit.
+	strippedFailures    atomic.Uint64
+	lastStrippedFailure atomic.Int64 // UnixNano; 0 = never failed
 }
 
 // PayloadRetainer is the optional publisher-side capability that retains a
@@ -85,6 +107,48 @@ type EmitterOption func(*Emitter)
 // the Emitter an ordinary inline producer.
 func WithPayloadRetainer(r PayloadRetainer) EmitterOption {
 	return func(e *Emitter) { e.retainer = r }
+}
+
+// WithStrippedPublisher attaches the dual-emit capability the cross-org
+// export seam relies on to apply an agreed by-reference delivery mode
+// (export-seam-mode spec D-1/D-5/D-6): the seam cannot transform a NATS
+// message in flight (account export/import is a routing grant, not a
+// transform), so a serving node's producing loop instead publishes TWICE —
+// the primary (full) form on its existing subject, and a STRIPPED form
+// (Payload: nil, same sequence number) on pub, which is bound at the
+// composition root to the mode-scoped subject a by-reference subscriber's
+// account imports (e.g. "byref.<outputSubject>"). Which subscribers can see
+// which form is then entirely a matter of the export/import grant — not a
+// runtime branch here. Omitting this option leaves the Emitter a
+// single-publish (inline-only) producer, byte-for-byte the pre-dual-emit
+// behavior; see Emit's partial-failure semantics doc and
+// StrippedPublishFailures for what happens when the stripped publish itself
+// fails.
+func WithStrippedPublisher(pub Publisher) EmitterOption {
+	return func(e *Emitter) { e.stripped = pub }
+}
+
+// StrippedPublishFailures returns the number of stripped-publish failures
+// (marshal or publish) recorded since construction — monotonic, never reset.
+// It is the wiring point for a future health/metrics surface (L3
+// observability): the emission log is form-independent by design (§ its
+// doc), so it cannot itself reveal a persistent, systematic stripped-form
+// divergence (inline healthy, by-reference silently failing); a caller
+// polling this counter (and LastStrippedPublishFailure) from a separate
+// goroutine can. A zero value with no WithStrippedPublisher configured, or
+// with one configured but never yet failing, are indistinguishable — callers
+// that need to tell those apart hold the EmitterOption they passed.
+func (e *Emitter) StrippedPublishFailures() uint64 { return e.strippedFailures.Load() }
+
+// LastStrippedPublishFailure returns the time of the most recent
+// stripped-publish failure and true, or the zero Time and false if none has
+// occurred yet. Same wiring point as StrippedPublishFailures.
+func (e *Emitter) LastStrippedPublishFailure() (time.Time, bool) {
+	n := e.lastStrippedFailure.Load()
+	if n == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, n), true
 }
 
 // intentLog is the optional durable-sequence-intent capability an Emitter's
@@ -227,6 +291,14 @@ func committedTailSequence(ctx context.Context, emission tlog.Log) (uint64, erro
 // assumes a publish error means not-delivered; an AMBIGUOUS publish error (a
 // broker that accepted the PUB before the flush timed out) can still make
 // reuse collide — a pre-existing, orthogonal residual (see NewEmitter).
+//
+// Dual-emit partial failure (when WithStrippedPublisher is configured): the
+// stripped publish runs AFTER the primary publish has already succeeded, so
+// its own failure does NOT change any of the above — the sequence still
+// advances and the emission log still appends exactly once, form-independent.
+// See publishStripped for why failing Emit here would be strictly worse (it
+// would duplicate the primary delivery on retry) and StrippedPublishFailures
+// for how the loss is made observable instead.
 func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, payload []byte) error {
 	next := e.seq
 
@@ -311,6 +383,14 @@ func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, pay
 	// Advance ONLY after a successful publish.
 	e.seq = next + 1
 
+	// Dual-emit: best-effort stripped (Payload: nil) publish to the export
+	// seam's mode-scoped subject, under the SAME sequence number as the
+	// primary publish just above (see WithStrippedPublisher). A failure here
+	// never fails Emit — see publishStripped's doc for why.
+	if e.stripped != nil {
+		e.publishStripped(cred, next)
+	}
+
 	// Append the pre-computed emission record under a detached context so that
 	// ctx cancellation at shutdown cannot abort recording a delivered event.
 	if _, err := e.emission.Append(context.WithoutCancel(ctx), rec); err != nil {
@@ -319,4 +399,39 @@ func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, pay
 		// audit-defense loss. Log loudly; do not re-attempt (PoC posture).
 	}
 	return nil
+}
+
+// publishStripped marshals and publishes the stripped (Payload: nil) form of
+// an already-delivered primary event. It NEVER returns an error to Emit:
+// primary delivery already happened, so failing Emit here would force a
+// seq-reuse retry that DUPLICATES the primary delivery on the next attempt —
+// worse than the stripped form's own loss, which the existing at-most-once
+// loss-accounting machinery (emission-log sequence-gap detection + TlogService
+// reconciliation) already covers as POSSIBLE LOSS (the same class core NATS
+// itself already admits for any subscriber). A failure instead increments the
+// monotonic StrippedPublishFailures counter, records the failure time, and
+// logs loudly with the counter attached — see StrippedPublishFailures.
+func (e *Emitter) publishStripped(cred *vc.PipelinePassCredential, seq uint64) {
+	wire, err := e.codec.MarshalEnvelope(&contract.Envelope{
+		Credential: cred,
+		Payload:    nil,
+		SequenceNo: seq,
+	})
+	if err != nil {
+		e.recordStrippedFailure()
+		e.logger.Error("transport: marshal stripped envelope failed", "err", err, "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
+		return
+	}
+	if err := e.stripped.Publish(wire); err != nil {
+		e.recordStrippedFailure()
+		e.logger.Error("transport: stripped publish failed", "err", err, "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
+		return
+	}
+}
+
+// recordStrippedFailure advances the failure counter and last-failure time
+// (see StrippedPublishFailures / LastStrippedPublishFailure).
+func (e *Emitter) recordStrippedFailure() {
+	e.strippedFailures.Add(1)
+	e.lastStrippedFailure.Store(time.Now().UnixNano())
 }

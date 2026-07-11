@@ -54,6 +54,14 @@ type LoopConfig struct {
 	// Emitter). Optional; nil leaves the loop an ordinary inline producer. Only
 	// meaningful for producing behaviors.
 	PayloadRetainer PayloadRetainer
+	// StrippedPublisher, when non-nil, makes the loop's Emitter dual-emit: a
+	// stripped (Payload: nil) form of every event additionally publishes to
+	// it, under the same sequence number as the primary publish — the
+	// cross-org export seam's mechanism for applying an agreed by-reference
+	// delivery mode (see transport.WithStrippedPublisher). Optional; nil
+	// leaves the loop single-publish, byte-for-byte the pre-dual-emit
+	// behavior. Only meaningful for producing behaviors.
+	StrippedPublisher Publisher
 	// Logger is used for operational log output. Nil defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -149,6 +157,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		var opts []EmitterOption
 		if l.cfg.PayloadRetainer != nil {
 			opts = append(opts, WithPayloadRetainer(l.cfg.PayloadRetainer))
+		}
+		if l.cfg.StrippedPublisher != nil {
+			opts = append(opts, WithStrippedPublisher(l.cfg.StrippedPublisher))
 		}
 		emitter, err = NewEmitter(ctx, l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger, opts...)
 		if err != nil {

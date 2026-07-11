@@ -29,6 +29,82 @@ per subscription and immutable for its lifetime — changing mode means a new
 subscription. See the `Subscription` record contract (`store/`) and the
 `Envelope` contract (`pipeline/contract`).
 
+**Empty-mode compatibility callout**: an unspecified request mode is
+NORMALIZED to by-reference, not to inline. A serving publisher now genuinely
+offers by-reference (see below), so an empty/omitted mode request that used
+to be a typed rejection now SUCCEEDS as a by-reference agreement. This is a
+behavior change, not a compatibility alias: the consumer side must be
+configured for by-reference (`payload-delivery = "by-reference"` config key +
+a `PayloadResolver`) or the ingress will reject every event as a delivery
+violation. An older client that wants inline must request it explicitly —
+omitting the mode no longer means "give me inline."
+
+## Mode-scoped export subjects and the subscriber-side rename
+
+The export seam cannot transform a NATS message in flight (an account
+export/import is a routing grant, not a payload transform), so it applies the
+agreed payload-delivery mode STRUCTURALLY, by mapping the mode to a distinct
+wire subject:
+
+- `subjectForMode(publisherDID, mode)` (service-internal): `inline` exports
+  the plain `publisherDID`; `by-reference` exports `"byref." + publisherDID`
+  (`ByReferenceSubjectPrefix`, exported so a producing loop's composition
+  root — `cmd/standalone` — can bind its dual-emit stripped-form publish to
+  the EXACT same subject, without duplicating the prefix convention). Prefix,
+  not suffix: a dplaax DID's registry segment may itself contain dots, so a
+  suffix scheme cannot rule out colliding with a DID that happens to end in a
+  matching segment without a grammar proof; a prefix partitions cleanly on
+  the first token. The function doubles as the NATS-subject-safety validator
+  for `publisherDID` (whitespace / `*` / `>` / an empty dot-segment all fail
+  closed with `ErrUnsafeSubject`) — `requirePipelineDID` only proves DID
+  shape, never wire-subject safety.
+- The publisher's export ref-count is keyed on the EXPORTED SUBJECT, not
+  `publisherDID`: an inline and a by-reference subscription of the same
+  publisher export different subjects and ref-count independently — one
+  mode's teardown never touches the other's export, and two subscribers on
+  the SAME mode/subject share one export (idempotent `AddExport`).
+- **Teardown is driven by the STORED subject, never recomputed**:
+  `Disconnect` removes `sub.ConnectionInfo["subject"]` — the subject
+  `AddExport` actually returned at registration time — rather than
+  re-deriving it from `PayloadDelivery`/`subjectForMode`. This makes teardown
+  correct for a legacy record too: every subscription created before this
+  mode-application landed was exported on the PLAIN subject regardless of
+  its agreed mode (the export seam did not yet apply the mode), so
+  `ConnectionInfo["subject"]` is what must be removed, not what the current
+  mapping would compute today. A record with no stored subject is a damaged
+  record; `Disconnect` fails closed (`ErrExportSubjectMissing`) rather than
+  guessing.
+- **Subscriber-side rename**: `Subscribe`'s `AddImport` renames the remote
+  subject to a LOCAL subject that is always the plain `publisherDID` —
+  inline's remote already IS `publisherDID` (a no-op rename); by-reference's
+  remote is `"byref." + publisherDID`, renamed back to the plain DID. The
+  consuming loop's `ingress-subject` config is therefore mode-independent: it
+  never has to name or know about the `"byref."` prefix, and a subscription's
+  mode can change (a new subscription, since mode is per-subscription
+  immutable) without touching loop config.
+- **Mixed-mode invariant**: because both modes' remotes rename to the SAME
+  local subject, one subscriber account holding an inline AND a by-reference
+  subscription to the SAME publisher at once would receive both forms on one
+  local subject (duplicate processing + a delivery-violation reject).
+  Enforced on both sides: `Subscribe` (subscriber side, authoritative)
+  rejects a second subscription to a publisher it already subscribes to,
+  under ANY mode (`ErrDuplicateSubscription` — change mode via Unsubscribe
+  then re-Subscribe); `RegisterSubscription` (publisher side,
+  defense-in-depth) rejects a registration for a
+  (subscriberDID, publisherDID) pair that already holds a DIFFERENT mode
+  (`ErrMixedModeSubscription`). Different SUBSCRIBERS may hold different
+  modes to the same publisher freely — the invariant is scoped to one
+  subscriber/publisher pair, not the publisher alone.
+- **Upgrade sequence for legacy stored by-reference subscriptions**: a
+  subscription registered before this slice, whose stored mode reads
+  by-reference (or empty — the pre-existing default), was actually exported
+  on the plain subject; the data path does not migrate automatically (mode
+  is per-subscription immutable — PoC posture). To pick up real by-reference
+  delivery: `Unsubscribe` the old subscription from the subscriber side (it
+  drives the publisher's `Disconnect`, which removes the plain export via the
+  stored-subject teardown above, cleanly — no leak) and re-`Subscribe` with
+  an explicit `"by-reference"` request.
+
 ## infra/ — transport abstraction
 
 `InfraOperator` (AddExport / RemoveExport / AddImport / RemoveImport / PublishType)

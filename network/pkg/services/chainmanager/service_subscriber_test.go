@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/did"
@@ -37,6 +38,7 @@ type fakePeer struct {
 	registered       int
 	disconnected     []string
 	cancelOnRegister context.CancelFunc // if set, cancels the caller ctx mid-flight
+	onRegister       func()             // if set, runs after the remote side-effect commits (races a concurrent winner)
 }
 
 func (f *fakePeer) GetPublisherInfo(context.Context, string, string, string) (string, []string, error) {
@@ -53,6 +55,9 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 	if f.cancelOnRegister != nil {
 		f.cancelOnRegister() // simulate the caller's ctx being canceled after the remote side-effect
 	}
+	if f.onRegister != nil {
+		f.onRegister() // simulate a concurrent Subscribe winning between the unlocked check and the lock
+	}
 	f.registered++
 	agreed := f.agreedMode
 	if agreed == "" {
@@ -61,7 +66,21 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 			agreed = "by-reference"
 		}
 	}
-	return f.remoteID, f.connInfo, f.publishType, agreed, nil
+	// Mirror a real publisher's subjectForMode: a by-reference agreement
+	// exports (and reports) the prefixed subject. A test that scripts an
+	// already-prefixed or deliberately-foreign subject is passed through
+	// verbatim (the mismatch test relies on that).
+	connInfo := f.connInfo
+	if agreed == "by-reference" && connInfo != nil && connInfo["subject"] != "" &&
+		!strings.HasPrefix(connInfo["subject"], ByReferenceSubjectPrefix) {
+		derived := make(map[string]string, len(connInfo))
+		for k, v := range connInfo {
+			derived[k] = v
+		}
+		derived["subject"] = ByReferenceSubjectPrefix + derived["subject"]
+		connInfo = derived
+	}
+	return f.remoteID, connInfo, f.publishType, agreed, nil
 }
 
 func (f *fakePeer) Disconnect(ctx context.Context, _, remoteID string) error {
@@ -362,16 +381,36 @@ func TestSubscribe_InvalidSubscriberDID(t *testing.T) {
 }
 
 // Unsubscribing one subscriber must NOT tear down the shared import while a
-// sibling subscriber of the same publisher subject remains (Codex P2 ref-count).
+// sibling subscriber-direction record on the same remote subject remains
+// (Codex P2 ref-count). Under D-4's mixed-mode invariant, Subscribe itself no
+// longer produces two subscriber-direction records for the SAME publisherDID
+// (ErrDuplicateSubscription rejects the second regardless of subscriberDID —
+// the local infra account has exactly one import target per publisherDID, so
+// two live subscriber records for one publisher would collide on it). The
+// sibling state is therefore constructed directly against the store here,
+// keeping the ref-count teardown logic itself covered as the still-real,
+// defensive code it is (e.g. a legacy/migrated store could hold it).
 func TestUnsubscribe_SiblingKeepsImport(t *testing.T) {
 	inf, peer := &fakeInfra{}, defaultPeer()
-	svc, _ := subSvc(inf, peer, publicGuard())
+	svc, subs := subSvc(inf, peer, publicGuard())
 	id1, err := svc.Subscribe(context.Background(), subOwner, pubPipeline, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := svc.Subscribe(context.Background(), "did:dplaax:reg:org:sub2", pubPipeline, "")
+	sub1, err := subs.Get(id1)
 	if err != nil {
+		t.Fatal(err)
+	}
+	sibling := &store.Subscription{
+		ID:              "sibling",
+		SubscriberDID:   "did:dplaax:reg:org:sub2",
+		PublisherDID:    pubPipeline,
+		PayloadDelivery: sub1.PayloadDelivery,
+		ConnectionInfo:  sub1.ConnectionInfo,
+		Direction:       directionSubscriber,
+		RemoteID:        "remote-sibling",
+	}
+	if err := subs.Save(sibling); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Unsubscribe(context.Background(), id1); err != nil {
@@ -380,7 +419,7 @@ func TestUnsubscribe_SiblingKeepsImport(t *testing.T) {
 	if len(inf.removedImports) != 0 {
 		t.Errorf("sibling remains: RemoveImport must not fire, got %v", inf.removedImports)
 	}
-	if err := svc.Unsubscribe(context.Background(), id2); err != nil {
+	if err := svc.Unsubscribe(context.Background(), sibling.ID); err != nil {
 		t.Fatal(err)
 	}
 	if len(inf.removedImports) != 1 {
@@ -413,19 +452,19 @@ func TestSubscribe_CompensationSurvivesCanceledContext(t *testing.T) {
 	}
 }
 
-// countForPublisher must ignore subscriber-direction records so a publisher
+// countForSubject must ignore subscriber-direction records so a publisher
 // Disconnect tears down its export based on publisher records alone.
-func TestCountForPublisher_IgnoresSubscriberDirection(t *testing.T) {
+func TestCountForSubject_IgnoresSubscriberDirection(t *testing.T) {
 	inf, peer := &fakeInfra{}, defaultPeer()
 	svc, _ := subSvc(inf, peer, publicGuard())
 	if _, err := svc.Subscribe(context.Background(), subOwner, pubPipeline, ""); err != nil {
 		t.Fatal(err)
 	}
-	n, err := svc.countForPublisher(pubPipeline)
+	n, err := svc.countForSubject(pubPipeline)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Errorf("countForPublisher = %d, want 0 (subscriber record must not count)", n)
+		t.Errorf("countForSubject = %d, want 0 (subscriber record must not count)", n)
 	}
 }

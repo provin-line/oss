@@ -288,6 +288,9 @@ func TestPeerHandler_DomainError_Mapped(t *testing.T) {
 		{"unsupported mode", chainmanager.ErrPayloadModeUnsupported, connect.CodeInvalidArgument},
 		{"invalid publisher", chainmanager.ErrInvalidPipelineDID, connect.CodeInvalidArgument},
 		{"infra unavailable", chainmanager.ErrInfraUnavailable, connect.CodeInternal},
+		{"unsafe subject", chainmanager.ErrUnsafeSubject, connect.CodeInvalidArgument},
+		{"mixed mode", chainmanager.ErrMixedModeSubscription, connect.CodeFailedPrecondition},
+		{"export subject missing", chainmanager.ErrExportSubjectMissing, connect.CodeInternal},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

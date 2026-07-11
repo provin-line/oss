@@ -19,6 +19,7 @@ import (
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	payloadclient "github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/pipeline/chained"
@@ -143,6 +144,25 @@ type boundRetainer struct {
 
 func (r boundRetainer) Retain(ctx context.Context, payload []byte) (string, error) {
 	return r.store.Store(ctx, payload, r.owner)
+}
+
+// strippedPublisherFor binds a producing loop's dual-emit stripped-form
+// publisher to conn's export-seam subject for the loop's output subject —
+// the sibling of retainerFor, and the wiring half of the export-seam-mode
+// spec's D-6 posture
+// ("serve ⇒ retain ⇒ dual-emit is one capability unit, no per-loop opt-out"):
+// returns nil when no PayloadStore is wired (an inline-only node, same
+// condition retainerFor gates on), else a Publisher bound to
+// chainmanager.ByReferenceSubjectPrefix+subject — the EXACT subject
+// chainmanager exports for a by-reference subscription of this loop's output
+// (subjectForMode), so a serving node's dual-emit and its chainmanager's
+// export grant always agree on the wire subject without duplicating the
+// prefix convention.
+func (pw payloadWiring) strippedPublisherFor(conn *natstransport.Conn, subject string) transport.Publisher {
+	if pw.store == nil {
+		return nil
+	}
+	return conn.Publisher(chainmanager.ByReferenceSubjectPrefix + subject)
 }
 
 // parseDelivery maps a config payload-delivery token to its contract value.
@@ -464,14 +484,15 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 		return nil, fmt.Errorf("standalone: loop %q: ingest processor: %w", lc.Name, err)
 	}
 	loop, err := transport.NewLoop(transport.LoopConfig{
-		Behavior:        contract.ChainFirstDrop,
-		Strategy:        contract.VerificationNone,
-		Processor:       proc,
-		Subscriber:      sub,
-		Publisher:       conn.Publisher(src.OutputSubject),
-		Codec:           envelopecodec.New(),
-		Emission:        emission,
-		PayloadRetainer: pw.retainerFor(src.OutputSubject),
+		Behavior:          contract.ChainFirstDrop,
+		Strategy:          contract.VerificationNone,
+		Processor:         proc,
+		Subscriber:        sub,
+		Publisher:         conn.Publisher(src.OutputSubject),
+		Codec:             envelopecodec.New(),
+		Emission:          emission,
+		PayloadRetainer:   pw.retainerFor(src.OutputSubject),
+		StrippedPublisher: pw.strippedPublisherFor(conn, src.OutputSubject),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -584,14 +605,15 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		return nil, fmt.Errorf("standalone: loop %q: chained processor: %w", lc.Name, err)
 	}
 	loop, err := transport.NewLoop(transport.LoopConfig{
-		Behavior:        contract.ChainPreserving,
-		Strategy:        strategy,
-		Processor:       proc,
-		Subscriber:      conn.Subscriber(lc.IngressSubject),
-		Publisher:       conn.Publisher(cc.OutputSubject),
-		Codec:           envelopecodec.New(),
-		Emission:        emission,
-		PayloadRetainer: pw.retainerFor(cc.OutputSubject),
+		Behavior:          contract.ChainPreserving,
+		Strategy:          strategy,
+		Processor:         proc,
+		Subscriber:        conn.Subscriber(lc.IngressSubject),
+		Publisher:         conn.Publisher(cc.OutputSubject),
+		Codec:             envelopecodec.New(),
+		Emission:          emission,
+		PayloadRetainer:   pw.retainerFor(cc.OutputSubject),
+		StrippedPublisher: pw.strippedPublisherFor(conn, cc.OutputSubject),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -637,6 +659,9 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		// The aggregate produces a FirstDrop head; retain its payload for by-reference
 		// subscribers (bound to its own output pipeline DID as the serving owner).
 		PayloadRetainer: pw.retainerFor(ac.OutputSubject),
+		// Dual-emit the stripped form to the export seam's mode-scoped subject
+		// (same serve ⇒ retain ⇒ dual-emit unit as the source/chained loops).
+		StrippedPublisher: pw.strippedPublisherFor(conn, ac.OutputSubject),
 	}
 	// ac.VerificationStrategy is config-validated to "adjacent"; the aggregate runtime
 	// declares VerificationAdjacent intrinsically, so it takes no strategy field.

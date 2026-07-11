@@ -18,6 +18,19 @@
 
 payload 配送（`inline` / `by-reference`、デフォルト `by-reference`）は購読ごとに合意され、購読の生存期間中は不変 — モード変更 = 新規購読。`Subscription` record の契約（`store/`）と `Envelope` の契約（`pipeline/contract`）を参照。
 
+**empty-mode 互換性についての注意**: 未指定のリクエストモードは inline ではなく by-reference に正規化される。serving するパブリッシャーは now genuinely by-reference を提供する（後述）ため、以前は typed rejection だった empty/未指定モードのリクエストが、現在は by-reference 合意として**成立する**。これは互換エイリアスではなく挙動変更である: consumer 側は by-reference 用に構成されていなければならない（`payload-delivery = "by-reference"` config key + `PayloadResolver`）— さもなければ ingress は全イベントを配送違反として reject する。inline を望む古いクライアントは明示的にリクエストする必要がある — モード省略はもはや「inline をくれ」を意味しない。
+
+## モードスコープ export subject と subscriber 側 rename
+
+export seam は飛行中の NATS メッセージを変換できない（account の export/import はルーティング権限であり payload の変換ではない）ため、合意済み payload 配送モードを**構造的に**適用する — モードを個別の wire subject へ写像することによって:
+
+- `subjectForMode(publisherDID, mode)`（service 内部）: `inline` は plain な `publisherDID` を export し、`by-reference` は `"byref." + publisherDID`（`ByReferenceSubjectPrefix` — composition root（`cmd/standalone`）が生産ループの dual-emit stripped-form publish を全く同じ subject へ bind できるよう export 済み定数。prefix 規約の重複を避ける）を export する。suffix ではなく prefix である理由: dplaax DID の registry セグメント自体がドットを含み得るため、suffix 方式では「該当セグメントで終わる DID」との衝突を文法証明なしに排除できない；prefix なら先頭 token で綺麗に分離できる。この関数は `publisherDID` の NATS-subject 安全性検証も兼ねる（whitespace / `*` / `>` / 空 dot セグメントはすべて `ErrUnsafeSubject` で fail-closed）— `requirePipelineDID` は DID の形を証明するのみで、wire subject としての安全性は証明しない。
+- パブリッシャー側の export ref-count は `publisherDID` ではなく**export された subject**をキーにする: 同一パブリッシャーへの inline 購読と by-reference 購読は異なる subject を export し、独立に ref-count される — 片方の teardown がもう片方の export に触れることはなく、同一モード/subject の 2 subscriber は 1 つの export を共有する（`AddExport` は idempotent）。
+- **teardown は保存された subject から駆動する（再計算しない）**: `Disconnect` は `sub.ConnectionInfo["subject"]`（登録時に `AddExport` が実際に返した subject）を削除する。`PayloadDelivery`/`subjectForMode` から再導出することはない。これにより legacy record の teardown も正しく動作する: この mode 適用が入る前に作られたすべての購読は、合意モードに関わらず PLAIN subject で export されていた（export seam がまだモードを適用していなかった）ため、`ConnectionInfo["subject"]` こそが削除すべき対象であり、現在の写像が計算する値ではない。保存 subject が欠落したレコードは破損状態であり、`Disconnect` は推測せず fail-closed（`ErrExportSubjectMissing`）する。
+- **subscriber 側の rename**: `Subscribe` の `AddImport` は remote subject を、常に plain な `publisherDID` である LOCAL subject へ rename する — inline の remote は既に `publisherDID`（rename は no-op）、by-reference の remote は `"byref." + publisherDID` で plain DID へ rename し直す。consuming loop の `ingress-subject` config はモードに依らない: `"byref."` prefix を知る必要は一切なく、購読のモードが変わっても（モードは購読ごと immutable なので新規購読になる）loop config に触れる必要がない。
+- **mixed-mode invariant**: 両モードの remote が同一 local subject に rename されるため、同一 subscriber account が同一パブリッシャーへの inline と by-reference の購読を同時に持つと、1 つの local subject に両形式が届いてしまう（重複処理 + 配送違反 reject）。両側で強制する: `Subscribe`（subscriber 側、authoritative）は、既に何らかのモードで購読済みのパブリッシャーへの 2 回目の購読を拒否する（`ErrDuplicateSubscription` — モード変更は Unsubscribe → 再 Subscribe）；`RegisterSubscription`（publisher 側、defense-in-depth）は、(subscriberDID, publisherDID) の組が既に**異なる**モードで登録されている場合の登録を拒否する（`ErrMixedModeSubscription`）。異なる subscriber は同一パブリッシャーへ異なるモードを自由に保持できる — invariant は 1 つの subscriber/publisher 組にスコープされ、パブリッシャー単体ではない。
+- **legacy な保存済み by-reference 購読のアップグレード手順**: この slice 以前に登録された購読で、保存モードが by-reference（または空 — 従来のデフォルト）を示すものは、実際には plain subject で export されていた。データパスは自動移行しない（モードは購読ごと immutable — PoC ポスチャ）。実際の by-reference 配送を得るには: 旧購読を subscriber 側から `Unsubscribe`（publisher 側の `Disconnect` を駆動し、上記の保存 subject 起点 teardown により plain export を漏れなく撤去）してから、明示的に `"by-reference"` を指定して再 `Subscribe` する。
+
 ## infra/ — トランスポート抽象
 
 `InfraOperator`（AddExport / RemoveExport / AddImport / RemoveImport / PublishType）は、pub-sub バックエンドの Hub スワップポイントである。実装:

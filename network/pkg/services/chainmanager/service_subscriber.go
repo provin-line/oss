@@ -33,6 +33,15 @@ var (
 	// parseable dplaax DID — a fast local fail-closed before any signed round-trip
 	// (D-s7).
 	ErrInvalidSubscriberDID = errors.New("chainmanager: invalid subscriber DID")
+	// ErrDuplicateSubscription is returned when Subscribe is called for a
+	// publisherDID this CM already holds a subscriber-direction subscription
+	// for, under ANY mode (D-4, authoritative half of the mixed-mode
+	// invariant): both inline and by-reference remotes rename to the SAME
+	// local subject (see importTargets/AddImport below), so holding two
+	// subscriptions to one publisher at once would deliver duplicate/mixed
+	// forms on that one local subject. Mode is per-subscription immutable —
+	// changing it means Unsubscribe then re-Subscribe.
+	ErrDuplicateSubscription = errors.New("chainmanager: already subscribed to this publisher")
 )
 
 // DIDResolver resolves a DID to its DID Document — here, the publisher's, to read
@@ -108,6 +117,12 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	if _, err := dplaax.Parse(subscriberDID); err != nil {
 		return "", fmt.Errorf("%w: %q: %v", ErrInvalidSubscriberDID, subscriberDID, err)
 	}
+	// Mixed-mode invariant, subscriber side (D-4, authoritative): reject before
+	// any remote round-trip if a subscription to this publisher already exists,
+	// under any mode.
+	if err := s.rejectDuplicateSubscription(publisherDID); err != nil {
+		return "", err
+	}
 
 	endpoint, err := s.resolveEndpoint(ctx, publisherDID)
 	if err != nil {
@@ -116,9 +131,9 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 
 	// Discover + negotiate before committing: a mode the publisher does not offer
 	// is rejected locally (no wasted registration / nonce). An empty request
-	// normalizes to by-reference, which is NOT currently offered (the export seam
-	// cannot yet apply the mode), so an empty or explicit by-reference request is
-	// rejected here — the subscriber must request "inline".
+	// normalizes to by-reference (the wire negotiation default), so it succeeds
+	// here exactly when the publisher serves payloads (offeredPayloadModes);
+	// otherwise it is rejected and the subscriber must request "inline".
 	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, subscriberDID, publisherDID)
 	if err != nil {
 		return "", fmt.Errorf("%w: get publisher info: %w", ErrRemotePeer, err)
@@ -140,7 +155,32 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Re-run the duplicate check UNDER the lock (the pre-RPC check above is a
+	// fast-fail only): two concurrent Subscribes to the same publisher can both
+	// pass the unlocked check before either persists, and would import both
+	// mode subjects renamed onto the same local subject — the mixed-delivery
+	// state D-4 forbids. The loser compensates its already-committed remote
+	// registration (multi-agent-review convergent finding, 2026-07-12).
+	if err := s.rejectDuplicateSubscription(publisherDID); err != nil {
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		return "", err
+	}
+
 	remoteSubject, remoteAccountKey := importTargets(connInfo)
+	// The remote-supplied import subject is asserted against what THIS side
+	// derives for the agreed mode before any local wiring: a buggy or lying
+	// publisher must not be able to steer the subscriber's import to an
+	// arbitrary subject in its account (renamed onto publisherDID, it would be
+	// consumed as if it were the publisher's output).
+	wantSubject, err := subjectForMode(publisherDID, agreedMode)
+	if err != nil {
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		return "", err
+	}
+	if remoteSubject != wantSubject {
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		return "", fmt.Errorf("%w: publisher returned import subject %q, want %q for mode %q", ErrRemotePeer, remoteSubject, wantSubject, agreedMode)
+	}
 	// Ref-count the shared import by remote subject (mirror the publisher export
 	// ref-count): only the first subscriber for a subject creates the import, so
 	// only the first should compensate by removing it.
@@ -149,7 +189,14 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
 		return "", err
 	}
-	if err := s.infra.AddImport(remoteSubject, remoteAccountKey, remoteSubject); err != nil {
+	// localSubject = publisherDID (D-4 rename), NOT remoteSubject: inline's
+	// remote is already publisherDID (a no-op rename), while by-reference's
+	// remote is ByReferenceSubjectPrefix+publisherDID — renaming it back to the
+	// plain publisherDID is what lets the consuming loop's ingress-subject
+	// config stay mode-independent (the loop never has to know or express
+	// "byref."). AddImport's renaming-import capability makes this a pure
+	// config-side absorption; no new wire concept.
+	if err := s.infra.AddImport(remoteSubject, remoteAccountKey, publisherDID); err != nil {
 		// the remote already registered → undo it (best-effort, fresh context).
 		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
 		return "", fmt.Errorf("chainmanager: add import: %w", err)
@@ -303,9 +350,27 @@ func assertModeOffered(requested string, offered []string) error {
 	return fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, mode)
 }
 
-// importTargets derives the AddImport/RemoveImport arguments from a publisher's
-// connection_info. PoC naming is 1:1 (local subject = remote subject); a richer
-// subject scheme is deferred (C2).
+// importTargets derives the AddImport/RemoveImport REMOTE-side arguments from
+// a publisher's connection_info — the local subject is NOT derived here (see
+// Subscribe: localSubject = publisherDID, D-4's rename). A richer subject
+// scheme beyond D-2's mode-scoped prefix is deferred (C2).
 func importTargets(connInfo map[string]string) (remoteSubject, remoteAccountKey string) {
 	return connInfo["subject"], connInfo["account"]
+}
+
+// rejectDuplicateSubscription enforces the subscriber-side, AUTHORITATIVE
+// half of the mixed-mode invariant (D-4): Subscribe is rejected if a
+// subscriber-direction subscription to publisherDID already exists, under any
+// mode.
+func (s *Service) rejectDuplicateSubscription(publisherDID string) error {
+	all, err := s.subs.List()
+	if err != nil {
+		return err
+	}
+	for _, sub := range all {
+		if directionOf(sub) == directionSubscriber && sub.PublisherDID == publisherDID {
+			return fmt.Errorf("%w: %q", ErrDuplicateSubscription, publisherDID)
+		}
+	}
+	return nil
 }

@@ -48,10 +48,12 @@ type Service struct {
 	mu sync.Mutex
 
 	// payloadServing reports whether this node runs a by-reference payload
-	// serving boundary (payloadresolver). It is one input to the advertised
-	// payload-delivery modes (offeredPayloadModes) — NOT sufficient on its own,
-	// because advertising by-reference also requires the export seam to apply the
-	// agreed mode, which is not yet implemented.
+	// serving boundary (payloadresolver). It is now both necessary AND
+	// sufficient for advertising by-reference (offeredPayloadModes,
+	// exportSeamAppliesDeliveryMode): the export seam applies the agreed mode
+	// structurally (mode→subject mapping + a serving node's producing loops
+	// dual-emit), so a serving node's advertisement and its wiring always
+	// agree.
 	payloadServing bool
 }
 
@@ -63,9 +65,9 @@ func WithInfraOperator(op infra.Operator) Option {
 	return func(s *Service) { s.infra = op }
 }
 
-// WithPayloadServing declares that this node serves by-reference payloads. It is
-// necessary but not sufficient for advertising the by-reference mode — see
-// offeredPayloadModes.
+// WithPayloadServing declares that this node serves by-reference payloads. It
+// is both necessary and sufficient for advertising the by-reference mode —
+// see offeredPayloadModes.
 func WithPayloadServing() Option {
 	return func(s *Service) { s.payloadServing = true }
 }

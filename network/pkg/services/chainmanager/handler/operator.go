@@ -123,6 +123,10 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, chainmanager.ErrDuplicateSubscription):
+		// D-4 mixed-mode invariant, subscriber-side (authoritative): a
+		// subscription to this publisher already exists — a create-conflict.
+		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, chainmanager.ErrNoChainManagerEndpoint):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, chainmanager.ErrSubscriberUnconfigured):

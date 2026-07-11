@@ -143,6 +143,13 @@ type Config struct {
 	// (the producer half of by-reference delivery). Optional; nil leaves the
 	// aggregate an inline producer.
 	PayloadRetainer transport.PayloadRetainer
+	// StrippedPublisher, when non-nil, makes the aggregate's emitter dual-emit:
+	// a stripped (Payload: nil) form of every emitted head additionally
+	// publishes to it, under the same sequence number as the primary publish
+	// (see transport.WithStrippedPublisher — the export seam's mechanism for
+	// applying an agreed by-reference delivery mode). Optional; nil leaves the
+	// aggregate single-publish, byte-for-byte the pre-dual-emit behavior.
+	StrippedPublisher transport.Publisher
 	// Observers are notified after each window emit (fire-and-forget). Optional.
 	Observers []contract.ProcessObserver
 	// Logger defaults to slog.Default(); Now defaults to time.Now.
@@ -216,6 +223,9 @@ func New(cfg Config) (*Process, error) {
 	var emitterOpts []transport.EmitterOption
 	if cfg.PayloadRetainer != nil {
 		emitterOpts = append(emitterOpts, transport.WithPayloadRetainer(cfg.PayloadRetainer))
+	}
+	if cfg.StrippedPublisher != nil {
+		emitterOpts = append(emitterOpts, transport.WithStrippedPublisher(cfg.StrippedPublisher))
 	}
 	emitter, err := transport.NewEmitter(context.Background(), cfg.Publisher, cfg.Codec, cfg.Emission, logger, emitterOpts...)
 	if err != nil {
