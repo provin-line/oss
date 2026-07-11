@@ -17,6 +17,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +27,8 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
@@ -31,6 +36,8 @@ import (
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/tlog/filelog"
+	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -658,4 +665,267 @@ func credAddressesTo(t *testing.T, body []byte, key string) bool {
 		return false
 	}
 	return h == key
+}
+
+// --- transfer family (audit-reachable transfer evidence: emission, ingress,
+// relationship — the federation-layer domain settled 2026-07-11) ---
+
+// --- transfer.evidence.definition (transfer-001) ---
+//
+// A credential's emission record and its ingress record must share the same
+// content-hash join key: the driver appends the fixture credential's wire
+// bytes to an emission log (a tlog, standing in for the emitting process's
+// transfer.emission.append-only record) and stores it in the real ingress
+// vcfilestore (transfer.ingress.retention), then asserts the credential
+// re-derived from EACH side hashes identically to cred.Hash() — the single
+// content-hash join key reconciliation uses.
+func runTransferEvidenceDefinition(t *testing.T, v dplaaxVector) {
+	var e struct {
+		Join string `json:"join"`
+	}
+	mustParse(t, v.Expect, &e)
+
+	cred, _ := signedFixtureCred(t)
+	wire, err := cred.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	wantHash, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+
+	// Emission side: the emitting process's append-only emission record.
+	emissionLog := memlog.New()
+	emitted, err := emissionLog.Append(context.Background(), wire)
+	if err != nil {
+		t.Fatalf("emission Append: %v", err)
+	}
+	var emittedCred vc.PipelinePassCredential
+	if err := emittedCred.UnmarshalJSON(emitted.Payload); err != nil {
+		t.Fatalf("unmarshal emitted record: %v", err)
+	}
+	emissionHash, err := emittedCred.Hash()
+	if err != nil {
+		t.Fatalf("emission record hash: %v", err)
+	}
+
+	// Ingress side: the real ingress VC store.
+	ingress, err := vcfilestore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := ingress.Put(wantHash, cred); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := ingress.Get(wantHash)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	ingressHash, err := got.Hash()
+	if err != nil {
+		t.Fatalf("stored credential hash: %v", err)
+	}
+
+	consistent := emissionHash == wantHash && ingressHash == wantHash
+	if want := e.Join == "content-hash-consistent"; consistent != want {
+		t.Errorf("emission hash %s, ingress key %s (retrieved hash %s), cred hash %s: consistent=%v, want %s",
+			emissionHash, wantHash, ingressHash, wantHash, consistent, e.Join)
+	}
+}
+
+// --- transfer.emission.append-only (transfer-002) ---
+//
+// The append-only, tamper-evident emission record: rewriting an already-
+// recorded ordinal is rejected. Driven against the real filelog — append two
+// records, then overwrite the FIRST record's payload directly on disk (the
+// "rewrite-recorded-ordinal" op — filelog_test.go's own tamper-fixture
+// pattern, reused black-box here) and reopen a second filelog instance over
+// the same dir; the reopen's replay verification recomputes every hash and
+// must fail on the altered entry.
+func runTransferEmissionAppendOnly(t *testing.T, v dplaaxVector) {
+	want := expectString(t, v)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	fl, err := filelog.New(dir)
+	if err != nil {
+		t.Fatalf("filelog.New: %v", err)
+	}
+	if _, err := fl.Append(ctx, []byte("emission record 1")); err != nil {
+		t.Fatalf("Append 1: %v", err)
+	}
+	if _, err := fl.Append(ctx, []byte("emission record 2")); err != nil {
+		t.Fatalf("Append 2: %v", err)
+	}
+	// Release the single-opener lock before tampering and reopening.
+	if err := fl.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	path := filepath.Join(dir, "log.ndjson")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 recorded lines, got %d", len(lines))
+	}
+	var entry map[string]any
+	// decoder-hygiene-exempt: test-side tamper helper on fixture bytes.
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("unmarshal recorded entry: %v", err)
+	}
+	entry["payload"] = base64.StdEncoding.EncodeToString([]byte("rewritten ordinal 0"))
+	// canonicalizer-hygiene-exempt: deliberate tamper fixture.
+	tampered, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("re-marshal tampered entry: %v", err)
+	}
+	lines[0] = string(tampered)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write tampered log: %v", err)
+	}
+
+	_, reopenErr := filelog.New(dir) // replay verification runs here
+	rejected := reopenErr != nil
+	if rejected != (want == "reject") {
+		t.Errorf("reopen after rewriting a recorded ordinal rejected=%v (err=%v), want %s", rejected, reopenErr, want)
+	}
+}
+
+// --- transfer.ingress.retention (transfer-003) ---
+//
+// A received credential is retained byte-preserving across a process restart
+// and is enumerable for audit. Driven exactly like commitment-012's own
+// restart pattern (runCommitmentPersistence): store a signed fixture
+// credential in the real ingress vcfilestore, open a SECOND store instance
+// over the same dir (the restart), Get it back, and assert the retained
+// credential's marshaled bytes are byte-identical to what was stored — plus
+// assert it is enumerable via ListHashes (vcresolver.Store's enumeration
+// primitive; already-existing I1 surface, no new method needed).
+func runTransferIngressRetention(t *testing.T, v dplaaxVector) {
+	var e struct {
+		State string `json:"state"`
+	}
+	mustParse(t, v.Expect, &e)
+
+	dir := t.TempDir()
+	s, err := vcfilestore.NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	cred, _ := signedFixtureCred(t)
+	hash, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	wantBytes, err := cred.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	if err := s.Put(hash, cred); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	restarted, err := vcfilestore.NewStore(dir) // a fresh instance over the same dir
+	if err != nil {
+		t.Fatalf("NewStore (restart): %v", err)
+	}
+	got, err := restarted.Get(hash)
+	if err != nil {
+		t.Fatalf("Get (restart): %v", err)
+	}
+	gotBytes, err := got.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON retrieved: %v", err)
+	}
+	byteIdentical := string(gotBytes) == string(wantBytes)
+
+	hashes, err := restarted.ListHashes("", 10)
+	if err != nil {
+		t.Fatalf("ListHashes: %v", err)
+	}
+	enumerable := false
+	for _, h := range hashes {
+		if h == hash {
+			enumerable = true
+		}
+	}
+
+	state := "not-retained-byte-identical"
+	if byteIdentical && enumerable {
+		state = "retained-byte-identical"
+	}
+	if state != e.State {
+		t.Errorf("post-restart retention state = %q (byteIdentical=%v enumerable=%v), want %q", state, byteIdentical, enumerable, e.State)
+	}
+}
+
+// --- transfer.relationship.record (transfer-004) ---
+//
+// A counterparty-signed relationship request is retained with its signed
+// view and verifying key material across a process restart. Driven against
+// the real evidence.Log over a filelog: Record a fully-populated
+// evidence.Record, open a SECOND filelog+evidence.Log instance over the same
+// dir (the restart), Get(0) it back, and assert the retained Record equals
+// the original byte-for-byte (signed view components + KeyMaterial).
+func runTransferRelationshipRecord(t *testing.T, v dplaaxVector) {
+	var e struct {
+		State string `json:"state"`
+	}
+	mustParse(t, v.Expect, &e)
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	fl, err := filelog.New(dir)
+	if err != nil {
+		t.Fatalf("filelog.New: %v", err)
+	}
+	log := evidence.New(fl)
+	want := evidence.Record{
+		Op:          "RegisterSubscription",
+		ViewVersion: wireauth.ViewVersion,
+		SignerDID:   "did:dplaax:conf.example:org:sub",
+		Nonce:       "n-transfer-004",
+		IssuedAt:    "2026-07-11T12:00:00Z",
+		Signature:   []byte{0xde, 0xad, 0xbe, 0xef},
+		Fields: map[string]any{
+			"subscriber_did":   "did:dplaax:conf.example:org:sub",
+			"publisher_did":    "did:dplaax:conf.example:org:acme:pipeline:p1",
+			"payload_delivery": "inline",
+		},
+		KeyMaterial: evidence.KeyMaterial{
+			Method:    "did:dplaax:conf.example:org:sub#auth",
+			PublicKey: []byte{1, 2, 3, 4, 5},
+			Type:      "authentication",
+		},
+	}
+	if _, err := log.Record(ctx, want); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := fl.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	fl2, err := filelog.New(dir) // a fresh instance over the same dir (the restart)
+	if err != nil {
+		t.Fatalf("filelog.New (restart): %v", err)
+	}
+	defer fl2.Close()
+	log2 := evidence.New(fl2)
+	got, err := log2.Get(ctx, 0)
+	if err != nil {
+		t.Fatalf("Get (restart): %v", err)
+	}
+
+	state := "not-signed-view-retained"
+	if reflect.DeepEqual(got, want) {
+		state = "signed-view-retained"
+	}
+	if state != e.State {
+		t.Errorf("post-restart relationship record state = %q, want %q (got %+v, want %+v)", state, e.State, got, want)
+	}
 }

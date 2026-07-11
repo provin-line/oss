@@ -24,6 +24,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
@@ -43,6 +44,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	"github.com/provin-line/oss/tlog"
+	"github.com/provin-line/oss/tlog/filelog"
 
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
@@ -178,9 +180,20 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		mux.Handle(p.path, p.h)
 	}
 
+	// Durable relationship-evidence log (transfer.relationship.record): each
+	// verified RegisterSubscription/Disconnect snapshots the counterparty-signed
+	// request + verifying key material under the chain root. Mirrors the sink
+	// reject log — no checkpoint signer (the retained records already carry the
+	// counterparty signature, not a signed log head).
+	evFilelog, err := filelog.New(filepath.Join(chainRoot, "relationship-evidence"))
+	if err != nil {
+		return nil, fmt.Errorf("standalone: chain relationship evidence log: %w", err)
+	}
+	evLog := evidence.New(evFilelog)
+
 	// ChainPeerService is the internet-facing L2 surface: mounted WITHOUT the L1
 	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11).
-	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(chainSvc, peerVerifier))
+	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog))
 	mux.Handle(peerPath, peerHandler)
 
 	// PayloadService is the internet-facing L2 by-reference payload serving

@@ -1,0 +1,13 @@
+{
+  "id": "transfer-002",
+  "rule": "transfer.emission.append-only",
+  "description": "Rewriting a recorded emission at an already-used ordinal is rejected by the append-only, tamper-evident emission record",
+  "input": {
+    "sequence": [
+      { "op": "emit" },
+      { "op": "emit" },
+      { "op": "rewrite-recorded-ordinal" }
+    ]
+  },
+  "expect": "reject"
+}

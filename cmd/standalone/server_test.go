@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -121,6 +123,34 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		t.Fatalf("save owner key: %v", err)
 	}
 	return srv, ed25519.NewSigner(ownerKS), ownerKP.PublicKey
+}
+
+// The standalone peer surface must record relationship evidence
+// (transfer.relationship.record): BuildHandler wires a durable filelog under the
+// chain root into the peer handler. This guards that composition — without it,
+// NewPeerWithEvidence has no production caller and the behavior never runs.
+func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
+	dataDir := t.TempDir()
+	coreCfg := &core.CoreConfig{DataDir: dataDir, ListenAddr: ":0", AllowLoopback: true}
+	regCfg := &registry.RegistryConfig{ID: registryID}
+	verifier := endpoint.NewStaticEndpoint(nil)
+	chainCfg := natsChainCfg(t)
+	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	chainOp, err := chainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("chainOperator: %v", err)
+	}
+	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
+	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{}); err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	// filelog.New creates the dir and the append file at open; its presence proves
+	// the evidence log was constructed under chain/relationship-evidence.
+	evPath := filepath.Join(dataDir, "chain", "relationship-evidence", "log.ndjson")
+	if _, err := os.Stat(evPath); err != nil {
+		t.Errorf("relationship-evidence log not wired at %s: %v", evPath, err)
+	}
 }
 
 func ed25519JWK(pub []byte) map[string]any {

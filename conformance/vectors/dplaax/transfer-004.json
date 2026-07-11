@@ -1,0 +1,13 @@
+{
+  "id": "transfer-004",
+  "rule": "transfer.relationship.record",
+  "description": "A counterparty-signed relationship request is retained with its signed view and verifying key material across a process restart",
+  "input": {
+    "sequence": [
+      { "op": "register-signed" },
+      { "op": "process-restart" },
+      { "op": "lookup" }
+    ]
+  },
+  "expect": { "state": "signed-view-retained" }
+}
