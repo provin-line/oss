@@ -65,7 +65,9 @@ var (
 	ErrMissingCodec    = errors.New("aggregate: Codec is required")
 	ErrMissingEmission = errors.New("aggregate: Emission is required")
 	ErrMissingFold     = errors.New("aggregate: Fold is required")
-	ErrBadWindow       = errors.New("aggregate: Window must be > 0")
+	// ErrMissingPayloadResolver — a by-reference ingress needs a PayloadResolver.
+	ErrMissingPayloadResolver = errors.New("aggregate: PayloadResolver is required when an ingress is by-reference")
+	ErrBadWindow              = errors.New("aggregate: Window must be > 0")
 )
 
 // PooledInput is one verified, audit-stored ingress item awaiting a fold.
@@ -113,6 +115,13 @@ type EmissionRegistrar interface {
 type Ingress struct {
 	Subscriber       transport.Subscriber
 	UpstreamEndpoint string
+	// PayloadDelivery is the agreed payload-delivery mode of THIS ingress. The
+	// zero value (DeliveryInline) expects inline payload bytes; DeliveryByReference
+	// dereferences a nil payload via PayloadResolver.
+	PayloadDelivery contract.PayloadDelivery
+	// PayloadResolver dereferences a by-reference payload by content address.
+	// Required iff PayloadDelivery is DeliveryByReference (New fails closed).
+	PayloadResolver contract.PayloadResolver
 }
 
 // Config constructs a Process.
@@ -129,6 +138,11 @@ type Config struct {
 	// SelfAudit registers each emitted aggregate head for consumed-set self-audit before it
 	// is broadcast (slice-17o). Optional: nil leaves the runtime broadcast-only.
 	SelfAudit EmissionRegistrar
+	// PayloadRetainer, when non-nil, durably retains each emitted aggregate head's
+	// payload before publishing so a by-reference subscriber can dereference it
+	// (the producer half of by-reference delivery). Optional; nil leaves the
+	// aggregate an inline producer.
+	PayloadRetainer transport.PayloadRetainer
 	// Observers are notified after each window emit (fire-and-forget). Optional.
 	Observers []contract.ProcessObserver
 	// Logger defaults to slog.Default(); Now defaults to time.Now.
@@ -185,6 +199,9 @@ func New(cfg Config) (*Process, error) {
 			// must be a config error, not a startup panic.
 			return nil, fmt.Errorf("aggregate: Ingress[%d] has a nil Subscriber", i)
 		}
+		if ing.PayloadDelivery == contract.DeliveryByReference && ing.PayloadResolver == nil {
+			return nil, fmt.Errorf("aggregate: Ingress[%d] is by-reference but has no PayloadResolver: %w", i, ErrMissingPayloadResolver)
+		}
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -196,7 +213,11 @@ func New(cfg Config) (*Process, error) {
 	}
 	// Construction-time seed read; New has no ctx (the process owns its
 	// lifecycle from Run) — Background is deliberate here.
-	emitter, err := transport.NewEmitter(context.Background(), cfg.Publisher, cfg.Codec, cfg.Emission, logger)
+	var emitterOpts []transport.EmitterOption
+	if cfg.PayloadRetainer != nil {
+		emitterOpts = append(emitterOpts, transport.WithPayloadRetainer(cfg.PayloadRetainer))
+	}
+	emitter, err := transport.NewEmitter(context.Background(), cfg.Publisher, cfg.Codec, cfg.Emission, logger, emitterOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +248,7 @@ func (p *Process) Run(ctx context.Context) error {
 	for _, ing := range p.cfg.Ingress {
 		ing := ing
 		if err := ing.Subscriber.Subscribe(func(data []byte) {
-			p.handleIngress(ctx, data, ing.UpstreamEndpoint)
+			p.handleIngress(ctx, data, ing)
 		}); err != nil {
 			// Drain the already-registered subscriptions so no handler keeps
 			// admitting under the caller's still-live context after a startup
@@ -262,7 +283,7 @@ func (p *Process) Run(ctx context.Context) error {
 // handleIngress runs per inbound message in a subscription goroutine: decode →
 // verify → bind → store → admit. Every failure drops the input (fail-closed):
 // nothing un-verified, un-bound, or un-stored ever reaches the pool.
-func (p *Process) handleIngress(ctx context.Context, data []byte, upstreamEndpoint string) {
+func (p *Process) handleIngress(ctx context.Context, data []byte, ing Ingress) {
 	env, err := p.cfg.Codec.UnmarshalEnvelope(data)
 	if err != nil {
 		p.logger.Error("aggregate: decode ingress envelope", "err", err)
@@ -285,30 +306,75 @@ func (p *Process) handleIngress(ctx context.Context, data []byte, upstreamEndpoi
 		return
 	}
 
-	// Payload↔credential binding — a verified credential does not make its bytes
-	// trustworthy. Reject nil/mismatched payload.
-	if env.Payload == nil {
-		p.logger.Warn("aggregate: ingress envelope has no inline payload — dropping")
-		return
-	}
+	// Subject — read before payload acquisition (a by-reference fetch keys on the
+	// declared outputHash, and the binding gate compares against it).
 	subj, err := cred.Subject()
 	if err != nil {
 		p.logger.Error("aggregate: ingress credential subject", "err", err)
 		return
 	}
-	if hashPayload(env.Payload) != subj.OutputHash {
+	if subj.OutputHash == "" {
+		p.logger.Warn("aggregate: ingress credential declares no outputHash — binding undecidable, dropping")
+		return
+	}
+
+	// Payload acquisition per the ingress's agreed delivery mode (fail-closed);
+	// dropped inputs never pool. A by-reference fetch runs only after verification.
+	payload, ok := p.acquirePayload(ctx, env, subj.OutputHash, ing)
+	if !ok {
+		return
+	}
+
+	// Payload↔credential binding — a verified credential does not make its bytes
+	// trustworthy, and a fetched by-reference payload is served by an untrusted
+	// boundary. The binding gate is the sole integrity check.
+	if hashPayload(payload) != subj.OutputHash {
 		p.logger.Warn("aggregate: ingress payload does not bind to credential outputHash — dropping")
 		return
 	}
 
 	// Store synchronously before pooling (fail-closed). The store implementation
 	// owns audit-head registration.
-	if err := p.cfg.Store.StoreIngressVC(ctx, cred, upstreamEndpoint); err != nil {
+	if err := p.cfg.Store.StoreIngressVC(ctx, cred, ing.UpstreamEndpoint); err != nil {
 		p.logger.Error("aggregate: store ingress VC — dropping", "err", err)
 		return
 	}
 
-	p.admit(PooledInput{Credential: cred, Payload: env.Payload})
+	p.admit(PooledInput{Credential: cred, Payload: payload})
+}
+
+// acquirePayload resolves an ingress message's payload bytes per the ingress's
+// agreed delivery mode, returning ok == false (after logging the drop) on any
+// mode violation or fetch failure — this runtime drops fail-closed rather than
+// producing a reject Result. The fail-closed table:
+//
+//	inline       + present → the inline bytes
+//	inline       + nil     → drop (payload stripped in error)
+//	by-reference + nil     → fetch(UpstreamEndpoint, outputHash) via PayloadResolver
+//	by-reference + present → drop (leak / export misconfiguration)
+//
+// A fetch failure is a liveness drop, never a confidence question (a dropped
+// input simply does not pool).
+func (p *Process) acquirePayload(ctx context.Context, env *contract.Envelope, outputHash string, ing Ingress) ([]byte, bool) {
+	switch ing.PayloadDelivery {
+	case contract.DeliveryByReference:
+		if env.Payload != nil {
+			p.logger.Warn("aggregate: by-reference delivery agreed but inline payload present — dropping")
+			return nil, false
+		}
+		bytes, err := ing.PayloadResolver.ResolvePayload(ctx, ing.UpstreamEndpoint, outputHash)
+		if err != nil {
+			p.logger.Warn("aggregate: fetch by-reference payload — dropping", "err", err)
+			return nil, false
+		}
+		return bytes, true
+	default: // DeliveryInline
+		if env.Payload == nil {
+			p.logger.Warn("aggregate: inline delivery agreed but no payload — dropping")
+			return nil, false
+		}
+		return env.Payload, true
+	}
 }
 
 // admit adds a verified+stored input to the pool, deduplicating by content

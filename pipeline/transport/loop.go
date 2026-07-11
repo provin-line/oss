@@ -49,6 +49,11 @@ type LoopConfig struct {
 	// Emission is the transparency log for recording each published event
 	// (credential hash + sequence number). Required for producing behaviors.
 	Emission tlog.Log
+	// PayloadRetainer, when non-nil, durably retains each produced payload before
+	// publishing so a by-reference subscriber can later dereference it (see
+	// Emitter). Optional; nil leaves the loop an ordinary inline producer. Only
+	// meaningful for producing behaviors.
+	PayloadRetainer PayloadRetainer
 	// Logger is used for operational log output. Nil defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -141,7 +146,11 @@ func (l *Loop) Run(ctx context.Context) error {
 	var emitter *Emitter
 	if isProducing(l.cfg.Behavior) {
 		var err error
-		emitter, err = NewEmitter(ctx, l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger)
+		var opts []EmitterOption
+		if l.cfg.PayloadRetainer != nil {
+			opts = append(opts, WithPayloadRetainer(l.cfg.PayloadRetainer))
+		}
+		emitter, err = NewEmitter(ctx, l.cfg.Publisher, l.cfg.Codec, l.cfg.Emission, l.logger, opts...)
 		if err != nil {
 			return err
 		}

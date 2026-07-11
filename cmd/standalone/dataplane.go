@@ -19,6 +19,7 @@ import (
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	payloadclient "github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/pipeline/chained"
 	jsonataconv "github.com/provin-line/oss/pipeline/chained/converter/jsonata"
@@ -47,6 +48,11 @@ import (
 // The compile-time CredentialResolver assertion lives here (the consumer that imports
 // both network/ and pipeline/), keeping the client package free of any pipeline/ import.
 var _ chainwalk.CredentialResolver = (*vcresolverclient.Resolver)(nil)
+
+// The payload client is the network by-reference payload resolver consuming loops
+// fetch through. Its contract.PayloadResolver assertion lives here for the same
+// reason — the client package stays free of any pipeline/ import (AGENTS.md layer rule).
+var _ contract.PayloadResolver = (*payloadclient.Resolver)(nil)
 
 // dataPlaneDeps are the cross-plane dependencies a data plane needs beyond its own
 // keystore: the shared DID resolver (sink loops verify upstream credentials through it)
@@ -94,6 +100,68 @@ type dataPlaneDeps struct {
 	// registry at boot (fail-closed). Nil is a boot error for any loop that
 	// declares a non-empty schema-ref; a loop without one needs none.
 	SchemaGetter schemaGetter
+	// PayloadStore, when non-nil, retains each producing loop's payload before
+	// publishing so a by-reference subscriber can later fetch it (the publisher
+	// half of by-reference delivery). Nil leaves producing loops inline-only.
+	PayloadStore payloadRetainStore
+	// PayloadResolver dereferences a by-reference ingress payload by content
+	// address (the consumer half). Required for any consuming loop whose config
+	// declares payload-delivery = by-reference (the runtime fails closed
+	// otherwise); nil is fine for inline loops.
+	PayloadResolver contract.PayloadResolver
+}
+
+// payloadRetainStore retains a producing loop's payload bytes keyed by their
+// content address, recording ownerDID (the producing pipeline) for serving
+// authorization. *payloadresolver.Service satisfies it.
+type payloadRetainStore interface {
+	Store(ctx context.Context, payload []byte, ownerDID string) (string, error)
+}
+
+// payloadWiring carries the by-reference seams the loop builders apply: a
+// producer-side retain store (bound per loop to its output pipeline DID) and a
+// consumer-side resolver. Both nil unless the node is wired for by-reference.
+type payloadWiring struct {
+	store    payloadRetainStore
+	resolver contract.PayloadResolver
+}
+
+// retainerFor binds the retain store to a producing loop's output pipeline DID —
+// the owner whose allow-list gates who may fetch the served payload. Returns nil
+// when no store is wired (an inline-only node).
+func (pw payloadWiring) retainerFor(ownerDID string) transport.PayloadRetainer {
+	if pw.store == nil {
+		return nil
+	}
+	return boundRetainer{store: pw.store, owner: ownerDID}
+}
+
+type boundRetainer struct {
+	store payloadRetainStore
+	owner string
+}
+
+func (r boundRetainer) Retain(ctx context.Context, payload []byte) (string, error) {
+	return r.store.Store(ctx, payload, r.owner)
+}
+
+// parseDelivery maps a config payload-delivery token to its contract value.
+// This reads a CONFIG field, whose default is inline (in-org expectation), so
+// the EMPTY string maps to inline here — deliberately NOT via
+// contract.ParsePayloadDelivery, which maps "" to by-reference (the wire
+// negotiation default). The config loader also defaults an absent key to
+// "inline", so "" reaches here only from a directly-constructed LoopConfig; both
+// paths must agree that unset means inline. Any malformed non-empty value (the
+// loader already rejects these) falls back to inline defensively.
+func parseDelivery(s string) contract.PayloadDelivery {
+	if s == "" {
+		return contract.DeliveryInline
+	}
+	d, err := contract.ParsePayloadDelivery(s)
+	if err != nil {
+		return contract.DeliveryInline
+	}
+	return d
 }
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
@@ -256,6 +324,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	if vcClient != nil {
 		publisher = vcClient
 	}
+	pw := payloadWiring{store: deps.PayloadStore, resolver: deps.PayloadResolver}
 	sinkWriters := newSinkWriters(deps.SinkWriter)
 	for _, lc := range pipeCfg.Loops {
 		var loop *transport.Loop
@@ -278,7 +347,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			if schemaRef, err = resolveSchema(lc.Name, lc.Source.SchemaRef); err == nil {
 				var emission tlog.Log
 				if emission, err = newEmission(lc.Name, lc.Source.OutputSubject, lc.Source.Issuer); err == nil {
-					loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, schemaRef, lc)
+					loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, schemaRef, pw, lc)
 				}
 			}
 		case pipelineconfig.RoleSink:
@@ -300,7 +369,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 					rejectLog, err = newRejectLog(lc.Name)
 				}
 				if err == nil {
-					loop, err = buildSinkLoop(conn, verifier, ingressStore, w, receipts, rejectLog, lc)
+					loop, err = buildSinkLoop(conn, verifier, ingressStore, w, receipts, rejectLog, pw, lc)
 				}
 			}
 		case pipelineconfig.RoleChained:
@@ -309,7 +378,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				if schemaRef, err = resolveSchema(lc.Name, lc.Chained.SchemaRef); err == nil {
 					var emission tlog.Log
 					if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
-						loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, schemaRef, lc)
+						loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, schemaRef, pw, lc)
 					}
 				}
 			}
@@ -333,7 +402,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				}
 				var emission tlog.Log
 				if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
-					agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, lc)
+					agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, pw, lc)
 				}
 			}
 			if err != nil {
@@ -362,7 +431,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 // emission log. The config layer has already validated that lc.Role is source. The
 // caller supplies the ingress Subscriber (push-enabled loops wrap it with a
 // readiness latch).
-func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, emission tlog.Log, schema vc.SchemaRef, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	if src.TransformationClaim == vc.ClaimAggregate {
 		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
@@ -395,13 +464,14 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 		return nil, fmt.Errorf("standalone: loop %q: ingest processor: %w", lc.Name, err)
 	}
 	loop, err := transport.NewLoop(transport.LoopConfig{
-		Behavior:   contract.ChainFirstDrop,
-		Strategy:   contract.VerificationNone,
-		Processor:  proc,
-		Subscriber: sub,
-		Publisher:  conn.Publisher(src.OutputSubject),
-		Codec:      envelopecodec.New(),
-		Emission:   emission,
+		Behavior:        contract.ChainFirstDrop,
+		Strategy:        contract.VerificationNone,
+		Processor:       proc,
+		Subscriber:      sub,
+		Publisher:       conn.Publisher(src.OutputSubject),
+		Codec:           envelopecodec.New(),
+		Emission:        emission,
+		PayloadRetainer: pw.retainerFor(src.OutputSubject),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -413,7 +483,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, pw payloadWiring, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
@@ -433,6 +503,8 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 		AllowIssuers:     lc.Sink.AllowIssuers,
 		Receipts:         receipts,
 		RejectLog:        rejectLog,
+		PayloadDelivery:  parseDelivery(lc.Sink.PayloadDelivery),
+		PayloadResolver:  pw.resolver,
 	}
 	proc, err := sink.New(cfg)
 	if err != nil {
@@ -456,7 +528,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, schema vc.SchemaRef, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher credentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc pipelineconfig.LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -489,6 +561,8 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		Verifier:          verifier,
 		Store:             store,
 		Signer:            chainedSigner,
+		PayloadDelivery:   parseDelivery(cc.PayloadDelivery),
+		PayloadResolver:   pw.resolver,
 	}
 	// Converter/filters compile at boot — a malformed JSONata expression fails closed here.
 	if cc.Converter != "" {
@@ -510,13 +584,14 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 		return nil, fmt.Errorf("standalone: loop %q: chained processor: %w", lc.Name, err)
 	}
 	loop, err := transport.NewLoop(transport.LoopConfig{
-		Behavior:   contract.ChainPreserving,
-		Strategy:   strategy,
-		Processor:  proc,
-		Subscriber: conn.Subscriber(lc.IngressSubject),
-		Publisher:  conn.Publisher(cc.OutputSubject),
-		Codec:      envelopecodec.New(),
-		Emission:   emission,
+		Behavior:        contract.ChainPreserving,
+		Strategy:        strategy,
+		Processor:       proc,
+		Subscriber:      conn.Subscriber(lc.IngressSubject),
+		Publisher:       conn.Publisher(cc.OutputSubject),
+		Codec:           envelopecodec.New(),
+		Emission:        emission,
+		PayloadRetainer: pw.retainerFor(cc.OutputSubject),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: build loop: %w", lc.Name, err)
@@ -530,7 +605,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
 // wired. When a VC store is configured the signer publishes each issued FirstDrop
 // (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
-func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
+func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, pw payloadWiring, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
 	ac := lc.Aggregate
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -559,6 +634,9 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		// publish that source/chained loops do via publishingSigner — so the aggregate uses
 		// the PLAIN signer and does not wrap it (the publish must follow self-audit, D-17o-3).
 		SelfAudit: registrar,
+		// The aggregate produces a FirstDrop head; retain its payload for by-reference
+		// subscribers (bound to its own output pipeline DID as the serving owner).
+		PayloadRetainer: pw.retainerFor(ac.OutputSubject),
 	}
 	// ac.VerificationStrategy is config-validated to "adjacent"; the aggregate runtime
 	// declares VerificationAdjacent intrinsically, so it takes no strategy field.
@@ -566,6 +644,8 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		cfg.Ingress = append(cfg.Ingress, aggregate.Ingress{
 			Subscriber:       conn.Subscriber(ing.Subject),
 			UpstreamEndpoint: ing.UpstreamEndpoint,
+			PayloadDelivery:  parseDelivery(ing.PayloadDelivery),
+			PayloadResolver:  pw.resolver,
 		})
 	}
 	proc, err := aggregate.New(cfg)

@@ -1,0 +1,54 @@
+// dplaax.payload.v1 is the publisher's serving boundary for by-reference
+// payload delivery: it serves back, by content address, the payload bytes a
+// producing process emitted. A subscriber that agreed to by-reference delivery
+// dereferences the nil envelope payload against this service.
+//
+// Charter split from dplaax.vc.v1: that service serves provenance VCs; this one
+// serves the DATA a process transformed — bytes that may be confidential (AI
+// corpora, supply-chain records) and whose authorization is a distinct resource
+// class ("payload" vs "vc"). Adding a payload RPC to VCResolverService would
+// conflate the two.
+//
+// Internet-facing (L2): every request carries an AuthProof verified in-band via
+// the wireauth library — the same pattern as dplaax.chain.v1.ChainPeerService,
+// and it reuses that package's frozen AuthProof type (a redefinition would be a
+// drift source). It carries NO o3co.authz.v1 L1 policy option; the absence is a
+// tested descriptor contract mirroring the chain.v1 split.
+syntax = "proto3";
+
+package dplaax.payload.v1;
+
+option go_package = "github.com/provin-line/oss/gen/go/dplaax/payload/v1;payloadpb";
+
+import "dplaax/chain/v1/chain.proto";
+
+// PayloadService serves by-reference payload bytes by content address.
+service PayloadService {
+  // ResolvePayload streams the payload bytes held at a content address.
+  //
+  // Server-streaming is deliberate: by-reference delivery exists BECAUSE
+  // payloads can be large, so the wire must not impose a unary message-size
+  // ceiling. The client concatenates chunks in order and verifies the assembled
+  // bytes against the content address itself — the serving boundary is never
+  // trusted for integrity.
+  //
+  // A well-formed miss is NotFound (authoritative: "this boundary holds no such
+  // payload"). A malformed content_hash is InvalidArgument. How a caller treats
+  // NotFound is its own policy (a subscriber reads it as a broken publisher
+  // retention obligation).
+  rpc ResolvePayload(ResolvePayloadRequest) returns (stream ResolvePayloadResponse);
+}
+
+message ResolvePayloadRequest {
+  // auth_proof is the L2 wireauth token, verified in-handler (mirrors the
+  // chain.v1 peer surface). Reuses dplaax.chain.v1.AuthProof by design.
+  dplaax.chain.v1.AuthProof auth_proof = 1;
+  // content_hash is the "sha256:<hex>" address of the payload to fetch.
+  string content_hash = 2;
+}
+
+message ResolvePayloadResponse {
+  // chunk is one ordered frame of the payload bytes; the client concatenates
+  // frames. Chunk size is a server implementation detail, not wire-normative.
+  bytes chunk = 1;
+}

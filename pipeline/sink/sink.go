@@ -106,7 +106,21 @@ const (
 	// RejectBindingGate — the payload does not match the credential's outputHash.
 	RejectBindingGate RejectReason = "binding-gate"
 	// RejectByReferenceUnsupported — by-reference (nil payload) ingress, unimplemented.
+	//
+	// Deprecated: by-reference ingress is now implemented (RejectPayloadFetch /
+	// RejectPayloadDeliveryViolation cover its failure modes). This value is no
+	// longer emitted but is retained because it may appear as a historical value
+	// in existing reject logs and archives; removing the identifier would break
+	// consumers of that durable record.
 	RejectByReferenceUnsupported RejectReason = "by-reference-unsupported"
+	// RejectPayloadFetch — a by-reference payload could not be dereferenced from
+	// the publisher's serving boundary (transient failure or a definitive miss).
+	// A liveness failure, never a confidence verdict.
+	RejectPayloadFetch RejectReason = "payload-fetch"
+	// RejectPayloadDeliveryViolation — the envelope's payload presence contradicts
+	// the agreed delivery mode (inline agreed but no payload, or by-reference
+	// agreed but an inline payload arrived). A decidable protocol violation.
+	RejectPayloadDeliveryViolation RejectReason = "payload-delivery-violation"
 	// RejectIngressStoreFailure — the verified ingress VC could not be stored.
 	RejectIngressStoreFailure RejectReason = "ingress-store-failure"
 )
@@ -154,6 +168,10 @@ var (
 	ErrMissingWriter   = errors.New("sink: Writer is required")
 	ErrMissingUpstream = errors.New("sink: UpstreamEndpoint is required")
 	ErrMissingVerifier = errors.New("sink: Verifier is required")
+	// ErrMissingPayloadResolver — a by-reference ingress needs a PayloadResolver
+	// to dereference its nil payloads (fail closed at construction, never on the
+	// first by-reference event).
+	ErrMissingPayloadResolver = errors.New("sink: PayloadResolver is required when PayloadDelivery is by-reference")
 )
 
 // Config holds construction-time configuration for a Sink Process runtime.
@@ -192,6 +210,15 @@ type Config struct {
 	// "mutual" allow-list; the publisher side is the chainmanager subscription
 	// allow-list — each is its own local config (see the sink README).
 	AllowIssuers []string
+	// PayloadDelivery is the agreed payload-delivery mode of this ingress. The
+	// zero value (DeliveryInline) expects inline payload bytes; DeliveryByReference
+	// dereferences a nil payload via PayloadResolver. A payload whose presence
+	// contradicts the mode is a decidable protocol violation.
+	PayloadDelivery contract.PayloadDelivery
+	// PayloadResolver dereferences a by-reference payload by content address.
+	// Required iff PayloadDelivery is DeliveryByReference (New fails closed
+	// otherwise); unused for inline delivery.
+	PayloadResolver contract.PayloadResolver
 	// Observers are notified after every outcome (passed/errored).
 	Observers []contract.ProcessObserver
 	// Logger receives diagnostic output. nil = slog.Default().
@@ -233,6 +260,9 @@ func New(cfg Config) (*Processor, error) {
 	}
 	if cfg.Verifier == nil {
 		return nil, ErrMissingVerifier
+	}
+	if cfg.PayloadDelivery == contract.DeliveryByReference && cfg.PayloadResolver == nil {
+		return nil, ErrMissingPayloadResolver
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -326,26 +356,37 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		}
 	}
 
-	// Stage 5 — Payload extraction. By-reference (nil) ingress fetch is not
-	// implemented in the PoC sink runtime.
-	if envelope.Payload == nil {
-		return p.reject(ctx, RejectByReferenceUnsupported, "by-reference ingress fetch is not implemented in the PoC sink runtime (lands with the resolver client)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+	// Stage 5 — Subject. Read BEFORE payload acquisition: a by-reference fetch
+	// keys on the declared outputHash, and the binding gate compares against it.
+	subject, err := cred.Subject()
+	if err != nil {
+		return p.reject(ctx, RejectMalformedCredential, fmt.Sprintf("credential subject unreadable: %v", err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 	}
-	payload := envelope.Payload
+	if subject.OutputHash == "" {
+		return p.reject(ctx, RejectMalformedCredential, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+	}
+
+	// Stage 5.5 — Payload acquisition per agreed delivery mode. A payload whose
+	// presence contradicts the mode is a decidable protocol violation; a
+	// by-reference nil is dereferenced from the serving boundary by outputHash.
+	// Fetch runs only here (after verify + verdict + allow-list + store), so the
+	// sink never fetches bytes for a credential it will refuse.
+	payload, rej, ctxErr := p.acquirePayload(ctx, envelope, subject.OutputHash, verdict, consumedRef, cred)
+	if ctxErr != nil {
+		return nil, ctxErr
+	}
+	if rej != nil {
+		return rej, nil
+	}
 	// inputHash is the hash of the bytes flowing into the sink — its observer
 	// "input" (and, once binding passes, == the consumed credential's outputHash).
 	inputHash := hashBytes(payload)
 
 	// Stage 6 — Payload↔credential binding. Unconditional for every SinkKind:
 	// a sink must never emit a record pairing a credential with bytes it does
-	// not describe. Observation leniency covers the verdict, not this gate.
-	subject, err := cred.Subject()
-	if err != nil {
-		return p.reject(ctx, RejectMalformedCredential, fmt.Sprintf("credential subject unreadable: %v", err), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
-	}
-	if subject.OutputHash == "" {
-		return p.reject(ctx, RejectMalformedCredential, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
-	}
+	// not describe. Observation leniency covers the verdict, not this gate. For a
+	// by-reference payload this is the sole integrity check on the fetched bytes —
+	// the serving boundary is untrusted.
 	if inputHash != subject.OutputHash {
 		return p.reject(ctx, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
@@ -390,6 +431,44 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 
 func isCtxErr(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// acquirePayload resolves the event's payload bytes per the agreed delivery
+// mode. It returns either the bytes (rej and ctxErr both nil), a reject Result
+// (rej non-nil), or a context error (ctxErr non-nil). The fail-closed table:
+//
+//	inline       + present → the inline bytes
+//	inline       + nil     → RejectPayloadDeliveryViolation (payload stripped in error)
+//	by-reference + nil     → fetch(UpstreamEndpoint, outputHash) via PayloadResolver
+//	by-reference + present → RejectPayloadDeliveryViolation (leak / export misconfig)
+//
+// A fetch failure (transient or a definitive miss) is RejectPayloadFetch — a
+// liveness failure, never a confidence verdict. Context cancellation is returned
+// as ctxErr for the caller to propagate as a Go error (like every other stage),
+// NOT recorded as a reject — a shutdown-interrupted fetch must not pollute an
+// archival sink's durable reject log. Cancellation is detected via ctx.Err()
+// rather than the fetch error's type, because the network resolver returns a
+// transport-wrapped error that may not unwrap to context.Canceled.
+func (p *Processor) acquirePayload(ctx context.Context, envelope *contract.Envelope, outputHash string, verdict vc.ConfidenceState, consumedRef string, cred *vc.PipelinePassCredential) (payload []byte, rej *contract.Result, ctxErr error) {
+	switch p.cfg.PayloadDelivery {
+	case contract.DeliveryByReference:
+		if envelope.Payload != nil {
+			return nil, p.reject(ctx, RejectPayloadDeliveryViolation, "by-reference delivery agreed but the envelope carries an inline payload (export-seam misconfiguration; possible payload leak)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		bytes, err := p.cfg.PayloadResolver.ResolvePayload(ctx, p.cfg.UpstreamEndpoint, outputHash)
+		if err != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return nil, nil, cErr
+			}
+			return nil, p.reject(ctx, RejectPayloadFetch, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		return bytes, nil, nil
+	default: // DeliveryInline
+		if envelope.Payload == nil {
+			return nil, p.reject(ctx, RejectPayloadDeliveryViolation, "inline delivery agreed but the envelope carries no payload (stripped in error)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		return envelope.Payload, nil, nil
+	}
 }
 
 func hashBytes(data []byte) string {

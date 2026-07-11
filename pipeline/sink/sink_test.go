@@ -847,7 +847,10 @@ func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 			wantReason: sink.RejectMalformedCredential,
 		},
 		{
-			name:     "by-reference-unsupported",
+			// A nil payload under the default (inline) delivery mode is now a
+			// decidable protocol violation (stripped in error) — no longer the
+			// deprecated by-reference-unsupported reject.
+			name:     "payload-delivery-violation",
 			verifier: &fakeVerifier{result: verified()},
 			store:    &fakeStore{},
 			wire: func(t *testing.T) []byte {
@@ -857,7 +860,7 @@ func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 				}
 				return wire
 			},
-			wantReason: sink.RejectByReferenceUnsupported,
+			wantReason: sink.RejectPayloadDeliveryViolation,
 		},
 	}
 

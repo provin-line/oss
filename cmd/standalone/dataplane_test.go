@@ -218,11 +218,11 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	badLC.Name = "bad"
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
 
-	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, goodLC)
+	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, goodLC)
 	if err != nil {
 		t.Fatalf("build good loop: %v", err)
 	}
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, badLC)
+	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}

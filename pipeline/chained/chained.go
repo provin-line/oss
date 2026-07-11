@@ -98,6 +98,10 @@ var ErrInputValidatorWithoutRef = errors.New("chained: InputSchemaRef is require
 // OutputSchemaRef is the zero value.
 var ErrOutputValidatorWithoutRef = errors.New("chained: OutputSchemaRef is required when OutputValidator is set")
 
+// ErrMissingPayloadResolver is returned when PayloadDelivery is by-reference but
+// no PayloadResolver is configured (fail closed at construction).
+var ErrMissingPayloadResolver = errors.New("chained: PayloadResolver is required when PayloadDelivery is by-reference")
+
 // ---------------------------------------------------------------------------
 // Config and Processor
 // ---------------------------------------------------------------------------
@@ -151,6 +155,17 @@ type Config struct {
 
 	// OutputSchemaRef is required when OutputValidator is non-nil.
 	OutputSchemaRef vc.SchemaRef
+
+	// PayloadDelivery is the agreed payload-delivery mode of the ingress. The
+	// zero value (DeliveryInline) expects inline payload bytes; DeliveryByReference
+	// dereferences a nil payload via PayloadResolver. A payload whose presence
+	// contradicts the mode is a decidable protocol violation.
+	PayloadDelivery contract.PayloadDelivery
+
+	// PayloadResolver dereferences a by-reference payload by content address.
+	// Required iff PayloadDelivery is DeliveryByReference (New fails closed
+	// otherwise); unused for inline delivery.
+	PayloadResolver contract.PayloadResolver
 
 	// Observers are notified after every outcome (passed/filtered/errored).
 	// Fire-and-forget: observer errors are logged and never propagated.
@@ -206,6 +221,9 @@ func New(cfg Config) (*Processor, error) {
 	}
 	if cfg.OutputValidator != nil && cfg.OutputSchemaRef == (vc.SchemaRef{}) {
 		return nil, ErrOutputValidatorWithoutRef
+	}
+	if cfg.PayloadDelivery == contract.DeliveryByReference && cfg.PayloadResolver == nil {
+		return nil, ErrMissingPayloadResolver
 	}
 
 	logger := cfg.Logger
@@ -273,19 +291,9 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		return p.errored(ctx, fmt.Sprintf("store ingress VC: %v — never continue without the audit trail", err), &confidence, "", ""), nil
 	}
 
-	// Stage 4 — Payload extraction.
-	// nil Payload = by-reference delivery, not implemented in PoC chained runtime.
-	if envelope.Payload == nil {
-		return p.errored(ctx, "by-reference ingress fetch is not implemented in the PoC chained runtime (lands with the resolver client)", &confidence, "", ""), nil
-	}
-	payload := envelope.Payload
-
-	// Stage 4.5 — Payload↔credential binding. The verifier holds only the
-	// credential; the runtime is the one party holding both artifacts, so it
-	// enforces sha256(payload) == predecessor's declared outputHash here —
-	// the earliest point tampered or substituted bytes can be rejected, and
-	// the guarantee that this process's own emitted link satisfies chain
-	// continuity (outputHash[n] == inputHash[n+1]) by construction.
+	// Stage 4 — Predecessor subject. Read BEFORE payload acquisition: a
+	// by-reference fetch keys on the declared outputHash, and the binding gate
+	// compares against it.
 	subject, err := cred.Subject()
 	if err != nil {
 		return p.errored(ctx, fmt.Sprintf("predecessor subject unreadable: %v", err), &confidence, "", ""), nil
@@ -293,6 +301,28 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	if subject.OutputHash == "" {
 		return p.errored(ctx, "predecessor declares no outputHash: a producing predecessor must declare one — binding undecidable, fail closed", &confidence, "", ""), nil
 	}
+
+	// Stage 4.5 — Payload acquisition per agreed delivery mode (fail-closed
+	// table): inline+nil / by-reference+present are decidable protocol
+	// violations; by-reference+nil dereferences the payload from the serving
+	// boundary by outputHash. Fetch runs only here (after verify + store), so a
+	// credential that will be refused never triggers a fetch.
+	payload, rej, ctxErr := p.acquirePayload(ctx, envelope, subject.OutputHash, confidence)
+	if ctxErr != nil {
+		return nil, ctxErr
+	}
+	if rej != nil {
+		return rej, nil
+	}
+
+	// Stage 4.6 — Payload↔credential binding. The verifier holds only the
+	// credential; the runtime is the one party holding both artifacts, so it
+	// enforces sha256(payload) == predecessor's declared outputHash here —
+	// the earliest point tampered or substituted bytes can be rejected, and
+	// the guarantee that this process's own emitted link satisfies chain
+	// continuity (outputHash[n] == inputHash[n+1]) by construction. For a
+	// by-reference payload this is the sole integrity check on the fetched
+	// bytes — the serving boundary is untrusted.
 	if got := hashBytes(payload); got != subject.OutputHash {
 		return p.errored(ctx, fmt.Sprintf("payload does not match the predecessor's outputHash (payload %s, credential declares %s): tampered or substituted bytes", got, subject.OutputHash), &confidence, "", ""), nil
 	}
@@ -416,6 +446,45 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 // transport loop must see it to drain).
 func isCtxErr(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// acquirePayload resolves the event's payload bytes per the agreed delivery
+// mode. It returns either the bytes (rej and ctxErr both nil), an errored Result
+// (rej non-nil), or a context error (ctxErr non-nil). The fail-closed table:
+//
+//	inline       + present → the inline bytes
+//	inline       + nil     → errored (payload stripped in error)
+//	by-reference + nil     → fetch(UpstreamEndpoint, outputHash) via PayloadResolver
+//	by-reference + present → errored (leak / export misconfiguration)
+//
+// A fetch failure (transient or a definitive miss) is an errored Result — a
+// liveness failure, never a confidence demotion (the verdict is preserved).
+// Context cancellation is returned as ctxErr for the caller to propagate as a Go
+// error (like every other stage), NOT converted to a domain errored Result — a
+// shutdown-interrupted fetch must not emit a spurious processing-error event.
+// Cancellation is detected via ctx.Err() rather than the fetch error's type,
+// because the network resolver returns a transport-wrapped error that may not
+// unwrap to context.Canceled.
+func (p *Processor) acquirePayload(ctx context.Context, envelope *contract.Envelope, outputHash string, confidence vc.ConfidenceState) (payload []byte, rej *contract.Result, ctxErr error) {
+	switch p.cfg.PayloadDelivery {
+	case contract.DeliveryByReference:
+		if envelope.Payload != nil {
+			return nil, p.errored(ctx, "by-reference delivery agreed but the envelope carries an inline payload (export-seam misconfiguration; possible payload leak)", &confidence, "", ""), nil
+		}
+		bytes, err := p.cfg.PayloadResolver.ResolvePayload(ctx, p.cfg.UpstreamEndpoint, outputHash)
+		if err != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return nil, nil, cErr
+			}
+			return nil, p.errored(ctx, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &confidence, "", ""), nil
+		}
+		return bytes, nil, nil
+	default: // DeliveryInline
+		if envelope.Payload == nil {
+			return nil, p.errored(ctx, "inline delivery agreed but the envelope carries no payload (stripped in error)", &confidence, "", ""), nil
+		}
+		return envelope.Payload, nil, nil
+	}
 }
 
 // hashBytes returns "sha256:<64-hex-chars>" over data — the content address

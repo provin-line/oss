@@ -27,9 +27,30 @@ var (
 	ErrInfraUnavailable = errors.New("chainmanager: infra operator not configured")
 )
 
-// supportedPayloadModes is the PoC-fixed set of payload-delivery modes this CM
-// offers (slice-11 D-p7). Per-publisher configurability is a later refinement.
-var supportedPayloadModes = []string{"by-reference", "inline"}
+// exportSeamAppliesDeliveryMode reports whether the cross-organization export
+// seam applies the agreed payload-delivery mode (stripping the payload for a
+// by-reference subscription). It is false: mode application at the export seam
+// is not yet implemented (gap-backlog: export-seam mode application, the (d)
+// residual of by-reference delivery). Until it lands, advertising the
+// by-reference mode would be false advertising — a subscription could be agreed
+// and signed, yet every event would arrive inline and fail at the consumer — so
+// offeredPayloadModes withholds it even on a serving node. Flip this to true
+// when the export seam gains mode application.
+const exportSeamAppliesDeliveryMode = false
+
+// offeredPayloadModes derives the payload-delivery modes this CM advertises.
+// "inline" is always offered. "by-reference" additionally requires BOTH this
+// node serving payloads AND the export seam applying the mode; the latter is not
+// implemented (exportSeamAppliesDeliveryMode), so by-reference is currently never
+// advertised — replacing the earlier PoC-fixed set that advertised a mode whose
+// subscriptions were guaranteed to fail.
+func (s *Service) offeredPayloadModes() []string {
+	modes := []string{"inline"}
+	if s.payloadServing && exportSeamAppliesDeliveryMode {
+		modes = append(modes, "by-reference")
+	}
+	return modes
+}
 
 // PublisherInfo returns the publisher's transport type and offered
 // payload-delivery modes, after admitting callerDID against the publisher's
@@ -44,8 +65,7 @@ func (s *Service) PublisherInfo(ctx context.Context, publisherDID, callerDID str
 	if err := s.admit(publisherDID, callerDID); err != nil {
 		return "", nil, err
 	}
-	modes := append([]string(nil), supportedPayloadModes...)
-	return s.infra.PublishType(), modes, nil
+	return s.infra.PublishType(), s.offeredPayloadModes(), nil
 }
 
 // RegisterSubscription admits the subscriber, negotiates the payload mode,
@@ -63,7 +83,7 @@ func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publi
 	if err := s.admit(publisherDID, subscriberDID); err != nil {
 		return nil, err
 	}
-	mode, err := negotiatePayloadMode(requestedMode)
+	mode, err := negotiatePayloadMode(requestedMode, s.offeredPayloadModes())
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +169,16 @@ func (s *Service) Disconnect(ctx context.Context, subscriptionID, callerDID stri
 	return s.subs.Delete(subscriptionID)
 }
 
+// Admit reports whether callerDID is admitted by pipelineDID's allow-list,
+// returning nil on a match and ErrNotAdmitted on none (or a malformed
+// pipelineDID as ErrInvalidPipelineDID). It is the exported form of the
+// default-distrust admission the peer surface applies at subscription time,
+// shared with the by-reference payload serving boundary (payloadresolver), which
+// admits a caller against any owner pipeline's allow-list. It is read-only.
+func (s *Service) Admit(pipelineDID, callerDID string) error {
+	return s.admit(pipelineDID, callerDID)
+}
+
 // admit validates the publisher key and matches callerDID against the publisher's
 // allow-list. Default-distrust: an empty rule set or no match is ErrNotAdmitted.
 func (s *Service) admit(publisherDID, callerDID string) error {
@@ -194,19 +224,23 @@ func (s *Service) countForPublisher(publisherDID string) (int, error) {
 	return n, nil
 }
 
-// negotiatePayloadMode resolves a requested mode against the offered set: empty
-// means by-reference (the conservative default); a mode not offered is
-// ErrPayloadModeUnsupported (a typed rejection, never a silent fallback).
-func negotiatePayloadMode(requested string) (string, error) {
-	if requested == "" {
-		return "by-reference", nil
+// negotiatePayloadMode resolves a requested mode against the offered set. An
+// empty request is NORMALIZED to by-reference (the wire negotiation default)
+// BEFORE the offered-modes check — it is not accepted unconditionally. So when
+// by-reference is not offered (the current posture, see offeredPayloadModes), an
+// empty or explicit by-reference request is ErrPayloadModeUnsupported, never a
+// silently-agreed subscription that would fail every event.
+func negotiatePayloadMode(requested string, offered []string) (string, error) {
+	mode := requested
+	if mode == "" {
+		mode = "by-reference"
 	}
-	for _, m := range supportedPayloadModes {
-		if m == requested {
-			return requested, nil
+	for _, m := range offered {
+		if m == mode {
+			return mode, nil
 		}
 	}
-	return "", fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, requested)
+	return "", fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, mode)
 }
 
 // newSubscriptionID returns a fresh crypto-random hex id.

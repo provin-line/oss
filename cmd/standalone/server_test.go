@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -16,6 +17,8 @@ import (
 	chainpbconnect "github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
 	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
+	payloadpbconnect "github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	signerpb "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
 	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
@@ -31,6 +34,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -99,7 +104,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, nil, maxCredentialSize, ingestMounts{})
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, ingestMounts{})
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
@@ -344,6 +349,28 @@ func TestBoot_ChainPeerServiceMountedNoL1(t *testing.T) {
 		connect.NewRequest(&chainpb.GetPublisherInfoRequest{PublisherDid: pipelineDID}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("peer GetPublisherInfo without proof: got %v (%v), want InvalidArgument (mounted, no L1)",
+			connect.CodeOf(err), err)
+	}
+}
+
+// PayloadService (the internet-facing L2 by-reference serving boundary) is
+// mounted WITHOUT the L1 authz interceptor: a request with no bearer reaches the
+// handler and is rejected by wireauth for the missing proof (InvalidArgument),
+// NOT by the L1 interceptor (Unauthenticated). Proves the serving boundary is
+// mounted and carries no L1 gate, mirroring the chain peer surface.
+func TestBoot_PayloadServiceMountedNoL1(t *testing.T) {
+	srv, _, _ := assembled(t)
+	payloadClient := payloadpbconnect.NewPayloadServiceClient(srv.Client(), srv.URL)
+	stream, err := payloadClient.ResolvePayload(context.Background(),
+		connect.NewRequest(&payloadpb.ResolvePayloadRequest{ContentHash: "sha256:" + strings.Repeat("a", 64)}))
+	if err == nil {
+		// Server-streaming: the error may surface on the first Receive.
+		stream.Receive()
+		err = stream.Err()
+		stream.Close()
+	}
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("payload ResolvePayload without proof: got %v (%v), want InvalidArgument (mounted, no L1)",
 			connect.CodeOf(err), err)
 	}
 }
