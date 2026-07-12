@@ -7,3 +7,6 @@ dist/
 .DS_Store
 *.bak
 *.swp
+
+# stray local build artifacts (go build ./deploy/quickstart/provision)
+/provision
