@@ -46,7 +46,7 @@ services:
   # Building from source instead: swap `image:` for the commented build block
   # (needs $GITHUB_TOKEN as a BuildKit secret; see policy-verifier.Dockerfile).
   policy-verifier:
-    image: ghcr.io/provin-line/auth-policy-verifier:sha-5ef8b0c5340a6256b894f87fc938086bcc136cad
+    image: ghcr.io/provin-line/auth-policy-verifier:v0.1.0
     # build:
     #   context: .
     #   dockerfile: policy-verifier.Dockerfile
@@ -69,7 +69,7 @@ services:
   # scaffold-time --registry-base-url is a placeholder; the env below
   # overrides it at runtime (the image is deployment-generic).
   auth-provider:
-    image: ghcr.io/provin-line/auth-auth-provider:sha-5ef8b0c5340a6256b894f87fc938086bcc136cad
+    image: ghcr.io/provin-line/auth-auth-provider:v0.1.0
     # build:
     #   context: .
     #   dockerfile: auth-provider.Dockerfile

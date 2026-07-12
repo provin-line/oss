@@ -21,13 +21,12 @@
 # (the compose file wires it from $GITHUB_TOKEN). Once the repos are public this
 # step is inert — an anonymous clone just works and the secret can be dropped.
 #
-# AUTH_REF pins provin.auth. Default is the poc commit that switched the DID
-# grant identifier to the https grant-type URI — it must stay in lock-step
-# with the grant_type value bin/did-token.mjs sends (and transitively with
-# the published images the compose file pins). Bump it to a release tag once
-# provin.auth cuts one.
+# AUTH_REF pins provin.auth. Default is the v0.1.0 internal-release tag — it
+# must stay in lock-step with the grant_type value bin/did-token.mjs sends
+# (and with the published images the compose file pins, which are the images
+# provin.auth's publish-images.yml built from this same tag).
 
-ARG AUTH_REF=5ef8b0c5340a6256b894f87fc938086bcc136cad
+ARG AUTH_REF=v0.1.0
 
 # A token, if mounted as the `github_token` secret, authenticates github.com
 # HTTPS fetches — covering both `git clone` and pnpm's git-subdir deps. It is

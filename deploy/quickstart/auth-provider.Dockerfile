@@ -13,7 +13,7 @@
 # resolve the owner DID during the `https://dplaax.dev/oauth/grant-type/did` grant; it
 # is also overridable at runtime via DPLAAX_REGISTRY_BASE_URL (set in compose).
 
-ARG AUTH_REF=5ef8b0c5340a6256b894f87fc938086bcc136cad
+ARG AUTH_REF=v0.1.0
 
 # --- gen: clone provin.auth, build the generator, scaffold the instance ---
 FROM node:24-alpine AS gen
