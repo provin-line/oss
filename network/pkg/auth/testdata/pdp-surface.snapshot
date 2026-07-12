@@ -1,0 +1,31 @@
+# The node's declared L1 PDP surface: every (resource, action) pair the
+# network asks a PDP to decide. LOCK-STEP CONTRACT: this file must equal the
+# `surface` list in provin.auth
+# packages/create-policy-verifier/src/template/config/application.conf.tmpl —
+# the scaffold's DefaultDenyRuleCollector denies anything not listed there,
+# so a pair added here without the scaffold change ships an RPC that every
+# real deployment rejects (the historical tlog:read / ingest:push gap).
+# Update BOTH in the same change, then this snapshot. provin.auth's own
+# mirror pin is create-policy-verifier surface-completeness.test.mts.
+#
+# Sources: o3co.authz.v1.policy method options in api/protobuf/dplaax/*/v1
+# (checked mechanically by TestPDPSurfaceSnapshot), plus HTTP-only PEP calls
+# that carry no proto option (listed in the test's httpOnlySurface).
+audit:read
+chain:read
+chain:subscribe
+chain:unsubscribe
+chain:update-allowlist
+dids:issue
+dids:read
+dids:register
+dids:revoke
+ingest:push
+schemas:deprecate
+schemas:read
+schemas:register
+signer:sign-vc
+signer:sign-wire
+tlog:read
+vc:read
+vc:store
