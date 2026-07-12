@@ -12,7 +12,9 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
 
@@ -64,6 +66,38 @@ func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.Au
 		httpClient = http.DefaultClient
 	}
 	return auditpbconnect.NewAuditServiceClient(httpClient, base, connect.WithInterceptors(bearer(token))), nil
+}
+
+// Schema returns a SchemaService client for the registry base URL, presenting
+// token as the L1 bearer on every RPC — the surface `provin schema register`
+// drives. Same validation and injection rules as DID.
+func Schema(httpClient connect.HTTPClient, registry, token string) (schemapbconnect.SchemaServiceClient, error) {
+	if err := validateBaseURL(registry); err != nil {
+		return nil, fmt.Errorf("client: registry URL: %w", err)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("client: bearer token must not be empty (--token / PROVIN_TOKEN)")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return schemapbconnect.NewSchemaServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
+}
+
+// Chain returns a ChainService client for the registry base URL, presenting
+// token as the L1 bearer on every RPC — the surface `provin chain subscribe`
+// / `chain set-allow` drive. Same validation and injection rules as DID.
+func Chain(httpClient connect.HTTPClient, registry, token string) (chainpbconnect.ChainServiceClient, error) {
+	if err := validateBaseURL(registry); err != nil {
+		return nil, fmt.Errorf("client: registry URL: %w", err)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("client: bearer token must not be empty (--token / PROVIN_TOKEN)")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return chainpbconnect.NewChainServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
 }
 
 // validateBaseURL rejects a base URL that is empty, scheme-less, not http(s),

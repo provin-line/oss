@@ -11,8 +11,8 @@ dplaax registry.
 | `pipeline` | create (delegation-signed issuance) | DIDService | implemented |
 | `process` | create (delegation-signed issuance) | DIDService | implemented |
 | `bundle` | export (archive a chain + its authority documents), verify (offline re-verification, no network) | VCResolverService + DID resolution (export); none (verify) | implemented |
-| `schema` | register | SchemaService | planned |
-| `chain` | subscribe, set-allow | ChainService | planned |
+| `schema` | register | SchemaService | implemented |
+| `chain` | subscribe, set-allow | ChainService | implemented |
 | `org` | verify / inspect / diagnose / generate-txt | DNS + DID resolution (no registry mutation) | planned |
 
 Global flags: `--registry` (env `PROVIN_REGISTRY`), `--token` (env `PROVIN_TOKEN`).

@@ -11,8 +11,8 @@
 | `pipeline` | create（委任署名による発行） | DIDService | 実装済み |
 | `process` | create（委任署名による発行） | DIDService | 実装済み |
 | `bundle` | export（チェーン + authority document のアーカイブ）、verify（オフライン再検証・ネットワーク不要） | VCResolverService + DID 解決（export）; なし（verify） | 実装済み |
-| `schema` | register | SchemaService | 予定 |
-| `chain` | subscribe, set-allow | ChainService | 予定 |
+| `schema` | register | SchemaService | 実装済み |
+| `chain` | subscribe, set-allow | ChainService | 実装済み |
 | `org` | verify / inspect / diagnose / generate-txt | DNS + DID 解決（レジストリへの変更なし） | 予定 |
 
 グローバルフラグ: `--registry`（環境変数 `PROVIN_REGISTRY`）、`--token`（環境変数 `PROVIN_TOKEN`）。

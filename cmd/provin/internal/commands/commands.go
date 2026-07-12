@@ -10,7 +10,9 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/cmd/provin/internal/client"
+	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 )
 
 // Env is the per-invocation environment every command runs against: the
@@ -40,4 +42,12 @@ func (e Env) out() io.Writer {
 
 func (e Env) didClient() (didpbconnect.DIDServiceClient, error) {
 	return client.DID(e.httpClient(), e.Registry, e.Token)
+}
+
+func (e Env) schemaClient() (schemapbconnect.SchemaServiceClient, error) {
+	return client.Schema(e.httpClient(), e.Registry, e.Token)
+}
+
+func (e Env) chainClient() (chainpbconnect.ChainServiceClient, error) {
+	return client.Chain(e.httpClient(), e.Registry, e.Token)
 }

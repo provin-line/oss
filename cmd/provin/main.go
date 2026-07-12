@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "provin:", err)
 		os.Exit(1)
 	}
@@ -26,24 +26,30 @@ func main() {
 const usage = `usage: provin <group> <operation> [flags]
 
 Implemented:
-  owner    init    --did <owner-did> --key <jwk-path>     register a pipeline owner
-  pipeline create  --did <target-did> --owner-key <path>  issue a pipeline DID
-  process  create  --did <target-did> --owner-key <path>  issue a process DID
-  bundle   export  --head <sha256:hex> --out <dir>        archive a chain + its authority documents
-                   [--aggregate-complete] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]...
-                   [--allow-loopback] [--allow-private] [--max-depth <n>]
-  bundle   verify  --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
-                                                          re-verify a bundle offline (no network)
+  owner    init       --did <owner-did> --key <jwk-path>     register a pipeline owner
+  pipeline create     --did <target-did> --owner-key <path>  issue a pipeline DID
+  process  create     --did <target-did> --owner-key <path>  issue a process DID
+  bundle   export     --head <sha256:hex> --out <dir>        archive a chain + its authority documents
+                      [--aggregate-complete] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]...
+                      [--allow-loopback] [--allow-private] [--max-depth <n>]
+  bundle   verify     --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
+                                                              re-verify a bundle offline (no network)
+  schema   register   --name <name> --format <format> --file <path|-> [--prerelease <label>]
+                                                              register an immutable schema version (- reads the body from stdin)
+  chain    subscribe  --subscriber <did> --publisher <did> [--delivery inline|by-reference]
+                                                              subscribe to a publisher (delivery mode is REQUESTED, never server-confirmed)
+  chain    set-allow  --pipeline <did> --pattern <glob> [--pattern <glob>...] | --clear
+                                                              REPLACE the pipeline's entire allow-list (full replacement; --clear for deny-all)
 
-Global flags (owner/pipeline/process/bundle export):
+Global flags (owner/pipeline/process/bundle export/schema register/chain subscribe/chain set-allow):
   --registry <base-url>   registry base URL   (env PROVIN_REGISTRY)
   --token    <token>      L1 bearer token     (env PROVIN_TOKEN)
 
-Planned (see README.md): schema register, chain subscribe/set-allow, org verify.`
+Planned (see README.md): org verify.`
 
 // run dispatches one CLI invocation. It is the testable seam: main wires
-// os.Args/os.Stdout and maps an error to exit code 1.
-func run(ctx context.Context, args []string, stdout io.Writer) error {
+// os.Args/os.Stdin/os.Stdout and maps an error to exit code 1.
+func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) < 2 {
 		return fmt.Errorf("missing command\n%s", usage)
 	}
@@ -59,6 +65,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return bundleExport(ctx, rest, stdout)
 	case "bundle verify":
 		return bundleVerify(ctx, rest, stdout)
+	case "schema register":
+		return schemaRegister(ctx, rest, stdin, stdout)
+	case "chain subscribe":
+		return chainSubscribe(ctx, rest, stdout)
+	case "chain set-allow":
+		return chainSetAllow(ctx, rest, stdout)
 	default:
 		return fmt.Errorf("unknown command %q %q\n%s", group, op, usage)
 	}
@@ -193,5 +205,108 @@ func bundleVerify(ctx context.Context, args []string, stdout io.Writer) error {
 		Dir:    *dir,
 		Head:   *head,
 		Digest: *digest,
+	})
+}
+
+func schemaRegister(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("schema register", flag.ContinueOnError)
+	registry, token := globalFlags(fs)
+	name := fs.String("name", "", "schema name (required)")
+	format := fs.String("format", "", "schema format, e.g. JsonSchema (required; open string — the registry validates, the CLI does not enumerate)")
+	file := fs.String("file", "", "path to the schema body, or - to read it from stdin (required)")
+	prerelease := fs.String("prerelease", "", "optional prerelease label")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("schema register: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *name == "" || *format == "" {
+		return fmt.Errorf("schema register: --name and --format are required")
+	}
+	if *file == "" {
+		return fmt.Errorf("schema register: --file is required")
+	}
+	body, err := readFileOrStdin(*file, stdin)
+	if err != nil {
+		return fmt.Errorf("schema register: read %s: %w", *file, err)
+	}
+	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
+	return commands.SchemaRegister(ctx, env, commands.SchemaRegisterConfig{
+		Name:       *name,
+		Format:     *format,
+		Body:       body,
+		Prerelease: *prerelease,
+	})
+}
+
+// readFileOrStdin reads path's bytes, or stdin when path is "-" — the
+// registration-from-a-pipe path the spec calls the common operator case.
+func readFileOrStdin(path string, stdin io.Reader) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(stdin)
+	}
+	return os.ReadFile(path)
+}
+
+func chainSubscribe(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("chain subscribe", flag.ContinueOnError)
+	registry, token := globalFlags(fs)
+	subscriber := fs.String("subscriber", "", "subscriber DID (required)")
+	publisher := fs.String("publisher", "", "publisher DID (required)")
+	delivery := fs.String("delivery", "", "requested payload delivery: inline | by-reference (optional; omitted/empty means by-reference, the protocol's own default — the CLI passes it through and does not invent one)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("chain subscribe: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *subscriber == "" || *publisher == "" {
+		return fmt.Errorf("chain subscribe: --subscriber and --publisher are required")
+	}
+	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
+	return commands.ChainSubscribe(ctx, env, commands.ChainSubscribeConfig{
+		Subscriber: *subscriber,
+		Publisher:  *publisher,
+		Delivery:   *delivery,
+	})
+}
+
+func chainSetAllow(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("chain set-allow", flag.ContinueOnError)
+	registry, token := globalFlags(fs)
+	pipeline := fs.String("pipeline", "", "pipeline DID whose allow-list is REPLACED (required)")
+	var patterns []string
+	fs.Func("pattern", "allow-list DID glob pattern (repeatable). UpdateAllowList is full-replacement: this REPLACES the entire allow-list, not an incremental add. At least one --pattern or --clear is required.", func(v string) error {
+		if v == "" {
+			return fmt.Errorf("must not be blank")
+		}
+		patterns = append(patterns, v)
+		return nil
+	})
+	clearFlag := fs.Bool("clear", false, "REPLACE the allow-list with zero rules (an explicit deny-all); mutually exclusive with --pattern")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("chain set-allow: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *pipeline == "" {
+		return fmt.Errorf("chain set-allow: --pipeline is required")
+	}
+	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
+	return commands.ChainSetAllow(ctx, env, commands.ChainSetAllowConfig{
+		Pipeline: *pipeline,
+		Patterns: patterns,
+		Clear:    *clearFlag,
 	})
 }
