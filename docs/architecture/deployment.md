@@ -88,11 +88,48 @@ verdicts). Two operational obligations:
 - **Back up the data dir.** Audit-reachable deployments promise
   retrospective resolution of source credentials long after issuance —
   evidence retention is a deployment obligation, not an optimization.
-- **Evidence grows without bound** (retention/GC is a roadmap item); monitor
-  disk.
+- **Evidence grows without bound by default**; monitor disk. To bound live
+  disk without deleting records, rotate the relationship-evidence log to a
+  cold archive (see below).
 
 In-memory by design (PoC posture): the wireauth nonce store (replay defense
 re-arms via the restart epoch barrier) and infra-operator state.
+
+### Evidence log rotation
+
+The relationship-evidence log is append-only and tamper-evident (a hash
+chain, replay-verified at open): records are **never** deleted or mutated —
+retention IS the audit horizon. To bound live disk, rotate old records to a
+cold archive instead of deleting them:
+
+```console
+# Stop the daemon first — the log takes a single-opener lock, so an
+# online rotate fails loudly (it will NOT corrupt a running log).
+$ provin evidence rotate --dir <data-dir>/relationship-evidence
+```
+
+Rotation copies the current log into `archive/seg-NNNNNN/` (with a
+`manifest.json` recording size, chain head, and — if the log is armed with a
+checkpoint signer — a signed final checkpoint), then truncates the live log
+to a fresh empty genesis. The archived segment stays independently
+replay-verifiable; move `archive/` to cheaper cold storage as needed, keeping
+it for the audit horizon. Rotation is crash-safe: an interrupted rotate is
+completed or rolled back at the next daemon start.
+
+**Segment stitching (audit across a rotation).** After a rotation the live
+log's record indices restart at 0, so the full history is ordered by *segment
+number then index*: `seg-000001` records `0..N₁-1`, then `seg-000002`, …, then
+the live log. Each segment verifies independently from its own genesis. An
+auditor reconstructing the complete relationship history reads the archive
+segments in ascending `seg-NNNNNN` order, then the live log. A consumer that
+references evidence by a persistent global index across a rotation must switch
+to `(segment, index)`; the current relationship-evidence path does not (it
+appends and audits the live log), so rotation is transparent to it.
+
+Unsigned caveat: unless the evidence log is armed with a checkpoint signer,
+the archived segment's integrity rests on chain replay plus filesystem access
+control — the same trust model as the live unsigned log. The `manifest.json`
+head is a storage summary, not a cryptographic seal.
 
 ## Trust material
 

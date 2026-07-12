@@ -20,6 +20,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	"github.com/provin-line/oss/tlog/filelog"
 )
 
 func TestRun_UnknownOrMissingCommand(t *testing.T) {
@@ -76,6 +77,7 @@ func TestRun_UnexpectedPositionalArgs(t *testing.T) {
 		"org inspect":      {"org", "inspect", "--did", "did:x", "extra"},
 		"org diagnose":     {"org", "diagnose", "--did", "did:x", "extra"},
 		"org generate-txt": {"org", "generate-txt", "--did", "did:x", "extra"},
+		"evidence rotate":  {"evidence", "rotate", "--dir", "x", "extra"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(context.Background(), args, strings.NewReader(""), io.Discard)
@@ -335,5 +337,68 @@ func TestRun_OrgGenerateTXT_Offline_EndToEnd(t *testing.T) {
 	want := "_dplaax-org.acme.com\nv=dplaax1; did=did:dplaax:poc.dplaax.dev:org:acme.com; key=sha256:" + strings.Repeat("a", 64) + "\n"
 	if out.String() != want {
 		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+}
+
+// evidence rotate seals a stopped evidence log into an archive segment and
+// leaves a fresh empty live log — end to end through run().
+func TestRun_EvidenceRotate_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	l, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"e1", "e2"} {
+		if _, err := l.Append(ctx, []byte(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil { // release the flock: the daemon has stopped
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := run(ctx, []string{"evidence", "rotate", "--dir", dir}, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("evidence rotate: %v", err)
+	}
+	if !strings.Contains(out.String(), "rotated evidence log") || !strings.Contains(out.String(), "records:   2") {
+		t.Errorf("output missing rotation summary:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "archive", "seg-000001", "log.ndjson")); err != nil {
+		t.Errorf("archive segment not created: %v", err)
+	}
+	l2, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+	if n, _ := l2.Size(ctx); n != 0 {
+		t.Errorf("live Size after rotate = %d, want 0", n)
+	}
+}
+
+// evidence rotate on a directory a live opener still holds (the daemon is up)
+// fails loudly rather than corrupting a running log.
+func TestRun_EvidenceRotate_LockedDirFailsLoud(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	l, err := filelog.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(ctx, []byte("e1")); err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close() // hold the flock for the whole test
+	if err := run(ctx, []string{"evidence", "rotate", "--dir", dir}, strings.NewReader(""), io.Discard); err == nil {
+		t.Error("evidence rotate on a locked dir: want error, got nil")
+	}
+}
+
+func TestRun_EvidenceRotate_RequiresDir(t *testing.T) {
+	err := run(context.Background(), []string{"evidence", "rotate"}, strings.NewReader(""), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("want required error, got %v", err)
 	}
 }

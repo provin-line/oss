@@ -67,6 +67,9 @@ Implemented:
   org      generate-txt --did <did> [--fingerprint sha256:<hex>]
                                                               print the DNS TXT record name + value that would endorse the DID
                                                               (--fingerprint skips DID resolution: offline mode, no --registry needed)
+  evidence rotate     --dir <log-dir>                         seal the relationship-evidence log to a cold-archive segment and
+                                                              start a fresh one (offline; stop the daemon first). Append-only:
+                                                              records are archived, never deleted.
 
 Global flags (owner/pipeline/process/bundle export/schema register/chain subscribe/chain set-allow):
   --registry <base-url>   registry base URL   (env PROVIN_REGISTRY)
@@ -110,6 +113,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		return orgDiagnose(ctx, rest, stdout)
 	case "org generate-txt":
 		return orgGenerateTXT(ctx, rest, stdout)
+	case "evidence rotate":
+		return evidenceRotate(ctx, rest, stdout)
 	default:
 		return fmt.Errorf("unknown command %q %q\n%s", group, op, usage)
 	}
@@ -140,6 +145,24 @@ func parse(fs *flag.FlagSet, args []string, stdout io.Writer) error {
 
 // errHelp marks a successful -h/--help invocation (usage already printed).
 var errHelp = errors.New("help requested")
+
+func evidenceRotate(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("evidence rotate", flag.ContinueOnError)
+	dir := fs.String("dir", "", "relationship-evidence log directory to rotate (required; stop the daemon first)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("evidence rotate: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *dir == "" {
+		return fmt.Errorf("evidence rotate: --dir is required")
+	}
+	return commands.EvidenceRotate(ctx, stdout, *dir)
+}
 
 func ownerInit(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("owner init", flag.ContinueOnError)

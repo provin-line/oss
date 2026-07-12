@@ -49,9 +49,25 @@ NATS operator mode は account の接続時（または JWT 失効時）に acco
 すべての永続状態は設定した data dir 以下に置かれる（`network/README.ja.md` の「状態モデル」参照）: YAML のコントロールプレーン record と、ファイルバックの evidence ディレクトリ（credential、resolution pool、audit queue、verdict）。運用上の義務は 2 つ:
 
 - **data dir をバックアップする。** audit-reachable な deployment は、発行からはるか後の source credential 遡及解決を約束している — evidence 保持は最適化ではなく deployment の義務。
-- **evidence は無制限に成長する**（retention/GC は roadmap 項目）。ディスクを監視すること。
+- **evidence は default で無制限に成長する**。ディスクを監視すること。record を削除せず live ディスクを抑えるには、relationship-evidence log を cold archive へ rotation する（下記）。
 
 設計上インメモリ（PoC 姿勢）: wireauth nonce store（replay 防御は restart epoch barrier で再武装）と infra-operator 状態。
+
+### evidence log の rotation
+
+relationship-evidence log は append-only かつ tamper-evident（open 時に replay 検証される hash chain）: record は**決して**削除・改変しない — 保持がそのまま audit horizon である。live ディスクを抑えるには、record を削除するのではなく古い record を cold archive へ rotation する:
+
+```console
+# 先に daemon を停止する — log は single-opener lock を取るので、
+# online の rotate は loud に失敗する（稼働中の log を壊すことはない）。
+$ provin evidence rotate --dir <data-dir>/relationship-evidence
+```
+
+rotation は現在の log を `archive/seg-NNNNNN/` へ copy し（`manifest.json` に size・chain head・そして checkpoint signer が武装していれば署名済み最終 checkpoint を記録）、live log を fresh な空 genesis へ truncate する。archive された segment は独立に replay 検証可能。必要に応じて `archive/` を安価な cold storage へ移し、audit horizon の間保持する。rotation は crash-safe: 中断された rotate は次回 daemon 起動時に完了またはロールバックされる。
+
+**segment stitching（rotation をまたぐ audit）。** rotation 後、live log の record index は 0 から振り直されるため、完全な履歴は *segment 番号 → index* の順で並ぶ: `seg-000001` の record `0..N₁-1`、次に `seg-000002`、…、最後に live log。各 segment は自身の genesis から独立に検証できる。完全な relationship 履歴を再構成する監査者は、archive segment を `seg-NNNNNN` 昇順に読み、最後に live log を読む。rotation をまたいで evidence を永続 global index で参照する consumer は `(segment, index)` へ切り替える必要がある。現在の relationship-evidence 経路はそうしていない（live log に append し audit する）ので、rotation は透過的。
+
+unsigned の注意: evidence log が checkpoint signer で武装されていない限り、archive segment の完全性は chain replay + filesystem のアクセス制御に依存する — live の unsigned log と同じ信頼モデル。`manifest.json` の head は storage summary であって暗号学的 seal ではない。
 
 ## Trust material
 

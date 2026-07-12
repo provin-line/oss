@@ -198,6 +198,14 @@ func New(dir string, opts ...Option) (*Log, error) {
 	for _, opt := range opts {
 		opt(l)
 	}
+	// Complete or roll back a rotation that crashed mid-flight (see Rotate). This
+	// must run before the daemon can Append: reconciliation may truncate the live
+	// log's archived prefix, and a prefix-truncate is only safe before any new
+	// append re-chains against it. A malformed/mismatching archive segment fails
+	// loud here (evidence doctrine), blocking boot rather than hiding damage.
+	if err := l.reconcileRotation(); err != nil {
+		return nil, err
+	}
 	success = true
 	return l, nil
 }
@@ -470,7 +478,14 @@ func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
 	if signer == nil {
 		return nil, ErrUnsignedLog
 	}
-	ts := time.Now().UTC().Truncate(time.Second)
+	return signCheckpoint(size, head, signer, time.Now().UTC().Truncate(time.Second))
+}
+
+// signCheckpoint signs a head commitment over an EXPLICIT (size, head, ts). It
+// touches no Log state and takes no lock, so a caller already holding l.mu
+// (e.g. Rotate) can seal a segment without re-entering Checkpoint's own
+// l.mu.Lock (which would deadlock).
+func signCheckpoint(size uint64, head string, signer *CheckpointSigner, ts time.Time) (*tlog.Checkpoint, error) {
 	view, err := jcs.Canonicalize(map[string]any{
 		"v":         1,
 		"purpose":   checkpointPurpose,
