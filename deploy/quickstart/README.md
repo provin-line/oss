@@ -83,7 +83,7 @@ $PROVIN owner init --did "$OWNER" --key /tmp/acme-owner.jwk \
 ### 2b. Exchange a DID-signed assertion for a real JWT
 
 Now that the owner is registered and resolvable, get a real JWT from the
-auth.provider via the `urn:dplaax:oauth:grant-type:did` grant (the helper signs
+auth.provider via the `https://dplaax.dev/oauth/grant-type/did` grant (the helper signs
 the challenge with the owner key — Node stdlib only):
 
 ```sh

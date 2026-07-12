@@ -10,7 +10,7 @@
  */
 
 // Exchange a DID-signed assertion for a real JWT from the quickstart's
-// auth.provider (the `urn:dplaax:oauth:grant-type:did` grant), then print the
+// auth.provider (the `https://dplaax.dev/oauth/grant-type/did` grant), then print the
 // access_token. This is the "real provider" leg of the walkthrough: once
 // `provin owner init` has registered the owner DID, the provider can resolve it
 // and verify a challenge signed by the owner's key — so we never mint the
@@ -66,7 +66,7 @@ async function main() {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
-			grant_type: "urn:dplaax:oauth:grant-type:did",
+			grant_type: "https://dplaax.dev/oauth/grant-type/did",
 			client_id: args.client,
 			did: args.did,
 			message,

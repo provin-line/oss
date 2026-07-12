@@ -10,10 +10,10 @@
 # the canonical parameterized copy of this build lives in provin.auth).
 #
 # --registry-base-url points the provider's DID resolver at the node so it can
-# resolve the owner DID during the `urn:dplaax:oauth:grant-type:did` grant; it
+# resolve the owner DID during the `https://dplaax.dev/oauth/grant-type/did` grant; it
 # is also overridable at runtime via DPLAAX_REGISTRY_BASE_URL (set in compose).
 
-ARG AUTH_REF=f7e6d6fee8db63ce88725394c656bd23c6d34f55
+ARG AUTH_REF=5ef8b0c5340a6256b894f87fc938086bcc136cad
 
 # --- gen: clone provin.auth, build the generator, scaffold the instance ---
 FROM node:24-alpine AS gen

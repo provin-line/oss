@@ -8,5 +8,6 @@ dist/
 *.bak
 *.swp
 
-# stray local build artifacts (go build ./deploy/quickstart/provision)
+# stray local build artifacts (go build ./deploy/quickstart/provision, ./cmd/provin)
 /provision
+/provin
