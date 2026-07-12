@@ -212,3 +212,45 @@ func TestNewSigner_AggregateRequiresCanonical(t *testing.T) {
 		t.Error("NewSigner(ClaimAggregate, no SourceRootCanonical): want error")
 	}
 }
+
+// An aggregate signer configured with a fold-output schema reference emits it
+// into the FirstDrop's credential subject, exactly like the source/chained
+// producing sides (TestSigner_SignFirstDrop_EmitsSchema) — the aggregate's
+// specially-shaped subject (commitment triple) still carries Schema.
+func TestSigner_SignAggregateFirstDrop_EmitsSchema(t *testing.T) {
+	b, _ := fixture(t)
+	ref := vc.SchemaRef{
+		ID:          "dplaax:schema/agg-report@2026-07-10-abcdef0123456789",
+		Type:        "JsonSchema",
+		ContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	s := newSigner(t, b, func(c *vcdid.Config) {
+		c.TransformationClaim = vc.ClaimAggregate
+		c.SourceRootCanonical = vc.SourceRootCanonicalJCS
+		c.Schema = ref
+	})
+	sources := []*vc.PipelinePassCredential{
+		signedSource(t, "did:dplaax:reg:org:alpha:pipeline:a:process:p1", "sha256:s1"),
+	}
+	cred, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	if err != nil {
+		t.Fatalf("SignAggregateFirstDrop: %v", err)
+	}
+	subj, err := cred.Subject()
+	if err != nil {
+		t.Fatalf("Subject: %v", err)
+	}
+	if subj.Schema != ref {
+		t.Errorf("aggregate emitted schema = %+v, want %+v", subj.Schema, ref)
+	}
+
+	// And none when unset (aggSigner has no Schema configured).
+	plain, err := aggSigner(t).SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	if err != nil {
+		t.Fatalf("SignAggregateFirstDrop (no schema): %v", err)
+	}
+	ps, _ := plain.Subject()
+	if ps.Schema != (vc.SchemaRef{}) {
+		t.Errorf("no-schema aggregate emitted %+v, want zero", ps.Schema)
+	}
+}

@@ -119,3 +119,27 @@ func TestLoad_Source_StillRequiresIngressSubject(t *testing.T) {
 		t.Error("source without ingress-subject: want boot error")
 	}
 }
+
+// An aggregate's fold-output schema-ref: the deferred follow-up from the
+// schema-validation slice — same optional "<name>@<version>" short-form the
+// source/chained producing sides carry, resolved at boot and stamped into the
+// emitted FirstDrop's credentialSubject.schema by the signer.
+func TestLoad_AggregateSchemaRef(t *testing.T) {
+	withRef := strings.Replace(validAggregateLoop, `window = 5s`,
+		"window = 5s\n      schema-ref = \"agg-report@2026-07-10-abcdef0123456789\"", 1)
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(withRef))))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if got := pc.Loops[0].Aggregate.SchemaRef; got != "agg-report@2026-07-10-abcdef0123456789" {
+		t.Errorf("Aggregate.SchemaRef = %q, want the configured short-form", got)
+	}
+}
+
+func TestLoad_AggregateMalformedSchemaRefRejected(t *testing.T) {
+	withRef := strings.Replace(validAggregateLoop, `window = 5s`,
+		"window = 5s\n      schema-ref = \"noversion\"", 1)
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(withRef)))); err == nil {
+		t.Error("malformed aggregate schema-ref: want boot error, got nil")
+	}
+}

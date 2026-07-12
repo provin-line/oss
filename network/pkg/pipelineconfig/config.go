@@ -200,7 +200,10 @@ type SourceConfig struct {
 	ProcessID  string
 	// TransformationClaim is the validated transformation claim of issued credentials.
 	TransformationClaim vc.TransformationClaim
-	// SchemaRef is the (currently empty-only) schema reference; non-empty is rejected.
+	// SchemaRef is the optional output-schema reference in "<name>@<version>"
+	// short-form, resolved against the registry at boot and stamped into issued
+	// credentials' credentialSubject.schema (the empty-only constraint was
+	// retired by the schema-validation slice).
 	SchemaRef string
 	// PushIngress exposes this loop's ingress as an HTTP push endpoint on the node
 	// listener (the apipush adapter, mounted at /ingest/<loop-name>/). The loop name
@@ -322,14 +325,17 @@ type AggregateIngress struct {
 // subjects live in Ingresses. The transformation-claim (provin:aggregate) and the
 // source-root canonical (JCS) are fixed by the runtime, not config keys.
 type AggregateConfig struct {
-	// Producing side (mirrors SourceConfig minus SchemaRef/TransformationClaim).
-	// No SchemaRef by design (this slice): an aggregate's fold-output schema is a
-	// deferred follow-up — the vcdid emit path already carries it, so adding it is
-	// a later config-key + boot-resolve reuse, not new machinery.
+	// Producing side (mirrors SourceConfig minus TransformationClaim — fixed to
+	// provin:aggregate by the runtime — and minus PushIngress, a source-only key).
 	OutputSubject string
 	Issuer        IssuerConfig
 	PipelineID    string
 	ProcessID     string
+	// SchemaRef is the optional fold-output schema reference in
+	// "<name>@<version>" short-form, resolved against the registry at boot and
+	// stamped into each emitted FirstDrop's credentialSubject.schema — the same
+	// producing-side contract source/chained loops carry.
+	SchemaRef string
 	// Consuming side. Ingresses is the set of upstream subjects to pool (≥1), loaded
 	// from the aggregate.ingresses.<key> object map by sorted key. VerificationStrategy
 	// is the per-input ingress depth (adjacent).
@@ -1016,6 +1022,11 @@ func loadAggregateConfig(cfg *hoconconfig.Config, base, name string) (AggregateC
 		return ac, err
 	}
 	if ac.VerificationStrategy, err = loadStrategy(cfg, abase+".verification-strategy", name); err != nil {
+		return ac, err
+	}
+	// schema-ref (optional) names the fold-output schema in the registry — same
+	// short-form and boot-resolve contract as the source/chained producing sides.
+	if ac.SchemaRef, err = loadSchemaRef(cfg, abase+".schema-ref", name); err != nil {
 		return ac, err
 	}
 	if !cfg.Has(abase + ".window") {

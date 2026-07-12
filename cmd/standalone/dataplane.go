@@ -420,9 +420,12 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 						publisher: publisher,
 					}
 				}
-				var emission tlog.Log
-				if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
-					agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, pw, lc)
+				var schemaRef vc.SchemaRef
+				if schemaRef, err = resolveSchema(lc.Name, lc.Aggregate.SchemaRef); err == nil {
+					var emission tlog.Log
+					if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
+						agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, schemaRef, pw, lc)
+					}
 				}
 			}
 			if err != nil {
@@ -627,7 +630,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher c
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
 // wired. When a VC store is configured the signer publishes each issued FirstDrop
 // (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
-func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, pw payloadWiring, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
+func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, schemaRef vc.SchemaRef, pw payloadWiring, lc pipelineconfig.LoopConfig) (*aggregate.Process, error) {
 	ac := lc.Aggregate
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -638,6 +641,7 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		ProcessID:           ac.ProcessID,
 		TransformationClaim: vc.ClaimAggregate,
 		SourceRootCanonical: vc.SourceRootCanonicalJCS,
+		Schema:              schemaRef,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("standalone: loop %q: aggregate signer: %w", lc.Name, err)
