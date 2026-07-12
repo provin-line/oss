@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
+	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,13 +15,12 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
-	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
-	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
@@ -28,134 +28,62 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store/memstore"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadclient "github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
+	payloadhandler "github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
 
-// This is CAPSTONE A of the export-seam-mode spec (§9-6): the first test to
-// prove a STRIPPED envelope crosses a real NATS account export/import
-// boundary. It reuses the crossnode capstone's DID lineage (capPipelineDID /
-// capIssuerDID / capOwnerDID / capIngress) but drives the subscription
-// through the REAL chainmanager peer flow (RegisterSubscription /
-// Subscribe) instead of setupCapstone's direct AddExport/AddImport, because
-// the thing under test — mode→subject mapping, the subscriber-side rename,
-// dual-emit — lives in that flow. Existing capstones (setupCapstone and its
-// tests) are NOT modified; this file is additive.
-
-const byrefSubDID = "did:dplaax:poc.dplaax.dev:org:beta"
-
-// inProcessPayloadResolver dereferences payload bytes directly against a
-// *payloadresolver.Service in the same process — the sink's PayloadResolver
-// seam. It proves the binding gate (sink-side sha256(payload)==outputHash)
-// without re-proving the HTTP fetch path, which byref_dataplane_e2e_test.go
-// already covers end to end (spec §9-6: capstone A does not re-compose it).
-type inProcessPayloadResolver struct{ svc *payloadresolver.Service }
-
-func (r inProcessPayloadResolver) ResolvePayload(ctx context.Context, _ string, contentHash string) ([]byte, error) {
-	b, _, err := r.svc.Resolve(ctx, contentHash)
-	return b, err
-}
-
-// mapDIDResolver resolves publisherDID to a fixed #chain-manager endpoint —
-// the subscriber-side chainmanager.DIDResolver seam.
-type mapDIDResolver map[string]*did.DIDDocument
-
-func (m mapDIDResolver) Resolve(_ context.Context, d string) (*did.DIDDocument, error) {
-	doc, ok := m[d]
-	if !ok {
-		return nil, wireauth.ErrKeyResolution
-	}
-	return doc, nil
-}
-
-// byrefEndpointDoc is capPipelineDID's DID document as the SUBSCRIBER
-// resolves it: it advertises the #chain-manager endpoint (the publisher's
-// httptest peer server).
-func byrefEndpointDoc(endpoint string) *did.DIDDocument {
-	return did.New(did.DocumentFields{
-		ID: capPipelineDID,
-		Service: []did.ServiceEndpoint{{
-			ID: "#chain-manager", Type: "ChainManager", ServiceEndpoint: endpoint,
-		}},
-	})
-}
-
-// byrefAuthDoc is the SUBSCRIBER's own DID document (what the publisher's
-// wireauth verifier resolves to check the L2 signature) — an #auth
-// authentication key, distinct from the credential-signing #signing key.
-func byrefAuthDoc(pub []byte) *did.DIDDocument {
-	return did.New(did.DocumentFields{
-		ID: byrefSubDID, Controller: byrefSubDID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID: byrefSubDID + "#auth", Type: "JsonWebKey2020", Controller: byrefSubDID,
-			PublicKeyJWK: capJWK(pub),
-		}},
-		Authentication: []string{byrefSubDID + "#auth"},
-	})
-}
-
-func capJWK(pub []byte) map[string]any {
-	return map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)}
-}
-
-// capSigner generates a fresh Ed25519 #auth key for subject and returns a
-// crypto.Signer over it plus the raw public key (for building its DID
-// document) — the wireauth signing identity for a chainmanager peer caller.
-func capSigner(t *testing.T, subject string) (crypto.Signer, []byte) {
-	t.Helper()
-	ks := filestore.New(t.TempDir())
-	kp, err := (ed25519.Generator{}).Generate()
-	if err != nil {
-		t.Fatalf("capSigner: generate: %v", err)
-	}
-	if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
-		t.Fatalf("capSigner: save: %v", err)
-	}
-	return ed25519.NewSigner(ks), kp.PublicKey
-}
-
-// capByRefSinkCfg builds the by-reference sink loop config. upstreamEndpoint
-// is inert for capstone A (in-process resolver shortcut) and a live httptest
-// server for the combined full smoke (a genuine ConnectRPC fetch hop).
-func capByRefSinkCfg(upstreamEndpoint string) *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
-		Name:           "archive",
-		Role:           pipelineconfig.RoleSink,
-		IngressSubject: capPipelineDID, // unchanged by mode — the rename absorbs it (D-4)
-		Sink: pipelineconfig.SinkConfig{
-			Kind:                 pipelineconfig.SinkObservationOnly,
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
-			UpstreamEndpoint:     upstreamEndpoint,
-			PayloadDelivery:      "by-reference",
-		},
-	}}}
-}
-
-// TestCapstone_ByReferenceCrossNodeDelivery is capstone A (export-seam-mode
-// spec §9-6): a publisher node with payload serving (PayloadStore wired, so
-// its source loop dual-emits) registers a REAL by-reference subscription
-// through the chainmanager peer flow — publisher RegisterSubscription maps
-// the agreed mode to "byref."+capPipelineDID and exports it; subscriber
-// Subscribe imports it and RENAMES it back to the plain capPipelineDID local
-// subject (D-4), so the sink loop's ingress-subject config is unchanged. The
-// sink runs payload-delivery=by-reference with an in-process PayloadResolver
-// returning the publisher-retained bytes.
+// This is the by-reference FULL SMOKE composing the two halves the
+// export-seam-mode spec (§9-6) explicitly deferred fusing: capstone A
+// (TestCapstone_ByReferenceCrossNodeDelivery, crossnode_byref_e2e_test.go) —
+// a stripped envelope crossing a REAL NATS account export/import boundary —
+// and the by-reference data-path e2e
+// (TestByReference_DataPath_SinkFetchesAndDelivers,
+// network/pkg/services/payloadresolver/handler/byref_dataplane_e2e_test.go)
+// — a sink dereferencing a nil payload over a REAL PayloadService HTTP
+// surface. Capstone A's own doc comment on inProcessPayloadResolver named
+// this exact composition as future work; gap-backlog L4 tracks it.
 //
-// Positive: the sink receives and DELIVERS the event end to end — the
-// stripped envelope crossed the real NATS account export/import boundary and
-// the payload was dereferenced + bound.
+// It reuses capstone A's DID lineage and scaffolding (capOperator,
+// capSigner, bridgeCapDir, mapDIDResolver, byrefEndpointDoc, byrefAuthDoc,
+// byrefSubDID, capByRefSinkCfg) rather than duplicating it — here the sink
+// config's UpstreamEndpoint points at the publisher's LIVE httptest server
+// (mounting BOTH the chain peer surface and the PayloadService, exactly as
+// server.go mounts them on one mux), so the sink's PayloadResolver fetch is
+// a genuine ConnectRPC HTTP hop rather than capstone A's in-process shortcut.
+
+// TestCapstone_ByReferenceCrossNodeFetchAndDeliver is the combined
+// by-reference full smoke: a publisher node (payload serving wired, so its
+// source loop dual-emits stripped alongside plain) registers a REAL
+// by-reference subscription through the chainmanager peer flow, exactly as
+// capstone A does. The subscriber's sink loop receives the stripped envelope
+// that crossed the real NATS account boundary and — unlike capstone A —
+// dereferences its payload through a REAL payloadclient.Resolver making a
+// genuine ConnectRPC call over httptest to the publisher's PayloadService,
+// binds the fetched bytes against the credential's outputHash, and DELIVERS.
 //
-// Negative (confidentiality = grant shape, not a runtime check): the
-// by-reference subscriber's account cannot read the PLAIN (inline) subject —
-// a probe import of the never-exported plain subject (structurally routable,
-// mirroring TestIsolationE2E/TestMultiNodeDelivery's "denied" pattern) stays
-// live from before the positive injection begins, so its later "received
-// nothing" check is not a timing race: the positive assertion already proves
-// N dual-emit cycles (each publishing the primary form on the SAME publisher
-// account subject the probe imports) happened before the check runs.
-func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
+// Teeth:
+//  1. Stripped, not plain, crossed the boundary: sink.Processor's
+//     acquirePayload fails closed (RejectPayloadDeliveryViolation) if a
+//     by-reference-configured sink ever receives an envelope carrying an
+//     inline payload (pipeline/sink/sink.go: "by-reference + present →
+//     RejectPayloadDeliveryViolation"). A StatusPassed delivery below is
+//     therefore only possible if the envelope that crossed was nil-payload.
+//  2. The HTTP hop is real and observed: payloadReqs counts requests that
+//     actually reached the mounted PayloadService handler. The ONLY writer
+//     into payloadSvc's store is the publisher data plane's retain path
+//     (PayloadStore: payloadSvc passed to buildDataPlane) — this test never
+//     calls payloadSvc.Store directly — so a delivered record with matching
+//     bytes plus payloadReqs > 0 together prove the sink actually fetched
+//     over the wire rather than short-circuiting.
+//  3. Byte-identical payload + ConfidenceVerified binding.
+//  4. Negative (deliver-then-check, capstone A's pattern): the probe import
+//     of the never-exported PLAIN subject stays empty — the full payload
+//     never crossed the boundary in-band, only the by-reference pointer did.
+func TestCapstone_ByReferenceCrossNodeFetchAndDeliver(t *testing.T) {
 	ctx := context.Background()
 
 	// --- shared trust root + JWT dir (slice-16 pattern) ---------------------
@@ -173,8 +101,9 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	pubOp := capOperator(t, pubAccSeed, opSeed, sharedDir)
 	subOp := capOperator(t, subAccSeed, opSeed, sharedDir)
 
-	// --- publisher-side chainmanager peer server (real wireauth, real nats
-	// operator SHARING the publisher data-plane's account, payload serving) --
+	// --- publisher-side chainmanager peer server AND PayloadService, mounted
+	// on ONE httptest server exactly as server.go mounts them (real wireauth,
+	// real nats operator SHARING the publisher data-plane's account) ---------
 	subSigner, subAuthPub := capSigner(t, byrefSubDID)
 	pubAllows := memstore.NewAllowListStore()
 	if err := pubAllows.Save(capPipelineDID, []store.AllowRule{{Pattern: "did:dplaax:*:org:beta"}}); err != nil {
@@ -190,8 +119,23 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	}
 	pubChainSvc := chainmanager.New(memstore.NewSubscriptionStore(), pubAllows,
 		chainmanager.WithInfraOperator(pubOp), chainmanager.WithPayloadServing())
-	_, ph := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(pubChainSvc, v))
-	pubPeerSrv := httptest.NewServer(ph)
+
+	// payloadSvc is created here (before the mux) and reused below as the
+	// publisher data plane's PayloadStore — the SAME store instance backs
+	// both the retain path (producer) and the serving boundary (this
+	// handler), which is what makes "successful fetch" proof of a real hop.
+	payloadSvc := payloadresolver.New(payloadmemstore.New())
+
+	var payloadReqs int32 // observed hits on the mounted PayloadService — teeth #2
+	peerPath, ph := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(pubChainSvc, v))
+	payloadPath, poh := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, v, pubChainSvc))
+	mux := http.NewServeMux()
+	mux.Handle(peerPath, ph)
+	mux.Handle(payloadPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&payloadReqs, 1)
+		poh.ServeHTTP(w, r)
+	}))
+	pubPeerSrv := httptest.NewServer(mux)
 	t.Cleanup(pubPeerSrv.Close)
 
 	// --- subscriber-side chainmanager Service (real nats operator SHARING the
@@ -211,7 +155,8 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	// Negative probe: the subscriber account ALSO structurally imports the
 	// PLAIN publisher subject onto a distinct local alias — it was never
 	// exported for this (by-reference-only) subscription, so nothing should
-	// ever arrive on it (mirrors TestIsolationE2E's "denied" subject).
+	// ever arrive on it (mirrors capstone A's / TestIsolationE2E's "denied"
+	// pattern).
 	const probeLocal = "probe.plain"
 	if err := subOp.AddImport(capPipelineDID, pubAccPub, probeLocal); err != nil {
 		t.Fatalf("AddImport(probe): %v", err)
@@ -236,7 +181,6 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	if err := ks.SaveKeyPair(capIssuerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("save key: %v", err)
 	}
-	payloadSvc := payloadresolver.New(payloadmemstore.New())
 	pubChainCfg := &chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
@@ -246,20 +190,22 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
 
-	// --- subscriber data plane: sink loop, by-reference, in-process resolver
+	// --- subscriber data plane: sink loop, by-reference, REAL payloadclient
+	// pointed at the publisher's live httptest server ------------------------
 	res := local.New()
 	res.Add(capProcessDoc(capIssuerDID, capOwnerDID, kp.PublicKey))
 	res.Add(capOwnerDoc(capOwnerDID))
 	writer := &captureWriter{}
+	payloadResolver := payloadclient.New(subSigner, byrefSubDID, guard.HTTPClient(), 0)
 	subChainCfg := &chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := buildDataPlane(ctx, subChainCfg, capByRefSinkCfg("https://acme.example/pipelines/pipe"), filestore.New(t.TempDir()), dataPlaneDeps{
+	subDP, err := buildDataPlane(ctx, subChainCfg, capByRefSinkCfg(pubPeerSrv.URL), filestore.New(t.TempDir()), dataPlaneDeps{
 		Resolver:        res,
 		SinkWriter:      writer,
 		VCStore:         dpVCStore(),
-		PayloadResolver: inProcessPayloadResolver{svc: payloadSvc},
+		PayloadResolver: payloadResolver,
 	})
 	if err != nil {
 		t.Fatalf("build subscriber data plane: %v", err)
@@ -329,6 +275,14 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		case <-deadline:
 			t.Fatal("sink did not receive the by-reference cross-node event")
 		}
+	}
+
+	// --- teeth #2: the HTTP hop to the publisher's PayloadService actually
+	// happened (not an in-process shortcut). payloadSvc is populated ONLY via
+	// the publisher data plane's retain path, so the delivered byte-identical
+	// payload above already implies a fetch; this independently OBSERVES it.
+	if hits := atomic.LoadInt32(&payloadReqs); hits == 0 {
+		t.Fatal("PayloadService received zero requests: the sink did not fetch over the real HTTP surface")
 	}
 
 	// --- negative: deliver-then-check. The positive delivery above proves at
