@@ -20,15 +20,20 @@ end-to-end — from HTTP push ingest to a `VERIFIED` audit verdict — through t
 ## Prerequisites
 
 - **Docker** with Compose v2 (`docker compose`), BuildKit enabled (default).
-- While `provin.auth` / `provin.oss` are **private**, a GitHub token with read
-  access — the builds clone `provin.auth` and fetch its git-subdir packages:
+- The auth-layer services (`policy-verifier`, `auth-provider`) are **published
+  images** (`ghcr.io/provin-line/auth-*`, built by provin.auth's
+  publish-images workflow and pinned by immutable `sha-` tag in the compose
+  file). While `provin.auth` is **private**, pulling them needs a one-time
+  registry login with a token that can read the org's packages:
 
   ```sh
-  export GITHUB_TOKEN=$(gh auth token)   # or a PAT with repo:read
+  gh auth token | docker login ghcr.io -u "$(gh api user --jq .login)" --password-stdin
   ```
 
-  Once the repos are public this is unnecessary (the Dockerfiles fall back to an
-  anonymous clone).
+  Once the repos are public this is unnecessary. Building those two services
+  **from source** instead (the commented `build:` blocks in the compose file)
+  needs `export GITHUB_TOKEN=$(gh auth token)` for the in-build clone — see
+  the Dockerfile headers.
 - For the walkthrough (host-side operator tooling): **Go** (to build the `provin`
   CLI), **Node ≥ 20** (the DID-grant helper — Node stdlib only, no `npm install`),
   and `bash` + `openssl` + `curl`.

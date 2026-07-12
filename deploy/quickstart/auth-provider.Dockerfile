@@ -3,9 +3,11 @@
 # Generation-in-Dockerfile for the quickstart's REAL auth.provider (JWT issuer).
 # Same shape as policy-verifier.Dockerfile: clone provin.auth at a pinned ref,
 # build the create-auth-provider CLI, scaffold an instance pinned to the same
-# ref, then build + run it. See that file's header for the rationale and the
+# ref, then build + run it. See that file's header for the rationale, the
 # GITHUB ACCESS note (a `github_token` BuildKit secret while the repos are
-# private; inert once public).
+# private; inert once public), and the SOURCE-BUILD FALLBACK note (the compose
+# file references the published ghcr.io/provin-line/auth-auth-provider image;
+# the canonical parameterized copy of this build lives in provin.auth).
 #
 # --registry-base-url points the provider's DID resolver at the node so it can
 # resolve the owner DID during the `urn:dplaax:oauth:grant-type:did` grant; it

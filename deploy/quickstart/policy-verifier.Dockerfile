@@ -2,6 +2,12 @@
 #
 # Generation-in-Dockerfile for the quickstart's REAL policy-verifier (PDP).
 #
+# SOURCE-BUILD FALLBACK: the compose file references the published image
+# (ghcr.io/provin-line/auth-policy-verifier, built by provin.auth's
+# publish-images workflow from the CANONICAL parameterized copy of this
+# build — provin.auth deploy/generated-instance.Dockerfile). Keep this file
+# for from-source builds; behavioral changes belong in the canonical copy.
+#
 # provin.auth is a generator repo — a runnable policy-verifier instance is not
 # committed anywhere; it is scaffolded by the create-policy-verifier CLI. So
 # this image (1) clones provin.auth at a pinned ref, (2) builds that CLI,
