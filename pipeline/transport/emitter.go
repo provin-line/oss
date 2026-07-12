@@ -194,7 +194,7 @@ type intentLog interface {
 // errors AMBIGUOUSLY (a flush timeout after the broker already accepted the
 // PUB) is treated as not-delivered and its number reused, which can still
 // collide — see Emit. Closing that needs a stronger Publisher delivery
-// contract.
+// contract; tracked as https://github.com/provin-line/oss/issues/11.
 //
 // A tail record that cannot be read back as an emission record fails
 // construction (the open-time damage doctrine extended to the seed). memlog

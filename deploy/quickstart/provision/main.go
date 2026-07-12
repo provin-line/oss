@@ -69,7 +69,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "provision: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("provisioned NATS trust material for account %q under %s\n", cfg.account, cfg.outDir)
 }
 
 // provision generates the operator + account material and writes the broker
@@ -83,6 +82,33 @@ func main() {
 func provision(cfg config) error {
 	jwtsDir := filepath.Join(cfg.outDir, "jwts")
 	natsDir := filepath.Join(cfg.outDir, "nats")
+
+	// Idempotency: `docker compose up` re-runs this one-shot container on every
+	// up. Complete existing material is REUSED (regenerating seeds under a live
+	// stack desynchronizes any container still holding the old trust root);
+	// partial material (an interrupted run) fails closed — the artifacts
+	// cross-reference each other, so mixing generations yields a broker that
+	// silently rejects the node. Only the service overlay is re-minted on reuse:
+	// it derives from the shared secret, not the seeds, and carries an expiry.
+	accPub, reuse, err := hasCompleteMaterial(cfg, jwtsDir, natsDir)
+	if err != nil {
+		return err
+	}
+	if reuse {
+		// Re-apply the shared-volume permissions: the node's DirPublisher
+		// republishes the account JWT as 0600 owned by the node's uid (see
+		// dirpublisher.go), and this provisioner (root) is the only party that
+		// can widen it back for every other reader on the next cycle.
+		if err := os.Chmod(jwtsDir, 0o777); err != nil {
+			return fmt.Errorf("chmod jwts dir: %w", err)
+		}
+		if err := os.Chmod(filepath.Join(jwtsDir, accPub+".jwt"), 0o644); err != nil {
+			return fmt.Errorf("chmod account jwt: %w", err)
+		}
+		fmt.Println("reusing existing NATS trust material (delete the volume — docker compose down -v — to regenerate)")
+		return writeServiceOverlay(cfg)
+	}
+
 	for _, d := range []string{jwtsDir, natsDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", d, err)
@@ -135,7 +161,7 @@ func provision(cfg config) error {
 	if err != nil {
 		return fmt.Errorf("account seed: %w", err)
 	}
-	accPub, err := acc.PublicKey()
+	accPub, err = acc.PublicKey()
 	if err != nil {
 		return fmt.Errorf("account public key: %w", err)
 	}
@@ -168,7 +194,71 @@ func provision(cfg config) error {
 	if err := writeServiceOverlay(cfg); err != nil {
 		return err
 	}
+	fmt.Printf("provisioned NATS trust material for account %q under %s\n", cfg.account, cfg.outDir)
 	return nil
+}
+
+// hasCompleteMaterial reports whether cfg.outDir already holds a complete,
+// internally consistent set of trust artifacts from an earlier run, returning
+// the existing account public key when it does. Complete = all four core files
+// exist AND the resolver dir holds the claims JWT for the account seed's own
+// public key (the cross-reference the broker preload and the node both depend
+// on). Zero core files = a fresh volume (generate). Anything in between = an
+// interrupted run; fail closed with reset guidance rather than mixing artifact
+// generations.
+func hasCompleteMaterial(cfg config, jwtsDir, natsDir string) (string, bool, error) {
+	core := []string{
+		filepath.Join(cfg.outDir, "operator.seed"),
+		filepath.Join(cfg.outDir, cfg.account+"-account.seed"),
+		filepath.Join(natsDir, "operator.jwt"),
+		filepath.Join(natsDir, "nats-server.conf"),
+	}
+	present := 0
+	for _, p := range core {
+		if _, err := os.Stat(p); err == nil {
+			present++
+		} else if !os.IsNotExist(err) {
+			return "", false, fmt.Errorf("stat %s: %w", p, err)
+		}
+	}
+	if present == 0 {
+		return "", false, nil
+	}
+	partial := func(detail string) error {
+		return fmt.Errorf("partial NATS trust material under %s (%s); reset the quickstart volume with `docker compose down -v` and re-run", cfg.outDir, detail)
+	}
+	if present < len(core) {
+		return "", false, partial(fmt.Sprintf("%d/%d core artifacts", present, len(core)))
+	}
+	accSeed, err := os.ReadFile(filepath.Join(cfg.outDir, cfg.account+"-account.seed"))
+	if err != nil {
+		return "", false, fmt.Errorf("read existing account seed: %w", err)
+	}
+	accKP, err := nkeys.FromSeed(accSeed)
+	if err != nil {
+		return "", false, partial("account seed is not a valid nkey seed")
+	}
+	accPub, err := accKP.PublicKey()
+	if err != nil {
+		return "", false, fmt.Errorf("existing account public key: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(jwtsDir, accPub+".jwt")); err != nil {
+		if os.IsNotExist(err) {
+			return "", false, partial("resolver dir is missing the account claims JWT")
+		}
+		return "", false, fmt.Errorf("stat account claims jwt: %w", err)
+	}
+	// The broker config must preload THIS account: a truncated or foreign
+	// nats-server.conf would otherwise reuse-boot the broker without operator
+	// mode — the one silent failure in the set (everything else fails loudly).
+	conf, err := os.ReadFile(filepath.Join(natsDir, "nats-server.conf"))
+	if err != nil {
+		return "", false, fmt.Errorf("read existing nats-server.conf: %w", err)
+	}
+	if !strings.Contains(string(conf), accPub) {
+		return "", false, partial("nats-server.conf does not preload the existing account")
+	}
+	return accPub, true, nil
 }
 
 // writeServiceOverlay mints the node's own service token and writes a HOCON

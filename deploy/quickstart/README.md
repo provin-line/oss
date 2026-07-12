@@ -4,7 +4,7 @@ Bring up a **fully authenticated** dPLaaX stack on one host and drive a record
 end-to-end — from HTTP push ingest to a `VERIFIED` audit verdict — through the
 **real** three-layer authorization stack, not a stub.
 
-```
+```text
 ┌── auth.provider ──┐   issues JWTs from a DID-signed assertion (token issuance)
 │  policy-verifier  │   verifies the JWT + evaluates policy         (the PDP)
 │      node         │   enforces policy per RPC (the PEP) + runs the pipeline
@@ -134,7 +134,10 @@ chained, and audited entirely through the real provider + real verifier path.
   `nats-server.conf`) and mints the node's **service token** — an HS256 JWT the
   node uses to authenticate its *own* L1-gated calls (publishing issued VCs,
   resolving references, fetching adjacent evidence). Both are written to a shared
-  volume; nothing cryptographic is committed to the repo.
+  volume; nothing cryptographic is committed to the repo. Re-running
+  `docker compose up` **reuses** existing trust material (only the service token
+  is re-minted — it carries an expiry); partial material from an interrupted run
+  fails closed with a pointer to the reset below.
 - **`policy-verifier`** and **`auth-provider`** are *generated* by
   `provin.auth`'s `create-*` CLIs at build time (there is no committed instance
   to build) — see `policy-verifier.Dockerfile` / `auth-provider.Dockerfile`. Both

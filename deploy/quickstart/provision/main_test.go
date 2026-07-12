@@ -11,6 +11,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -151,6 +152,175 @@ func TestProvision_NoSecretNoOverlay(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err == nil {
 		t.Error("overlay.conf written despite no jwt-secret")
 	}
+}
+
+// Re-running provision over complete existing material must REUSE it, not
+// regenerate: `docker compose up` re-runs the one-shot provisioner on every
+// up, and regenerating seeds under a live stack desynchronizes any container
+// that keeps the old trust root (new seed vs old operator). Idempotency is the
+// fix the quickstart promises over `down` → `up` cycles (a full reset stays
+// `down -v`).
+func TestProvision_Idempotent_ReusesExistingMaterial(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+
+	accSeed := mustRead(t, filepath.Join(dir, "acme-account.seed"))
+	accKP, err := nkeys.FromSeed(accSeed)
+	if err != nil {
+		t.Fatalf("account seed not an nkey seed: %v", err)
+	}
+	accPub, _ := accKP.PublicKey()
+
+	artifacts := []string{
+		"operator.seed",
+		"acme-account.seed",
+		filepath.Join("nats", "operator.jwt"),
+		filepath.Join("nats", "nats-server.conf"),
+		filepath.Join("jwts", accPub+".jwt"),
+	}
+	before := map[string][]byte{}
+	for _, rel := range artifacts {
+		before[rel] = mustRead(t, filepath.Join(dir, rel))
+	}
+
+	if err := provision(cfg); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	for _, rel := range artifacts {
+		if got := mustRead(t, filepath.Join(dir, rel)); !bytes.Equal(got, before[rel]) {
+			t.Errorf("%s changed across an idempotent re-run", rel)
+		}
+	}
+}
+
+// The service overlay is derived from the shared secret (not from the trust
+// material) and carries an expiry, so the reuse path must still (re-)mint it:
+// a stack first provisioned without a secret, then re-upped with one, gets a
+// working vc-store-bearer without a volume reset.
+func TestProvision_Idempotent_StillMintsServiceOverlay(t *testing.T) {
+	dir := t.TempDir()
+	if err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err == nil {
+		t.Fatal("overlay.conf written despite no jwt-secret")
+	}
+	if err := provision(config{
+		outDir: dir, account: "acme", natsURL: "nats://nats:4222",
+		jwtSecret: "shared-secret", jwtIssuer: "http://auth-provider:3000",
+		serviceSubject: "did:dplaax:poc.dplaax.dev:org:acme", serviceTTL: time.Hour,
+	}); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err != nil {
+		t.Errorf("reuse path did not mint the service overlay: %v", err)
+	}
+}
+
+// The node's DirPublisher republishes the account claims JWT as 0600 (owned by
+// the node's uid) at its first grant; the reuse path must widen the shared
+// resolver dir and JWT back so every other reader survives the next up cycle
+// (Codex review P1).
+func TestProvision_Idempotent_RestoresSharedPermissions(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	accKP, err := nkeys.FromSeed(mustRead(t, filepath.Join(dir, "acme-account.seed")))
+	if err != nil {
+		t.Fatalf("account seed: %v", err)
+	}
+	accPub, _ := accKP.PublicKey()
+	jwtPath := filepath.Join(dir, "jwts", accPub+".jwt")
+	// Simulate the node's republish tightening the file, and a volume driver
+	// tightening the dir.
+	if err := os.Chmod(jwtPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "jwts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := provision(cfg); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	if info, _ := os.Stat(jwtPath); info.Mode().Perm() != 0o644 {
+		t.Errorf("account jwt mode = %v after reuse, want 0644", info.Mode().Perm())
+	}
+	if info, _ := os.Stat(filepath.Join(dir, "jwts")); info.Mode().Perm() != 0o777 {
+		t.Errorf("jwts dir mode = %v after reuse, want 0777", info.Mode().Perm())
+	}
+}
+
+// Partial material (an interrupted earlier run) is neither reusable nor safe
+// to silently regenerate over — the artifacts cross-reference each other, so
+// mixing generations produces a broker that rejects the node with no obvious
+// error. Provision must fail closed with reset guidance instead.
+func TestProvision_PartialMaterial_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "operator.seed"), []byte("SOOPERATORSEED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"})
+	if err == nil {
+		t.Fatal("provision succeeded over partial trust material")
+	}
+	if !strings.Contains(err.Error(), "down -v") {
+		t.Errorf("error carries no reset guidance: %v", err)
+	}
+}
+
+// The completeness check must verify the cross-references the stack depends
+// on, not just count files: all four core artifacts present but (a) the
+// resolver dir missing the claims JWT for the seed's own public key, or
+// (b) a nats-server.conf that does not preload that account, are interrupted/
+// corrupt states — reuse would boot a broker that rejects the node (a) or a
+// broker silently without operator mode (b). Both must fail closed.
+func TestProvision_BrokenCrossReference_FailsClosed(t *testing.T) {
+	cfg := func(dir string) config {
+		return config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+	}
+	accPubOf := func(t *testing.T, dir string) string {
+		t.Helper()
+		accKP, err := nkeys.FromSeed(mustRead(t, filepath.Join(dir, "acme-account.seed")))
+		if err != nil {
+			t.Fatalf("account seed: %v", err)
+		}
+		pub, _ := accKP.PublicKey()
+		return pub
+	}
+
+	t.Run("resolver jwt missing", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := provision(cfg(dir)); err != nil {
+			t.Fatalf("first provision: %v", err)
+		}
+		if err := os.Remove(filepath.Join(dir, "jwts", accPubOf(t, dir)+".jwt")); err != nil {
+			t.Fatal(err)
+		}
+		err := provision(cfg(dir))
+		if err == nil || !strings.Contains(err.Error(), "down -v") {
+			t.Fatalf("want fail-closed with reset guidance, got: %v", err)
+		}
+	})
+
+	t.Run("broker config does not preload the account", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := provision(cfg(dir)); err != nil {
+			t.Fatalf("first provision: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "nats", "nats-server.conf"), []byte("port: 4222\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := provision(cfg(dir))
+		if err == nil || !strings.Contains(err.Error(), "down -v") {
+			t.Fatalf("want fail-closed with reset guidance, got: %v", err)
+		}
+	})
 }
 
 func mustRead(t *testing.T, path string) []byte {
