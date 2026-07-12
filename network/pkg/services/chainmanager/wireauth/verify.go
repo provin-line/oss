@@ -40,9 +40,10 @@ type AcceptanceWindow struct {
 
 // VerifierConfig configures a Verifier. Resolver, Crypto, and Nonces are
 // required (NewVerifier errors if any is nil). Clock defaults to time.Now and
-// Epoch to the next whole second after construction. Window defaults to {60s
-// past, 5s future} ONLY when wholly unset (the zero AcceptanceWindow); a
-// partially-set window is honored exactly, so MaxFuture:0 stays expressible.
+// Epoch to the first whole second at or after boot+MaxFuture — the restart
+// replay barrier (see NewVerifier). Window defaults to {60s past, 5s future}
+// ONLY when wholly unset (the zero AcceptanceWindow); a partially-set window is
+// honored exactly, so MaxFuture:0 stays expressible.
 // Negative window durations are rejected. Canonicalization is NOT configurable:
 // the signed-view format is frozen to JCS (ViewVersion), and a verify-side canon
 // the sign side did not honor would be a divergence hazard, not a feature.
@@ -81,19 +82,27 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	epoch := cfg.Epoch
-	if epoch.IsZero() {
-		epoch = ceilToSecond(clock().UTC())
-	}
-	// Default only when the window is wholly unset: a partially-set window must
-	// be honored exactly, so MaxFuture:0 ("reject any future-dated proof") stays
-	// expressible rather than being silently widened to the default tolerance.
+	// Resolve the window before the epoch: the default epoch is derived from the
+	// effective MaxFuture. Default only when the window is wholly unset — a
+	// partially-set window must be honored exactly, so MaxFuture:0 ("reject any
+	// future-dated proof") stays expressible rather than being silently widened.
 	window := cfg.Window
 	if window == (AcceptanceWindow{}) {
 		window = AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 5 * time.Second}
 	}
 	if window.MaxPast < 0 || window.MaxFuture < 0 {
 		return nil, fmt.Errorf("wireauth: VerifierConfig.Window durations must be non-negative")
+	}
+	epoch := cfg.Epoch
+	if epoch.IsZero() {
+		// Default epoch = the first whole second at or after boot+MaxFuture. This
+		// closes the restart replay window fully (under a non-backward-stepping
+		// clock): any proof acceptable before the restart had issuedAt below the
+		// window's future bound (< boot+MaxFuture ≤ epoch), so it is rejected after
+		// the in-memory nonce store resets. The cost is that a default-epoch
+		// verifier rejects even legitimate current-time proofs for ~MaxFuture after
+		// boot; peers recover by retrying. An explicit Epoch overrides this.
+		epoch = ceilToSecond(clock().UTC().Add(window.MaxFuture))
 	}
 	return &Verifier{
 		resolver: cfg.Resolver, crypto: cfg.Crypto, nonces: cfg.Nonces,
@@ -179,9 +188,9 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 }
 
 // ceilToSecond rounds t up to the next whole second unless it is already
-// second-aligned. As the epoch default this is fail-closed: a proof issued in
-// the verifier's construction second is rejected, so it cannot replay after the
-// in-memory nonce store resets at restart.
+// second-aligned. Ceiling the epoch keeps it at or above boot+MaxFuture, so the
+// restart barrier stays fail-closed against second-precision proof timestamps
+// (see NewVerifier for the replay-window rationale).
 func ceilToSecond(t time.Time) time.Time {
 	trunc := t.Truncate(time.Second)
 	if trunc.Equal(t) {

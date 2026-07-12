@@ -73,12 +73,12 @@ func TestVerify_EpochBarrier(t *testing.T) {
 }
 
 // A proof issued in the verifier's construction second is rejected because the
-// default epoch ceils to the next whole second — closing same-second pre-restart
-// replay against the in-memory nonce store.
+// default epoch is boot+MaxFuture (ceiled) — well past the construction second,
+// closing same-second pre-restart replay against the in-memory nonce store.
 func TestVerify_SameSecondRestartRejected(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at()) // issuedAt 12:00:00
-	// Construct at 12:00:00.5 with the DEFAULT (ceiled) epoch → epoch 12:00:01.
+	// Construct at 12:00:00.5 with the DEFAULT epoch → ceil(12:00:00.5 + 5s) = 12:00:06.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
 		Nonces: wireauth.NewMemoryNonceStore(),
@@ -88,6 +88,163 @@ func TestVerify_SameSecondRestartRejected(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	assertErrIs(t, v.Verify(context.Background(), "Op", okFields(), proof, nil), wireauth.ErrBeforeEpoch)
+}
+
+// The restart replay window spans up to MaxFuture: a proof issued in the future
+// (within the acceptance window) could have been accepted just before a crash,
+// so after restart — with the in-memory nonce store reset — the default epoch
+// (boot+MaxFuture) must still reject it. With the old ceilToSecond(boot) epoch
+// this proof replays; with boot+MaxFuture it is rejected before crypto.
+func TestVerify_FutureDatedRestartReplayRejected(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	// Proof 4s in the future — inside the default 5s MaxFuture window.
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at().Add(4*time.Second))
+	// Boot AND now both at() (clock is consulted once for the epoch, again in
+	// Verify for the window). Default window → epoch = ceil(at()+5s) = 12:00:05.
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
+		Nonces: wireauth.NewMemoryNonceStore(),
+		Clock:  func() time.Time { return at() },
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	// The proof is otherwise fully valid: only the epoch barrier may reject it.
+	assertErrIs(t, v.Verify(context.Background(), "Op", okFields(), proof, nil), wireauth.ErrBeforeEpoch)
+}
+
+// The default epoch must be derived from the RESOLVED MaxFuture, not a hardcoded
+// 5s: with MaxFuture=10s a proof 9s ahead falls below the epoch (rejected),
+// while the exact boundary proof at epoch (10s ahead) is accepted — documenting
+// that the strict Before comparison admits IssuedAt==epoch and the closure
+// relies on pre-restart proofs being strictly below it.
+func TestNewVerifier_DefaultEpochUsesConfiguredMaxFuture(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	resolver := mapResolver{subDID: authDoc(subDID, pub)}
+	newV := func(t *testing.T) *wireauth.Verifier {
+		t.Helper()
+		v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+			Clock:  func() time.Time { return at() },
+			Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 10 * time.Second},
+		})
+		if err != nil {
+			t.Fatalf("NewVerifier: %v", err)
+		}
+		return v
+	}
+	t.Run("below epoch rejected (proves MaxFuture read, not hardcoded 5s)", func(t *testing.T) {
+		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n9", at().Add(9*time.Second))
+		assertErrIs(t, newV(t).Verify(context.Background(), "Op", okFields(), proof, nil), wireauth.ErrBeforeEpoch)
+	})
+	t.Run("at epoch boundary accepted", func(t *testing.T) {
+		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n10", at().Add(10*time.Second))
+		if err := newV(t).Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+			t.Errorf("boundary proof at epoch: want accept, got %v", err)
+		}
+	})
+}
+
+// An explicit MaxFuture:0 must not incur the boot+MaxFuture startup delay: the
+// default epoch collapses to ceil(boot), so a current-second proof is accepted
+// immediately. A hardcoded 5s epoch would reject it.
+func TestNewVerifier_ZeroMaxFutureNoStartupDelay(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
+		Nonces: wireauth.NewMemoryNonceStore(),
+		Clock:  func() time.Time { return at() },
+		Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 0},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+		t.Errorf("MaxFuture:0 current-second proof: want accept (no startup delay), got %v", err)
+	}
+}
+
+// TestVerify_RestartReplaySequence simulates a full crash-restart across two
+// verifier instances (the second with an empty nonce store) and refutes the
+// "a proof at exactly boot+MaxFuture replays" concern. A proof is replayable
+// only if it was RECORDED before the restart, and the crash-restart ordering
+// (accept time t_a < new boot t_boot) forces every recordable proof strictly
+// below the new epoch. The boundary proof at exactly t_boot+MaxFuture is
+// provably NOT recordable pre-restart — the old process's future window rejects
+// it — so admitting it post-restart would accept only a fresh (never-recorded)
+// proof, which is not a replay.
+func TestVerify_RestartReplaySequence(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	resolver := mapResolver{subDID: authDoc(subDID, pub)}
+
+	// Old process: clock 11:59:59, strictly before the new boot at 12:00:00. An
+	// explicit early epoch isolates the acceptance WINDOW as the recording gate.
+	// With the default 5s future window it can record proofs up to 12:00:04.
+	oldV, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Clock: func() time.Time { return at().Add(-time.Second) },
+		Epoch: at().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("old NewVerifier: %v", err)
+	}
+
+	// The MAX future-dated proof the old process can record (12:00:04) — accepted
+	// and its nonce recorded on the old (soon-discarded) store.
+	maxRecordable, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "max", at().Add(4*time.Second))
+	if err := oldV.Verify(context.Background(), "Op", okFields(), maxRecordable, nil); err != nil {
+		t.Fatalf("old process must record its max future-dated proof (12:00:04): %v", err)
+	}
+	// The boundary proof at exactly t_boot+MaxFuture (12:00:05) is NOT recordable
+	// pre-restart: the old process's future window rejects it. Empirical refutation
+	// of the "boundary replays" concern — there is nothing to replay.
+	boundary, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "boundary", at().Add(5*time.Second))
+	assertErrIs(t, oldV.Verify(context.Background(), "Op", okFields(), boundary, nil), wireauth.ErrFromFuture)
+
+	// New process: boot 12:00:00, fresh empty nonce store, default window → epoch
+	// = ceil(12:00:00 + 5s) = 12:00:05.
+	newV, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Clock: func() time.Time { return at() },
+	})
+	if err != nil {
+		t.Fatalf("new NewVerifier: %v", err)
+	}
+	// Replaying the recorded max proof (12:00:04) against the restarted verifier is
+	// rejected by the epoch barrier (12:00:04 < 12:00:05) despite the forgotten
+	// nonce: the window is closed for everything actually recordable.
+	assertErrIs(t, newV.Verify(context.Background(), "Op", okFields(), maxRecordable, nil), wireauth.ErrBeforeEpoch)
+}
+
+// After the ~MaxFuture startup rejection, a default-epoch verifier recovers: once
+// the clock advances past boot+MaxFuture, current-time proofs are accepted again.
+// This pins the bounded availability cost the spec (§4) trades for full closure,
+// on the default 5s path specifically.
+func TestVerify_DefaultEpochRecoversAfterMaxFuture(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	resolver := mapResolver{subDID: authDoc(subDID, pub)}
+	// Clock returns boot (12:00:00) during construction — default epoch 12:00:05 —
+	// then advances to 12:00:06 for Verify (past the epoch).
+	booted := false
+	clock := func() time.Time {
+		if !booted {
+			return at()
+		}
+		return at().Add(6 * time.Second)
+	}
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Clock: clock,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	booted = true
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "recovered", at().Add(6*time.Second))
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+		t.Errorf("post-startup proof (now past epoch): want accept, got %v", err)
+	}
 }
 
 func TestVerify_AcceptanceWindow(t *testing.T) {
