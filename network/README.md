@@ -12,7 +12,9 @@ The dplaax network services, exposed over ConnectRPC (h2c) by the node binary
 | ChainPeerService | Internet-facing cross-organization peer protocol (L2 wire-signed) |
 | VCResolverService | Provenance-chain VC storage and async cross-registry resolution |
 
-Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`) and `GET /healthz`.
+Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`), `GET /healthz`
+(liveness, static), and `GET /readyz` (readiness — dependency-aware: evidence
+store, broker connection when a data plane runs, external PDP reachability).
 
 ## State model: DB-free
 

@@ -53,7 +53,8 @@ import (
 // BuildHandler wires the services into one mux: the Connect RPC services
 // sit behind the L1 authorization interceptors (verifier injected — main builds
 // it from config, tests inject a static endpoint), while the public W3C DID
-// resolution route and /healthz are mounted unauthenticated. Stores root under
+// resolution route, /healthz (liveness), and /readyz (readiness, fed by the
+// caller-assembled checks) are mounted unauthenticated. Stores root under
 // the core data dir in fixed subdirs (dids/, schemas/, keys/, chain/) so they
 // never cohabit. The registry id and service endpoints come from the registry
 // config.
@@ -123,7 +124,7 @@ func nodeDIDOf(chainCfg *chainconfig.Config) string {
 	return ""
 }
 
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts, readiness []readinessCheck) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -202,10 +203,14 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, peerVerifier, chainSvc))
 	mux.Handle(payloadPath, payloadHandler)
 
-	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4) and
-	// liveness. These deliberately carry no authz interceptor.
+	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4),
+	// liveness, and readiness. These deliberately carry no authz interceptor.
+	// /healthz stays STATIC (liveness: "restart me if this fails");
+	// /readyz is dependency-aware (readiness: "route no new work here") —
+	// the checks are assembled by main from what this node is configured with.
 	mux.Handle("/did/", didhandler.NewResolutionHandler(didSvc, regCfg.ID))
 	mux.HandleFunc("/healthz", healthz)
+	mux.HandleFunc("/readyz", readyz(readiness))
 
 	// HTTP push ingest (apipush) for push-enabled source loops: /ingest/<loop>/push
 	// (PDP-guarded) and /ingest/<loop>/health (public). Zero bindings mount nothing.

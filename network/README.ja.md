@@ -12,7 +12,7 @@ dplaax ネットワークサービス。ノードバイナリ（`cmd/standalone`
 | ChainPeerService | インターネット向けの組織間ピアプロトコル（L2 ワイヤー署名済み） |
 | VCResolverService | プロベナンスチェーンの VC ストレージと非同期クロスレジストリ解決 |
 
-加えて、生 HTTP として W3C DID 解決（`GET /did/.../did.json`）と `GET /healthz` を提供する。
+加えて、生 HTTP として W3C DID 解決（`GET /did/.../did.json`）、`GET /healthz`（liveness・static）、`GET /readyz`（readiness — 依存関係認識: evidence store、データプレーン稼働時の broker 接続、外部 PDP 到達性）を提供する。
 
 ## 状態モデル: DB レス
 

@@ -196,6 +196,14 @@ func (c *Conn) Subscriber(subject string) *Subscriber {
 	return &Subscriber{nc: c.nc, subject: subject}
 }
 
+// Healthy reports whether the shared connection can serve traffic — the
+// connection-level signal behind every derived Publisher's Healthy. It drives
+// node-level readiness endpoints, where the resource under question is the one
+// shared connection, not any single publisher.
+func (c *Conn) Healthy() bool {
+	return c.nc.IsConnected()
+}
+
 // Close tears down the underlying connection. It owns connection lifecycle for all
 // Publishers and Subscribers derived from this Conn.
 func (c *Conn) Close() error {

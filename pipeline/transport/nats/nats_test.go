@@ -153,6 +153,25 @@ func TestPublisher_HealthyReflectsConnection(t *testing.T) {
 	}
 }
 
+// Conn.Healthy is the connection-level signal behind Publisher.Healthy; it
+// drives node-level readiness (one shared connection, many publishers).
+func TestConn_HealthyReflectsConnection(t *testing.T) {
+	url, seed := newAccountServer(t)
+	c, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: seed})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !c.Healthy() {
+		t.Fatal("Healthy: want true while connected")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if c.Healthy() {
+		t.Fatal("Healthy: want false after Close")
+	}
+}
+
 func TestSubscriber_SubscribeTwiceErrors(t *testing.T) {
 	url, seed := newAccountServer(t)
 	conn := mustConnect(t, url, seed)

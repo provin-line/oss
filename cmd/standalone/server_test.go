@@ -106,7 +106,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, ingestMounts{})
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, ingestMounts{}, nil)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{}); err != nil {
+	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{}, nil); err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
 	// filelog.New creates the dir and the append file at open; its presence proves
@@ -287,6 +287,24 @@ func TestBoot_Healthz(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("healthz status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// BuildHandler mounts /readyz (readiness — dependency-aware, unlike the static
+// /healthz). With zero checks configured (this HTTP-only assembly) it is
+// trivially ready.
+func TestBoot_Readyz(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("readyz status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("readyz content-type = %q, want application/json", ct)
 	}
 }
 

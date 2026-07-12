@@ -1,9 +1,10 @@
 // Command standalone is the dplaax network registry server: a single binary that
 // loads its HOCON config, constructs the DID / Schema / Signer services over
 // file-backed stores, and serves them via ConnectRPC (h2c) behind the L1
-// authorization interceptors, plus the public W3C DID resolution route and
-// /healthz. Every config value is validated at boot — a misconfigured binary
-// dies at startup, never on first request.
+// authorization interceptors, plus the public W3C DID resolution route,
+// /healthz (liveness), and /readyz (dependency-aware readiness). Every config
+// value is validated at boot — a misconfigured binary dies at startup, never
+// on first request.
 //
 // Alongside the HTTP control plane it runs the data plane: the pipeline transport
 // loops declared in the pipeline config (slice-17b). Both run concurrently under one
@@ -182,8 +183,19 @@ func main() {
 		log.Fatalf("standalone: build data plane: %v", err)
 	}
 
+	// Readiness (/readyz) checks: only what THIS node is configured with — the
+	// evidence substrate always, the shared broker connection when a data plane
+	// runs, and the external PDP when one is configured (static has no probe).
+	readiness := []readinessCheck{evidenceStoreCheck(evidenceDir)}
+	if dp.conn != nil {
+		readiness = append(readiness, natsCheck(dp.conn.Healthy))
+	}
+	if check, ok := pdpCheck(authCfg); ok {
+		readiness = append(readiness, check)
+	}
+
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize})
+		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize}, readiness)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
