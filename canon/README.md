@@ -12,10 +12,10 @@ non-Go implementations (Java / Rust / JS).
 
 ## Subpackages
 
-| Path | Algorithm |
-|---|---|
-| `canon/jcs` | RFC 8785 JSON Canonicalization Scheme (Phase 1 cryptosuite, MUST) |
-| `canon/urdna2015` | RDF Dataset Normalization for `eddsa-rdfc-2022` (Phase 2, MAY) |
+| Path | Algorithm | Status |
+| --- | --- | --- |
+| `canon/jcs` | RFC 8785 JSON Canonicalization Scheme (Phase 1 cryptosuite, MUST) | implemented |
+| `canon/urdna2015` | RDF Dataset Normalization for `eddsa-rdfc-2022` (Phase 2, MAY) | **not implemented** — API scaffold only; the constructor and `Canonicalize` panic. The `eddsa-rdfc-2022` cryptosuite is unusable until this lands |
 
 ## Hard rules
 

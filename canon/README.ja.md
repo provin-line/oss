@@ -9,10 +9,10 @@ JSON 署名スコープの決定論的なバイト表現と、それを保護す
 
 ## サブパッケージ
 
-| パス | アルゴリズム |
-|---|---|
-| `canon/jcs` | RFC 8785 JSON Canonicalization Scheme（Phase 1 暗号スイート、MUST）|
-| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Normalization（Phase 2、MAY）|
+| パス | アルゴリズム | 状態 |
+| --- | --- | --- |
+| `canon/jcs` | RFC 8785 JSON Canonicalization Scheme（Phase 1 暗号スイート、MUST） | 実装済み |
+| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Normalization（Phase 2、MAY） | **未実装** — API スキャフォールドのみ。コンストラクタと `Canonicalize` は panic する。これが実装されるまで `eddsa-rdfc-2022` 暗号スイートは使用不可 |
 
 ## 厳守ルール
 

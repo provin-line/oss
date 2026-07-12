@@ -16,17 +16,21 @@ Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`) and `GET /healthz`.
 
 ## State model: DB-free
 
-All durable state is YAML files under a configurable data dir (DID documents, keys,
-schemas, subscriptions, allow-lists). VC store, nonce store, and infra-operator state
-are in-memory (PoC posture — restart implications are documented per service).
-Storage sits behind store interfaces; swapping YAML for PostgreSQL is a Hub-side
-replacement, not a fork.
+All durable state is plain files under a configurable data dir: YAML for
+control-plane records (DID documents, keys, schemas, subscriptions, allow-lists)
+and a file-backed evidence dir for the VC store (credentials, resolution pool,
+audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`). Nonce store
+and infra-operator state are in-memory (PoC posture — restart implications are
+documented per service). Storage sits behind store interfaces; swapping files for
+PostgreSQL is a Hub-side replacement, not a fork.
 
 Deployments in the audit-reachable conformance class (source commitments, see
 [pipeline/source](../pipeline/source/README.md)) additionally require a
 **durable** VC store: retrospective audits resolve claimed source credentials long
-after issuance, and an in-memory store cannot honor that retention. The in-memory
-store satisfies only the plain PoC posture.
+after issuance. The file-backed store the standalone node wires satisfies that
+retention (subject to operational backup); the in-memory store
+(`vcresolver/memstore`) is test scaffolding and satisfies only the plain PoC
+posture.
 
 ## Two-layer authentication
 

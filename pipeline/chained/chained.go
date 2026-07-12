@@ -23,11 +23,14 @@
 // (allowing indeterminate through) is a SinkKind property of sinks, never of
 // producing processes that append to the chain.
 //
-// # By-reference payload limitation
+// # By-reference ingress
 //
-// A nil Payload in the decoded Envelope (by-reference delivery) is rejected
-// with StatusErrored. By-reference ingress fetch is not implemented in the
-// PoC Chained runtime; it lands with the resolver client. Tracked limitation.
+// Config.PayloadDelivery declares the agreed delivery mode of the ingress.
+// Inline (the zero value) expects payload bytes in the envelope;
+// DeliveryByReference dereferences a nil Payload via Config.PayloadResolver by
+// content address (New fails closed when the resolver is missing). A payload
+// whose presence contradicts the declared mode is a decidable protocol
+// violation and maps to StatusErrored.
 //
 // # Result error split
 //

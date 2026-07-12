@@ -6,10 +6,12 @@ Chained Process 型。**ステートレス性は定義的性質**であり、デ
 ## 処理ライフサイクル（1イベント）
 
 ```
-ingress VC verification (strategy: none | adjacent | full)
+ingress VC verification (strategy: adjacent — the only ingress strategy;
+                         full-chain audit is the async audit runner's job)
   → ingress VC store (synchronous; a verified input that cannot be stored
                       fails the event — audit reachability)
-  → payload extraction
+  → payload extraction (by-reference ingress dereferences a nil payload
+                        via PayloadResolver first)
   → payload↔credential binding (sha256(payload) == predecessor's outputHash;
                                 mismatch or missing outputHash fails the event)
   → optional input-schema check
@@ -40,7 +42,7 @@ ingress VC verification (strategy: none | adjacent | full)
 
 - `filter/` — `Filter` インターフェース（`Apply(ctx, data) (*Result, error)`）；`jsonata/` 実装（起動時に式をプリコンパイル；すべてが truthy であればパス）
 - `converter/` — `Converter` インターフェース + サブセット出力バリデータ；`jsonata/` 実装（ドキュメント全体モードとシーケンシャルなフィールド別ステップモード）
-- `cmd/` — ランタイムバイナリ（設定ロード、gRPC クライアント接続、トランスポートループ）
+- `cmd/` — スタンドアロンなランタイムバイナリ用に予約。**まだ未実装**。PoC では chained ループは `cmd/standalone`（データプレーン配線）内で動く
 
 ## エラーセマンティクス（PoC）
 
@@ -49,9 +51,10 @@ ingress VC verification (strategy: none | adjacent | full)
 ## ランタイム（package chained）
 
 **Config フィールド** — `Strategy`、`IngressConformant`、`UpstreamEndpoint`、`Codec`、
-`Verifier`（adjacent）/ `ChainVerifier`（full）、`Store`、`Signer`、`Filters`、
+`Verifier`（直前 credential の adjacent 検証）、`Store`、`Signer`、`Filters`、
 `Converter`（nil = パススルー）、`InputValidator`/`InputSchemaRef`、
-`OutputValidator`/`OutputSchemaRef`、`Observers`、`Logger`、`Now`。
+`OutputValidator`/`OutputSchemaRef`、`PayloadDelivery`/`PayloadResolver`、
+`Observers`、`Logger`、`Now`。
 
 **Strategy 制約** — `VerificationNone` および `VerificationUnknown` は構築時に拒否される。
 Chained Process はチェーン保持型クレデンシャルを発行するため、イベントごとに検証済みの predecessor
@@ -65,9 +68,11 @@ runtime はさらに変換前に payload↔credential binding を強制する �
 両方の artifact を持つ唯一の当事者は runtime である。これにより自身が発行する link の chain 連続性が
 by construction で保証される。
 
-**by-reference 制限** — デコードされた Envelope の `Payload` が `nil`（by-reference 配信モード）の場合、
-`StatusErrored` で拒否される。by-reference ingress fetch は PoC Chained ランタイムでは未実装（resolver
-クライアントとともに実装予定）。
+**by-reference ingress** — `PayloadDelivery` は ingress の合意済み配信モードを宣言する。
+inline（ゼロ値）は envelope 内の payload バイト列を期待し、`DeliveryByReference` は `nil`
+payload を `PayloadResolver` でコンテンツアドレスから解決する（resolver 欠落時は `New` が
+fail-closed）。宣言モードと payload の有無が矛盾する場合は決定可能なプロトコル違反として
+`StatusErrored` になる。
 
 **Result / Go error の分割** — ドメイン障害（検証・ストア・nil ペイロード・スキーマ・フィルタ・
 コンバータ・strict-decode・署名）は `Error` 文字列を持つ `StatusErrored` の `*Result` として返す。

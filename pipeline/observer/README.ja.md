@@ -3,9 +3,14 @@
 
 処理済みイベントごとに通知される `ProcessObserver` 実装（`OnProcessComplete(ctx, ProcessEvent)`）。
 
+## 状態
+
+**拡張点は稼働済み**: `contract.ProcessObserver` が定義され、全ランタイム（`ingest`・`aggregate`・`chained`・`sink`）が `Observers` config フィールドを持ち、すべての outcome の後に fire-and-forget で呼び出される。ここにある 2 つのサブパッケージは**予定であり未実装**（空のプレースホルダ）:
+
+- `logobserver/` —（予定）イベントフィールドの構造化ログ。
+- `vcobserver/` —（予定）ストア連携オブザーバ。監査上重要な保存経路は現状これ**なし**で成立している: 発行済み credential はデータプレーン配線の VC-store クライアント（`cmd/standalone`、`vc-store-endpoint`）がネットワーク VC ストアへ公開し、検証済みイングレス credential は `contract.IngressVCStore` 経由で永続化される — 下記参照。
+
 ## 規約
 
 - オブザーバは**ファイアアンドフォーゲット**：失敗はログ記録されるが、処理パスには伝播しない — 観測がパイプラインの結果に影響してはならない。
-- `logobserver/` — イベントフィールドの構造化ログ。
-- `vcobserver/` — 発行済み VC（および検証済みイングレス VC）を監査到達性のためにネットワークの VCResolver サービスに保存する。ここでの Proto ↔ ドメイン変換は正規ハッシュのラウンドトリップ比較で保護されている：ペイロードのサイレントな精度損失（`structpb` による大整数の折りたたみ）は、発行者側の正規化と受信者側の正規化が乖離した VC を出荷するのではなく、ラウドに失敗しなければならない。
-- イングレス VC ストア義務（検証を行うプロセスは検証したものを保存しなければならない）は、**同期的なライフサイクル義務**である — `contract.IngressVCStore` を検証と変換の間に呼び出し、保存失敗は event を失敗させる。`vcobserver` のストアクライアントはこのインターフェースを裏打ちする参照実装であり、fire-and-forget なのは観測イベント自体だけである。
+- イングレス VC ストア義務（検証を行うプロセスは検証したものを保存しなければならない）は、**同期的なライフサイクル義務**である — `contract.IngressVCStore` を検証と変換の間に呼び出し、保存失敗は event を失敗させる。これはオブザーバでは**ない**: fire-and-forget なのは観測イベント自体だけである。

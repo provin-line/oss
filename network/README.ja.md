@@ -16,9 +16,9 @@ dplaax ネットワークサービス。ノードバイナリ（`cmd/standalone`
 
 ## 状態モデル: DB レス
 
-すべての永続状態は設定可能なデータディレクトリ以下の YAML ファイル（DID ドキュメント、鍵、スキーマ、サブスクリプション、許可リスト）として管理する。VC ストア、ノンスストア、インフラオペレーター状態はインメモリ（PoC 想定 — 再起動時の影響はサービスごとにドキュメント化済み）。ストレージはストアインターフェース越しに抽象化されており、YAML を PostgreSQL に差し替えるのはフォークではなく Hub 側の置き換えで済む。
+すべての永続状態は設定可能なデータディレクトリ以下の plain ファイルとして管理する: コントロールプレーンのレコード（DID ドキュメント、鍵、スキーマ、サブスクリプション、許可リスト）は YAML、VC ストア（credential、resolution pool、audit queue、verdict — `vcresolver/filestore` + `auditor/filestore`）はファイルバックの evidence ディレクトリ。ノンスストアとインフラオペレーター状態はインメモリ（PoC 想定 — 再起動時の影響はサービスごとにドキュメント化済み）。ストレージはストアインターフェース越しに抽象化されており、ファイルを PostgreSQL に差し替えるのはフォークではなく Hub 側の置き換えで済む。
 
-audit-reachable conformance class（ソースコミットメント — [pipeline/source](../pipeline/source/README.ja.md) 参照）で deploy する場合は、加えて **永続** VC ストアが必須となる: 遡及監査は発行からはるかに後で claim された source クレデンシャルを解決するため、インメモリストアではこの保持義務を満たせない。インメモリストアが満たすのは plain な PoC 想定のみである。
+audit-reachable conformance class（ソースコミットメント — [pipeline/source](../pipeline/source/README.ja.md) 参照）で deploy する場合は、加えて **永続** VC ストアが必須となる: 遡及監査は発行からはるかに後で claim された source クレデンシャルを解決するためである。standalone ノードが配線するファイルバックのストアはこの保持義務を満たす（運用上のバックアップは別途必要）。インメモリストア（`vcresolver/memstore`）はテスト用スキャフォールドであり、満たすのは plain な PoC 想定のみである。
 
 ## 二層認証
 

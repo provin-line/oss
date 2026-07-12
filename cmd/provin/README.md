@@ -10,6 +10,7 @@ dplaax registry.
 | `owner` | init (local keygen + self-signed registration) | DIDService | implemented |
 | `pipeline` | create (delegation-signed issuance) | DIDService | implemented |
 | `process` | create (delegation-signed issuance) | DIDService | implemented |
+| `bundle` | export (archive a chain + its authority documents), verify (offline re-verification, no network) | VCResolverService + DID resolution (export); none (verify) | implemented |
 | `schema` | register | SchemaService | planned |
 | `chain` | subscribe, set-allow | ChainService | planned |
 | `org` | verify / inspect / diagnose / generate-txt | DNS + DID resolution (no registry mutation) | planned |

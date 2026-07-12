@@ -6,10 +6,12 @@ pool, no cache, no cross-event state. Stateful behaviour belongs to Source Proce
 ## Processing lifecycle (one event)
 
 ```
-ingress VC verification (strategy: none | adjacent | full)
+ingress VC verification (strategy: adjacent — the only ingress strategy;
+                         full-chain audit is the async audit runner's job)
   → ingress VC store (synchronous; a verified input that cannot be stored
                       fails the event — audit reachability)
-  → payload extraction
+  → payload extraction (by-reference ingress dereferences a nil payload
+                        via PayloadResolver first)
   → payload↔credential binding (sha256(payload) == predecessor's outputHash;
                                 mismatch or missing outputHash fails the event)
   → optional input-schema check
@@ -47,7 +49,8 @@ cross-event state would make the process a Source Process.
   implementation (expressions pre-compiled at startup; all must be truthy to pass)
 - `converter/` — `Converter` interface + subset output validator; `jsonata/`
   implementation (whole-document mode and sequential per-field steps mode)
-- `cmd/` — the runtime binary (config load, gRPC client wiring, transport loop)
+- `cmd/` — reserved for a standalone runtime binary; **not yet populated**. The
+  PoC runs chained loops inside `cmd/standalone` (data-plane wiring)
 
 ## Error semantics (PoC)
 
@@ -57,9 +60,10 @@ no dead-letter — the transport loop is the seam where dead-lettering plugs in 
 ## Runtime (package chained)
 
 **Config surface** — `Strategy`, `IngressConformant`, `UpstreamEndpoint`, `Codec`,
-`Verifier` (adjacent) / `ChainVerifier` (full), `Store`, `Signer`, `Filters`,
-`Converter` (nil = passthrough), `InputValidator`/`InputSchemaRef`,
-`OutputValidator`/`OutputSchemaRef`, `Observers`, `Logger`, `Now`.
+`Verifier` (adjacent verification of the preceding credential), `Store`, `Signer`,
+`Filters`, `Converter` (nil = passthrough), `InputValidator`/`InputSchemaRef`,
+`OutputValidator`/`OutputSchemaRef`, `PayloadDelivery`/`PayloadResolver`,
+`Observers`, `Logger`, `Now`.
 
 **Strategy constraint** — `VerificationNone` and `VerificationUnknown` are rejected at
 construction time. A Chained Process signs chain-preserving credentials and requires a
@@ -75,9 +79,11 @@ binding before transformation — the verifier holds only the credential; the ru
 the one party holding both artifacts, so its own emitted link satisfies chain
 continuity by construction.
 
-**By-reference limitation** — a `nil` Payload in the decoded envelope (by-reference
-delivery mode) is rejected with `StatusErrored`. By-reference ingress fetch is not
-implemented in the PoC Chained runtime; it lands with the resolver client.
+**By-reference ingress** — `PayloadDelivery` declares the agreed delivery mode of
+the ingress. Inline (the zero value) expects payload bytes in the envelope;
+`DeliveryByReference` dereferences a `nil` payload via `PayloadResolver` by content
+address (`New` fails closed if the resolver is missing). A payload whose presence
+contradicts the declared mode is a decidable protocol violation → `StatusErrored`.
 
 **Result / Go error split** — domain failures (verification, store, nil payload, schema,
 filter, converter, strict-decode, signing) produce a `StatusErrored` `*Result` with a
