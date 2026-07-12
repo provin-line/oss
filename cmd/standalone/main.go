@@ -194,8 +194,20 @@ func main() {
 		readiness = append(readiness, check)
 	}
 
+	// The by-reference advertisement health gate: every producing loop and
+	// aggregate is a stripped-publish health source, so the control-plane
+	// advertiser degrades by-reference when any of them is failing (D-5).
+	var byRefSources []strippedPublishHealthSource
+	for _, lp := range dp.loops {
+		byRefSources = append(byRefSources, lp)
+	}
+	for _, ag := range dp.aggregates {
+		byRefSources = append(byRefSources, ag)
+	}
+	byRefGate := newByRefHealthGate(byRefSources)
+
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize}, readiness)
+		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize}, readiness, byRefGate.healthy)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}

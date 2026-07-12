@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/tlog"
@@ -72,6 +73,37 @@ type LoopConfig struct {
 type Loop struct {
 	cfg    LoopConfig
 	logger *slog.Logger
+	// emitter is published (atomically) by Run once it constructs the producing
+	// emitter, so a health surface on ANOTHER goroutine can read the loop's
+	// stripped-publish counters without racing Run. It stays nil for
+	// non-producing (sink) loops and before Run — a nil read reports "no failure
+	// observed", the availability-oriented default (the loop configured the
+	// capability; there is no negative evidence yet). Run is not meant to execute
+	// concurrently or repeatedly for one Loop.
+	emitter atomic.Pointer[Emitter]
+}
+
+// StrippedPublishHealthy reports whether this loop's most recent stripped
+// publish succeeded (true also before Run and for non-producing loops, which
+// never dual-emit). It is the control plane's by-reference degradation signal:
+// the node stops advertising by-reference while a producing loop's stripped
+// emission is failing, and re-advertises only after a successful stripped
+// publish proves recovery.
+func (l *Loop) StrippedPublishHealthy() bool {
+	if e := l.emitter.Load(); e != nil {
+		return e.StrippedPublishHealthy()
+	}
+	return true
+}
+
+// StrippedPublishFailures reports this loop's monotonic stripped-publish failure
+// count (0 before Run / for non-producing loops). Companion to
+// StrippedPublishHealthy for metrics surfaces.
+func (l *Loop) StrippedPublishFailures() uint64 {
+	if e := l.emitter.Load(); e != nil {
+		return e.StrippedPublishFailures()
+	}
+	return 0
 }
 
 // isProducing reports whether the behavior requires a Publisher, Codec, and
@@ -165,6 +197,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// Publish the emitter for the health surface BEFORE Subscribe can deliver
+		// any traffic, so a stripped-publish failure is observable the moment it
+		// can occur.
+		l.emitter.Store(emitter)
 	}
 
 	if err := l.cfg.Subscriber.Subscribe(func(data []byte) {

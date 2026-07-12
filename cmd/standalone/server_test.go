@@ -106,7 +106,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, ingestMounts{}, nil)
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, ingestMounts{}, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 		t.Fatalf("chainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{}, nil); err != nil {
+	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, ingestMounts{}, nil, nil); err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
 	// filelog.New creates the dir and the append file at open; its presence proves

@@ -84,6 +84,12 @@ type Emitter struct {
 	// Emit.
 	strippedFailures    atomic.Uint64
 	lastStrippedFailure atomic.Int64 // UnixNano; 0 = never failed
+	// strippedUnhealthy is the LAST stripped-publish outcome: true after a
+	// failure, false after a success (zero value false = healthy, the optimistic
+	// pre-first-emit default). It backs StrippedPublishHealthy — recovery is tied
+	// to an actually-successful stripped publish, not a time window, so a broken
+	// publisher that has simply gone quiet never looks healthy again on its own.
+	strippedUnhealthy atomic.Bool
 }
 
 // PayloadRetainer is the optional publisher-side capability that retains a
@@ -150,6 +156,14 @@ func (e *Emitter) LastStrippedPublishFailure() (time.Time, bool) {
 	}
 	return time.Unix(0, n), true
 }
+
+// StrippedPublishHealthy reports whether the MOST RECENT stripped publish
+// succeeded (true also before any attempt and for an inline-only emitter that
+// never dual-emits). It is the control plane's by-reference degradation signal:
+// unlike a time window, it stays false while the publisher is broken even if the
+// loop goes quiet, and clears only on a genuinely successful stripped publish —
+// so a node never re-advertises by-reference without evidence of recovery.
+func (e *Emitter) StrippedPublishHealthy() bool { return !e.strippedUnhealthy.Load() }
 
 // intentLog is the optional durable-sequence-intent capability an Emitter's
 // emission log may provide: it records, ahead of the risky publish, the
@@ -427,11 +441,16 @@ func (e *Emitter) publishStripped(cred *vc.PipelinePassCredential, seq uint64) {
 		e.logger.Error("transport: stripped publish failed", "err", err, "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
 		return
 	}
+	// A successful stripped publish clears the health flag — recovery is proven,
+	// not merely elapsed.
+	e.strippedUnhealthy.Store(false)
 }
 
-// recordStrippedFailure advances the failure counter and last-failure time
-// (see StrippedPublishFailures / LastStrippedPublishFailure).
+// recordStrippedFailure advances the failure counter and last-failure time and
+// marks the last outcome unhealthy (see StrippedPublishFailures /
+// LastStrippedPublishFailure / StrippedPublishHealthy).
 func (e *Emitter) recordStrippedFailure() {
 	e.strippedFailures.Add(1)
 	e.lastStrippedFailure.Store(time.Now().UnixNano())
+	e.strippedUnhealthy.Store(true)
 }

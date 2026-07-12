@@ -55,6 +55,15 @@ type Service struct {
 	// dual-emit), so a serving node's advertisement and its wiring always
 	// agree.
 	payloadServing bool
+
+	// byRefHealthy, when non-nil, is an ADDITIONAL runtime gate on advertising
+	// by-reference: offeredPayloadModes offers it only when this returns true.
+	// It is an abstract predicate (the control plane knows nothing of the data
+	// plane's emitters) supplied by the composition root, which derives it from
+	// the producing loops' stripped-publish health. nil means "health monitoring
+	// not configured" — the static payloadServing decision stands, preserving the
+	// pre-degradation behavior and every existing constructor/test.
+	byRefHealthy func() bool
 }
 
 // Option configures a Service at construction.
@@ -66,10 +75,20 @@ func WithInfraOperator(op infra.Operator) Option {
 }
 
 // WithPayloadServing declares that this node serves by-reference payloads. It
-// is both necessary and sufficient for advertising the by-reference mode —
-// see offeredPayloadModes.
+// is necessary for advertising the by-reference mode; WithByReferenceHealth may
+// gate it further at runtime — see offeredPayloadModes.
 func WithPayloadServing() Option {
 	return func(s *Service) { s.payloadServing = true }
+}
+
+// WithByReferenceHealth supplies a runtime health predicate: by-reference is
+// advertised only while fn returns true (in addition to WithPayloadServing).
+// The composition root derives fn from the producing loops' stripped-publish
+// health, so a node whose by-reference emission is failing stops advertising a
+// mode it can no longer honestly serve (export-seam D-5 degradation). Omitting
+// this option leaves advertising governed solely by WithPayloadServing.
+func WithByReferenceHealth(fn func() bool) Option {
+	return func(s *Service) { s.byRefHealthy = fn }
 }
 
 // New returns a Service backed by the given stores. Pass WithInfraOperator to

@@ -124,7 +124,7 @@ func nodeDIDOf(chainCfg *chainconfig.Config) string {
 	return ""
 }
 
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts, readiness []readinessCheck) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier endpoint.VerifierEndpoint, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts, readiness []readinessCheck, byRefHealthy func() bool) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -145,14 +145,24 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	nodeDID := nodeDIDOf(chainCfg)
 	peerCli := peerclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient())
 
-	chainSvc := chainmanager.New(
-		chainyaml.NewSubscriptionStore(chainRoot), chainyaml.NewAllowListStore(chainRoot),
+	chainOpts := []chainmanager.Option{
 		chainmanager.WithInfraOperator(chainOp),
 		chainmanager.WithDIDResolver(resolver),
 		chainmanager.WithPeerClient(peerCli),
 		chainmanager.WithEndpointGuard(guard),
 		// This node runs the by-reference payload serving boundary (mounted below).
 		chainmanager.WithPayloadServing(),
+	}
+	// The composition root supplies a runtime health gate (derived from the
+	// producing loops' stripped-publish health) so by-reference advertisement is
+	// dropped while emission is failing (export-seam D-5 degradation). Absent it,
+	// advertising is governed solely by WithPayloadServing.
+	if byRefHealthy != nil {
+		chainOpts = append(chainOpts, chainmanager.WithByReferenceHealth(byRefHealthy))
+	}
+	chainSvc := chainmanager.New(
+		chainyaml.NewSubscriptionStore(chainRoot), chainyaml.NewAllowListStore(chainRoot),
+		chainOpts...,
 	)
 
 	// The peer surface verifies each RPC in-band via L2 wireauth (signer #auth key

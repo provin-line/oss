@@ -75,7 +75,12 @@ const exportSeamAppliesDeliveryMode = true
 // (exportSeamAppliesDeliveryMode, now structurally true — see its doc).
 func (s *Service) offeredPayloadModes() []string {
 	modes := []string{"inline"}
-	if s.payloadServing && exportSeamAppliesDeliveryMode {
+	// The runtime health gate (byRefHealthy), when configured, additionally
+	// suppresses by-reference while this node's stripped-publish emission is
+	// failing — so a node stops advertising a mode it can no longer honestly
+	// serve. Evaluated once; nil means health monitoring is not configured.
+	healthy := s.byRefHealthy == nil || s.byRefHealthy()
+	if s.payloadServing && exportSeamAppliesDeliveryMode && healthy {
 		modes = append(modes, "by-reference")
 	}
 	return modes

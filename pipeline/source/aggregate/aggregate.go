@@ -250,6 +250,21 @@ func (p *Process) VerificationStrategy() contract.VerificationStrategy {
 	return contract.VerificationAdjacent
 }
 
+// StrippedPublishHealthy reports whether this aggregate's most recent stripped
+// publish succeeded. An aggregate is a by-reference producer just like a
+// source/chained loop, so it participates in the control plane's by-reference
+// health gate. The emitter is a construction-time field (set-once), so no
+// atomic read is needed.
+func (p *Process) StrippedPublishHealthy() bool {
+	return p.emitter.StrippedPublishHealthy()
+}
+
+// StrippedPublishFailures reports this aggregate's monotonic stripped-publish
+// failure count. Companion to StrippedPublishHealthy for metrics surfaces.
+func (p *Process) StrippedPublishFailures() uint64 {
+	return p.emitter.StrippedPublishFailures()
+}
+
 // Run subscribes every ingress, then folds on each window tick until ctx is
 // cancelled, at which point it drains the subscribers, applies the partial-window
 // policy (discard), and closes the publisher.

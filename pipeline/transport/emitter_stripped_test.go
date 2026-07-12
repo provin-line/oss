@@ -168,3 +168,50 @@ func TestEmitter_Stripped_PrimaryFailureSkipsStripped(t *testing.T) {
 		t.Errorf("stripped publishes after recovery = %d, want 1", stripped.callCount())
 	}
 }
+
+// toggleFailPublisher fails its first failFirst publishes, then succeeds — to
+// exercise stripped-publish health recovery.
+type toggleFailPublisher struct {
+	calls     int
+	failFirst int
+}
+
+func (p *toggleFailPublisher) Publish([]byte) error {
+	p.calls++
+	if p.calls <= p.failFirst {
+		return errors.New("stripped: boom")
+	}
+	return nil
+}
+func (p *toggleFailPublisher) Healthy() bool { return true }
+func (p *toggleFailPublisher) Close() error  { return nil }
+
+// Stripped-publish health tracks the LAST outcome, not a time window: a failure
+// marks it unhealthy, and only a subsequent SUCCESSFUL stripped publish clears
+// it — so a broken-then-quiet publisher never falsely recovers on elapsed time.
+func TestEmitter_StrippedPublishHealth_TracksLastOutcome(t *testing.T) {
+	stripped := &toggleFailPublisher{failFirst: 1}
+	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	if !e.StrippedPublishHealthy() {
+		t.Error("before any emit: want healthy (optimistic default)")
+	}
+	payload := []byte(`{"a":1}`)
+	// First emit: the stripped publish fails (Emit itself still succeeds — the
+	// primary already delivered) → unhealthy.
+	if err := e.Emit(context.Background(), newTestCredential(t, payload), payload); err != nil {
+		t.Fatalf("Emit 1: %v", err)
+	}
+	if e.StrippedPublishHealthy() {
+		t.Error("after a failing stripped publish: want unhealthy")
+	}
+	// Second emit: the stripped publish succeeds → healthy again (proven recovery).
+	if err := e.Emit(context.Background(), newTestCredential(t, payload), payload); err != nil {
+		t.Fatalf("Emit 2: %v", err)
+	}
+	if !e.StrippedPublishHealthy() {
+		t.Error("after a successful stripped publish: want healthy (recovery proven)")
+	}
+}
