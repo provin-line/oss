@@ -13,9 +13,11 @@ dplaax registry.
 | `bundle` | export (archive a chain + its authority documents), verify (offline re-verification, no network) | VCResolverService + DID resolution (export); none (verify) | implemented |
 | `schema` | register | SchemaService | implemented |
 | `chain` | subscribe, set-allow | ChainService | implemented |
-| `org` | verify / inspect / diagnose / generate-txt | DNS + DID resolution (no registry mutation) | planned |
+| `org` | verify / inspect / diagnose / generate-txt | DNS + DID resolution (no registry mutation) | implemented |
 
-Global flags: `--registry` (env `PROVIN_REGISTRY`), `--token` (env `PROVIN_TOKEN`).
+Global flags: `--registry` (env `PROVIN_REGISTRY`), `--token` (env `PROVIN_TOKEN`). The
+`org` group takes `--registry` only — DID resolution is an unauthenticated public route,
+so `--token` is neither needed nor accepted.
 
 ```console
 $ provin owner init --did did:dplaax:poc.dplaax.dev:org:acme --key acme-owner.jwk \
@@ -25,6 +27,9 @@ registered owner did:dplaax:poc.dplaax.dev:org:acme (key: acme-owner.jwk)
 $ provin pipeline create --did did:dplaax:poc.dplaax.dev:org:acme:pipeline:lot \
     --owner-key acme-owner.jwk
 issued pipeline did:dplaax:poc.dplaax.dev:org:acme:pipeline:lot (signing keys held by the registry)
+
+$ provin org verify --did did:dplaax:poc.dplaax.dev:org:acme.com --registry https://poc.dplaax.dev
+endorsement: verified
 ```
 
 `owner init` is custody-first and retryable: the owner's JWK file (0600,
@@ -39,4 +44,8 @@ the DID, and a re-run reuses an existing key file whose `kid` matches `--did`.
   — CLI-local owner-key custody (RFC 8037 OKP JWK).
 - Owner private keys are generated locally and stored as JWK files; they are the only
   private keys that ever exist outside the registry (everything else is KMS-model).
-- Exit codes are meaningful for scripting (`org verify` maps verdict levels to codes).
+- Exit codes are meaningful for scripting. `org verify` maps its endorsement verdict to
+  the process exit code: `verified`=0, `missing`=1, `invalid`=2, `unreachable`=3, `na`=4.
+  `org inspect` / `org diagnose` / `org generate-txt` are not verdict-scored — they exit
+  0 on success regardless of the underlying state (inspect/diagnose report the state on
+  stdout instead). See `orgverify/README.md` for the verdict taxonomy.

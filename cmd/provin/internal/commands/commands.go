@@ -4,6 +4,7 @@
 package commands
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -50,4 +51,32 @@ func (e Env) schemaClient() (schemapbconnect.SchemaServiceClient, error) {
 
 func (e Env) chainClient() (chainpbconnect.ChainServiceClient, error) {
 	return client.Chain(e.httpClient(), e.Registry, e.Token)
+}
+
+// ExitStatus is a typed error a command can return to request a specific
+// process exit code, beyond the generic 1 every other error maps to (spec
+// cli-stage3-orgverify-port §7.3). main() unwraps it via errors.As and exits
+// with Code — commands themselves never call os.Exit, so every command path
+// stays testable in-process (run() / commands.XXX return an error either
+// way).
+//
+// Message, when non-empty, is also printed to stderr; when empty, main()
+// prints nothing beyond exiting with Code — the verdict-driven codes from
+// `org verify` leave it empty because the verdict was already reported on
+// stdout (see OrgVerify), and repeating it on stderr would be noise, not new
+// information.
+type ExitStatus struct {
+	Code    int
+	Message string
+}
+
+// Error implements error. It never returns an empty string even when Message
+// is empty, so ExitStatus remains a well-behaved error on any path that logs
+// err.Error() directly instead of going through main()'s Message-aware
+// unwrap.
+func (e ExitStatus) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("exit status %d", e.Code)
 }

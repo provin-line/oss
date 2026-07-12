@@ -22,7 +22,7 @@ import (
 // as the L1 bearer on every RPC. httpClient nil defaults to
 // http.DefaultClient (tests inject an httptest client).
 func DID(httpClient connect.HTTPClient, registry, token string) (didpbconnect.DIDServiceClient, error) {
-	if err := validateBaseURL(registry); err != nil {
+	if err := ValidateBaseURL(registry); err != nil {
 		return nil, fmt.Errorf("client: registry URL: %w", err)
 	}
 	if token == "" {
@@ -39,7 +39,7 @@ func DID(httpClient connect.HTTPClient, registry, token string) (didpbconnect.DI
 // surface the audit-bundle exporter walks a chain over. Same validation and
 // injection rules as DID.
 func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconnect.VCResolverServiceClient, error) {
-	if err := validateBaseURL(registry); err != nil {
+	if err := ValidateBaseURL(registry); err != nil {
 		return nil, fmt.Errorf("client: registry URL: %w", err)
 	}
 	if token == "" {
@@ -56,7 +56,7 @@ func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconn
 // aggregate-complete exporter walks consumed sets over. Same validation and
 // injection rules as DID.
 func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.AuditServiceClient, error) {
-	if err := validateBaseURL(base); err != nil {
+	if err := ValidateBaseURL(base); err != nil {
 		return nil, fmt.Errorf("client: audit base URL: %w", err)
 	}
 	if token == "" {
@@ -72,7 +72,7 @@ func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.Au
 // token as the L1 bearer on every RPC — the surface `provin schema register`
 // drives. Same validation and injection rules as DID.
 func Schema(httpClient connect.HTTPClient, registry, token string) (schemapbconnect.SchemaServiceClient, error) {
-	if err := validateBaseURL(registry); err != nil {
+	if err := ValidateBaseURL(registry); err != nil {
 		return nil, fmt.Errorf("client: registry URL: %w", err)
 	}
 	if token == "" {
@@ -88,7 +88,7 @@ func Schema(httpClient connect.HTTPClient, registry, token string) (schemapbconn
 // token as the L1 bearer on every RPC — the surface `provin chain subscribe`
 // / `chain set-allow` drive. Same validation and injection rules as DID.
 func Chain(httpClient connect.HTTPClient, registry, token string) (chainpbconnect.ChainServiceClient, error) {
-	if err := validateBaseURL(registry); err != nil {
+	if err := ValidateBaseURL(registry); err != nil {
 		return nil, fmt.Errorf("client: registry URL: %w", err)
 	}
 	if token == "" {
@@ -100,12 +100,15 @@ func Chain(httpClient connect.HTTPClient, registry, token string) (chainpbconnec
 	return chainpbconnect.NewChainServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
 }
 
-// validateBaseURL rejects a base URL that is empty, scheme-less, not http(s),
+// ValidateBaseURL rejects a base URL that is empty, scheme-less, not http(s),
 // hostless, or carrying a query/fragment (the Connect client appends the RPC
 // procedure to the raw base, so a query or fragment would corrupt every
 // request path) — the same fail-closed rules the node applies to its own
-// endpoint config.
-func validateBaseURL(raw string) error {
+// endpoint config. Exported so every base-URL-taking construction in
+// cmd/provin shares one contract, including non-ConnectRPC callers (e.g. the
+// org commands' raw-HTTP W3C DID-resolution adapter) — not just the Connect
+// client constructors below.
+func ValidateBaseURL(raw string) error {
 	if raw == "" {
 		return fmt.Errorf("must not be empty (--registry / PROVIN_REGISTRY)")
 	}

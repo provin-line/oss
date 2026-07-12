@@ -17,10 +17,31 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "provin:", err)
-		os.Exit(1)
+	err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout)
+	if err == nil {
+		return
 	}
+	code, msg := exitCode(err)
+	if msg != "" {
+		fmt.Fprintln(os.Stderr, "provin:", msg)
+	}
+	os.Exit(code)
+}
+
+// exitCode maps a non-nil error from run() to a process exit code and an
+// optional stderr message. A commands.ExitStatus (org verify's verdict-driven
+// exit codes, spec cli-stage3-orgverify-port §7.2/§7.3) unwraps to its own
+// Code and Message (Message is empty when the verdict was already reported
+// on stdout — see commands.OrgVerify); every other error maps to exit 1 with
+// its own text as the message. Commands never call os.Exit themselves — this
+// is the single place a returned error becomes a process exit code, which is
+// what keeps every command path testable via run() in-process.
+func exitCode(err error) (code int, stderrMsg string) {
+	var es commands.ExitStatus
+	if errors.As(err, &es) {
+		return es.Code, es.Message
+	}
+	return 1, err.Error()
 }
 
 const usage = `usage: provin <group> <operation> [flags]
@@ -40,12 +61,22 @@ Implemented:
                                                               subscribe to a publisher (delivery mode is REQUESTED, never server-confirmed)
   chain    set-allow  --pipeline <did> --pattern <glob> [--pattern <glob>...] | --clear
                                                               REPLACE the pipeline's entire allow-list (full replacement; --clear for deny-all)
+  org      verify     --did <did>                            check DNS-based organization endorsement; exit code carries the verdict
+  org      inspect    --did <did>                            show raw DNS / DID Document state for a DID, no verdict; always exits 0
+  org      diagnose   --did <did>                            print the verdict plus remediation steps; always exits 0
+  org      generate-txt --did <did> [--fingerprint sha256:<hex>]
+                                                              print the DNS TXT record name + value that would endorse the DID
+                                                              (--fingerprint skips DID resolution: offline mode, no --registry needed)
 
 Global flags (owner/pipeline/process/bundle export/schema register/chain subscribe/chain set-allow):
   --registry <base-url>   registry base URL   (env PROVIN_REGISTRY)
   --token    <token>      L1 bearer token     (env PROVIN_TOKEN)
 
-Planned (see README.md): org verify.`
+org verify/inspect/diagnose/generate-txt take --registry (env PROVIN_REGISTRY)
+only — DID resolution is an unauthenticated public route, so no --token.
+org verify's exit code maps the endorsement verdict: 0=verified 1=missing
+2=invalid 3=unreachable 4=na. org inspect/diagnose/generate-txt exit 0 on
+success regardless of the underlying state.`
 
 // run dispatches one CLI invocation. It is the testable seam: main wires
 // os.Args/os.Stdin/os.Stdout and maps an error to exit code 1.
@@ -71,6 +102,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		return chainSubscribe(ctx, rest, stdout)
 	case "chain set-allow":
 		return chainSetAllow(ctx, rest, stdout)
+	case "org verify":
+		return orgVerify(ctx, rest, stdout)
+	case "org inspect":
+		return orgInspect(ctx, rest, stdout)
+	case "org diagnose":
+		return orgDiagnose(ctx, rest, stdout)
+	case "org generate-txt":
+		return orgGenerateTXT(ctx, rest, stdout)
 	default:
 		return fmt.Errorf("unknown command %q %q\n%s", group, op, usage)
 	}
@@ -309,4 +348,93 @@ func chainSetAllow(ctx context.Context, args []string, stdout io.Writer) error {
 		Patterns: patterns,
 		Clear:    *clearFlag,
 	})
+}
+
+// registryFlag registers --registry (env-backed) on fs for the org commands,
+// which need no bearer token: DID resolution is an unauthenticated public
+// route (spec §7.4), so exposing --token here would be a footgun (a flag the
+// operator sets that silently does nothing).
+func registryFlag(fs *flag.FlagSet) *string {
+	return fs.String("registry", os.Getenv("PROVIN_REGISTRY"), "registry base URL (env PROVIN_REGISTRY)")
+}
+
+func orgVerify(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("org verify", flag.ContinueOnError)
+	registry := registryFlag(fs)
+	did := fs.String("did", "", "DID to verify (required)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("org verify: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *did == "" {
+		return fmt.Errorf("org verify: --did is required")
+	}
+	env := commands.Env{Registry: *registry, Stdout: stdout}
+	return commands.OrgVerify(ctx, env, commands.OrgVerifyConfig{DID: *did})
+}
+
+func orgInspect(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("org inspect", flag.ContinueOnError)
+	registry := registryFlag(fs)
+	did := fs.String("did", "", "DID to inspect (required)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("org inspect: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *did == "" {
+		return fmt.Errorf("org inspect: --did is required")
+	}
+	env := commands.Env{Registry: *registry, Stdout: stdout}
+	return commands.OrgInspect(ctx, env, commands.OrgInspectConfig{DID: *did})
+}
+
+func orgDiagnose(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("org diagnose", flag.ContinueOnError)
+	registry := registryFlag(fs)
+	did := fs.String("did", "", "DID to diagnose (required)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("org diagnose: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *did == "" {
+		return fmt.Errorf("org diagnose: --did is required")
+	}
+	env := commands.Env{Registry: *registry, Stdout: stdout}
+	return commands.OrgDiagnose(ctx, env, commands.OrgDiagnoseConfig{DID: *did})
+}
+
+func orgGenerateTXT(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("org generate-txt", flag.ContinueOnError)
+	registry := registryFlag(fs)
+	did := fs.String("did", "", "DID to generate a TXT record for (required)")
+	fingerprint := fs.String("fingerprint", "", "key fingerprint sha256:<hex> (optional; when set, skips DID resolution — offline mode, no --registry needed)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("org generate-txt: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *did == "" {
+		return fmt.Errorf("org generate-txt: --did is required")
+	}
+	env := commands.Env{Registry: *registry, Stdout: stdout}
+	return commands.OrgGenerateTXT(ctx, env, commands.OrgGenerateTXTConfig{DID: *did, Fingerprint: *fingerprint})
 }
