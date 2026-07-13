@@ -61,6 +61,7 @@ Implemented:
                                                               subscribe to a publisher (delivery mode is REQUESTED, never server-confirmed)
   chain    set-allow  --pipeline <did> --pattern <glob> [--pattern <glob>...] | --clear
                                                               REPLACE the pipeline's entire allow-list (full replacement; --clear for deny-all)
+  chain    get-allow  --pipeline <did>                       print the pipeline's current allow-list (read-before-replace; needs the chain:read-allowlist grant)
   org      verify     --did <did>                            check DNS-based organization endorsement; exit code carries the verdict
   org      inspect    --did <did>                            show raw DNS / DID Document state for a DID, no verdict; always exits 0
   org      diagnose   --did <did>                            print the verdict plus remediation steps; always exits 0
@@ -105,6 +106,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		return chainSubscribe(ctx, rest, stdout)
 	case "chain set-allow":
 		return chainSetAllow(ctx, rest, stdout)
+	case "chain get-allow":
+		return chainGetAllow(ctx, rest, stdout)
 	case "org verify":
 		return orgVerify(ctx, rest, stdout)
 	case "org inspect":
@@ -371,6 +374,26 @@ func chainSetAllow(ctx context.Context, args []string, stdout io.Writer) error {
 		Patterns: patterns,
 		Clear:    *clearFlag,
 	})
+}
+
+func chainGetAllow(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("chain get-allow", flag.ContinueOnError)
+	registry, token := globalFlags(fs)
+	pipeline := fs.String("pipeline", "", "pipeline DID whose allow-list is read (required)")
+	if err := parse(fs, args, stdout); err != nil {
+		if errors.Is(err, errHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("chain get-allow: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
+	if *pipeline == "" {
+		return fmt.Errorf("chain get-allow: --pipeline is required")
+	}
+	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
+	return commands.ChainGetAllow(ctx, env, *pipeline)
 }
 
 // registryFlag registers --registry (env-backed) on fs for the org commands,

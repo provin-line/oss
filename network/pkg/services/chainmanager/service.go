@@ -165,3 +165,19 @@ func (s *Service) UpdateAllowList(ctx context.Context, pipelineDID string, patte
 	}
 	return s.allows.Save(pipelineDID, rules)
 }
+
+// GetAllowList returns pipelineDID's current allow-list — the read-before-replace
+// companion to UpdateAllowList. An absent list is empty (default-distrust), not
+// an error: the store does not distinguish a never-configured pipeline from one
+// configured with zero rules, and both mean deny-all. The key must be a parseable
+// dplaax pipeline DID (ErrInvalidPipelineDID otherwise). An already-canceled
+// context is honored at entry.
+func (s *Service) GetAllowList(ctx context.Context, pipelineDID string) ([]store.AllowRule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := requirePipelineDID(pipelineDID); err != nil {
+		return nil, err
+	}
+	return s.allows.Get(pipelineDID)
+}

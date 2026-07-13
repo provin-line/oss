@@ -71,6 +71,13 @@ service ChainService {
   rpc UpdateAllowList(UpdateAllowListRequest) returns (UpdateAllowListResponse) {
     option (o3co.authz.v1.policy) = {resource: "chain", action: "update-allowlist"};
   }
+  // GetAllowList reads a pipeline's current allow-list — the read-before-replace
+  // companion to UpdateAllowList. It carries its own action ("read-allowlist",
+  // symmetric with "update-allowlist") so allow-list read is grantable
+  // independently of subscription read ("read") and of the write grant.
+  rpc GetAllowList(GetAllowListRequest) returns (GetAllowListResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "read-allowlist"};
+  }
 }
 
 // Subscribe/Unsubscribe carry the last-slice connection flow (the most
@@ -103,6 +110,16 @@ message UpdateAllowListRequest {
   repeated AllowRule rules = 2;
 }
 message UpdateAllowListResponse {}
+
+message GetAllowListRequest {
+  string pipeline_did = 1;
+}
+message GetAllowListResponse {
+  // rules is the pipeline's current allow-list, in stored order. An empty list
+  // is the default-distrust state (deny-all) — the store does not distinguish a
+  // never-configured pipeline from one configured with zero rules.
+  repeated AllowRule rules = 1;
+}
 
 // ── ChainPeerService (internet, L2 wireauth) ──────────────────────────────────
 

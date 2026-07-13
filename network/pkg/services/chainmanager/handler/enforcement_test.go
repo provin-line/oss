@@ -24,7 +24,7 @@ func authClient(t *testing.T, rules []endpoint.StaticRule) chainpbconnect.ChainS
 	t.Helper()
 	svc := chainmanager.New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore())
 	_, h := chainpbconnect.NewChainServiceHandler(
-		handler.NewOperator(svc),
+		handler.NewOperator(svc, handler.WithAllowListReader(svc)),
 		connect.WithInterceptors(auth.Interceptors(endpoint.NewStaticEndpoint(rules))...),
 	)
 	srv := httptest.NewServer(h)
@@ -83,3 +83,39 @@ func bearerReq() *connect.Request[chainpb.ListSubscriptionsRequest] {
 	req.Header().Set("Authorization", "Bearer dummy")
 	return req
 }
+
+func getAllowReq() *connect.Request[chainpb.GetAllowListRequest] {
+	req := connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1",
+	})
+	req.Header().Set("Authorization", "Bearer dummy")
+	return req
+}
+
+// GetAllowList carries its own action (chain:read-allowlist), separate from both
+// the subscription-read grant (chain:read) and the write grant
+// (chain:update-allowlist). All three axes are pinned in both directions.
+func TestEnforcement_GetAllowList_Allowed(t *testing.T) {
+	c := authClient(t, []endpoint.StaticRule{{Resource: "chain", Action: "read-allowlist"}})
+	if _, err := c.GetAllowList(context.Background(), getAllowReq()); err != nil {
+		t.Errorf("allowed read-allowlist: want success, got %v (code %v)", err, connect.CodeOf(err))
+	}
+}
+
+func TestEnforcement_GetAllowList_DeniedForSubscriptionRead(t *testing.T) {
+	// chain:read (subscription read) must NOT permit reading the allow-list.
+	c := authClient(t, []endpoint.StaticRule{{Resource: "chain", Action: "read"}})
+	if code := connect.CodeOf(mustErr(c.GetAllowList(context.Background(), getAllowReq()))); code != connect.CodePermissionDenied {
+		t.Errorf("chain:read for read-allowlist: want CodePermissionDenied, got %v", code)
+	}
+}
+
+func TestEnforcement_GetAllowList_DeniedForWriteGrant(t *testing.T) {
+	// chain:update-allowlist (write) must NOT permit reading the allow-list.
+	c := authClient(t, []endpoint.StaticRule{{Resource: "chain", Action: "update-allowlist"}})
+	if code := connect.CodeOf(mustErr(c.GetAllowList(context.Background(), getAllowReq()))); code != connect.CodePermissionDenied {
+		t.Errorf("chain:update-allowlist for read-allowlist: want CodePermissionDenied, got %v", code)
+	}
+}
+
+func mustErr[T any](_ *connect.Response[T], err error) error { return err }

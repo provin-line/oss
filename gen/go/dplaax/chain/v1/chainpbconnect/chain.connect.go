@@ -56,6 +56,9 @@ const (
 	// ChainServiceUpdateAllowListProcedure is the fully-qualified name of the ChainService's
 	// UpdateAllowList RPC.
 	ChainServiceUpdateAllowListProcedure = "/dplaax.chain.v1.ChainService/UpdateAllowList"
+	// ChainServiceGetAllowListProcedure is the fully-qualified name of the ChainService's GetAllowList
+	// RPC.
+	ChainServiceGetAllowListProcedure = "/dplaax.chain.v1.ChainService/GetAllowList"
 	// ChainPeerServiceGetPublisherInfoProcedure is the fully-qualified name of the ChainPeerService's
 	// GetPublisherInfo RPC.
 	ChainPeerServiceGetPublisherInfoProcedure = "/dplaax.chain.v1.ChainPeerService/GetPublisherInfo"
@@ -73,6 +76,11 @@ type ChainServiceClient interface {
 	Unsubscribe(context.Context, *connect.Request[v1.UnsubscribeRequest]) (*connect.Response[v1.UnsubscribeResponse], error)
 	ListSubscriptions(context.Context, *connect.Request[v1.ListSubscriptionsRequest]) (*connect.Response[v1.ListSubscriptionsResponse], error)
 	UpdateAllowList(context.Context, *connect.Request[v1.UpdateAllowListRequest]) (*connect.Response[v1.UpdateAllowListResponse], error)
+	// GetAllowList reads a pipeline's current allow-list — the read-before-replace
+	// companion to UpdateAllowList. It carries its own action ("read-allowlist",
+	// symmetric with "update-allowlist") so allow-list read is grantable
+	// independently of subscription read ("read") and of the write grant.
+	GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error)
 }
 
 // NewChainServiceClient constructs a client for the dplaax.chain.v1.ChainService service. By
@@ -110,6 +118,12 @@ func NewChainServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(chainServiceMethods.ByName("UpdateAllowList")),
 			connect.WithClientOptions(opts...),
 		),
+		getAllowList: connect.NewClient[v1.GetAllowListRequest, v1.GetAllowListResponse](
+			httpClient,
+			baseURL+ChainServiceGetAllowListProcedure,
+			connect.WithSchema(chainServiceMethods.ByName("GetAllowList")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -119,6 +133,7 @@ type chainServiceClient struct {
 	unsubscribe       *connect.Client[v1.UnsubscribeRequest, v1.UnsubscribeResponse]
 	listSubscriptions *connect.Client[v1.ListSubscriptionsRequest, v1.ListSubscriptionsResponse]
 	updateAllowList   *connect.Client[v1.UpdateAllowListRequest, v1.UpdateAllowListResponse]
+	getAllowList      *connect.Client[v1.GetAllowListRequest, v1.GetAllowListResponse]
 }
 
 // Subscribe calls dplaax.chain.v1.ChainService.Subscribe.
@@ -141,12 +156,22 @@ func (c *chainServiceClient) UpdateAllowList(ctx context.Context, req *connect.R
 	return c.updateAllowList.CallUnary(ctx, req)
 }
 
+// GetAllowList calls dplaax.chain.v1.ChainService.GetAllowList.
+func (c *chainServiceClient) GetAllowList(ctx context.Context, req *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error) {
+	return c.getAllowList.CallUnary(ctx, req)
+}
+
 // ChainServiceHandler is an implementation of the dplaax.chain.v1.ChainService service.
 type ChainServiceHandler interface {
 	Subscribe(context.Context, *connect.Request[v1.SubscribeRequest]) (*connect.Response[v1.SubscribeResponse], error)
 	Unsubscribe(context.Context, *connect.Request[v1.UnsubscribeRequest]) (*connect.Response[v1.UnsubscribeResponse], error)
 	ListSubscriptions(context.Context, *connect.Request[v1.ListSubscriptionsRequest]) (*connect.Response[v1.ListSubscriptionsResponse], error)
 	UpdateAllowList(context.Context, *connect.Request[v1.UpdateAllowListRequest]) (*connect.Response[v1.UpdateAllowListResponse], error)
+	// GetAllowList reads a pipeline's current allow-list — the read-before-replace
+	// companion to UpdateAllowList. It carries its own action ("read-allowlist",
+	// symmetric with "update-allowlist") so allow-list read is grantable
+	// independently of subscription read ("read") and of the write grant.
+	GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error)
 }
 
 // NewChainServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -180,6 +205,12 @@ func NewChainServiceHandler(svc ChainServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(chainServiceMethods.ByName("UpdateAllowList")),
 		connect.WithHandlerOptions(opts...),
 	)
+	chainServiceGetAllowListHandler := connect.NewUnaryHandler(
+		ChainServiceGetAllowListProcedure,
+		svc.GetAllowList,
+		connect.WithSchema(chainServiceMethods.ByName("GetAllowList")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.chain.v1.ChainService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ChainServiceSubscribeProcedure:
@@ -190,6 +221,8 @@ func NewChainServiceHandler(svc ChainServiceHandler, opts ...connect.HandlerOpti
 			chainServiceListSubscriptionsHandler.ServeHTTP(w, r)
 		case ChainServiceUpdateAllowListProcedure:
 			chainServiceUpdateAllowListHandler.ServeHTTP(w, r)
+		case ChainServiceGetAllowListProcedure:
+			chainServiceGetAllowListHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -213,6 +246,10 @@ func (UnimplementedChainServiceHandler) ListSubscriptions(context.Context, *conn
 
 func (UnimplementedChainServiceHandler) UpdateAllowList(context.Context, *connect.Request[v1.UpdateAllowListRequest]) (*connect.Response[v1.UpdateAllowListResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.chain.v1.ChainService.UpdateAllowList is not implemented"))
+}
+
+func (UnimplementedChainServiceHandler) GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.chain.v1.ChainService.GetAllowList is not implemented"))
 }
 
 // ChainPeerServiceClient is a client for the dplaax.chain.v1.ChainPeerService service.

@@ -13,6 +13,7 @@
 # that carry no proto option (listed in the test's httpOnlySurface).
 audit:read
 chain:read
+chain:read-allowlist
 chain:subscribe
 chain:unsubscribe
 chain:update-allowlist

@@ -33,6 +33,7 @@ func TestChainService_RPCPolicies(t *testing.T) {
 		"Unsubscribe":       {"chain", "unsubscribe"},
 		"ListSubscriptions": {"chain", "read"},
 		"UpdateAllowList":   {"chain", "update-allowlist"},
+		"GetAllowList":      {"chain", "read-allowlist"},
 	}
 	methods := chainpb.File_dplaax_chain_v1_chain_proto.Services().ByName("ChainService").Methods()
 	if methods.Len() != len(want) {

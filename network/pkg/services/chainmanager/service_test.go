@@ -130,3 +130,42 @@ func TestService_UpdateAllowList_InvalidPattern(t *testing.T) {
 		t.Error("Save was called despite a malformed pattern (not all-or-nothing)")
 	}
 }
+
+// GetAllowList is the read-before-replace companion to UpdateAllowList: an
+// absent list is empty (not an error), a saved list comes back in order, and the
+// key is validated like the write path.
+func TestService_GetAllowList(t *testing.T) {
+	svc := New(memstore.NewSubscriptionStore(), memstore.NewAllowListStore())
+	const pid = "did:dplaax:reg:org:acme:pipeline:p1"
+
+	// Absent list → empty, not an error (default-distrust; store does not
+	// distinguish never-configured from configured-empty).
+	rules, err := svc.GetAllowList(context.Background(), pid)
+	if err != nil || len(rules) != 0 {
+		t.Fatalf("absent allow-list: rules=%v err=%v, want empty/nil", rules, err)
+	}
+
+	// After a save, the rules come back in stored order.
+	if err := svc.UpdateAllowList(context.Background(), pid, []string{"did:dplaax:*:org:a:*", "did:dplaax:*:org:b:*"}); err != nil {
+		t.Fatalf("UpdateAllowList: %v", err)
+	}
+	rules, err = svc.GetAllowList(context.Background(), pid)
+	if err != nil {
+		t.Fatalf("GetAllowList: %v", err)
+	}
+	if len(rules) != 2 || rules[0].Pattern != "did:dplaax:*:org:a:*" || rules[1].Pattern != "did:dplaax:*:org:b:*" {
+		t.Errorf("rules = %+v, want the two saved patterns in order", rules)
+	}
+
+	// An unparseable pipeline DID is rejected, like the write path.
+	if _, err := svc.GetAllowList(context.Background(), "not-a-pipeline-did"); !errors.Is(err, ErrInvalidPipelineDID) {
+		t.Errorf("invalid pipeline DID: want ErrInvalidPipelineDID, got %v", err)
+	}
+
+	// A canceled context is honored before any read.
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := svc.GetAllowList(cctx, pid); err == nil {
+		t.Error("canceled context: want error")
+	}
+}

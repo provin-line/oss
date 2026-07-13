@@ -32,6 +32,9 @@ type fakeChainService struct {
 	subscriptionID       string
 	subscribeErr         error
 	updateAllowListErr   error
+	getAllowListCalls    []*chainpb.GetAllowListRequest
+	getAllowListRules    []*chainpb.AllowRule
+	getAllowListErr      error
 }
 
 func (f *fakeChainService) Subscribe(_ context.Context, req *connect.Request[chainpb.SubscribeRequest]) (*connect.Response[chainpb.SubscribeResponse], error) {
@@ -52,6 +55,16 @@ func (f *fakeChainService) UpdateAllowList(_ context.Context, req *connect.Reque
 		return nil, f.updateAllowListErr
 	}
 	return connect.NewResponse(&chainpb.UpdateAllowListResponse{}), nil
+}
+
+func (f *fakeChainService) GetAllowList(_ context.Context, req *connect.Request[chainpb.GetAllowListRequest]) (*connect.Response[chainpb.GetAllowListResponse], error) {
+	f.mu.Lock()
+	f.getAllowListCalls = append(f.getAllowListCalls, req.Msg)
+	f.mu.Unlock()
+	if f.getAllowListErr != nil {
+		return nil, f.getAllowListErr
+	}
+	return connect.NewResponse(&chainpb.GetAllowListResponse{Rules: f.getAllowListRules}), nil
 }
 
 func (f *fakeChainService) callCount() int {
@@ -252,5 +265,43 @@ func TestChainSetAllow_RPCErrorPropagates(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown pipeline") {
 		t.Fatalf("RPC error: want the connect error surfaced, got %v", err)
+	}
+}
+
+// --- chain get-allow -------------------------------------------------------
+
+func TestChainGetAllow_PrintsRulesInOrder(t *testing.T) {
+	fake := &fakeChainService{getAllowListRules: []*chainpb.AllowRule{
+		{Pattern: "did:dplaax:*:org:beta"},
+		{Pattern: "did:dplaax:*:org:gamma"},
+	}}
+	srv := newChainNode(t, fake)
+	var out bytes.Buffer
+
+	if err := commands.ChainGetAllow(context.Background(), env(srv, &out), publisherDID); err != nil {
+		t.Fatalf("ChainGetAllow: %v", err)
+	}
+	if len(fake.getAllowListCalls) != 1 || fake.getAllowListCalls[0].GetPipelineDid() != publisherDID {
+		t.Fatalf("pipeline pass-through mismatch: %+v", fake.getAllowListCalls)
+	}
+	want := "allow-list for " + publisherDID + " (2 rules):\n  did:dplaax:*:org:beta\n  did:dplaax:*:org:gamma\n"
+	if out.String() != want {
+		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+}
+
+// An empty allow-list prints an explicit deny-all line — the read-side mirror of
+// set-allow --clear — and does NOT assert the pipeline itself exists.
+func TestChainGetAllow_EmptyIsDenyAll(t *testing.T) {
+	fake := &fakeChainService{} // nil rules → empty
+	srv := newChainNode(t, fake)
+	var out bytes.Buffer
+
+	if err := commands.ChainGetAllow(context.Background(), env(srv, &out), publisherDID); err != nil {
+		t.Fatalf("ChainGetAllow: %v", err)
+	}
+	want := "allow-list for " + publisherDID + ": 0 rules (deny-all)\n"
+	if out.String() != want {
+		t.Errorf("output = %q, want %q", out.String(), want)
 	}
 }

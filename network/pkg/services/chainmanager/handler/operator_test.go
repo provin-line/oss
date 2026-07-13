@@ -131,3 +131,61 @@ func TestOperatorHandler_ConnectionFlowUnimplemented(t *testing.T) {
 		t.Errorf("Unsubscribe code = %v, want Unimplemented", connect.CodeOf(err))
 	}
 }
+
+func TestOperatorHandler_GetAllowList_Success(t *testing.T) {
+	svc, _, allows := newSvc(t)
+	pid := "did:dplaax:reg:org:acme:pipeline:p1"
+	if err := allows.Save(pid, []store.AllowRule{{Pattern: "did:dplaax:*:org:a:*"}, {Pattern: "did:dplaax:*:org:b:*"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewOperator(svc, WithAllowListReader(svc))
+	resp, err := h.GetAllowList(context.Background(), connect.NewRequest(&chainpb.GetAllowListRequest{PipelineDid: pid}))
+	if err != nil {
+		t.Fatalf("GetAllowList: %v", err)
+	}
+	got := resp.Msg.GetRules()
+	if len(got) != 2 || got[0].GetPattern() != "did:dplaax:*:org:a:*" || got[1].GetPattern() != "did:dplaax:*:org:b:*" {
+		t.Errorf("rules = %+v, want the two saved patterns in order", got)
+	}
+}
+
+// An absent list reads as an empty one (default-distrust) — a successful response
+// with zero rules, never NotFound.
+func TestOperatorHandler_GetAllowList_AbsentIsEmpty(t *testing.T) {
+	svc, _, _ := newSvc(t)
+	h := NewOperator(svc, WithAllowListReader(svc))
+	resp, err := h.GetAllowList(context.Background(), connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: "did:dplaax:reg:org:acme:pipeline:never",
+	}))
+	if err != nil {
+		t.Fatalf("GetAllowList (absent): %v", err)
+	}
+	if len(resp.Msg.GetRules()) != 0 {
+		t.Errorf("absent list returned %d rules, want 0", len(resp.Msg.GetRules()))
+	}
+}
+
+func TestOperatorHandler_GetAllowList_InvalidPipelineDID(t *testing.T) {
+	svc, _, _ := newSvc(t)
+	h := NewOperator(svc, WithAllowListReader(svc))
+	_, err := h.GetAllowList(context.Background(), connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: "did:dplaax:reg:org:acme", // owner, not a pipeline
+	}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", connect.CodeOf(err))
+	}
+}
+
+// Without WithAllowListReader the RPC reports Unimplemented — the deferral is
+// explicit for a custom handler assembly, never an accidental silent success
+// (production always wires it).
+func TestOperatorHandler_GetAllowList_UnwiredUnimplemented(t *testing.T) {
+	svc, _, _ := newSvc(t)
+	h := NewOperator(svc) // no WithAllowListReader
+	_, err := h.GetAllowList(context.Background(), connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: "did:dplaax:reg:org:acme:pipeline:p1",
+	}))
+	if connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("unwired GetAllowList code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+}

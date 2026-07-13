@@ -97,6 +97,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		{Resource: "vc", Action: "read"},
 		{Resource: "chain", Action: "read"},
 		{Resource: "chain", Action: "update-allowlist"},
+		{Resource: "chain", Action: "read-allowlist"},
 	})
 	chainCfg := natsChainCfg(t)
 	guard, resolver := newDIDResolution(coreCfg, chainCfg)
@@ -253,21 +254,35 @@ func TestBoot_RegisterIssueResolveSign(t *testing.T) {
 	}
 }
 
-// The ChainService (L1 operator surface) is mounted in the assembled stack: an
-// authorized UpdateAllowList and ListSubscriptions route through the mux and the
-// authz gate. This covers routing + the gate, not write-content (the allow-list
-// has no read RPC and ListSubscriptions reads a different store); rule-persistence
-// correctness is covered at the domain/handler level.
+// The ChainService (L1 operator surface) is mounted in the assembled stack:
+// authorized UpdateAllowList, GetAllowList, and ListSubscriptions route through
+// the mux and the authz gate. The write-then-read round-trip also guards the
+// production WithAllowListReader wiring (server.go): were it dropped, GetAllowList
+// would degrade to Unimplemented here — the assembled-stack test that the
+// unit-level handler test cannot catch. Deeper rule-persistence correctness is
+// covered at the domain/handler level.
 func TestBoot_ChainOperator(t *testing.T) {
 	ctx := context.Background()
 	srv, _, _ := assembled(t)
 	chainClient := chainpbconnect.NewChainServiceClient(srv.Client(), srv.URL)
 
+	const pattern = "did:dplaax:*:org:acme:*"
 	if _, err := chainClient.UpdateAllowList(ctx, bearer(connect.NewRequest(&chainpb.UpdateAllowListRequest{
 		PipelineDid: pipelineDID,
-		Rules:       []*chainpb.AllowRule{{Pattern: "did:dplaax:*:org:acme:*"}},
+		Rules:       []*chainpb.AllowRule{{Pattern: pattern}},
 	}))); err != nil {
 		t.Fatalf("UpdateAllowList: %v (code %v)", err, connect.CodeOf(err))
+	}
+	// Read it back through the full stack: proves the read RPC is wired (not
+	// Unimplemented) and its own read-allowlist grant is enforced end-to-end.
+	got, err := chainClient.GetAllowList(ctx, bearer(connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: pipelineDID,
+	})))
+	if err != nil {
+		t.Fatalf("GetAllowList: %v (code %v)", err, connect.CodeOf(err))
+	}
+	if rules := got.Msg.GetRules(); len(rules) != 1 || rules[0].GetPattern() != pattern {
+		t.Errorf("GetAllowList = %+v, want the one written pattern %q", rules, pattern)
 	}
 	resp, err := chainClient.ListSubscriptions(ctx, bearer(connect.NewRequest(&chainpb.ListSubscriptionsRequest{})))
 	if err != nil {

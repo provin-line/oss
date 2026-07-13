@@ -29,14 +29,24 @@ type Service interface {
 	UpdateAllowList(ctx context.Context, pipelineDID string, patterns []string) error
 }
 
+// AllowListReader is the read half of the allow-list capability. It is wired
+// separately from Service (via WithAllowListReader) so adding allow-list read
+// does not widen the exported Service interface — external Service
+// implementations keep compiling (D-s9, mirroring WithSubscriber).
+// *chainmanager.Service satisfies it.
+type AllowListReader interface {
+	GetAllowList(ctx context.Context, pipelineDID string) ([]store.AllowRule, error)
+}
+
 // OperatorHandler adapts a Service to the generated ChainServiceHandler. It
 // embeds the Unimplemented stub so the connection-flow RPCs (Subscribe /
 // Unsubscribe) return CodeUnimplemented until a SubscriberService is supplied via
 // WithSubscriber; the two operator-local RPCs are always implemented here.
 type OperatorHandler struct {
 	chainpbconnect.UnimplementedChainServiceHandler
-	svc Service
-	sub SubscriberService // nil → Subscribe/Unsubscribe report Unimplemented
+	svc   Service
+	sub   SubscriberService // nil → Subscribe/Unsubscribe report Unimplemented
+	allow AllowListReader   // nil → GetAllowList reports Unimplemented
 }
 
 var _ chainpbconnect.ChainServiceHandler = (*OperatorHandler)(nil)
@@ -50,6 +60,14 @@ type OperatorOption func(*OperatorHandler)
 // keep compiling.
 func WithSubscriber(sub SubscriberService) OperatorOption {
 	return func(h *OperatorHandler) { h.sub = sub }
+}
+
+// WithAllowListReader enables the GetAllowList RPC. Kept separate from Service
+// (like WithSubscriber) so the exported Service interface is not widened.
+// Production wiring always supplies it; without it GetAllowList reports
+// Unimplemented.
+func WithAllowListReader(r AllowListReader) OperatorOption {
+	return func(h *OperatorHandler) { h.allow = r }
 }
 
 // NewOperator returns an OperatorHandler backed by svc. Pass WithSubscriber to
@@ -84,6 +102,21 @@ func (h *OperatorHandler) UpdateAllowList(ctx context.Context, req *connect.Requ
 		return nil, mapError(err)
 	}
 	return connect.NewResponse(&chainpb.UpdateAllowListResponse{}), nil
+}
+
+func (h *OperatorHandler) GetAllowList(ctx context.Context, req *connect.Request[chainpb.GetAllowListRequest]) (*connect.Response[chainpb.GetAllowListResponse], error) {
+	if h.allow == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chainmanager: GetAllowList not wired (WithAllowListReader)"))
+	}
+	rules, err := h.allow.GetAllowList(ctx, req.Msg.GetPipelineDid())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := make([]*chainpb.AllowRule, len(rules))
+	for i, r := range rules {
+		out[i] = &chainpb.AllowRule{Pattern: r.Pattern}
+	}
+	return connect.NewResponse(&chainpb.GetAllowListResponse{Rules: out}), nil
 }
 
 // toProtoSubscription maps a domain subscription to the wire message. Created is

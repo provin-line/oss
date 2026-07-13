@@ -88,3 +88,32 @@ func ChainSetAllow(ctx context.Context, env Env, cfg ChainSetAllowConfig) error 
 	fmt.Fprintf(env.out(), "allow-list for %s replaced (%d rules)\n", cfg.Pipeline, len(cfg.Patterns))
 	return nil
 }
+
+// ChainGetAllow prints pipeline's current allow-list — the read-before-replace
+// companion to set-allow. It prints the rule count (even when zero, labeled
+// deny-all) followed by each pattern in returned order. The output makes no
+// claim that the pipeline itself exists: the RPC proves only that its effective
+// allow-list is what is shown (an absent list reads as an empty one — both are
+// deny-all). Requires the operator to hold the chain:read-allowlist grant.
+func ChainGetAllow(ctx context.Context, env Env, pipeline string) error {
+	c, err := env.chainClient()
+	if err != nil {
+		return err
+	}
+	res, err := c.GetAllowList(ctx, connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: pipeline,
+	}))
+	if err != nil {
+		return fmt.Errorf("chain get-allow: %w", err)
+	}
+	rules := res.Msg.GetRules()
+	if len(rules) == 0 {
+		fmt.Fprintf(env.out(), "allow-list for %s: 0 rules (deny-all)\n", pipeline)
+		return nil
+	}
+	fmt.Fprintf(env.out(), "allow-list for %s (%d rules):\n", pipeline, len(rules))
+	for _, r := range rules {
+		fmt.Fprintf(env.out(), "  %s\n", r.GetPattern())
+	}
+	return nil
+}
