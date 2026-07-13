@@ -10,4 +10,5 @@ import (
 
 func TestLogContract(t *testing.T) {
 	logcontract.Suite(t, func(t *testing.T) tlog.Log { return memlog.New() })
+	logcontract.ChainSuite(t, func(t *testing.T) tlog.Log { return memlog.New() })
 }

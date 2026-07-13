@@ -30,6 +30,7 @@ func newLog(t *testing.T) tlog.Log {
 
 func TestLogContract(t *testing.T) {
 	logcontract.Suite(t, newLog)
+	logcontract.ChainSuite(t, newLog)
 }
 
 // The whole point of the file log: records outlive the process. A reopened
@@ -543,5 +544,38 @@ func TestRecordIntent_FailedPersistNotNoOpOnRetry(t *testing.T) {
 	}
 	if hw, _ := l.HighestIntent(ctx); hw != 5 {
 		t.Fatalf("high-water = %d after successful retry, want 5", hw)
+	}
+}
+
+// P0-1: a filelog checkpoint carries the armed log identity as Origin.
+func TestCheckpointCarriesOrigin(t *testing.T) {
+	ctx := context.Background()
+	const logID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:o"
+	const signerDID = logID + ":process:s1"
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer: ed25519.NewSigner(ks), SignerDID: signerDID,
+		KeyID: string(keystore.KeyIDSigning), VerificationMethod: signerDID + "#signing", LogID: logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, err := l.Append(ctx, []byte("r")); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := l.Checkpoint(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.Origin != logID {
+		t.Errorf("Origin = %q, want %q", cp.Origin, logID)
 	}
 }

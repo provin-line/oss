@@ -93,3 +93,27 @@ func TestTlogService_RPCPolicies(t *testing.T) {
 		}
 	}
 }
+
+// originLog is a stub whose Checkpoint returns a controlled Origin — driving
+// the P0-1 fail-closed guard: the signed origin must match the registry key.
+type originLog struct {
+	tlog.Log
+	origin string
+}
+
+func (o originLog) Checkpoint(context.Context) (*tlog.Checkpoint, error) {
+	return &tlog.Checkpoint{Origin: o.origin, Size: 1, Head: "h", SignedBy: "did:x#s"}, nil
+}
+
+func TestCheckpointOriginGuard(t *testing.T) {
+	svc := tlogservice.New(map[string]tlog.Log{
+		"good": originLog{origin: "good"},
+		"bad":  originLog{origin: "not-the-key"},
+	})
+	if cp, err := svc.Checkpoint(context.Background(), "good"); err != nil || cp.Origin != "good" {
+		t.Fatalf("matching origin: cp=%v err=%v", cp, err)
+	}
+	if _, err := svc.Checkpoint(context.Background(), "bad"); err == nil {
+		t.Fatal("mismatched signed origin vs registry key: want fail-closed error")
+	}
+}

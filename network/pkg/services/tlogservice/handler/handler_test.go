@@ -34,8 +34,11 @@ func (f *fakeService) Records(_ context.Context, _ string, start uint64, count i
 
 func TestGetLogCheckpoint_Projection(t *testing.T) {
 	ts := time.Date(2026, 7, 7, 9, 0, 0, 0, time.UTC)
+	// The response log_id is projected from the SIGNED checkpoint (Origin),
+	// never echoed from the request (P0-1) — the fixture origin is what must
+	// come back.
 	h := handler.New(&fakeService{cp: &tlog.Checkpoint{
-		Size: 42, Head: "headhash", Timestamp: ts, SignedBy: "did:x#signing", Signature: []byte{1, 2},
+		Origin: "did:x:pipeline:p", Size: 42, Head: "headhash", Timestamp: ts, SignedBy: "did:x#signing", Signature: []byte{1, 2},
 	}})
 	resp, err := h.GetLogCheckpoint(context.Background(), connect.NewRequest(&tlogpb.GetLogCheckpointRequest{LogId: "did:x:pipeline:p"}))
 	if err != nil {

@@ -1,9 +1,16 @@
 // Package logcontract is the shared behavioral suite for tlog.Log
-// implementations: the mem and file logs both run it, so their semantics
-// (dense zero-based indexes, the exact chain-hash formula, record
-// immutability, out-of-range errors) cannot drift apart silently.
+// implementations, split by what a family shares:
+//
+//   - Suite is the implementation-neutral contract every Log passes (dense
+//     zero-based indexes, round-trips, record immutability, out-of-range
+//     errors, size, concurrent-append density);
+//   - ChainSuite additionally pins the hash-chain commitment formula
+//     byte-exactly — the memlog/filelog family runs it; a tree log's
+//     Record.Hash is the RFC 6962 leaf hash instead (merklelog pins that
+//     with its own known-answer vectors).
+//
 // Implementation-specific behavior (restart replay, damage handling, signed
-// checkpoints) stays in each package's own tests.
+// checkpoints, proofs) stays in each package's own tests.
 package logcontract
 
 import (
@@ -27,8 +34,9 @@ var Vector = []struct {
 	{"", "1142f0a442cc8435feed59a3a49871b111aa551a77ccc142f5acec72913414d9"},
 }
 
-// Suite runs the tlog.Log contract against a fresh implementation.
-func Suite(t *testing.T, newLog func(t *testing.T) tlog.Log) {
+// ChainSuite pins the hash-chain commitment formula byte-exactly. Only the
+// hash-chain family (memlog, filelog) runs it.
+func ChainSuite(t *testing.T, newLog func(t *testing.T) tlog.Log) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -47,6 +55,13 @@ func Suite(t *testing.T, newLog func(t *testing.T) tlog.Log) {
 			}
 		}
 	})
+}
+
+// Suite runs the implementation-neutral tlog.Log contract against a fresh
+// implementation.
+func Suite(t *testing.T, newLog func(t *testing.T) tlog.Log) {
+	t.Helper()
+	ctx := context.Background()
 
 	t.Run("get round-trip and out-of-range", func(t *testing.T) {
 		l := newLog(t)

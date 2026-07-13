@@ -54,7 +54,17 @@ type Record struct {
 // checkpoint, the operator cannot later present a different history below
 // that size without detection.
 type Checkpoint struct {
-	Size uint64
+	// Origin identifies WHICH log this commitment is scoped to (the log ID
+	// the operator armed at signing — transparency.dev vocabulary). Two
+	// checkpoints are comparable (consistency-provable) only within one
+	// origin. It rides the signed view (wire key "logId"), so it is
+	// non-repudiable alongside Size and Head. Checkpoints serialized before
+	// this field existed deserialize with an empty Origin: SignedView
+	// refuses those (fail closed) rather than reconstructing a view with a
+	// blank log ID — reconstructing a legacy view needs its historical log
+	// ID supplied out of band.
+	Origin string
+	Size   uint64
 	// Head is the commitment value: the chain head hash (hash-chain
 	// implementations) or the Merkle root (tree implementations).
 	Head      string

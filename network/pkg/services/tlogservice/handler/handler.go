@@ -45,8 +45,11 @@ func (h *Handler) GetLogCheckpoint(ctx context.Context, req *connect.Request[tlo
 	if err != nil {
 		return nil, mapError(err)
 	}
+	// log_id is projected from the SIGNED checkpoint (cp.Origin), never
+	// echoed from the request: the response value must be the one inside
+	// the signature (the service already rejects an origin mismatch).
 	return connect.NewResponse(&tlogpb.GetLogCheckpointResponse{
-		LogId:     req.Msg.GetLogId(),
+		LogId:     cp.Origin,
 		Size:      strconv.FormatUint(cp.Size, 10),
 		Head:      cp.Head,
 		Timestamp: cp.Timestamp.UTC().Format(time.RFC3339),

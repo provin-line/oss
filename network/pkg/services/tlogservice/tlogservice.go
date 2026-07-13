@@ -47,6 +47,13 @@ func (s *Service) Checkpoint(ctx context.Context, logID string) (*tlog.Checkpoin
 	if err != nil {
 		return nil, fmt.Errorf("tlogservice: checkpoint %q: %w", logID, err)
 	}
+	// The signed Origin and the registry key must agree — a mismatch is a
+	// node misconfiguration (a log armed with the wrong LogID) and serving
+	// it would publish a checkpoint whose signed identity contradicts the
+	// id it was requested under. Fail closed.
+	if cp.Origin != logID {
+		return nil, fmt.Errorf("tlogservice: checkpoint %q: signed origin %q does not match the registry key", logID, cp.Origin)
+	}
 	return cp, nil
 }
 

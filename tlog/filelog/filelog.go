@@ -32,8 +32,6 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/canon"
-	"github.com/provin-line/oss/canon/jcs"
-	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -74,17 +72,11 @@ type entry struct {
 	Hash    string `json:"hash"`
 }
 
-// CheckpointSigner arms a Log to sign its head commitments: the signing
-// capability (the repo's DID-aware crypto.Signer), the key address
-// (SignerDID + KeyID), the verification-method DID URL served as SignedBy,
-// and the log identity bound INSIDE every signature.
-type CheckpointSigner struct {
-	Signer             crypto.Signer
-	SignerDID          string
-	KeyID              string
-	VerificationMethod string
-	LogID              string
-}
+// CheckpointSigner is the contract-level arming type, re-exported for
+// source compatibility with existing keyed literals: the definition moved
+// to the tlog root (P0-1) because arming a checkpoint signer is
+// implementation-independent. New code should say tlog.CheckpointSigner.
+type CheckpointSigner = tlog.CheckpointSigner
 
 // Option configures a Log.
 type Option func(*Log)
@@ -486,27 +478,13 @@ func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
 // (e.g. Rotate) can seal a segment without re-entering Checkpoint's own
 // l.mu.Lock (which would deadlock).
 func signCheckpoint(size uint64, head string, signer *CheckpointSigner, ts time.Time) (*tlog.Checkpoint, error) {
-	view, err := jcs.Canonicalize(map[string]any{
-		"v":         1,
-		"purpose":   checkpointPurpose,
-		"logId":     signer.LogID,
-		"head":      head,
-		"signedBy":  signer.VerificationMethod,
-		"size":      strconv.FormatUint(size, 10),
-		"timestamp": ts.Format(time.RFC3339),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("filelog: canonicalize checkpoint view: %w", err)
-	}
-	sig, err := signer.Signer.Sign(signer.SignerDID, signer.KeyID, view)
+	// Delegates to the contract-level signer (P0-1): tlog.SignCheckpoint
+	// builds the identical JCS view this function used to build inline —
+	// Checkpoint.SignedView is the single implementation of the view bytes,
+	// so signer and verifier can never disagree — and populates Origin.
+	cp, err := tlog.SignCheckpoint(size, head, signer, ts)
 	if err != nil {
 		return nil, fmt.Errorf("filelog: sign checkpoint: %w", err)
 	}
-	return &tlog.Checkpoint{
-		Size:      size,
-		Head:      head,
-		Timestamp: ts,
-		SignedBy:  signer.VerificationMethod,
-		Signature: sig,
-	}, nil
+	return cp, nil
 }
