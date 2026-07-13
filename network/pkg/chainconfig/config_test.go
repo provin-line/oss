@@ -3,9 +3,11 @@ package chainconfig_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	natsjwt "github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 
 	"github.com/provin-line/oss/hoconconfig"
@@ -262,5 +264,140 @@ provin.network.chain.nats.registry-base-urls { "mfg.poc.dplaax.dev" = "http://x:
 provin.network.chain.nats.resolver-base-url = "http://one:8443"
 provin.network.chain.nats.registry-base-urls { "mfg.poc.dplaax.dev" = "http://mfg:8443" }`)); err == nil {
 		t.Error("registry-base-urls together with resolver-base-url silently accepted")
+	}
+}
+
+// sysUserFixture writes a PAIRED sys-user JWT file and USER nkey seed file
+// (the loader verifies the JWT subject is the seed's key).
+func sysUserFixture(t *testing.T) (jwtPath, seedPath string) {
+	t.Helper()
+	u, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, _ := u.Seed()
+	uPub, _ := u.PublicKey()
+	issuer, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := natsjwt.NewUserClaims(uPub).Encode(issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	jwtPath = filepath.Join(dir, "sys-user.jwt")
+	seedPath = filepath.Join(dir, "sys-user.seed")
+	if err := os.WriteFile(jwtPath, []byte(token+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(seedPath, append(seed, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return jwtPath, seedPath
+}
+
+func natsConfWithSys(url, accFile, opFile, dir, nodeDID, sysJWT, sysSeed string) string {
+	return `provin.network.chain {
+  transport = "nats"
+  nats {
+    url = "` + url + `"
+    account-seed-file = "` + accFile + `"
+    trust-root-seed-file = "` + opFile + `"
+    resolver-dir = "` + dir + `"
+    node-did = "` + nodeDID + `"
+    sys-user-jwt-file = "` + sysJWT + `"
+    sys-user-seed-file = "` + sysSeed + `"
+  }
+}`
+}
+
+// Both sys-user keys set: the live claims push is configured, files are read
+// and trimmed.
+func TestLoad_NATS_SysUserPair(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	jwtPath, seedPath := sysUserFixture(t)
+
+	cfg := loadWith(t, natsConfWithSys("nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID, jwtPath, seedPath))
+	c, err := chainconfig.LoadChainConfig(cfg)
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if c.NATS.SysUserJWT == "" || strings.Contains(c.NATS.SysUserJWT, "\n") {
+		t.Errorf("SysUserJWT = %q (want trimmed file contents)", c.NATS.SysUserJWT)
+	}
+	if c.NATS.SysUserSeed == "" {
+		t.Error("SysUserSeed empty")
+	}
+}
+
+// Omitting both keys keeps the live push disabled (previous behavior).
+func TestLoad_NATS_SysUserOmitted(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+
+	cfg := loadWith(t, natsConf("nats", "nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID))
+	c, err := chainconfig.LoadChainConfig(cfg)
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if c.NATS.SysUserJWT != "" || c.NATS.SysUserSeed != "" {
+		t.Errorf("sys-user fields must stay empty when unset, got %q/%q", c.NATS.SysUserJWT, c.NATS.SysUserSeed)
+	}
+}
+
+// Half a pair is a misconfiguration: fail boot naming the missing key.
+func TestLoad_NATS_SysUserHalfPair(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	jwtPath, seedPath := sysUserFixture(t)
+
+	for name, conf := range map[string]string{
+		"jwt only":  natsConfWithSys("nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/d", nodeDID, jwtPath, ""),
+		"seed only": natsConfWithSys("nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/d", nodeDID, "", seedPath),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := loadWith(t, conf)
+			if _, err := chainconfig.LoadChainConfig(cfg); err == nil {
+				t.Error("half-configured sys user: want error")
+			}
+		})
+	}
+}
+
+// A JWT that does not belong to the seed (mixed provisioning generations)
+// fails boot naming both keys, instead of failing 30s into the first grant.
+func TestLoad_NATS_SysUserMispaired(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	jwtPath, _ := sysUserFixture(t)
+	_, otherSeedPath := sysUserFixture(t) // a different user's seed
+
+	cfg := loadWith(t, natsConfWithSys("nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/d", nodeDID, jwtPath, otherSeedPath))
+	if _, err := chainconfig.LoadChainConfig(cfg); err == nil {
+		t.Error("mispaired sys-user JWT/seed: want boot error")
+	}
+}
+
+// The sys-user seed must be a USER nkey — a swapped account seed fails boot.
+func TestLoad_NATS_SysUserSeedWrongType(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	jwtPath, _ := sysUserFixture(t)
+
+	cfg := loadWith(t, natsConfWithSys("nats://h:4222", seedFile(t, accSeed), seedFile(t, opSeed), "/d", nodeDID, jwtPath, seedFile(t, accSeed)))
+	if _, err := chainconfig.LoadChainConfig(cfg); err == nil {
+		t.Error("account seed in sys-user-seed-file: want error")
 	}
 }

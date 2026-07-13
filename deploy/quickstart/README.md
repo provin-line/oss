@@ -130,13 +130,18 @@ chained, and audited entirely through the real provider + real verifier path.
 ## How it fits together
 
 - **`provision`** (one-shot init container) generates the NATS operator-mode
-  trust material (operator + account seeds, the account claims JWT, and
-  `nats-server.conf`) and mints the node's **service token** — an HS256 JWT the
-  node uses to authenticate its *own* L1-gated calls (publishing issued VCs,
-  resolving references, fetching adjacent evidence). Both are written to a shared
-  volume; nothing cryptographic is committed to the repo. Re-running
-  `docker compose up` **reuses** existing trust material (only the service token
-  is re-minted — it carries an expiry); partial material from an interrupted run
+  trust material (operator + account seeds, the account claims JWTs in the
+  resolver directory, a system account with a **claims-push user narrowed to
+  this node's account**, and `nats-server.conf` running the directory
+  resolver over that same directory) and mints the node's **service token** —
+  an HS256 JWT the node uses to authenticate its *own* L1-gated calls
+  (publishing issued VCs, resolving references, fetching adjacent evidence).
+  Everything is written to a shared volume; nothing cryptographic is
+  committed to the repo. The sys-user files are trust material — in anything
+  beyond this dev stack, guard them like signing keys. Re-running
+  `docker compose up` **reuses** existing trust material (only the service
+  token is re-minted — it carries an expiry); partial material from an
+  interrupted run — or material from a pre-directory-resolver quickstart —
   fails closed with a pointer to the reset below.
 - **`policy-verifier`** and **`auth-provider`** are *generated* by
   `provin.auth`'s `create-*` CLIs at build time (there is no committed instance

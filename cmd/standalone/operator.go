@@ -5,11 +5,18 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	chainnats "github.com/provin-line/oss/network/pkg/services/chainmanager/infra/nats"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/nats/livepublisher"
 )
 
 // natsOperator builds the production nats infra.Operator from chain config: a
 // directory JWT publisher (writes account claims where the nats-server directory
 // resolver reads them) signed by the configured trust-root for the node's account.
+// When the sys-user credentials are configured, the directory publisher is
+// wrapped with the live publisher, so every grant is also pushed to the RUNNING
+// broker (no restart needed for it to take effect); connect-wait is passed
+// through VERBATIM as the push budget, so an orchestrated start where the
+// broker comes up after the node converges, and connect-wait = 0s keeps its
+// strict fail-fast meaning (one immediate attempt) on the push path too.
 //
 // Claim-state on restart: chainnats.New hydrates the operator's in-memory
 // claims from the previously published account JWT (slice-16), so restarts
@@ -18,11 +25,24 @@ import (
 // if the published JWT is gone (e.g. a wiped resolver dir) while subscriptions
 // persist, claims start empty and the next Add re-publishes only its own grant.
 func natsOperator(c *chainconfig.Config) (infra.Operator, error) {
+	var publisher chainnats.JWTPublisher = chainnats.NewDirPublisher(c.NATS.ResolverDir)
+	if c.NATS.SysUserJWT != "" {
+		live, err := livepublisher.New(publisher, livepublisher.Config{
+			URL:         c.NATS.URL,
+			SysUserJWT:  c.NATS.SysUserJWT,
+			SysUserSeed: c.NATS.SysUserSeed,
+			Timeout:     c.NATS.ConnectWait,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("standalone: live claims publisher: %w", err)
+		}
+		publisher = live
+	}
 	op, err := chainnats.New(chainnats.Config{
 		AccountSeed:   c.NATS.AccountSeed,
 		TrustRootSeed: c.NATS.TrustRootSeed,
 		URL:           c.NATS.URL,
-		Publisher:     chainnats.NewDirPublisher(c.NATS.ResolverDir),
+		Publisher:     publisher,
 	})
 	if err != nil {
 		return nil, err

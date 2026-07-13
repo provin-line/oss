@@ -10,12 +10,14 @@ package chainconfig
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	jwt "github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 
 	"github.com/provin-line/oss/did/dplaax"
@@ -45,6 +47,8 @@ const (
 	keyResolverBaseURL   = "provin.network.chain.nats.resolver-base-url"
 	keyConnectWait       = "provin.network.chain.nats.connect-wait"
 	keyRegistryBaseURLs  = "provin.network.chain.nats.registry-base-urls"
+	keySysUserJWTFile    = "provin.network.chain.nats.sys-user-jwt-file"
+	keySysUserSeedFile   = "provin.network.chain.nats.sys-user-seed-file"
 	keyAllowNoop         = "provin.network.chain.dev.allow-noop-transport"
 )
 
@@ -82,6 +86,13 @@ type NATSConfig struct {
 	// against. Unmapped registries use the default (https://{registry}).
 	// Mutually exclusive with ResolverBaseURL.
 	RegistryBaseURLs map[string]string
+	// SysUserJWT / SysUserSeed are the system-account user credentials for the
+	// live claims push (read from their files, trimmed). Both set → grants
+	// pushed to the running broker; both empty → live push disabled (claims
+	// reach the broker via the resolver directory only). Setting exactly one
+	// is a boot error.
+	SysUserJWT  string
+	SysUserSeed string
 }
 
 // LoadChainConfig reads and validates the chain block. It fails closed: an
@@ -179,7 +190,71 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 		}
 		n.RegistryBaseURLs = urls
 	}
+	jwtPath, err := cfg.String(keySysUserJWTFile)
+	if err != nil {
+		return n, fmt.Errorf("chain: config %s: %w", keySysUserJWTFile, err)
+	}
+	seedPath, err := cfg.String(keySysUserSeedFile)
+	if err != nil {
+		return n, fmt.Errorf("chain: config %s: %w", keySysUserSeedFile, err)
+	}
+	switch {
+	case jwtPath == "" && seedPath == "":
+		// Live push disabled — the pre-slice behavior.
+	case jwtPath == "" || seedPath == "":
+		return n, fmt.Errorf("chain: config %s and %s must be set together (both for the live claims push, neither to disable it)", keySysUserJWTFile, keySysUserSeedFile)
+	default:
+		raw, err := os.ReadFile(jwtPath)
+		if err != nil {
+			return n, fmt.Errorf("chain: config %s: read sys-user JWT file: %w", keySysUserJWTFile, err)
+		}
+		n.SysUserJWT = strings.TrimSpace(string(raw))
+		if n.SysUserJWT == "" {
+			return n, fmt.Errorf("chain: config %s: sys-user JWT file is empty", keySysUserJWTFile)
+		}
+		if n.SysUserSeed, err = readUserSeed(seedPath); err != nil {
+			return n, fmt.Errorf("chain: config %s: %w", keySysUserSeedFile, err)
+		}
+		// The JWT must belong to the seed: mispaired files (mixed provisioning
+		// generations) would otherwise fail at the first push — an
+		// authorization error 30s into a grant — instead of at boot with the
+		// key named. A non-JWT file fails the same way.
+		claims, err := jwt.DecodeUserClaims(n.SysUserJWT)
+		if err != nil {
+			return n, fmt.Errorf("chain: config %s: not a user JWT: %w", keySysUserJWTFile, err)
+		}
+		kp, _ := nkeys.FromSeed([]byte(n.SysUserSeed))
+		pub, err := kp.PublicKey()
+		if err != nil {
+			return n, fmt.Errorf("chain: config %s: derive public key: %w", keySysUserSeedFile, err)
+		}
+		if claims.Subject != pub {
+			return n, fmt.Errorf("chain: config %s and %s do not pair: JWT subject %q is not the seed's key (mixed provisioning generations?)", keySysUserJWTFile, keySysUserSeedFile, claims.Subject)
+		}
+	}
 	return n, nil
+}
+
+// readUserSeed reads and trims a USER nkey seed — a swapped account/operator
+// seed fails boot here rather than at the first push.
+func readUserSeed(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read seed file: %w", err)
+	}
+	seed := strings.TrimSpace(string(raw))
+	kp, err := nkeys.FromSeed([]byte(seed))
+	if err != nil {
+		return "", fmt.Errorf("invalid nkey seed: %w", err)
+	}
+	pub, err := kp.PublicKey()
+	if err != nil {
+		return "", fmt.Errorf("derive public key: %w", err)
+	}
+	if !nkeys.IsValidPublicUserKey(pub) {
+		return "", errors.New("not a USER nkey seed")
+	}
+	return seed, nil
 }
 
 func requireString(cfg *hoconconfig.Config, key string) (string, error) {

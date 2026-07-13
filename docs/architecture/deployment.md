@@ -53,18 +53,35 @@ tooling generates, "re-read on expiry" never happens.
 
 Operational consequences:
 
-- After issuing a grant to a live stack, push the updated claims to the
-  broker (`$SYS.REQ.CLAIMS.UPDATE`) or restart the broker so the resolver
-  re-reads them. The e2e harness does the push; the production node does
-  not yet do it automatically (tracked as a roadmap item: live claims push).
-- A dir-resolver deployment has the same property: dropping a new JWT file
-  into the resolver directory does not update already-connected accounts.
+- **The node pushes updated claims automatically** when its sys-user
+  credentials are configured (`sys-user-jwt-file` / `sys-user-seed-file`):
+  every grant is pushed to the running broker
+  (`$SYS.REQ.ACCOUNT.<account>.CLAIMS.UPDATE`) as part of issuing it, and
+  the grant RPC fails loudly if the push cannot be confirmed. The quickstart
+  provisions this out of the box, with the sys user narrowed to exactly the
+  node account's claims-update subject. Treat the sys-user files as trust
+  material regardless — in production guard them like signing keys.
+- **Fallback runbook** (sys user not configured, or recovering from an
+  outage): push the updated claims manually (`nsc push`, or a request to
+  `$SYS.REQ.ACCOUNT.<account>.CLAIMS.UPDATE` — the per-account subject is
+  served by every resolver type) or restart the broker so the resolver
+  re-reads them.
+- The broker should resolve accounts from the SAME directory the node
+  publishes JWTs into (the quickstart runs the nats directory resolver over
+  it). A memory resolver with a baked `resolver_preload` goes stale the
+  moment a grant lands and resurrects old claims on broker restart — do not
+  deploy that shape beyond static single-account setups.
+- Both parties rewrite JWT files in that directory in place (the node's
+  publisher on grants, the broker's resolver on claims-update saves), so
+  **the broker and the node must run under the same uid** (the quickstart
+  does) — the publishers re-tighten file modes on every write, so split-uid
+  arrangements cannot keep the files mutually writable today.
 
-Symptom when missed: `chain subscribe` succeeds (the control-plane record is
-written) but no events flow — the broker silently drops the ungranted
-subject. Nothing errors; the negative capstone tests pin exactly this
-behavior as the *security* posture, which is why the operational side needs
-this note.
+Symptom when the push is missing: `chain subscribe` succeeds (the
+control-plane record is written) but no events flow — the broker silently
+drops the ungranted subject. Nothing errors; the negative capstone tests pin
+exactly this behavior as the *security* posture, which is why the
+operational side needs this note.
 
 ## Health endpoints
 

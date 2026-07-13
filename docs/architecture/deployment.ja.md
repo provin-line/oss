@@ -32,10 +32,12 @@ NATS operator mode は account の接続時（または JWT 失効時）に acco
 
 運用上の帰結:
 
-- 稼働中スタックに grant を発行したら、更新済み claims を broker に push（`$SYS.REQ.CLAIMS.UPDATE`）するか broker を再起動して再読込させる。e2e ハーネスは push を行うが、production ノードはまだ自動では行わない（roadmap 項目: live claims push）。
-- dir resolver 構成でも同じ性質: resolver ディレクトリに新しい JWT ファイルを置いても、接続済み account には反映されない。
+- **ノードは更新済み claims を自動で push する**（sys-user 資格情報 — `sys-user-jwt-file` / `sys-user-seed-file` — を設定した場合）: grant の発行処理の一部として稼働中 broker に push（`$SYS.REQ.ACCOUNT.<account>.CLAIMS.UPDATE`）し、push が確認できなければ grant RPC は loud に失敗する。quickstart はこれを標準で配備し、sys user はこの node account の claims-update subject だけに narrow 済み。それでも sys-user ファイルは trust 資材 — production では署名鍵と同格に保護する。
+- **fallback runbook**（sys user 未設定・障害復旧時）: 手動で claims を push（`nsc push`、または全 resolver 種別が応答する per-account subject `$SYS.REQ.ACCOUNT.<account>.CLAIMS.UPDATE` への request）するか、broker を再起動して再読込させる。
+- broker はノードが JWT を publish するのと**同じディレクトリ**から account を解決すべき（quickstart は nats directory resolver をその上で走らせる）。conf に bake した `resolver_preload` 付き memory resolver は、grant が載った瞬間に stale 化し、broker 再起動で旧 claims を復活させる — static な単一 account 構成以外でこの形はデプロイしないこと。
+- そのディレクトリの JWT ファイルは双方が in-place で書き換える（node の publisher は grant 時、broker の resolver は claims-update 保存時）。**broker と node は同一 uid で走らせる必要がある**（quickstart はそうしている）。publisher は書き込みごとにファイルモードを締め直すため、uid を分けた構成では相互書き込み可能な状態を今は維持できない。
 
-見落とした時の症状: `chain subscribe` は成功する（コントロールプレーンの record は書かれる）のにイベントが流れない — broker は grant されていない subject を黙って落とす。何もエラーにならない。負系 capstone テストがまさにこの挙動を**セキュリティ**姿勢として pin しているからこそ、運用側にはこの注意書きが要る。
+push が無い時の症状: `chain subscribe` は成功する（コントロールプレーンの record は書かれる）のにイベントが流れない — broker は grant されていない subject を黙って落とす。何もエラーにならない。負系 capstone テストがまさにこの挙動を**セキュリティ**姿勢として pin しているからこそ、運用側にはこの注意書きが要る。
 
 ## Health エンドポイント
 

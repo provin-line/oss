@@ -42,6 +42,9 @@ func TestProvision(t *testing.T) {
 	for _, rel := range []string{
 		"operator.seed",
 		"acme-account.seed",
+		"sys-account.seed",
+		"sys-user.jwt",
+		"sys-user.seed",
 		filepath.Join("nats", "operator.jwt"),
 		filepath.Join("nats", "nats-server.conf"),
 	} {
@@ -90,8 +93,73 @@ func TestProvision(t *testing.T) {
 	if !strings.Contains(conf, wantOpRef) {
 		t.Errorf("nats-server.conf does not reference the operator jwt at its written path (%q):\n%s", wantOpRef, conf)
 	}
-	if !strings.Contains(conf, accPub) {
-		t.Errorf("nats-server.conf resolver_preload is missing the account %q:\n%s", accPub, conf)
+	// The broker resolves accounts from the SAME directory the node's
+	// DirPublisher writes and the live claims push saves into — one source of
+	// truth across broker restarts (no baked preload snapshot to go stale).
+	if !strings.Contains(conf, "type: full") || !strings.Contains(conf, filepath.Join(dir, "jwts")) {
+		t.Errorf("nats-server.conf must run the directory resolver over the jwts dir:\n%s", conf)
+	}
+	if strings.Contains(conf, "resolver_preload") || strings.Contains(conf, "MEMORY") {
+		t.Errorf("nats-server.conf still bakes a preload snapshot (stale-claims class):\n%s", conf)
+	}
+
+	// System account: configured in the broker, resolvable from the jwts dir,
+	// its JWT signed by the operator.
+	sysSeed := mustRead(t, filepath.Join(dir, "sys-account.seed"))
+	sysKP, err := nkeys.FromSeed(sysSeed)
+	if err != nil {
+		t.Fatalf("sys account seed not an nkey seed: %v", err)
+	}
+	sysPub, _ := sysKP.PublicKey()
+	if !strings.Contains(conf, "system_account: "+sysPub) {
+		t.Errorf("nats-server.conf missing system_account %q:\n%s", sysPub, conf)
+	}
+	sysJWT := mustRead(t, filepath.Join(dir, "jwts", sysPub+".jwt"))
+	sysClaims, err := jwt.DecodeAccountClaims(strings.TrimSpace(string(sysJWT)))
+	if err != nil {
+		t.Fatalf("sys account jwt does not decode: %v", err)
+	}
+	if sysClaims.Subject != sysPub || sysClaims.Issuer != opPub {
+		t.Errorf("sys account jwt subject/issuer = %q/%q, want %q/%q", sysClaims.Subject, sysClaims.Issuer, sysPub, opPub)
+	}
+
+	// Sys user: signed by the sys account, NARROWED to exactly this node's
+	// claims-update subject plus the request-reply inbox — a leaked quickstart
+	// credential must not be a broker admin credential.
+	userClaims, err := jwt.DecodeUserClaims(strings.TrimSpace(string(mustRead(t, filepath.Join(dir, "sys-user.jwt")))))
+	if err != nil {
+		t.Fatalf("sys-user.jwt does not decode: %v", err)
+	}
+	if userClaims.Issuer != sysPub {
+		t.Errorf("sys user issuer = %q, want sys account %q", userClaims.Issuer, sysPub)
+	}
+	wantUpdate := "$SYS.REQ.ACCOUNT." + accPub + ".CLAIMS.UPDATE"
+	if got := userClaims.Permissions.Pub.Allow; len(got) != 1 || got[0] != wantUpdate {
+		t.Errorf("sys user pub allow = %v, want exactly [%s]", got, wantUpdate)
+	}
+	if got := userClaims.Permissions.Sub.Allow; len(got) != 1 || got[0] != "_INBOX.>" {
+		t.Errorf("sys user sub allow = %v, want exactly [_INBOX.>]", got)
+	}
+	userSeed := mustRead(t, filepath.Join(dir, "sys-user.seed"))
+	userKP, err := nkeys.FromSeed(userSeed)
+	if err != nil {
+		t.Fatalf("sys user seed not an nkey seed: %v", err)
+	}
+	userPub, _ := userKP.PublicKey()
+	if userClaims.Subject != userPub {
+		t.Errorf("sys-user.jwt subject = %q, want the sys-user seed's key %q (jwt/seed pairing)", userClaims.Subject, userPub)
+	}
+
+	// The node (a non-root uid) must be able to READ the sys-user credentials
+	// the root provisioner wrote — same dev posture as the account seed.
+	for _, rel := range []string{"sys-user.jwt", "sys-user.seed", "sys-account.seed"} {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if info.Mode().Perm()&0o044 == 0 {
+			t.Errorf("%s mode %v is not world-readable — the node uid cannot load it", rel, info.Mode().Perm())
+		}
 	}
 }
 
@@ -174,12 +242,23 @@ func TestProvision_Idempotent_ReusesExistingMaterial(t *testing.T) {
 	}
 	accPub, _ := accKP.PublicKey()
 
+	sysSeed := mustRead(t, filepath.Join(dir, "sys-account.seed"))
+	sysKP, err := nkeys.FromSeed(sysSeed)
+	if err != nil {
+		t.Fatalf("sys account seed not an nkey seed: %v", err)
+	}
+	sysPub, _ := sysKP.PublicKey()
+
 	artifacts := []string{
 		"operator.seed",
 		"acme-account.seed",
+		"sys-account.seed",
+		"sys-user.jwt",
+		"sys-user.seed",
 		filepath.Join("nats", "operator.jwt"),
 		filepath.Join("nats", "nats-server.conf"),
 		filepath.Join("jwts", accPub+".jwt"),
+		filepath.Join("jwts", sysPub+".jwt"),
 	}
 	before := map[string][]byte{}
 	for _, rel := range artifacts {

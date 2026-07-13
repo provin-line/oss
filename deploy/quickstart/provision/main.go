@@ -9,12 +9,17 @@
  */
 
 // Command provision lays down the operator-mode NATS trust material the
-// quickstart's broker and standalone node consume — an operator trust root, one
-// account, the account's claims JWT in a resolver directory, and a broker config
-// that preloads it. It mirrors a production deployment's out-of-band NATS
-// provisioning (the same shape the provin.e2e compose harness generates per
-// run), so the quickstart commits no cryptographic seeds: every artifact is
-// generated fresh into a git-ignored directory before `docker compose up`.
+// quickstart's broker and standalone node consume — an operator trust root, the
+// node's account, a system account with a narrowed claims-push user, the
+// account-claims JWTs in a resolver directory, and a broker config running the
+// directory resolver over that same directory. One directory is the single
+// source of truth: the node's DirPublisher writes it, the broker's first
+// lookups read it, and the live claims push saves into it — so grants survive
+// broker restarts with no baked snapshot to go stale. It mirrors a production
+// deployment's out-of-band NATS provisioning (the same shape the provin.e2e
+// compose harness generates per run), so the quickstart commits no
+// cryptographic seeds: every artifact is generated fresh into a git-ignored
+// directory before `docker compose up`.
 //
 // This is NATS decentralized-auth material only (nkey seeds, account JWTs). The
 // separate HS256 shared secret used by the auth.provider / policy-verifier /
@@ -76,9 +81,13 @@ func main() {
 //
 //	<out>/operator.seed              operator (trust-root) nkey seed
 //	<out>/<account>-account.seed     account nkey seed
+//	<out>/sys-account.seed           system-account nkey seed
+//	<out>/sys-user.jwt               narrowed claims-push user JWT (node cred)
+//	<out>/sys-user.seed              its USER nkey seed
 //	<out>/nats/operator.jwt          self-signed operator JWT (broker trust anchor)
-//	<out>/nats/nats-server.conf      operator-mode config preloading the account
+//	<out>/nats/nats-server.conf      operator-mode config, directory resolver
 //	<out>/jwts/<accountPub>.jwt      account-claims JWT (resolver dir)
+//	<out>/jwts/<sysPub>.jwt          system-account claims JWT (resolver dir)
 func provision(cfg config) error {
 	jwtsDir := filepath.Join(cfg.outDir, "jwts")
 	natsDir := filepath.Join(cfg.outDir, "nats")
@@ -98,13 +107,16 @@ func provision(cfg config) error {
 		// Re-apply the shared-volume permissions: the node's DirPublisher
 		// republishes the account JWT as 0600 owned by the node's uid (see
 		// dirpublisher.go), and this provisioner (root) is the only party that
-		// can widen it back for every other reader on the next cycle.
+		// can widen it back for every other reader on the next cycle. The
+		// broker's directory resolver ALSO rewrites JWTs on claims-update
+		// saves, so the same widening applies each cycle.
 		if err := os.Chmod(jwtsDir, 0o777); err != nil {
 			return fmt.Errorf("chmod jwts dir: %w", err)
 		}
 		if err := os.Chmod(filepath.Join(jwtsDir, accPub+".jwt"), 0o644); err != nil {
 			return fmt.Errorf("chmod account jwt: %w", err)
 		}
+		chownAllTo(jwtsDir, nodeUID)
 		fmt.Println("reusing existing NATS trust material (delete the volume — docker compose down -v — to regenerate)")
 		return writeServiceOverlay(cfg)
 	}
@@ -187,7 +199,24 @@ func provision(cfg config) error {
 		return fmt.Errorf("chmod account jwt: %w", err)
 	}
 
-	if err := writeBrokerConfig(natsDir, jwtsDir, accPub); err != nil {
+	// System account + the node's narrowed claims-push user: what lets a grant
+	// issued to the LIVE stack take effect without a broker restart.
+	sysPub, err := provisionSystemAccount(cfg, op, jwtsDir, accPub)
+	if err != nil {
+		return err
+	}
+
+	// The broker's directory resolver both READS these JWTs on lookup and
+	// WRITES them on a live claims-update save (os.WriteFile in place, no
+	// rename) — while the node's DirPublisher re-publishes them 0600
+	// node-owned. Cross-uid access would EACCES either party, so the compose
+	// file runs the broker under the node's uid and this provisioner (root in
+	// the container) hands the resolver dir's contents to that uid.
+	// Best-effort: chown needs root, so running the tool outside the container
+	// (tests, a manual invocation) skips it.
+	chownAllTo(jwtsDir, nodeUID)
+
+	if err := writeBrokerConfig(natsDir, jwtsDir, sysPub); err != nil {
 		return err
 	}
 
@@ -198,18 +227,41 @@ func provision(cfg config) error {
 	return nil
 }
 
+// nodeUID is the uid the standalone image runs as (cmd/standalone/Dockerfile)
+// and, via the compose file's `user:`, the broker too — shared ownership of
+// the resolver dir is what lets both re-write account JWTs in place.
+const nodeUID = 10001
+
+// chownAllTo hands dir and every entry in it to uid (same gid). Best-effort:
+// outside the root provisioning container (e.g. under `go test`) chown is not
+// permitted and the dev machine's single-uid situation needs none.
+func chownAllTo(dir string, uid int) {
+	_ = os.Chown(dir, uid, uid)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		_ = os.Chown(filepath.Join(dir, e.Name()), uid, uid)
+	}
+}
+
 // hasCompleteMaterial reports whether cfg.outDir already holds a complete,
 // internally consistent set of trust artifacts from an earlier run, returning
-// the existing account public key when it does. Complete = all four core files
-// exist AND the resolver dir holds the claims JWT for the account seed's own
-// public key (the cross-reference the broker preload and the node both depend
-// on). Zero core files = a fresh volume (generate). Anything in between = an
-// interrupted run; fail closed with reset guidance rather than mixing artifact
-// generations.
+// the existing account public key when it does. Complete = all core files
+// exist AND the resolver dir holds the claims JWTs for the account and system
+// account AND the broker config runs the directory resolver with that system
+// account (the cross-references broker and node both depend on). Zero core
+// files = a fresh volume (generate). Anything in between = an interrupted run
+// OR material from a pre-directory-resolver quickstart; fail closed with
+// reset guidance rather than mixing artifact generations.
 func hasCompleteMaterial(cfg config, jwtsDir, natsDir string) (string, bool, error) {
 	core := []string{
 		filepath.Join(cfg.outDir, "operator.seed"),
 		filepath.Join(cfg.outDir, cfg.account+"-account.seed"),
+		filepath.Join(cfg.outDir, "sys-account.seed"),
+		filepath.Join(cfg.outDir, "sys-user.jwt"),
+		filepath.Join(cfg.outDir, "sys-user.seed"),
 		filepath.Join(natsDir, "operator.jwt"),
 		filepath.Join(natsDir, "nats-server.conf"),
 	}
@@ -248,15 +300,74 @@ func hasCompleteMaterial(cfg config, jwtsDir, natsDir string) (string, bool, err
 		}
 		return "", false, fmt.Errorf("stat account claims jwt: %w", err)
 	}
-	// The broker config must preload THIS account: a truncated or foreign
-	// nats-server.conf would otherwise reuse-boot the broker without operator
-	// mode — the one silent failure in the set (everything else fails loudly).
+	sysSeed, err := os.ReadFile(filepath.Join(cfg.outDir, "sys-account.seed"))
+	if err != nil {
+		return "", false, fmt.Errorf("read existing sys account seed: %w", err)
+	}
+	sysKP, err := nkeys.FromSeed(sysSeed)
+	if err != nil {
+		return "", false, partial("sys account seed is not a valid nkey seed")
+	}
+	sysPub, err := sysKP.PublicKey()
+	if err != nil {
+		return "", false, fmt.Errorf("existing sys account public key: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(jwtsDir, sysPub+".jwt")); err != nil {
+		if os.IsNotExist(err) {
+			return "", false, partial("resolver dir is missing the system-account claims JWT")
+		}
+		return "", false, fmt.Errorf("stat sys account claims jwt: %w", err)
+	}
+	// The sys-user credentials must pair with each other and with THIS
+	// account generation: a mixed or tampered volume would otherwise reuse-
+	// boot a node whose every grant burns the push budget on a permission
+	// violation the error does not name.
+	userJWT, err := os.ReadFile(filepath.Join(cfg.outDir, "sys-user.jwt"))
+	if err != nil {
+		return "", false, fmt.Errorf("read existing sys-user jwt: %w", err)
+	}
+	userClaims, err := jwt.DecodeUserClaims(strings.TrimSpace(string(userJWT)))
+	if err != nil {
+		return "", false, partial("sys-user.jwt does not decode as user claims")
+	}
+	userSeed, err := os.ReadFile(filepath.Join(cfg.outDir, "sys-user.seed"))
+	if err != nil {
+		return "", false, fmt.Errorf("read existing sys-user seed: %w", err)
+	}
+	userKP, err := nkeys.FromSeed(userSeed)
+	if err != nil {
+		return "", false, partial("sys-user seed is not a valid nkey seed")
+	}
+	userPub, err := userKP.PublicKey()
+	if err != nil {
+		return "", false, fmt.Errorf("existing sys-user public key: %w", err)
+	}
+	if userClaims.Subject != userPub {
+		return "", false, partial("sys-user.jwt subject does not match sys-user.seed (mixed generations)")
+	}
+	if userClaims.Issuer != sysPub {
+		return "", false, partial("sys-user.jwt is not issued by the existing system account")
+	}
+	if want := "$SYS.REQ.ACCOUNT." + accPub + ".CLAIMS.UPDATE"; !userClaims.Permissions.Pub.Allow.Contains(want) {
+		return "", false, partial("sys-user.jwt is not scoped to the existing account's claims-update subject")
+	}
+	// The broker config must run the directory resolver over THIS resolver dir
+	// with THIS system account: a truncated, foreign, or pre-migration
+	// (memory-resolver) nats-server.conf would otherwise reuse-boot a broker
+	// that goes stale on the first live grant — the one silent failure in the
+	// set (everything else fails loudly).
 	conf, err := os.ReadFile(filepath.Join(natsDir, "nats-server.conf"))
 	if err != nil {
 		return "", false, fmt.Errorf("read existing nats-server.conf: %w", err)
 	}
-	if !strings.Contains(string(conf), accPub) {
-		return "", false, partial("nats-server.conf does not preload the existing account")
+	if !strings.Contains(string(conf), "system_account: "+sysPub) {
+		return "", false, partial("nats-server.conf does not configure the existing system account")
+	}
+	if !strings.Contains(string(conf), "type: full") {
+		return "", false, partial("nats-server.conf does not run the directory resolver (pre-migration material)")
+	}
+	if !strings.Contains(string(conf), "dir: '"+jwtsDir+"'") {
+		return "", false, partial("nats-server.conf resolver dir does not point at the resolver directory")
 	}
 	return accPub, true, nil
 }
@@ -310,23 +421,86 @@ func mintHS256(secret string, claims map[string]any) (string, error) {
 	return signingInput + "." + b64(mac.Sum(nil)), nil
 }
 
-// writeBrokerConfig renders nats-server.conf: operator-mode with a memory
-// resolver that preloads the account's claims JWT (static claims; a single-node
-// quickstart needs no cross-account grants). The operator-JWT path it references
-// is <natsDir>/operator.jwt — the same path this tool wrote it to, which is
-// valid inside the broker container because the compose file mounts the output
-// directory at the identical path there.
-func writeBrokerConfig(natsDir, jwtsDir, accPub string) error {
-	accJWT, err := os.ReadFile(filepath.Join(jwtsDir, accPub+".jwt"))
+// provisionSystemAccount creates the system account (operator-signed, claims
+// JWT into the resolver dir) and the node's claims-push user. The user is
+// NARROWED to publishing exactly the node account's claims-update subject and
+// subscribing to request-reply inboxes: a leaked quickstart credential is a
+// "re-push this one account's claims" capability, not a broker admin key.
+// (Nuance: the broker's dir handler saves any structurally valid JWT whose
+// subject matches, without checking its issuer against the trusted operator —
+// so a leaked cred can clobber the resolver file with a foreign-signed JWT,
+// making the account unresolvable: a DoS, not a privilege escalation.)
+// Files are world-readable like the rest of the dev material (the node runs
+// as a non-root uid).
+func provisionSystemAccount(cfg config, op nkeys.KeyPair, jwtsDir, accPub string) (string, error) {
+	sys, err := nkeys.CreateAccount()
 	if err != nil {
-		return fmt.Errorf("read account jwt: %w", err)
+		return "", fmt.Errorf("create system account: %w", err)
 	}
+	sysSeed, err := sys.Seed()
+	if err != nil {
+		return "", fmt.Errorf("system account seed: %w", err)
+	}
+	sysPub, err := sys.PublicKey()
+	if err != nil {
+		return "", fmt.Errorf("system account public key: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.outDir, "sys-account.seed"), sysSeed, 0o644); err != nil {
+		return "", fmt.Errorf("write system account seed: %w", err)
+	}
+	sysClaims := jwt.NewAccountClaims(sysPub)
+	sysClaims.Name = "SYS"
+	sysJWT, err := sysClaims.Encode(op)
+	if err != nil {
+		return "", fmt.Errorf("encode system account jwt: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(jwtsDir, sysPub+".jwt"), []byte(sysJWT), 0o644); err != nil {
+		return "", fmt.Errorf("write system account jwt: %w", err)
+	}
+
+	user, err := nkeys.CreateUser()
+	if err != nil {
+		return "", fmt.Errorf("create sys user: %w", err)
+	}
+	userSeed, err := user.Seed()
+	if err != nil {
+		return "", fmt.Errorf("sys user seed: %w", err)
+	}
+	userPub, err := user.PublicKey()
+	if err != nil {
+		return "", fmt.Errorf("sys user public key: %w", err)
+	}
+	userClaims := jwt.NewUserClaims(userPub)
+	userClaims.Name = "claims-push"
+	userClaims.Permissions.Pub.Allow.Add("$SYS.REQ.ACCOUNT." + accPub + ".CLAIMS.UPDATE")
+	userClaims.Permissions.Sub.Allow.Add("_INBOX.>")
+	userJWT, err := userClaims.Encode(sys)
+	if err != nil {
+		return "", fmt.Errorf("encode sys user jwt: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.outDir, "sys-user.jwt"), []byte(userJWT), 0o644); err != nil {
+		return "", fmt.Errorf("write sys user jwt: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.outDir, "sys-user.seed"), userSeed, 0o644); err != nil {
+		return "", fmt.Errorf("write sys user seed: %w", err)
+	}
+	return sysPub, nil
+}
+
+// writeBrokerConfig renders nats-server.conf: operator-mode with the DIRECTORY
+// account resolver over the same jwts dir the node's DirPublisher writes and
+// the claims push saves into — one source of truth, so a broker restart serves
+// current claims (a memory-resolver preload would be a snapshot that goes
+// stale the moment a grant lands). The operator-JWT path it references is
+// <natsDir>/operator.jwt — the same path this tool wrote it to, which is valid
+// inside the broker container because the compose file mounts the output
+// directory at the identical path there.
+func writeBrokerConfig(natsDir, jwtsDir, sysPub string) error {
 	var b strings.Builder
 	b.WriteString("port: 4222\nhttp: 8222\n")
 	fmt.Fprintf(&b, "operator: %s\n", filepath.Join(natsDir, "operator.jwt"))
-	b.WriteString("resolver: MEMORY\nresolver_preload: {\n")
-	fmt.Fprintf(&b, "  %s: %q\n", accPub, strings.TrimSpace(string(accJWT)))
-	b.WriteString("}\n")
+	fmt.Fprintf(&b, "system_account: %s\n", sysPub)
+	fmt.Fprintf(&b, "resolver {\n  type: full\n  dir: '%s'\n  allow_delete: false\n  interval: \"2m\"\n}\n", jwtsDir)
 	if err := os.WriteFile(filepath.Join(natsDir, "nats-server.conf"), []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("write nats-server.conf: %w", err)
 	}

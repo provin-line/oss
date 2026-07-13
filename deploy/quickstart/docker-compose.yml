@@ -29,7 +29,14 @@ services:
       - provisioned:/provisioned
 
   nats:
-    image: nats:2.10
+    # Pinned to the same server line the repo's broker-contract tests run
+    # against (the claims-update API the node's live push depends on).
+    image: nats:2.12.6
+    # Same uid as the standalone node (cmd/standalone/Dockerfile): the broker's
+    # directory resolver and the node's DirPublisher both rewrite account JWTs
+    # in the shared resolver dir, so they must share ownership (provision
+    # chowns the dir to this uid).
+    user: "10001"
     command: ["-c", "/provisioned/nats/nats-server.conf"]
     volumes:
       - provisioned:/provisioned
