@@ -4,6 +4,28 @@ import (
 	_ "embed"
 )
 
+// contextCredentialsV2Document is the byte-exact copy of the W3C Verifiable
+// Credentials v2 base context, retrieved verbatim from
+// https://www.w3.org/ns/credentials/v2 (a permanently-cacheable static
+// document). The VCDM 2.0 specification publishes its normative sha256 —
+// pinned by TestCredentialsV2ContextMatchesNormativeDigest — so any
+// divergence from the official bytes, however it happens, fails the build's
+// tests. The RDFC (eddsa-rdfc-2022) canonicalization expands every
+// credential against this document, so its bytes sit inside the signing
+// scope the same way the two protocol contexts below do. Embedded at
+// compile time, never fetched at runtime.
+//
+//go:embed contexts/credentials-v2.jsonld
+var contextCredentialsV2Document []byte
+
+// ContextCredentialsV2Document returns the W3C credentials/v2 base context
+// document (defensive copy) served at ContextCredentialsV2.
+func ContextCredentialsV2Document() []byte {
+	out := make([]byte, len(contextCredentialsV2Document))
+	copy(out, contextCredentialsV2Document)
+	return out
+}
+
 // contextDplaaxVCV1Document is the vendored byte-exact copy of the dplaax
 // protocol context (canonical: dplaax.spec_draft contexts/v1.jsonld). The
 // @context array rides the signing scope as bytes, so any divergence from

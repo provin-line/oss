@@ -13,8 +13,20 @@ func TestRegisterCryptosuite_JCSRegisteredAtInit(t *testing.T) {
 	}
 }
 
+// The Phase-2 suite is registered by init() after passing the expansion
+// probe, backed by URDNA2015.
+func TestRegisterCryptosuite_RDFCRegisteredAtInit(t *testing.T) {
+	c, err := canonicalizerFor(CryptosuiteEdDSARDFC2022)
+	if err != nil {
+		t.Fatalf("eddsa-rdfc-2022 must be registered at init: %v", err)
+	}
+	if got := c.Name(); got != "urdna2015" {
+		t.Errorf("eddsa-rdfc-2022 canonicalizer = %q, want urdna2015", got)
+	}
+}
+
 func TestCanonicalizerFor_Unknown(t *testing.T) {
-	if _, err := canonicalizerFor("eddsa-rdfc-2022"); err == nil {
+	if _, err := canonicalizerFor("eddsa-nonexistent-9999"); err == nil {
 		t.Error("unregistered cryptosuite: want error")
 	}
 }

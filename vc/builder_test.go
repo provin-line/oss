@@ -71,7 +71,7 @@ func TestBuilder_BuildChainPreserving_NilPredecessor(t *testing.T) {
 
 func TestBuilder_WithCryptosuite_Unregistered(t *testing.T) {
 	signer, _, _ := fixture(t)
-	b := vc.NewBuilder(signer, vc.WithCryptosuite("eddsa-rdfc-2022"))
+	b := vc.NewBuilder(signer, vc.WithCryptosuite("eddsa-nonexistent-9999"))
 	if _, err := b.BuildFirstDrop(issuerDID, string(keystore.KeyIDSigning), vmID, sampleSubject(), nil); err == nil {
 		t.Error("building with an unregistered cryptosuite: want error")
 	}

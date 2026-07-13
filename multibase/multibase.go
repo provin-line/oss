@@ -1,4 +1,15 @@
-package vc
+// Package multibase implements the multiformats multibase encoding for the
+// self-describing byte strings this repository puts on the wire: Data
+// Integrity proofValue and Multikey publicKeyMultibase, both base58btc
+// ("z" prefix).
+//
+// It is the single codec shared by every producer and consumer (vc, did):
+// two independent base58 implementations diverging on an edge case would
+// partition signature verification from key decoding, so the codec is
+// frozen here once. Decoding is fail-closed: a value that does not carry
+// the expected multibase prefix is rejected rather than mis-decoded under
+// another base.
+package multibase
 
 import (
 	"fmt"
@@ -8,6 +19,26 @@ import (
 
 // base58Alphabet is the Bitcoin base58 alphabet (no 0, O, I, l).
 const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+// base58BtcPrefix is the multibase code for base58btc.
+const base58BtcPrefix = "z"
+
+// EncodeBase58Btc encodes data as multibase base58btc ("z" prefix) — the
+// proofValue and publicKeyMultibase encoding.
+func EncodeBase58Btc(data []byte) string {
+	return base58BtcPrefix + base58Encode(data)
+}
+
+// DecodeBase58Btc decodes a multibase base58btc value. A value that does not
+// carry the "z" prefix is rejected rather than mis-decoded under another base
+// (defense against a verifier accepting a differently-encoded value).
+func DecodeBase58Btc(s string) ([]byte, error) {
+	rest, ok := strings.CutPrefix(s, base58BtcPrefix)
+	if !ok {
+		return nil, fmt.Errorf("multibase: value %q is not base58btc (missing %q prefix)", s, base58BtcPrefix)
+	}
+	return base58Decode(rest)
+}
 
 // base58Encode encodes b in Bitcoin base58. Each leading zero byte becomes a
 // leading "1" (base58 of zero), per the standard.
@@ -59,24 +90,4 @@ func base58Decode(s string) ([]byte, error) {
 	out := make([]byte, zeros+len(decoded))
 	copy(out[zeros:], decoded)
 	return out, nil
-}
-
-// multibaseBase58Prefix is the multibase code for base58btc.
-const multibaseBase58Prefix = "z"
-
-// multibaseEncodeBase58 encodes data as multibase base58btc ("z" prefix) — the
-// proofValue encoding for Data Integrity proofs.
-func multibaseEncodeBase58(data []byte) string {
-	return multibaseBase58Prefix + base58Encode(data)
-}
-
-// multibaseDecodeBase58 decodes a multibase base58btc value. A value that does
-// not carry the "z" prefix is rejected rather than mis-decoded under another
-// base (defense against a verifier accepting a differently-encoded proofValue).
-func multibaseDecodeBase58(s string) ([]byte, error) {
-	rest, ok := strings.CutPrefix(s, multibaseBase58Prefix)
-	if !ok {
-		return nil, fmt.Errorf("multibase: value %q is not base58btc (missing %q prefix)", s, multibaseBase58Prefix)
-	}
-	return base58Decode(rest)
 }

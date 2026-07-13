@@ -1,6 +1,7 @@
 package did
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/multibase"
 )
 
 // DIDDocument is the W3C DID Document model served by registries.
@@ -43,13 +45,23 @@ const (
 	keyService            = "service"
 )
 
-// VerificationMethod is a public key entry in a DID Document. Keys are
-// expressed as JWK (type "JsonWebKey2020"); the PoC supports OKP/Ed25519.
+// VerificationMethod is a public key entry in a DID Document. Two key
+// encodings are read, selected by Type: JWK (type "JsonWebKey2020",
+// publicKeyJwk) and Multikey (type "Multikey", publicKeyMultibase). The type
+// and the encoding are mutually exclusive — a method carrying the encoding
+// its type does not name, or both encodings at once, is rejected at
+// extraction (see ExtractPublicKey). Documents this repository ISSUES use the
+// JWK form; Multikey is a read capability for interoperating with W3C
+// Data Integrity verifiers and controller documents. The PoC supports
+// Ed25519 keys in both encodings.
 type VerificationMethod struct {
 	ID           string         `json:"id"`
 	Type         string         `json:"type"`
 	Controller   string         `json:"controller"`
 	PublicKeyJWK map[string]any `json:"publicKeyJwk,omitempty"`
+	// PublicKeyMultibase is the Multikey encoding: multibase base58btc ("z")
+	// over multicodec ed25519-pub (0xed01) + 32 raw key bytes.
+	PublicKeyMultibase string `json:"publicKeyMultibase,omitempty"`
 }
 
 // ServiceEndpoint is a service entry in a DID Document (e.g. #vc-resolver,
@@ -230,14 +242,18 @@ func (vm VerificationMethod) toMap() map[string]any {
 	if vm.PublicKeyJWK != nil {
 		m["publicKeyJwk"] = deepCopyMap(vm.PublicKeyJWK)
 	}
+	if vm.PublicKeyMultibase != "" {
+		m["publicKeyMultibase"] = vm.PublicKeyMultibase
+	}
 	return m
 }
 
 func vmFromMap(m map[string]any) VerificationMethod {
 	vm := VerificationMethod{
-		ID:         getString(m, "id"),
-		Type:       getString(m, "type"),
-		Controller: getString(m, "controller"),
+		ID:                 getString(m, "id"),
+		Type:               getString(m, "type"),
+		Controller:         getString(m, "controller"),
+		PublicKeyMultibase: getString(m, "publicKeyMultibase"),
 	}
 	if jwk, ok := m["publicKeyJwk"].(map[string]any); ok {
 		vm.PublicKeyJWK = deepCopyMap(jwk)
@@ -272,10 +288,12 @@ const (
 // document. This is the single extraction implementation in the repository —
 // consumers must not maintain copies.
 //
-// The PoC supports OKP/Ed25519 JWKs only. The relationship and controller
-// checks are security gates: a key not listed under the required relationship,
-// or whose controller is not the document subject, is rejected (key-confusion
-// and cross-document injection defense).
+// The PoC supports Ed25519 keys, as OKP JWKs (type "JsonWebKey2020") or as
+// Multikey (type "Multikey"). The relationship and controller checks are
+// security gates: a key not listed under the required relationship, or whose
+// controller is not the document subject, is rejected (key-confusion and
+// cross-document injection defense). The method type and its key encoding are
+// enforced as mutually exclusive — see decodeVMPublicKey.
 func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationship) ([]byte, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("did: nil document")
@@ -336,7 +354,64 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 		return nil, fmt.Errorf("did: verification method controller %q != document %q", vm.Controller, subject)
 	}
 
-	return decodeEd25519JWK(vm.PublicKeyJWK)
+	return decodeVMPublicKey(vm)
+}
+
+// Verification method types whose key encodings this package reads.
+const (
+	vmTypeJSONWebKey2020 = "JsonWebKey2020"
+	vmTypeMultikey       = "Multikey"
+)
+
+// decodeVMPublicKey extracts the raw public key bytes for a verification
+// method, enforcing type↔encoding exclusivity: a Multikey method must carry
+// publicKeyMultibase and nothing else; a JsonWebKey2020 method must carry
+// publicKeyJwk and nothing else. A method with both encodings, an encoding
+// contradicting its type, or an unrecognized type is rejected — never
+// resolved by silently picking one encoding, because a dual-encoded method
+// whose encodings disagree would let key identity depend on which reader
+// looked (an alternate wire shape this profile does not freeze).
+func decodeVMPublicKey(vm *VerificationMethod) ([]byte, error) {
+	switch vm.Type {
+	case vmTypeMultikey:
+		if vm.PublicKeyJWK != nil {
+			return nil, fmt.Errorf("did: Multikey method %q also carries publicKeyJwk (type and encoding are exclusive)", vm.ID)
+		}
+		if vm.PublicKeyMultibase == "" {
+			return nil, fmt.Errorf("did: Multikey method %q has no publicKeyMultibase", vm.ID)
+		}
+		return decodeEd25519Multikey(vm.PublicKeyMultibase)
+	case vmTypeJSONWebKey2020:
+		if vm.PublicKeyMultibase != "" {
+			return nil, fmt.Errorf("did: JsonWebKey2020 method %q also carries publicKeyMultibase (type and encoding are exclusive)", vm.ID)
+		}
+		return decodeEd25519JWK(vm.PublicKeyJWK)
+	default:
+		return nil, fmt.Errorf("did: unsupported verification method type %q (want %q or %q)", vm.Type, vmTypeJSONWebKey2020, vmTypeMultikey)
+	}
+}
+
+// ed25519PubMulticodec is the multicodec varint prefix for ed25519-pub
+// (0xed01) that leads every Ed25519 Multikey value.
+var ed25519PubMulticodec = []byte{0xed, 0x01}
+
+// decodeEd25519Multikey extracts the 32-byte Ed25519 public key from a
+// Multikey publicKeyMultibase value: multibase base58btc ("z" prefix) over
+// the ed25519-pub multicodec prefix + raw key. Any other multibase base,
+// multicodec, or key length fails closed.
+func decodeEd25519Multikey(s string) ([]byte, error) {
+	raw, err := multibase.DecodeBase58Btc(s)
+	if err != nil {
+		return nil, fmt.Errorf("did: publicKeyMultibase: %w", err)
+	}
+	if len(raw) < len(ed25519PubMulticodec) || !bytes.Equal(raw[:len(ed25519PubMulticodec)], ed25519PubMulticodec) {
+		return nil, fmt.Errorf("did: publicKeyMultibase is not an ed25519-pub Multikey (want multicodec 0xed01 prefix)")
+	}
+	key := raw[len(ed25519PubMulticodec):]
+	if len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	}
+	return key, nil
 }
 
 // absoluteKeyID resolves a DID URL key reference to its absolute form against

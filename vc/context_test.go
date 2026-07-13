@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/provin-line/oss/vc"
@@ -66,10 +67,73 @@ func TestProvinContextGroundsClaimNamespace(t *testing.T) {
 	}
 }
 
+// The sha256 the W3C VCDM 2.0 specification publishes for its base context
+// (https://www.w3.org/ns/credentials/v2, a permanently-cacheable static
+// document). Pinning the NORMATIVE digest — not a digest of whatever was
+// fetched on vendoring day — means a copy that diverges from the official
+// bytes by even one byte fails here, however the divergence happened.
+const contextCredentialsV2SHA256 = "59955ced6697d61e03f2b2556febe5308ab16842846f5b586d7f1f7adec92734"
+
+func TestCredentialsV2ContextMatchesNormativeDigest(t *testing.T) {
+	sum := sha256.Sum256(vc.ContextCredentialsV2Document())
+	if got := hex.EncodeToString(sum[:]); got != contextCredentialsV2SHA256 {
+		t.Errorf("embedded credentials/v2 sha256 = %s, want the W3C-published %s (re-fetch verbatim from https://www.w3.org/ns/credentials/v2)", got, contextCredentialsV2SHA256)
+	}
+}
+
+// The embedded credentials/v2 must be self-contained: RDFC expansion runs
+// against an offline allowlist, so a nested remote context reference (a
+// string or array @context inside any term definition) would either fail at
+// runtime or, worse, demand widening the allowlist. The W3C document embeds
+// all its scoped contexts inline; this pins that property.
+func TestCredentialsV2ContextSelfContained(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(vc.ContextCredentialsV2Document(), &doc); err != nil {
+		t.Fatalf("credentials/v2 is not valid JSON: %v", err)
+	}
+	// What breaks the offline loader is a nested @context value that names a
+	// REMOTE document: a string IRI, or an array containing one. An inline
+	// object and a null (JSON-LD's context reset) are self-contained.
+	remoteRef := func(v any) bool {
+		switch t2 := v.(type) {
+		case string:
+			return true
+		case []any:
+			for _, e := range t2 {
+				if _, isStr := e.(string); isStr {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var walk func(v any, path string)
+	walk = func(v any, path string) {
+		switch t2 := v.(type) {
+		case map[string]any:
+			for k, e := range t2 {
+				if k == "@context" && path != "" && remoteRef(e) {
+					t.Errorf("nested @context at %s references a remote document (%v) — breaks the offline loader", path, e)
+				}
+				if k == "@import" {
+					t.Errorf("@import at %s: the embedded context must be self-contained", path)
+				}
+				walk(e, path+"/"+k)
+			}
+		case []any:
+			for i, e := range t2 {
+				walk(e, fmt.Sprintf("%s[%d]", path, i))
+			}
+		}
+	}
+	walk(doc, "")
+}
+
 func TestContextDocumentDefensiveCopy(t *testing.T) {
 	for name, accessor := range map[string]func() []byte{
-		"ContextDplaaxVCV1Document": vc.ContextDplaaxVCV1Document,
-		"ContextProvinVCV1Document": vc.ContextProvinVCV1Document,
+		"ContextDplaaxVCV1Document":    vc.ContextDplaaxVCV1Document,
+		"ContextProvinVCV1Document":    vc.ContextProvinVCV1Document,
+		"ContextCredentialsV2Document": vc.ContextCredentialsV2Document,
 	} {
 		a := accessor()
 		a[0] = '!'

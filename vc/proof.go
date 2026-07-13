@@ -8,6 +8,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/multibase"
 )
 
 // Data Integrity proof constants for the provin profile: every issued proof is
@@ -55,7 +56,7 @@ func CreateProof(
 		VerificationMethod: verificationMethod,
 		ProofPurpose:       proofPurposeSign,
 		Created:            created,
-		ProofValue:         multibaseEncodeBase58(sig),
+		ProofValue:         multibase.EncodeBase58Btc(sig),
 	}, nil
 }
 
@@ -104,7 +105,7 @@ func VerifyProof(
 	if err != nil {
 		return err
 	}
-	sig, err := multibaseDecodeBase58(proof.ProofValue)
+	sig, err := multibase.DecodeBase58Btc(proof.ProofValue)
 	if err != nil {
 		return fmt.Errorf("vc: decode proofValue: %w", err)
 	}

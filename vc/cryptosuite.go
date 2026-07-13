@@ -3,9 +3,11 @@ package vc
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/canon/urdna2015"
 )
 
 // Wire identifiers of the supported proof cryptosuites.
@@ -81,4 +83,62 @@ func init() {
 	// eddsa-jcs-2022 is the Phase-1 MUST suite: JCS canonicalization. JCS needs
 	// no IRI-expansion probe (it is structural, not RDF-based).
 	RegisterCryptosuite(CryptosuiteEdDSAJCS2022, jcs.Canonicalizer{})
+
+	// eddsa-rdfc-2022: URDNA2015 canonicalization over the three frozen
+	// context documents, resolved offline from the embedded copies — a
+	// credential referencing any other context IRI fails rather than fetches.
+	// The suite is registered only after the expansion probe passes.
+	rdfc := urdna2015.NewCanonicalizer(map[string][]byte{
+		ContextCredentialsV2: contextCredentialsV2Document,
+		ContextDplaaxVCV1:    contextDplaaxVCV1Document,
+		ContextProvinVCV1:    contextProvinVCV1Document,
+	})
+	probeRDFC(rdfc)
+	RegisterCryptosuite(CryptosuiteEdDSARDFC2022, rdfc)
 }
+
+// probeRDFC canonicalizes a full-shape provin credential (every wire member:
+// schema, hashes, chain link, source commitment) and its proof config through
+// c, panicking on any error. It runs at init: an embedded-context omission or
+// a wire term no frozen context defines must fail process startup loudly —
+// a binary whose RDF canonicalization cannot cover the wire vocabulary would
+// otherwise refuse (or worse, partition) every rdfc proof it touches at
+// runtime.
+func probeRDFC(c canon.Canonicalizer) {
+	cred, err := New(CredentialFields{
+		Issuer:    "did:dplaax:probe.dplaax.dev:org:probe:pipeline:p:process:s",
+		ValidFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: CredentialSubjectFields{
+			PipelineID:          "p",
+			ProcessID:           "s",
+			TransformationClaim: ClaimAggregate,
+			Schema:              SchemaRef{ID: SchemaURI("probe", "1.0.0"), Type: "JsonSchema", ContentHash: "sha256:" + probeHex},
+			InputHash:           "sha256:" + probeHex,
+			OutputHash:          "sha256:" + probeHex,
+		},
+		PreviousCredential: "sha256:" + probeHex,
+		SourceCommitment: &SourceCommitment{
+			DerivedFrom:         []string{"sha256:" + probeHex},
+			SourceRoot:          "f1220" + probeHex,
+			SourceRootCanonical: "rfc6962-sha256",
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("vc: rdfc probe credential: %v", err))
+	}
+	doc := cred.Body()
+	if _, err := c.Canonicalize(doc); err != nil {
+		panic(fmt.Sprintf("vc: rdfc expansion probe (credential): %v", err))
+	}
+	ctx, hasCtx := doc[keyContext]
+	cfg := proofConfigMap(proofType, CryptosuiteEdDSARDFC2022,
+		"did:dplaax:probe.dplaax.dev:org:probe:pipeline:p:process:s#signing",
+		proofPurposeSign, "2026-01-01T00:00:00Z", ctx, hasCtx)
+	if _, err := c.Canonicalize(cfg); err != nil {
+		panic(fmt.Sprintf("vc: rdfc expansion probe (proof config): %v", err))
+	}
+}
+
+// probeHex is a fixed 64-hex filler for the probe credential's content
+// addresses.
+const probeHex = "abababababababababababababababababababababababababababababababab"

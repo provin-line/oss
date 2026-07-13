@@ -12,7 +12,7 @@ JSON 署名スコープの決定論的なバイト表現と、それを保護す
 | パス | アルゴリズム | 状態 |
 | --- | --- | --- |
 | `canon/jcs` | RFC 8785 JSON Canonicalization Scheme（Phase 1 暗号スイート、MUST） | 実装済み |
-| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Normalization（Phase 2、MAY） | **未実装** — API スキャフォールドのみ。コンストラクタと `Canonicalize` は panic する。これが実装されるまで `eddsa-rdfc-2022` 暗号スイートは使用不可 |
+| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Canonicalization（URDNA2015）（Phase 2、MAY） | 実装済み — `piprate/json-gold` をオフラインの context allowlist（ネットワークには決して出ない）の背後にラップし、JSON-LD 処理が署名スコープから暗黙に落とすもの（未定義 term・相対 `@id`/`@type` 値・数値メンバー（2^53 切り捨て））はすべて fail-closed で拒否する。公式 W3C vc-di-eddsa test vector にアンカー |
 
 ## 厳守ルール
 
