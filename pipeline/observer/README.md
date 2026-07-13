@@ -7,10 +7,13 @@
 
 The **extension point is live**: `contract.ProcessObserver` is defined, every
 runtime (`ingest`, `aggregate`, `chained`, `sink`) carries an `Observers` config
-field, and observers are invoked fire-and-forget after every outcome. The two
-subpackages here are **planned, not yet implemented** (empty placeholders):
+field, and observers are invoked fire-and-forget after every outcome.
+`logobserver/` ships as a reference implementation; `vcobserver/` is planned:
 
-- `logobserver/` — (planned) structured logging of event fields.
+- `logobserver/` — a reference `ProcessObserver`: emits each event's fields as
+  one structured `slog` record (status, hashes, role-named VC refs, confidence,
+  filtered step). Minimal and dependency-free — the template to copy for a real
+  adapter. Opt-in: it is not wired into any runtime by default.
 - `vcobserver/` — (planned) a store-backed observer. The audit-critical storage
   paths ship WITHOUT it today: issued credentials are published to the network
   VC store by the data-plane wiring's VC-store client (`cmd/standalone`,

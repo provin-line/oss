@@ -42,7 +42,6 @@ ingress VC verification (strategy: adjacent — the only ingress strategy;
 
 - `filter/` — `Filter` インターフェース（`Apply(ctx, data) (*Result, error)`）；`jsonata/` 実装（起動時に式をプリコンパイル；すべてが truthy であればパス）
 - `converter/` — `Converter` インターフェース + サブセット出力バリデータ；`jsonata/` 実装（ドキュメント全体モードとシーケンシャルなフィールド別ステップモード）
-- `cmd/` — スタンドアロンなランタイムバイナリ用に予約。**まだ未実装**。PoC では chained ループは `cmd/standalone`（データプレーン配線）内で動く
 
 ## エラーセマンティクス（PoC）
 

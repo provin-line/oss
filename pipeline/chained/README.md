@@ -49,8 +49,6 @@ cross-event state would make the process a Source Process.
   implementation (expressions pre-compiled at startup; all must be truthy to pass)
 - `converter/` — `Converter` interface + subset output validator; `jsonata/`
   implementation (whole-document mode and sequential per-field steps mode)
-- `cmd/` — reserved for a standalone runtime binary; **not yet populated**. The
-  PoC runs chained loops inside `cmd/standalone` (data-plane wiring)
 
 ## Error semantics (PoC)
 

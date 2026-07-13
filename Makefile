@@ -17,7 +17,6 @@ help:
 # Binaries land here as their packages materialize:
 #   cmd/standalone                → $(DIST)/standalone   [built]
 #   cmd/provin                    → $(DIST)/provin       [built]
-#   pipeline/chained/cmd          → $(DIST)/chained
 #   pipeline/sink/console         → $(DIST)/console-sink
 build:
 	mkdir -p $(DIST)
