@@ -91,7 +91,9 @@ type Fold interface {
 // aggregate runtime exercises (only the aggregate FirstDrop path). Depending on
 // this rather than the wider provenance.SourceSigner keeps SignFirstDrop off the
 // aggregate's surface (interface segregation; slice-17k D-17k-3). *vcdid.Signer
-// and the publishing decorator both satisfy it.
+// and the publishing decorator both satisfy it. payload is the aggregate output
+// bytes; a non-nil payload is defensively checked against outputHash (see the
+// provenance package doc). The aggregate runtime passes the real output bytes.
 type aggregateFirstDropSigner interface {
 	SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error)
 }

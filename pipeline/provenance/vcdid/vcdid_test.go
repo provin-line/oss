@@ -2,6 +2,8 @@ package vcdid_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"testing"
 
@@ -96,7 +98,7 @@ func TestSigner_SignFirstDrop_SignsAndVerifies(t *testing.T) {
 	b, pub := fixture(t)
 	s := newSigner(t, b, nil)
 
-	cred, err := s.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:out")
+	cred, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:out")
 	if err != nil {
 		t.Fatalf("SignFirstDrop: %v", err)
 	}
@@ -122,13 +124,13 @@ func TestSigner_SignChainPreserving_LinksAndVerifies(t *testing.T) {
 	b, pub := fixture(t)
 	s := newSigner(t, b, nil)
 
-	prev, err := s.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:mid")
+	prev, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:mid")
 	if err != nil {
 		t.Fatalf("predecessor SignFirstDrop: %v", err)
 	}
 	prevHash, _ := prev.Hash()
 
-	cred, err := s.SignChainPreserving(context.Background(), []byte(`{"x":1}`), "sha256:mid", "sha256:out", prev)
+	cred, err := s.SignChainPreserving(context.Background(), nil, "sha256:mid", "sha256:out", prev)
 	if err != nil {
 		t.Fatalf("SignChainPreserving: %v", err)
 	}
@@ -149,11 +151,11 @@ func TestSigner_AuditReachable_AttachesCommitment(t *testing.T) {
 		c.SourceRootCanonical = vc.SourceRootCanonicalJCS
 	})
 
-	prev, err := s.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:mid")
+	prev, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:mid")
 	if err != nil {
 		t.Fatalf("predecessor: %v", err)
 	}
-	cred, err := s.SignChainPreserving(context.Background(), []byte(`{"x":1}`), "sha256:mid", "sha256:out", prev)
+	cred, err := s.SignChainPreserving(context.Background(), nil, "sha256:mid", "sha256:out", prev)
 	if err != nil {
 		t.Fatalf("SignChainPreserving: %v", err)
 	}
@@ -193,7 +195,7 @@ func TestSigner_SignChainPreserving_NilPredecessor(t *testing.T) {
 				c.SourceRootCanonical = vc.SourceRootCanonicalJCS
 			}
 		})
-		if _, err := s.SignChainPreserving(context.Background(), []byte(`{}`), "sha256:in", "sha256:out", nil); err == nil {
+		if _, err := s.SignChainPreserving(context.Background(), nil, "sha256:in", "sha256:out", nil); err == nil {
 			t.Errorf("SignChainPreserving(nil predecessor, audit=%v): want error", audit)
 		}
 	}
@@ -258,7 +260,7 @@ func TestSigner_SignFirstDrop_EmitsSchema(t *testing.T) {
 		ContentHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 	s := newSigner(t, b, func(c *vcdid.Config) { c.Schema = ref })
-	cred, err := s.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:out")
+	cred, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:out")
 	if err != nil {
 		t.Fatalf("SignFirstDrop: %v", err)
 	}
@@ -271,7 +273,7 @@ func TestSigner_SignFirstDrop_EmitsSchema(t *testing.T) {
 	}
 
 	none := newSigner(t, b, nil)
-	c2, err := none.SignFirstDrop(context.Background(), []byte(`{"x":1}`), "sha256:in", "sha256:out")
+	c2, err := none.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:out")
 	if err != nil {
 		t.Fatalf("SignFirstDrop (no schema): %v", err)
 	}
@@ -283,12 +285,81 @@ func TestSigner_SignFirstDrop_EmitsSchema(t *testing.T) {
 	// A chained (re-signing) loop emits the reference too — chained loops declare
 	// the shape of what they re-emit, so the same Config.Schema flows through
 	// SignChainPreserving.
-	chained, err := s.SignChainPreserving(context.Background(), []byte(`{"x":2}`), "sha256:out", "sha256:out2", cred)
+	chained, err := s.SignChainPreserving(context.Background(), nil, "sha256:out", "sha256:out2", cred)
 	if err != nil {
 		t.Fatalf("SignChainPreserving: %v", err)
 	}
 	cs, _ := chained.Subject()
 	if cs.Schema != ref {
 		t.Errorf("chained emitted schema = %+v, want %+v", cs.Schema, ref)
+	}
+}
+
+// mustHash mirrors the pipeline content address for building matching fixtures.
+func mustHash(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// The signer defensively re-verifies the output bytes: it refuses to attest an
+// outputHash the shown payload does not produce, signs when they match, and skips
+// the check for a nil payload (a caller with no bytes, e.g. a sink receipt). A
+// non-nil empty slice is still checked — distinct from nil.
+func TestSigner_DefensivePayloadCheck(t *testing.T) {
+	b, _ := fixture(t)
+	s := newSigner(t, b, nil)
+	agg := newSigner(t, b, func(c *vcdid.Config) {
+		c.TransformationClaim = vc.ClaimAggregate
+		c.SourceRootCanonical = vc.SourceRootCanonicalJCS
+	})
+	ctx := context.Background()
+	payload := []byte(`{"out":true}`)
+	good := mustHash(payload)
+	bad := mustHash([]byte("other bytes"))
+
+	// SignFirstDrop: match signs, mismatch refuses, nil opts out.
+	if _, err := s.SignFirstDrop(ctx, payload, good, good); err != nil {
+		t.Errorf("FirstDrop matching payload: unexpected error %v", err)
+	}
+	if _, err := s.SignFirstDrop(ctx, payload, good, bad); err == nil {
+		t.Error("FirstDrop mismatched payload: want refusal, got nil")
+	}
+	if _, err := s.SignFirstDrop(ctx, nil, good, bad); err != nil {
+		t.Errorf("FirstDrop nil payload (opt-out): unexpected error %v", err)
+	}
+
+	// SignChainPreserving needs a predecessor; same defensive semantics.
+	prev, err := s.SignFirstDrop(ctx, nil, good, good)
+	if err != nil {
+		t.Fatalf("predecessor: %v", err)
+	}
+	if _, err := s.SignChainPreserving(ctx, payload, good, good, prev); err != nil {
+		t.Errorf("ChainPreserving matching payload: %v", err)
+	}
+	if _, err := s.SignChainPreserving(ctx, payload, good, bad, prev); err == nil {
+		t.Error("ChainPreserving mismatched payload: want refusal")
+	}
+	if _, err := s.SignChainPreserving(ctx, nil, good, bad, prev); err != nil {
+		t.Errorf("ChainPreserving nil payload (opt-out): unexpected error %v", err)
+	}
+
+	// SignAggregateFirstDrop: the gate runs after the commitment, still before signing.
+	if _, err := agg.SignAggregateFirstDrop(ctx, payload, good, nil); err != nil {
+		t.Errorf("Aggregate matching payload: %v", err)
+	}
+	if _, err := agg.SignAggregateFirstDrop(ctx, payload, bad, nil); err == nil {
+		t.Error("Aggregate mismatched payload: want refusal")
+	}
+	if _, err := agg.SignAggregateFirstDrop(ctx, nil, bad, nil); err != nil {
+		t.Errorf("Aggregate nil payload (opt-out): unexpected error %v", err)
+	}
+
+	// A non-nil empty slice hashes to sha256("") — checked, not skipped like nil.
+	empty := []byte{}
+	if _, err := s.SignFirstDrop(ctx, empty, mustHash(empty), mustHash(empty)); err != nil {
+		t.Errorf("empty payload matching its own hash: %v", err)
+	}
+	if _, err := s.SignFirstDrop(ctx, empty, good, good); err == nil {
+		t.Error("empty payload against a non-empty hash: want refusal (empty != nil)")
 	}
 }

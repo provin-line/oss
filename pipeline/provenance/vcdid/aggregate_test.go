@@ -45,7 +45,7 @@ func signedSource(t *testing.T, issuer, hash string) *vc.PipelinePassCredential 
 	if err != nil {
 		t.Fatalf("NewSigner(%s): %v", issuer, err)
 	}
-	cred, err := s.SignFirstDrop(context.Background(), []byte(`{"v":1}`), "sha256:"+hash, "sha256:"+hash)
+	cred, err := s.SignFirstDrop(context.Background(), nil, "sha256:"+hash, "sha256:"+hash)
 	if err != nil {
 		t.Fatalf("source SignFirstDrop: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestSigner_SignAggregateFirstDrop_CommitsAndVerifies(t *testing.T) {
 	srcB := signedSource(t, srcBIssuer, "b")
 	sources := []*vc.PipelinePassCredential{srcA, srcB}
 
-	cred, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	cred, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out", sources)
 	if err != nil {
 		t.Fatalf("SignAggregateFirstDrop: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSigner_SignAggregateFirstDrop_CommitsAndVerifies(t *testing.T) {
 func TestSigner_SignAggregateFirstDrop_BatchOfOne(t *testing.T) {
 	s := aggSigner(t)
 	sources := []*vc.PipelinePassCredential{signedSource(t, srcAIssuer, "a")}
-	cred, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	cred, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out", sources)
 	if err != nil {
 		t.Fatalf("SignAggregateFirstDrop(N=1): %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSigner_SignAggregateFirstDrop_BatchOfOne(t *testing.T) {
 func TestSigner_SignAggregateFirstDrop_DuplicateSource(t *testing.T) {
 	s := aggSigner(t)
 	src := signedSource(t, srcAIssuer, "a")
-	if _, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{}`), "sha256:out",
+	if _, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out",
 		[]*vc.PipelinePassCredential{src, src}); err == nil {
 		t.Error("duplicate-content source: want error, got nil")
 	}
@@ -149,7 +149,7 @@ func TestSigner_SignAggregateFirstDrop_DuplicateSource(t *testing.T) {
 // A nil source element fails closed (an error, not a panic) — spec-review M2.
 func TestSigner_SignAggregateFirstDrop_NilSource(t *testing.T) {
 	s := aggSigner(t)
-	if _, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{}`), "sha256:out",
+	if _, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out",
 		[]*vc.PipelinePassCredential{signedSource(t, srcAIssuer, "a"), nil}); err == nil {
 		t.Error("nil source element: want error, got nil")
 	}
@@ -160,7 +160,7 @@ func TestSigner_SignAggregateFirstDrop_NilSource(t *testing.T) {
 // (D-17k-8).
 func TestSigner_SignAggregateFirstDrop_EmptySet(t *testing.T) {
 	s := aggSigner(t)
-	cred, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", nil)
+	cred, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out", nil)
 	if err != nil {
 		t.Fatalf("SignAggregateFirstDrop(empty): %v", err)
 	}
@@ -178,7 +178,7 @@ func TestSigner_SignAggregateFirstDrop_WrongClaimRejected(t *testing.T) {
 		c.TransformationClaim = vc.ClaimConvert
 		c.SourceRootCanonical = vc.SourceRootCanonicalJCS
 	})
-	if _, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{}`), "sha256:out",
+	if _, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out",
 		[]*vc.PipelinePassCredential{signedSource(t, srcAIssuer, "a")}); err == nil {
 		t.Error("non-aggregate claim signer: SignAggregateFirstDrop must be rejected")
 	}
@@ -190,11 +190,11 @@ func TestSigner_SignAggregateFirstDrop_WrongClaimRejected(t *testing.T) {
 // commitment, or a previousCredential link). Binds claim↔method both ways (review P2-b).
 func TestSigner_AggregateSigner_RejectsLegacyPaths(t *testing.T) {
 	s := aggSigner(t)
-	if _, err := s.SignFirstDrop(context.Background(), []byte(`{}`), "sha256:in", "sha256:out"); err == nil {
+	if _, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:out"); err == nil {
 		t.Error("aggregate signer SignFirstDrop: want rejection, got nil")
 	}
 	src := signedSource(t, srcAIssuer, "a")
-	if _, err := s.SignChainPreserving(context.Background(), []byte(`{}`), "sha256:in", "sha256:out", src); err == nil {
+	if _, err := s.SignChainPreserving(context.Background(), nil, "sha256:in", "sha256:out", src); err == nil {
 		t.Error("aggregate signer SignChainPreserving: want rejection, got nil")
 	}
 }
@@ -232,7 +232,7 @@ func TestSigner_SignAggregateFirstDrop_EmitsSchema(t *testing.T) {
 	sources := []*vc.PipelinePassCredential{
 		signedSource(t, "did:dplaax:reg:org:alpha:pipeline:a:process:p1", "sha256:s1"),
 	}
-	cred, err := s.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	cred, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out", sources)
 	if err != nil {
 		t.Fatalf("SignAggregateFirstDrop: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestSigner_SignAggregateFirstDrop_EmitsSchema(t *testing.T) {
 	}
 
 	// And none when unset (aggSigner has no Schema configured).
-	plain, err := aggSigner(t).SignAggregateFirstDrop(context.Background(), []byte(`{"agg":true}`), "sha256:out", sources)
+	plain, err := aggSigner(t).SignAggregateFirstDrop(context.Background(), nil, "sha256:out", sources)
 	if err != nil {
 		t.Fatalf("SignAggregateFirstDrop (no schema): %v", err)
 	}

@@ -247,11 +247,11 @@ func TestRegisteringSigner_AggregateOverridden(t *testing.T) {
 
 	// One signed source to fold (its own issuer); register it so the consumed set is
 	// resolvable, then aggregate over it.
-	src, err := aggSig.SignAggregateFirstDrop(context.Background(), []byte(`{"s":1}`), "sha256:src", nil)
+	src, err := aggSig.SignAggregateFirstDrop(context.Background(), nil, "sha256:src", nil)
 	if err != nil {
 		t.Fatalf("source aggregate sign: %v", err)
 	}
-	cred, err := rs.SignAggregateFirstDrop(context.Background(), []byte(`{"agg":1}`), "sha256:out",
+	cred, err := rs.SignAggregateFirstDrop(context.Background(), nil, "sha256:out",
 		[]*vc.PipelinePassCredential{src})
 	if err != nil {
 		t.Fatalf("registeringSigner.SignAggregateFirstDrop: %v", err)

@@ -16,6 +16,15 @@
 // vc.Builder's BuildChainPreserving / BuildFirstDrop) so one provider
 // value can implement both capabilities — same-named methods with
 // different parameter lists would make that impossible in Go.
+//
+// The payload argument every signing method takes is the output bytes being
+// attested. It is a defensive check, not merely metadata: when payload is
+// non-nil an implementation MUST verify sha256(payload) equals the outputHash it
+// is asked to sign and refuse to sign on mismatch — a signer never attests a
+// hash for bytes it was shown that do not produce it. A caller that holds no
+// bytes to check (e.g. a sink receipt attesting an existing credential's hash)
+// passes nil to skip the check; the guarantee is "verify when supplied", so nil
+// is a deliberate opt-out, not a signer promise about bytes it never saw.
 package provenance
 
 import (

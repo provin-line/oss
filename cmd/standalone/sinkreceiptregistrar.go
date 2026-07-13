@@ -94,7 +94,9 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 		return fmt.Errorf("sinkReceiptRegistrar: consumed credential declares no outputHash")
 	}
 	// A receipt asserts identity over the consumed output: input == output.
-	// payload is unused by SignChainPreserving (the subject carries the hashes).
+	// payload is nil deliberately: the receipt attests an already-signed
+	// credential's OutputHash and the registrar holds no output bytes to
+	// re-hash, so the signer's defensive payload check is skipped (opt-out).
 	receipt, err := r.signer.SignChainPreserving(ctx, nil, subject.OutputHash, subject.OutputHash, consumed)
 	if err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: sign receipt: %w", err)

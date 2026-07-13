@@ -19,6 +19,8 @@ package vcdid
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/provin-line/oss/vc"
@@ -121,6 +123,9 @@ func (s *Signer) SignFirstDrop(ctx context.Context, payload []byte, inputHash, o
 		// commitment — a malformed aggregate. Binds claim↔method both ways.
 		return nil, fmt.Errorf("vcdid: SignFirstDrop is not valid for an aggregate signer (TransformationClaim %q); use SignAggregateFirstDrop", vc.ClaimAggregate)
 	}
+	if err := verifyPayload(payload, outputHash); err != nil {
+		return nil, err
+	}
 	return s.cfg.Builder.BuildFirstDrop(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.subject(inputHash, outputHash), nil)
 }
 
@@ -151,6 +156,11 @@ func (s *Signer) SignChainPreserving(ctx context.Context, payload []byte, inputH
 			return nil, fmt.Errorf("vcdid: source commitment: %w", err)
 		}
 		commitment = c
+	}
+	// Defensive gate last, immediately before signing (see verifyPayload): every
+	// structural/misuse error surfaces as itself, never masked by a payload mismatch.
+	if err := verifyPayload(payload, outputHash); err != nil {
+		return nil, err
 	}
 	return s.cfg.Builder.BuildChainPreserving(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.subject(inputHash, outputHash), predecessor, commitment)
 }
@@ -183,11 +193,41 @@ func (s *Signer) SignAggregateFirstDrop(ctx context.Context, payload []byte, out
 			return nil, fmt.Errorf("vcdid: nil source credential at index %d", i)
 		}
 	}
+	// NewSourceCommitment also fails closed on a duplicate-content source; running
+	// it before the payload gate keeps that (and every structural) error surfacing
+	// as itself rather than as a payload mismatch.
 	commitment, err := vc.NewSourceCommitment(sources, s.cfg.SourceRootCanonical)
 	if err != nil {
 		return nil, fmt.Errorf("vcdid: source commitment: %w", err)
 	}
+	// Defensive gate last, immediately before signing (see verifyPayload).
+	if err := verifyPayload(payload, outputHash); err != nil {
+		return nil, err
+	}
 	return s.cfg.Builder.BuildFirstDrop(s.cfg.IssuerDID, s.cfg.KeyID, s.cfg.VerificationMethod, s.aggregateSubject(outputHash), commitment)
+}
+
+// hashPayload is the content address of payload — "sha256:" + lowercase hex of
+// sha256(payload) — matching the pipeline packages (ingest/chained/sink/aggregate)
+// so a recomputed hash compares byte-for-byte against the outputHash they emit.
+func hashPayload(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// verifyPayload is the defensive gate: a signer must never attest an outputHash
+// for output bytes it was shown that do not produce it. When payload is nil the
+// caller supplied no bytes to check (e.g. a sink receipt over an existing
+// credential's hash), so the check is skipped — not failed. A non-nil (even
+// empty) payload IS checked: a genuinely empty output hashes to sha256("").
+func verifyPayload(payload []byte, outputHash string) error {
+	if payload == nil {
+		return nil
+	}
+	if got := hashPayload(payload); got != outputHash {
+		return fmt.Errorf("vcdid: refusing to sign — payload hash %s does not match outputHash %s", got, outputHash)
+	}
+	return nil
 }
 
 // subject assembles the credential subject from the process's constant metadata
