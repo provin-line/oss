@@ -6,8 +6,8 @@
     "credential": {
       "@context": [
         "https://www.w3.org/ns/credentials/v2",
-        "https://poc.dplaax.dev/vc/v1",
-        "https://poc.provin.dev/vc/v1"
+        "https://dplaax.dev/vc/v1",
+        "https://provin.dev/vc/v1"
       ],
       "type": [
         "VerifiableCredential",
@@ -39,8 +39,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "credentialSubject": {
           "inputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -67,8 +67,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "credentialSubject": {
           "inputHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -95,8 +95,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "credentialSubject": {
           "inputHash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",

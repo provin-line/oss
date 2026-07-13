@@ -7,8 +7,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "type": [
           "VerifiableCredential",
@@ -34,8 +34,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "type": [
           "VerifiableCredential",
@@ -48,7 +48,7 @@
           "processId": "proc-x",
           "transformationClaim": "provin:convert",
           "outputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "previousCredential": "sha256:6cd573c99462e8c14cc1f8c2d7f18d47a75404f80044526312d7047c5f69dd50"
+          "previousCredential": "sha256:339406c2602d964ee1fae1222814b452484061e58819ef6f7100ca5b81d4a64f"
         },
         "proof": {
           "type": "DataIntegrityProof",

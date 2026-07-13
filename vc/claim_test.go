@@ -135,8 +135,8 @@ func TestValidateTransformationClaimOnWireDocuments(t *testing.T) {
 		  }
 		}`
 	}
-	known := `"https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.dev/vc/v1"`
-	withProvin := known + `, "https://poc.provin.dev/vc/v1"`
+	known := `"https://www.w3.org/ns/credentials/v2", "https://dplaax.dev/vc/v1"`
+	withProvin := known + `, "https://provin.dev/vc/v1"`
 	withForeign := withProvin + `, "https://acme.example/vc/v1"`
 
 	cases := []struct {
@@ -178,7 +178,7 @@ func TestValidateTransformationClaimOnWireDocuments(t *testing.T) {
 func TestValidateTransformationClaimInlineContextIsEnumerated(t *testing.T) {
 	wire := func(inline, claim string) string {
 		return `{
-		  "@context": ["https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.dev/vc/v1", ` + inline + `],
+		  "@context": ["https://www.w3.org/ns/credentials/v2", "https://dplaax.dev/vc/v1", ` + inline + `],
 		  "type": ["VerifiableCredential", "PipelinePassCredential"],
 		  "issuer": "did:dplaax:poc.dplaax.dev:org:acme:process:p1",
 		  "validFrom": "2026-06-11T00:00:00Z",
@@ -218,7 +218,7 @@ func TestValidateTransformationClaimInlineContextIsEnumerated(t *testing.T) {
 func TestValidateTransformationClaimErrorMentionsClaim(t *testing.T) {
 	var cred vc.PipelinePassCredential
 	if err := cred.UnmarshalJSON([]byte(`{
-	  "@context": ["https://www.w3.org/ns/credentials/v2", "https://poc.dplaax.dev/vc/v1"],
+	  "@context": ["https://www.w3.org/ns/credentials/v2", "https://dplaax.dev/vc/v1"],
 	  "type": ["VerifiableCredential", "PipelinePassCredential"],
 	  "issuer": "did:x:y",
 	  "credentialSubject": {"transformationClaim": "filter"}

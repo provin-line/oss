@@ -6,7 +6,7 @@
   ],
   "description": "provin profile context document — byte ledger (sha256) and the prefix grounding it carries",
   "input": {
-    "context_uri": "https://poc.provin.dev/vc/v1"
+    "context_uri": "https://provin.dev/vc/v1"
   },
   "expect": {
     "sha256": "35c8066d47eba1c0c284632f3b390fdb525162b45f5629b31457b030e41a9b86",

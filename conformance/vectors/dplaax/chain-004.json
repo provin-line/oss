@@ -8,8 +8,8 @@
     "credential": {
       "@context": [
         "https://www.w3.org/ns/credentials/v2",
-        "https://poc.dplaax.dev/vc/v1",
-        "https://poc.provin.dev/vc/v1"
+        "https://dplaax.dev/vc/v1",
+        "https://provin.dev/vc/v1"
       ],
       "type": [
         "VerifiableCredential",

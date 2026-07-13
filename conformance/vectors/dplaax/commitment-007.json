@@ -7,8 +7,8 @@
       {
         "@context": [
           "https://www.w3.org/ns/credentials/v2",
-          "https://poc.dplaax.dev/vc/v1",
-          "https://poc.provin.dev/vc/v1"
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
         ],
         "credentialSubject": {
           "inputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -39,7 +39,7 @@
     "derived_from": [
       "did:dplaax:poc.dplaax.dev:org:mineA:pipeline:m:process:s"
     ],
-    "source_root": "f12205ebd215e502f30be68a2df071d7eaf56b7cce0508e780261a52a8846030c4082",
+    "source_root": "f12209b928a4afda548fd8947ed964c1b71adb5ea299757edb785eeb4f951e8996f02",
     "source_root_canonical": "jcs-rfc8785"
   }
 }

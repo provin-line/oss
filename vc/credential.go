@@ -18,17 +18,19 @@ import (
 // ContextDplaaxVCV1 is the dplaax protocol context (canonical document
 // owned by the spec, vendored byte-exact here — see
 // ContextDplaaxVCV1Document); a profile may append its own extension
-// context for profile-owned custom subject fields. The poc.* tier
-// explicitly permits pre-GA byte-level context evolution; at GA the URI
-// promotes to https://dplaax.dev/vc/v1 and freezes.
+// context for profile-owned custom subject fields. These URIs are frozen
+// as the v0 wire vocabulary: the @context array rides the signing scope as
+// bytes, so repointing either is a cross-implementation hash partition — a
+// next-MAJOR break, not a compatible change.
 const (
 	ContextCredentialsV2 = "https://www.w3.org/ns/credentials/v2"
-	ContextDplaaxVCV1    = "https://poc.dplaax.dev/vc/v1"
+	ContextDplaaxVCV1    = "https://dplaax.dev/vc/v1"
 	// ContextProvinVCV1 is the provin profile context: grounds the "provin"
 	// claim namespace prefix (credential.claim.grounding) and hosts
-	// profile-owned custom subject field terms. poc tier — the provin.dev
-	// domain acquisition must be confirmed before external deployment.
-	ContextProvinVCV1 = "https://poc.provin.dev/vc/v1"
+	// profile-owned custom subject field terms. Frozen as v0 wire; served
+	// from the provin.dev profile domain, but the embedded document is the
+	// canonical source, so protocol dereferencing never depends on hosting.
+	ContextProvinVCV1 = "https://provin.dev/vc/v1"
 )
 
 // PipelinePassCredential is the per-event provenance credential.

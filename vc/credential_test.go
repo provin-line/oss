@@ -153,7 +153,7 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	// The @context array is the signing-scope contract: protocol context
 	// plus the provin profile context that grounds the claim namespace.
 	if !strings.Contains(string(wire),
-		`"@context":["https://www.w3.org/ns/credentials/v2","https://poc.dplaax.dev/vc/v1","https://poc.provin.dev/vc/v1"]`) {
+		`"@context":["https://www.w3.org/ns/credentials/v2","https://dplaax.dev/vc/v1","https://provin.dev/vc/v1"]`) {
 		t.Errorf("wire form missing expected @context array: %s", wire)
 	}
 	var rt vc.PipelinePassCredential
