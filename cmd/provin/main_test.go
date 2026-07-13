@@ -404,3 +404,29 @@ func TestRun_EvidenceRotate_RequiresDir(t *testing.T) {
 		t.Fatalf("want required error, got %v", err)
 	}
 }
+
+// The bundle exporter defaults to the COMPLETE scope: parsing a flag-omitted
+// invocation must yield aggregate-complete = true (offline verification
+// completeness by default; =false is the documented opt-out for a v1
+// linear-only bundle). This parses the REAL FlagSet, so flipping the default
+// back cannot pass silently — and the usage text must keep advertising the
+// opt-out form.
+func TestRun_BundleExport_AggregateCompleteDefaultsOn(t *testing.T) {
+	fs, o := bundleExportFlagSet()
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse([]string{"--head", "sha256:x", "--out", "dir"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !*o.aggregateComplete {
+		t.Fatal("--aggregate-complete must default to TRUE (completeness by default)")
+	}
+	if err := fs.Parse([]string{"--aggregate-complete=false"}); err != nil {
+		t.Fatalf("parse opt-out: %v", err)
+	}
+	if *o.aggregateComplete {
+		t.Fatal("--aggregate-complete=false must opt out")
+	}
+	if !strings.Contains(usage, "--aggregate-complete=false") {
+		t.Fatal("top-level usage must advertise the =false opt-out")
+	}
+}

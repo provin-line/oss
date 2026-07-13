@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"connectrpc.com/connect"
 
@@ -52,6 +51,12 @@ type BundleExportConfig struct {
 	// of the frozen bundle convention; overridden endpoints still pass the
 	// SSRF guard. Unmapped registries use the advertisement.
 	VCResolverBases map[string]string
+	// AuditBases overrides the DID-advertised #audit endpoint per registry
+	// id — the audit-specific split-horizon seam, deliberately independent
+	// of DIDBases so DID resolution and receipt routing can be overridden
+	// separately. Unmapped registries use the advertisement, then the
+	// legacy fallback (DIDBases → https://{registry}).
+	AuditBases map[string]string
 }
 
 // BundleExport archives head's chain and authority documents into cfg.Out
@@ -80,6 +85,7 @@ func BundleExport(ctx context.Context, env Env, cfg BundleExportConfig) error {
 			docs:       docs,
 			didBases:   cfg.DIDBases,
 			vcResolver: cfg.VCResolverBases,
+			auditBases: cfg.AuditBases,
 			audit:      map[string]auditClient{},
 			vcs:        map[string]vcpbconnect.VCResolverServiceClient{},
 		}
@@ -163,12 +169,14 @@ func confidence(s vc.ConfidenceState) string {
 }
 
 // wireConsumedSource is the CLI's bundle.ConsumedSetSource: receipt fetches
-// route by the issuer's REGISTRY base (the --did-base map; unmapped falls
-// through to https://{registry} — a #audit service advertisement is the
-// recorded follow-up for a stable derivation), while source-credential
-// fetches follow the repo's NORMATIVE pattern: the issuer DID document's
-// single advertised #vc-resolver service endpoint (the batch resolver's
-// derivation). Routing is operational, not part of the frozen convention.
+// route --audit-base override → the issuer DID document's #audit service
+// advertisement (the stable derivation) → the legacy registry base
+// (--did-base map / https://{registry}) when no advertisement exists —
+// documents issued before the advertisement existed keep working. Source-
+// credential fetches follow the repo's NORMATIVE pattern: the issuer DID
+// document's single advertised #vc-resolver service endpoint (the batch
+// resolver's derivation). Routing is operational, not part of the frozen
+// convention.
 // Every derived endpoint (issuer registry base, DID-advertised service) is
 // UNTRUSTED input — a hostile credential naming did:dplaax:127.0.0.1:… or a
 // DID document advertising a metadata URL must not turn the exporter into a
@@ -182,6 +190,7 @@ type wireConsumedSource struct {
 	docs       *didresolver.Resolver
 	didBases   map[string]string
 	vcResolver map[string]string // registry -> #vc-resolver override (split-horizon)
+	auditBases map[string]string // registry -> #audit override (audit-specific split-horizon)
 	audit      map[string]auditClient
 	vcs        map[string]vcpbconnect.VCResolverServiceClient
 }
@@ -200,8 +209,56 @@ func (s *wireConsumedSource) registryBase(issuerDID string) (string, error) {
 	return didresolver.DefaultBaseURL(d.Registry)
 }
 
+// auditEndpoint resolves where an issuer's audit receipts can be fetched:
+// the audit-specific override when the operator mapped the issuer's registry
+// (--audit-base), otherwise the stable derivation — the single #audit
+// AuditService the issuer's DID document advertises — falling back to the
+// legacy registry base (--did-base / https://{registry}) when the document
+// advertises none (documents embed services at issuance; older documents
+// carry no #audit). Exactly-one matching advertisement is enforced: two or
+// more is ambiguous, and a matching advertisement with an empty endpoint is
+// an error, never a silent fallback. Sending the bearer to the derived
+// endpoint is the same single-token PoC trust model as the #vc-resolver
+// derivation and the legacy fallback (all issuer-controlled destinations);
+// destination-scoped credentials are a post-v0 roadmap item.
+func (s *wireConsumedSource) auditEndpoint(ctx context.Context, issuerDID string) (string, error) {
+	d, err := dplaax.Parse(issuerDID)
+	if err != nil {
+		return "", fmt.Errorf("bundle export: issuer %q: %w", issuerDID, err)
+	}
+	if base, ok := s.auditBases[d.Registry]; ok {
+		return base, nil
+	}
+	doc, err := s.docs.Resolve(ctx, issuerDID)
+	if err != nil {
+		return "", fmt.Errorf("bundle export: resolve issuer %s for its #audit endpoint: %w", issuerDID, err)
+	}
+	var endpoint string
+	var n int
+	for _, svc := range doc.Service() {
+		// Exact-id match (bare fragment or THIS issuer's re-anchored id): a
+		// service whose id is another URI merely ending in "#audit" is not
+		// this issuer's advertisement and must not capture routing.
+		if svc.Type == "AuditService" && (svc.ID == "#audit" || svc.ID == issuerDID+"#audit") {
+			endpoint = svc.ServiceEndpoint
+			n++
+		}
+	}
+	switch {
+	case n > 1:
+		return "", fmt.Errorf("bundle export: issuer %s advertises %d #audit AuditServices, want at most one", issuerDID, n)
+	case n == 1:
+		if endpoint == "" {
+			return "", fmt.Errorf("bundle export: issuer %s advertises an #audit AuditService with an empty endpoint", issuerDID)
+		}
+		return endpoint, nil
+	default:
+		return s.registryBase(issuerDID)
+	}
+}
+
 func (s *wireConsumedSource) FetchConsumed(ctx context.Context, issuerDID, headHash string) ([]string, error) {
-	base, err := s.registryBase(issuerDID)
+	base, err := s.auditEndpoint(ctx, issuerDID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +342,10 @@ func (s *wireConsumedSource) vcResolverEndpoint(ctx context.Context, issuerDID s
 	var endpoint string
 	var n int
 	for _, svc := range doc.Service() {
-		if svc.Type == "VCResolver" && strings.HasSuffix(svc.ID, "#vc-resolver") {
+		// Same exact-id rule as auditEndpoint: suffix matching would let a
+		// foreign URI ending in "#vc-resolver" capture or shadow the issuer's
+		// own advertisement.
+		if svc.Type == "VCResolver" && (svc.ID == "#vc-resolver" || svc.ID == issuerDID+"#vc-resolver") {
 			endpoint = svc.ServiceEndpoint
 			n++
 		}

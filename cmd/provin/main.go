@@ -51,7 +51,7 @@ Implemented:
   pipeline create     --did <target-did> --owner-key <path>  issue a pipeline DID
   process  create     --did <target-did> --owner-key <path>  issue a process DID
   bundle   export     --head <sha256:hex> --out <dir>        archive a chain + its authority documents
-                      [--aggregate-complete] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]...
+                      [--aggregate-complete=false] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]... [--audit-base <registry>=<url>]...
                       [--allow-loopback] [--allow-private] [--max-depth <n>]
   bundle   verify     --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
                                                               re-verify a bundle offline (no network)
@@ -203,33 +203,54 @@ func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(
 	return create(ctx, env, *did, *ownerKey)
 }
 
-func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
+// bundleExportOpts carries bundle export's parsed flags. Split from
+// bundleExport so a test can parse a flag-omitted invocation and assert the
+// ACTUAL defaults (the usage text alone cannot pin them).
+type bundleExportOpts struct {
+	registry, token   *string
+	head, out         *string
+	didBases          map[string]string
+	vcResolverBases   map[string]string
+	auditBases        map[string]string
+	aggregateComplete *bool
+	allowLoopback     *bool
+	allowPrivate      *bool
+	maxDepth          *int
+}
+
+func bundleExportFlagSet() (*flag.FlagSet, *bundleExportOpts) {
 	fs := flag.NewFlagSet("bundle export", flag.ContinueOnError)
-	registry, token := globalFlags(fs)
-	head := fs.String("head", "", "chain head content address sha256:<hex> (required)")
-	out := fs.String("out", "", "bundle directory to create; must not exist (required)")
-	didBases := map[string]string{}
-	fs.Func("did-base", "map a registry id to a DID-resolution base URL, <registry>=<url> (repeatable; unmapped registries default to https://<registry>)", func(v string) error {
-		reg, base, ok := strings.Cut(v, "=")
-		if !ok || reg == "" || base == "" {
-			return fmt.Errorf("want <registry>=<url>, got %q", v)
-		}
-		didBases[reg] = base
-		return nil
-	})
-	aggregateComplete := fs.Bool("aggregate-complete", false, "walk through aggregate boundaries: bundle consumed sources so source commitments re-verify offline (complete w.r.t. the SIGNED claimed sets)")
-	vcResolverBases := map[string]string{}
-	fs.Func("vc-resolver-base", "override the DID-advertised #vc-resolver endpoint for a registry, <registry>=<url> (repeatable; the split-horizon seam — advertised URLs may be reachable only inside the emitting network)", func(v string) error {
-		reg, base, ok := strings.Cut(v, "=")
-		if !ok || reg == "" || base == "" {
-			return fmt.Errorf("want <registry>=<url>, got %q", v)
-		}
-		vcResolverBases[reg] = base
-		return nil
-	})
-	allowLoopback := fs.Bool("allow-loopback", false, "permit loopback DID-resolution targets (local development)")
-	allowPrivate := fs.Bool("allow-private", false, "permit RFC 1918 private DID-resolution targets")
-	maxDepth := fs.Int("max-depth", 0, "chain walk bound (0 = default)")
+	o := &bundleExportOpts{didBases: map[string]string{}, vcResolverBases: map[string]string{}, auditBases: map[string]string{}}
+	o.registry, o.token = globalFlags(fs)
+	o.head = fs.String("head", "", "chain head content address sha256:<hex> (required)")
+	o.out = fs.String("out", "", "bundle directory to create; must not exist (required)")
+	mapFlag := func(name, usage string, into map[string]string) {
+		fs.Func(name, usage, func(v string) error {
+			reg, base, ok := strings.Cut(v, "=")
+			if !ok || reg == "" || base == "" {
+				return fmt.Errorf("want <registry>=<url>, got %q", v)
+			}
+			into[reg] = base
+			return nil
+		})
+	}
+	mapFlag("did-base", "map a registry id to a DID-resolution base URL, <registry>=<url> (repeatable; unmapped registries default to https://<registry>)", o.didBases)
+	mapFlag("vc-resolver-base", "override the DID-advertised #vc-resolver endpoint for a registry, <registry>=<url> (repeatable; the split-horizon seam — advertised URLs may be reachable only inside the emitting network)", o.vcResolverBases)
+	mapFlag("audit-base", "override the DID-advertised #audit endpoint for a registry, <registry>=<url> (repeatable; audit-specific split-horizon — independent of --did-base)", o.auditBases)
+	o.aggregateComplete = fs.Bool("aggregate-complete", true, "walk through aggregate boundaries: bundle consumed sources so source commitments re-verify offline (complete w.r.t. the SIGNED claimed sets). Default ON — pass =false for a v1 linear-only bundle (no receipt/source connectivity needed)")
+	o.allowLoopback = fs.Bool("allow-loopback", false, "permit loopback DID-resolution targets (local development)")
+	o.allowPrivate = fs.Bool("allow-private", false, "permit RFC 1918 private DID-resolution targets")
+	o.maxDepth = fs.Int("max-depth", 0, "chain walk bound (0 = default)")
+	return fs, o
+}
+
+func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
+	fs, o := bundleExportFlagSet()
+	registry, token := o.registry, o.token
+	head, out := o.head, o.out
+	didBases, vcResolverBases, auditBases := o.didBases, o.vcResolverBases, o.auditBases
+	aggregateComplete := o.aggregateComplete
+	allowLoopback, allowPrivate, maxDepth := o.allowLoopback, o.allowPrivate, o.maxDepth
 	if err := parse(fs, args, stdout); err != nil {
 		if errors.Is(err, errHelp) {
 			return nil
@@ -249,6 +270,7 @@ func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
 		MaxDepth:          *maxDepth,
 		AggregateComplete: *aggregateComplete,
 		VCResolverBases:   vcResolverBases,
+		AuditBases:        auditBases,
 	})
 }
 

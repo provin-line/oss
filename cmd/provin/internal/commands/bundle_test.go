@@ -268,7 +268,7 @@ func (s stubAudit) GetConsumedSources(_ context.Context, req *connect.Request[au
 
 // serviceDoc builds a DID document that ALSO advertises a #vc-resolver
 // service — what the CLI's normative endpoint derivation resolves.
-func serviceDoc(t *testing.T, id, controller string, pub []byte, vcResolverURL string) []byte {
+func serviceDoc(t *testing.T, id, controller string, pub []byte, vcResolverURL string, extra ...did.ServiceEndpoint) []byte {
 	t.Helper()
 	fields := did.DocumentFields{ID: id, Controller: controller}
 	if pub != nil {
@@ -282,6 +282,7 @@ func serviceDoc(t *testing.T, id, controller string, pub []byte, vcResolverURL s
 	if vcResolverURL != "" {
 		fields.Service = []did.ServiceEndpoint{{ID: id + "#vc-resolver", Type: "VCResolver", ServiceEndpoint: vcResolverURL}}
 	}
+	fields.Service = append(fields.Service, extra...)
 	raw, err := did.New(fields).MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +297,15 @@ func serviceDoc(t *testing.T, id, controller string, pub []byte, vcResolverURL s
 // (the normative derivation path), "" = nothing (only a split-horizon
 // override can route source fetches).
 func newAggregateNode(t *testing.T, advertise string) (srv *httptest.Server, head string, consumed []string) {
+	return newAggregateNodeWith(t, advertise, nil, false)
+}
+
+// newAggregateNodeWith additionally lets a test advertise #audit services on
+// the issuer documents (auditSvcs, evaluated lazily per request so the test
+// can point at a server booted afterwards) and break the node's OWN audit
+// responder (breakLocalAudit) so a successful export PROVES receipts were
+// fetched from the advertised endpoint.
+func newAggregateNodeWith(t *testing.T, advertise string, auditSvcs func(issuerID string) []did.ServiceEndpoint, breakLocalAudit bool) (srv *httptest.Server, head string, consumed []string) {
 	t.Helper()
 	gen := ed25519.Generator{}
 	ks := &bundleMemKS{keys: map[string][]byte{}}
@@ -357,7 +367,11 @@ func newAggregateNode(t *testing.T, advertise string) (srv *httptest.Server, hea
 		}
 		h.ServeHTTP(w, r)
 	}))
-	auditPath, ah := auditpbconnect.NewAuditServiceHandler(stubAudit{head: head, consumed: consumed})
+	auditHead := head
+	if breakLocalAudit {
+		auditHead = "sha256:" + strings.Repeat("00", 32) // never matches: the local responder has no receipt
+	}
+	auditPath, ah := auditpbconnect.NewAuditServiceHandler(stubAudit{head: auditHead, consumed: consumed})
 	mux.Handle(auditPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testToken {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
@@ -366,10 +380,16 @@ func newAggregateNode(t *testing.T, advertise string) (srv *httptest.Server, hea
 		ah.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("/did/", func(w http.ResponseWriter, r *http.Request) {
+		extras := func(id string) []did.ServiceEndpoint {
+			if auditSvcs == nil {
+				return nil
+			}
+			return auditSvcs(id)
+		}
 		docs := map[string][]byte{
-			didRoutePath(sensAIssuer):  serviceDoc(t, sensAIssuer, ownerDID, pubs[sensAIssuer], advertiseURL),
-			didRoutePath(sensBIssuer):  serviceDoc(t, sensBIssuer, ownerDID, pubs[sensBIssuer], advertiseURL),
-			didRoutePath(aggIssuerDID): serviceDoc(t, aggIssuerDID, ownerDID, pubs[aggIssuerDID], advertiseURL),
+			didRoutePath(sensAIssuer):  serviceDoc(t, sensAIssuer, ownerDID, pubs[sensAIssuer], advertiseURL, extras(sensAIssuer)...),
+			didRoutePath(sensBIssuer):  serviceDoc(t, sensBIssuer, ownerDID, pubs[sensBIssuer], advertiseURL, extras(sensBIssuer)...),
+			didRoutePath(aggIssuerDID): serviceDoc(t, aggIssuerDID, ownerDID, pubs[aggIssuerDID], advertiseURL, extras(aggIssuerDID)...),
 			didRoutePath(ownerDID):     serviceDoc(t, ownerDID, ownerDID, nil, ""),
 		}
 		raw, ok := docs[r.URL.Path]
@@ -467,5 +487,218 @@ func TestBundleExportAggregateComplete_VCResolverOverride(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "receipts:       1 aggregate(s)") {
 		t.Fatalf("override export output:\n%s", out)
+	}
+}
+
+// --- #audit advertisement routing ---------------------------------------------
+
+// auditServer boots a standalone AuditService responder for the given head —
+// the destination an #audit advertisement points at.
+func auditServer(t *testing.T, head string, consumed []string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	auditPath, ah := auditpbconnect.NewAuditServiceHandler(stubAudit{head: head, consumed: consumed})
+	mux.Handle(auditPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testToken {
+			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		ah.ServeHTTP(w, r)
+	}))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Receipts route via the issuer document's #audit advertisement: the node's
+// own audit responder is BROKEN, a second server advertised in the aggregate
+// issuer's document holds the receipt, and the export succeeds — proof the
+// derivation used the advertisement, not the registry base.
+func TestBundleExport_AuditAdvertisementRoutesReceipts(t *testing.T) {
+	ctx := context.Background()
+	var advertised string // set after the audit server boots; docs are served lazily
+	srv, head, consumed := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID || advertised == "" {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: advertised}}
+	}, true /* the local responder has no receipt */)
+	advertised = auditServer(t, head, consumed).URL
+
+	dir := filepath.Join(t.TempDir(), "bundle")
+	out := &bytes.Buffer{}
+	err := commands.BundleExport(ctx, env(srv, out), commands.BundleExportConfig{
+		Head: head, Out: dir,
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("BundleExport via #audit advertisement: %v", err)
+	}
+	if !strings.Contains(out.String(), "receipts:       1 aggregate(s)") {
+		t.Fatalf("receipts not fetched from the advertised endpoint:\n%s", out)
+	}
+}
+
+// Two #audit advertisements are ambiguous — the export fails closed.
+func TestBundleExport_AuditAdvertisementDuplicateFails(t *testing.T) {
+	ctx := context.Background()
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{
+			{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: "http://one.example"},
+			{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: "http://two.example"},
+		}
+	}, false)
+
+	err := commands.BundleExport(ctx, env(srv, &bytes.Buffer{}), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "advertises 2") {
+		t.Fatalf("duplicate #audit advertisements: want ambiguity error, got %v", err)
+	}
+}
+
+// A single matching advertisement with an empty endpoint is an error — never
+// a silent fallback to the registry base.
+func TestBundleExport_AuditAdvertisementEmptyEndpointFails(t *testing.T) {
+	ctx := context.Background()
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: ""}}
+	}, false)
+
+	err := commands.BundleExport(ctx, env(srv, &bytes.Buffer{}), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty endpoint") {
+		t.Fatalf("empty #audit endpoint: want error, got %v", err)
+	}
+}
+
+// A service whose fragment is #audit but whose type is not AuditService does
+// not match: the derivation falls back to the registry base (which works
+// here), so foreign uses of the fragment cannot hijack routing.
+func TestBundleExport_AuditAdvertisementWrongTypeFallsBack(t *testing.T) {
+	ctx := context.Background()
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: id + "#audit", Type: "SomethingElse", ServiceEndpoint: "http://irrelevant.example"}}
+	}, false)
+
+	out := &bytes.Buffer{}
+	err := commands.BundleExport(ctx, env(srv, out), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("wrong-type #audit must fall back to the registry base: %v", err)
+	}
+}
+
+// --audit-base overrides the advertisement: the document advertises a dead
+// endpoint, the override points at the node's own (healthy) audit responder,
+// and the export succeeds.
+func TestBundleExport_AuditBaseOverrideWins(t *testing.T) {
+	ctx := context.Background()
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: "http://127.0.0.1:1"}}
+	}, false)
+
+	out := &bytes.Buffer{}
+	err := commands.BundleExport(ctx, env(srv, out), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AuditBases:        map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("--audit-base must win over a (dead) advertisement: %v", err)
+	}
+	if !strings.Contains(out.String(), "receipts:       1 aggregate(s)") {
+		t.Fatalf("receipts missing under --audit-base override:\n%s", out)
+	}
+}
+
+// The default-flip contract at the exporter level: a purely LINEAR chain
+// exported under aggregate-complete (the new CLI default) produces a v2
+// manifest with scope aggregate-complete and ZERO receipts — an intended
+// 0.x compatibility change (manifest bytes and digest differ from v1) —
+// while =false retains the v1 linear shape.
+func TestBundleExport_LinearUnderAggregateCompleteDefault(t *testing.T) {
+	ctx := context.Background()
+	srv, head := newBundleNode(t)
+
+	out := &bytes.Buffer{}
+	err := commands.BundleExport(ctx, env(srv, out), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true, // the new CLI default
+	})
+	if err != nil {
+		t.Fatalf("linear chain under aggregate-complete: %v", err)
+	}
+	if !strings.Contains(out.String(), "scope:          aggregate-complete") ||
+		!strings.Contains(out.String(), "receipts:       0 aggregate(s)") {
+		t.Fatalf("linear chain must export as v2/aggregate-complete with zero receipts:\n%s", out)
+	}
+
+	out2 := &bytes.Buffer{}
+	if err := commands.BundleExport(ctx, env(srv, out2), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:      map[string]string{registryID: srv.URL},
+		AllowLoopback: true, // AggregateComplete false: the opt-out
+	}); err != nil {
+		t.Fatalf("linear chain with =false: %v", err)
+	}
+	if !strings.Contains(out2.String(), "scope:          linear") || strings.Contains(out2.String(), "receipts:") {
+		t.Fatalf("=false must retain the v1 linear shape:\n%s", out2)
+	}
+}
+
+// An AuditService whose id is a FOREIGN URI merely ending in "#audit" is not
+// this issuer's advertisement: it neither captures routing nor causes false
+// ambiguity — the derivation ignores it and the registry-base fallback works.
+func TestBundleExport_AuditAdvertisementForeignIDIgnored(t *testing.T) {
+	ctx := context.Background()
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: "https://other.example/thing#audit", Type: "AuditService", ServiceEndpoint: "http://127.0.0.1:1"}}
+	}, false)
+
+	out := &bytes.Buffer{}
+	err := commands.BundleExport(ctx, env(srv, out), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("foreign-URI #audit id must be ignored (fallback to registry base): %v", err)
+	}
+	if !strings.Contains(out.String(), "receipts:       1 aggregate(s)") {
+		t.Fatalf("receipts missing:\n%s", out)
 	}
 }
