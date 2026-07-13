@@ -107,6 +107,27 @@ A pipeline is a graph composition of four **peer** process types — none is pri
 See [pipeline/README.md](pipeline/README.md). Extension adapters live in **separate
 repositories** and implement [pipeline/contract](pipeline/contract/).
 
+## Stability and versioning
+
+This repository is `0.x` ([SemVer](https://semver.org/spec/v2.0.0.html)); see
+[CHANGELOG.md](CHANGELOG.md) for releases. Two surfaces have different
+stability promises:
+
+- **The v0 credential wire is frozen** — every byte that participates in a
+  credential signature: the credential `@context` set (embedded,
+  digest-pinned), the Data Integrity proof algorithm, both cryptosuites
+  (`eddsa-jcs-2022` default, `eddsa-rdfc-2022` opt-in) and their
+  canonicalizations, and the source-commitment form. Changing any of these
+  breaks proof compatibility with already-issued credentials and is a
+  next-MAJOR change. The freeze is enforced by tests (official W3C
+  vc-di-eddsa vectors, KATs, context sha256 pins), not by process — see the
+  freeze declaration in the CHANGELOG for the exact scope, including the
+  signed views it deliberately does NOT cover (tlog checkpoints, wire-auth,
+  lifecycle hashes).
+- **Exported Go API and configuration keys** may still change between `0.x`
+  minor releases. The first frozen API surface is declared at `1.0`, after
+  the feature set is complete and has survived a real deployment soak.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).

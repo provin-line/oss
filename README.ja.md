@@ -87,6 +87,24 @@ tlog ──► crypto
 
 詳細は [pipeline/README.md](pipeline/README.md) を参照。拡張アダプターは **別リポジトリ** に置かれ、[pipeline/contract](pipeline/contract/) を実装する。
 
+## 安定性とバージョニング
+
+このリポジトリは `0.x`（[SemVer](https://semver.org/spec/v2.0.0.html)）。リリースは
+[CHANGELOG.md](CHANGELOG.md) を参照。2 つの面で安定性の約束が異なる:
+
+- **v0 credential wire は凍結済み** — credential の署名に参加するすべての
+  バイト: credential の `@context` セット（embed 済み・digest pin）、Data
+  Integrity proof アルゴリズム、両暗号スイート（`eddsa-jcs-2022` が default、
+  `eddsa-rdfc-2022` は opt-in）とその正規化、source-commitment の計算形。
+  これらの変更は発行済み credential との proof 互換性を壊すため**次 MAJOR**の
+  変更となる。凍結はプロセスでなくテスト（公式 W3C vc-di-eddsa vector・KAT・
+  context sha256 pin）が強制する — 正確なスコープ（本宣言が意図的にカバー
+  **しない**署名面: tlog checkpoint・wire-auth・lifecycle hash）は CHANGELOG の
+  凍結宣言を参照。
+- **exported Go API と設定キー**は `0.x` の minor リリース間で変わりうる。
+  最初に凍結される API 面は、機能セットの完成と実デプロイでの soak を経た
+  `1.0` で宣言する。
+
 ## ライセンス
 
 Apache License 2.0 — [LICENSE](LICENSE) を参照。

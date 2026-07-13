@@ -4,9 +4,102 @@ All notable changes to this repository are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-While the version is `0.x`, exported Go API, wire formats, and configuration
-keys may still change between minor releases. The first frozen surface is
-declared at the `1.0` line.
+While the version is `0.x`, exported Go API and configuration keys may still
+change between minor releases. The **v0 credential wire is frozen** as of the
+Unreleased line below (see its freeze declaration): changing any byte of the
+credential Data Integrity signing scope is a next-MAJOR break, not a minor
+change. The first frozen *API* surface is declared at the `1.0` line.
+
+## [Unreleased]
+
+The P0 (public-release hardening) line. Releases as the next minor at the
+public/production cut; no intermediate tag is minted.
+
+### v0 credential wire freeze declaration
+
+As of this line the **v0 credential Data Integrity wire — every byte that
+participates in a credential signature — is frozen**. Concretely:
+
+- The credential `@context` set: `https://www.w3.org/ns/credentials/v2`
+  (embedded verbatim, pinned to the W3C-published normative sha256
+  `59955ced6697d61e03f2b2556febe5308ab16842846f5b586d7f1f7adec92734`),
+  `https://dplaax.dev/vc/v1`, and `https://provin.dev/vc/v1` (embedded,
+  sha256-pinned), and the credential/subject wire members they define.
+- The Data Integrity proof algorithm:
+  `hashData = SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document))`, the
+  six-member proof configuration, and the base58btc (`z` multibase)
+  `proofValue` encoding.
+- Both cryptosuites and their canonicalizations: `eddsa-jcs-2022` (RFC 8785,
+  Phase-1 MUST, issuance default) and `eddsa-rdfc-2022` (URDNA2015, Phase-2,
+  opt-in), each anchored to the official W3C vc-di-eddsa test vectors with
+  every intermediate pinned. The URDNA2015 behavior is additionally pinned by
+  a provin-shape KAT against json-gold v0.8.0.
+- The source-commitment form riding inside the signed credential: the RFC
+  6962 Merkle tree hash over JCS-canonicalized source credentials (leaf
+  prefix `0x00`, interior `0x01`, odd leaves promoted; empty set = hash of
+  the empty string), the `f1220` multihash `source_root` encoding, and the
+  `jcs-rfc8785` canonical identifier — a verifier recomputing the root must
+  reproduce these bytes exactly.
+- The DID verification-method read contracts: OKP/Ed25519 JWK
+  (`JsonWebKey2020`) and Multikey (`publicKeyMultibase`, multicodec
+  `0xed01`), with method type and key encoding mutually exclusive.
+
+Changing any of the above breaks proof compatibility with already-issued
+credentials and is a **next-MAJOR** change. The freeze is enforced by tests
+in this repository (W3C vectors, KATs, context digests), not by process.
+Exported Go API and configuration keys remain `0.x`-mutable; the wire freeze
+is deliberately stricter than the API surface.
+
+Out of scope of this declaration: the repository's OTHER signed views — the
+tlog checkpoint `SignedView`, the chain-manager/payload-resolver wire-auth
+views, and the DID-document JCS hash recorded into lifecycle logs — are
+separate protocol contracts, each pinned by its own golden tests. Changes
+there are compatibility-relevant and are called out in this changelog (see
+the checkpoint entry under Changed below), but they are versioned by their
+own contracts, not by this credential-wire declaration.
+
+### Added
+
+- `eddsa-rdfc-2022` cryptosuite: `canon/urdna2015` (RDF Dataset
+  Canonicalization wrapping `piprate/json-gold` v0.8.0) behind an offline
+  context allowlist — context resolution never touches the network. The RDFC
+  path fails closed on every input shape JSON-LD processing would silently
+  drop or mutate from the signing scope: numerics (2^53 truncation), nulls,
+  scalar node-array entries, undefined terms, relative `@id`/`@type`,
+  blank-node or invalid predicates, `@index`, `@direction`, and malformed
+  `@language`. Registered at init behind a full-shape expansion probe.
+- Multikey read support: `did.VerificationMethod.PublicKeyMultibase`, with
+  fail-closed type↔encoding exclusivity in `did.ExtractPublicKey`.
+- `multibase` package: the one base58btc codec shared by `vc` (proofValue)
+  and `did` (Multikey), anchored to the W3C proofValue test vector.
+- `GetAllowList` chain-manager RPC, `provin chain get-allow`, and the
+  `chain:read-allowlist` policy action.
+- `pipeline/observer/logobserver`: the reference `ProcessObserver` (one
+  structured slog record per event; fire-and-forget by construction).
+- `tlog`: RFC 6962 Merkle log with standalone inclusion/consistency proof
+  verification.
+- Defensive payload re-verification in the provenance signer: a non-nil
+  payload must hash to the credential's `outputHash` or signing refuses.
+
+### Changed
+
+- **BREAKING** `keystore.KeyStore` is a custody seam: `Sign` replaces
+  `GetPrivateKey` in the interface (KMS-shaped — raw keys no longer egress
+  through the contract); `crypto/ed25519.Signer` is removed in favor of raw
+  `ed25519.Sign` (file-backend private-key access remains on the concrete
+  `filestore.Store` only).
+- **BREAKING** `vc`/auth seam: `AttributeOwner` is exported and the
+  `auth.Verifier` seam is package-owned.
+- **BREAKING** the credential `@context` URIs are frozen as the v0 wire
+  vocabulary (repointing either protocol/profile URI is a hash partition).
+- **BREAKING** tlog checkpoint `SignedView` now binds a Checkpoint Origin
+  (`logId`) into the signed bytes and REJECTS legacy checkpoints without it:
+  checkpoints signed before this change no longer verify.
+
+### Removed
+
+- `pipeline/chained/cmd/` placeholder (the standalone runtime is the one
+  chained-loop binary).
 
 ## [0.1.0] - 2026-07-12
 
@@ -37,4 +130,5 @@ Initial internal release — pinned for internal (private) deployment and soak.
 - The quickstart pins the `provin.auth` policy-verifier / auth-provider images
   and `AUTH_REF` to `v0.1.0` (built from provin.auth's matching tag).
 
+[Unreleased]: https://github.com/provin-line/oss/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/provin-line/oss/releases/tag/v0.1.0

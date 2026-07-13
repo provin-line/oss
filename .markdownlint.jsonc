@@ -1,0 +1,5 @@
+{
+  // Keep a Changelog repeats "### Added" / "### Changed" under every version
+  // heading by design; only flag duplicates among siblings.
+  "MD024": { "siblings_only": true }
+}
