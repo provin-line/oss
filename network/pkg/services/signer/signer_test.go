@@ -47,6 +47,14 @@ func (m *memKeyStore) GetPrivateKey(d string, keyID keystore.KeyID) ([]byte, err
 	return nil, fmt.Errorf("memKeyStore: %s#%s: %w", d, keyID, keystore.ErrNotFound)
 }
 
+func (m *memKeyStore) Sign(d string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
+
 func (m *memKeyStore) DeleteKeys(d string) error {
 	delete(m.keys, d)
 	return nil
@@ -62,7 +70,7 @@ func svcWithKey(t *testing.T, keyID keystore.KeyID) (*signer.Service, []byte) {
 	}
 	ks := newMemKS()
 	ks.put(did, keyID, kp)
-	return signer.New(ed25519.NewSigner(ks)), kp.PublicKey
+	return signer.New(ks), kp.PublicKey
 }
 
 // --- happy paths: each domain signs with its bound key, signature verifies ----
@@ -122,7 +130,7 @@ func TestSign_EmptyDID(t *testing.T) {
 // --- error typing: absent key is NotFound; malformed key is neither -----------
 
 func TestSign_AbsentKey_IsKeyNotFound(t *testing.T) {
-	svc := signer.New(ed25519.NewSigner(newMemKS())) // empty keystore
+	svc := signer.New(newMemKS()) // empty keystore
 	_, err := svc.Sign(context.Background(), did, "signing", []byte("x"))
 	if !errors.Is(err, signer.ErrKeyNotFound) {
 		t.Fatalf("absent key: want ErrKeyNotFound, got %v", err)
@@ -132,7 +140,7 @@ func TestSign_AbsentKey_IsKeyNotFound(t *testing.T) {
 func TestSign_MalformedKey_IsNotMaskedAsNotFound(t *testing.T) {
 	ks := newMemKS()
 	ks.put(did, keystore.KeyIDSigning, &crypto.KeyPair{Algorithm: "Ed25519", PrivateKey: []byte{1, 2, 3}})
-	svc := signer.New(ed25519.NewSigner(ks))
+	svc := signer.New(ks)
 	_, err := svc.Sign(context.Background(), did, "signing", []byte("x"))
 	if err == nil {
 		t.Fatal("malformed key: want error, got nil")

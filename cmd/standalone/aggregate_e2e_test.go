@@ -90,7 +90,7 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 	}
 	res.Add(capOwnerDoc(agOwner))
 
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 	srcCredA, envA := signedSourceEnv(t, builder, agSrcAIss, "sa", []byte(`{"reading":1}`))
 	srcCredB, envB := signedSourceEnv(t, builder, agSrcBIss, "sb", []byte(`{"reading":2}`))
 

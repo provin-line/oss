@@ -113,7 +113,7 @@ func capSigner(t *testing.T, subject string) (crypto.Signer, []byte) {
 	if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("capSigner: save: %v", err)
 	}
-	return ed25519.NewSigner(ks), kp.PublicKey
+	return ks, kp.PublicKey
 }
 
 // capByRefSinkCfg builds the by-reference sink loop config. upstreamEndpoint

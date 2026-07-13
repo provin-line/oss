@@ -47,7 +47,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	}
 	res.Add(capOwnerDoc(agOwner))
 
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 	// Only the wire envelopes are needed — the aggregate head is discovered from the emitted
 	// output and the verdict asserted on the shared status store (D-17p-1).
 	_, envA := signedSourceEnv(t, builder, agSrcAIss, "sa", []byte(`{"reading":1}`))

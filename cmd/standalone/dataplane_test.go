@@ -207,7 +207,7 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	builder := vc.NewBuilder(ed25519.NewSigner(dpKeyStore(t)))
+	builder := vc.NewBuilder(dpKeyStore(t))
 
 	// A healthy loop (would otherwise block on <-ctx.Done forever) plus a loop whose
 	// ingress subject is malformed, so its Subscribe fails at Run time. buildSourceLoop

@@ -28,7 +28,6 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
-	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
@@ -165,7 +164,7 @@ func main() {
 	// node fails closed at boot (ErrMissingPayloadResolver).
 	var payloadClient contract.PayloadResolver
 	if nodeDID := nodeDIDOf(chainCfg); nodeDID != "" {
-		payloadClient = payloadclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient(), 0)
+		payloadClient = payloadclient.New(keyStore, nodeDID, guard.HTTPClient(), 0)
 	}
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
 		Resolver:        resolver,

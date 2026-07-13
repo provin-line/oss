@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -37,13 +38,20 @@ func (m *memKeyStore) GetPrivateKey(d string, id keystore.KeyID) ([]byte, error)
 	}
 	return k, nil
 }
+func (m *memKeyStore) Sign(d string, id string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(id))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
 func (m *memKeyStore) DeleteKeys(string) error { return nil }
 
 type errStr string
 
 func (e errStr) Error() string { return string(e) }
 
-var errNotFound = errStr("key not found")
+var errNotFound = fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 
 func signingDoc(subject string, pub []byte) *did.DIDDocument {
 	return signingDocAs(subject, subject, pub)
@@ -82,7 +90,7 @@ func fixture(t *testing.T, issuerDID string) (crypto.Signer, *local.Resolver) {
 	}
 	r := local.New()
 	r.Add(signingDoc(issuerDID, kp.PublicKey))
-	return ed25519.NewSigner(ks), r
+	return ks, r
 }
 
 func sampleSubject() delegation.DelegationSubject {

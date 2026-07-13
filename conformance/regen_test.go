@@ -47,7 +47,8 @@ func specVectorsDir() string {
 // os.ReadFile inputs, so a second plain run would otherwise return the first
 // run's cached log without re-executing (the operation is idempotent, so that
 // is only confusing, not corrupting).
-//   DPLAAX_REGEN=1 go test -tags regen ./conformance/ -run TestRegenerateDplaaxDerivedHashes -count=1
+//
+//	DPLAAX_REGEN=1 go test -tags regen ./conformance/ -run TestRegenerateDplaaxDerivedHashes -count=1
 //
 // The allow-list is explicit on purpose. Negative vectors pin deliberately
 // wrong values (commitment-008's all-zero root, resolver-002's 0xff… key) and

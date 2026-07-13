@@ -95,7 +95,7 @@ func TestAuditOne_TransientResolverOutage_RetainedThenVerified(t *testing.T) {
 	if err := ks.SaveKeyPair(ecIssuer, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("save key: %v", err)
 	}
-	cred, err := vc.NewBuilder(ed25519.NewSigner(ks)).BuildFirstDrop(
+	cred, err := vc.NewBuilder(ks).BuildFirstDrop(
 		ecIssuer, string(keystore.KeyIDSigning), ecIssuer+"#signing",
 		vc.CredentialSubjectFields{
 			PipelineID:          "p1",

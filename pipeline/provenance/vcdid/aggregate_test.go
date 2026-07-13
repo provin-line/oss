@@ -38,7 +38,7 @@ func signedSource(t *testing.T, issuer, hash string) *vc.PipelinePassCredential 
 		t.Fatalf("SaveKeyPair: %v", err)
 	}
 	s, err := vcdid.NewSigner(vcdid.Config{
-		Builder: vc.NewBuilder(ed25519.NewSigner(ks)), IssuerDID: issuer, KeyID: keyID,
+		Builder: vc.NewBuilder(ks), IssuerDID: issuer, KeyID: keyID,
 		VerificationMethod: issuer + "#signing", PipelineID: "src", ProcessID: "p",
 		TransformationClaim: vc.ClaimConvert,
 	})

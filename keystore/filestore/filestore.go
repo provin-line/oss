@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/keystore"
 )
 
@@ -26,7 +27,12 @@ type Store struct {
 	root string
 }
 
-var _ keystore.KeyStore = (*Store)(nil)
+var (
+	_ keystore.KeyStore = (*Store)(nil)
+	// A Store signs without exposing raw keys, so it is a crypto.Signer — this
+	// is the seam callers use directly (no wrapper).
+	_ crypto.Signer = (*Store)(nil)
+)
 
 // New returns a Store persisting keys under root.
 func New(root string) *Store {
@@ -50,9 +56,19 @@ func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 	if err != nil {
 		return err
 	}
-	for keyID := range keys {
+	// Validate every key before any filesystem mutation (fail-closed). The store
+	// persists raw bytes untagged and later signs them as Ed25519 (the PoC's only
+	// suite), so a key carrying any other algorithm would be silently misused —
+	// reject it at the door rather than sign it wrong later.
+	for keyID, kp := range keys {
 		if err := safeSegment(string(keyID)); err != nil {
 			return err
+		}
+		if kp == nil {
+			return fmt.Errorf("filestore: nil key pair for %q", keyID)
+		}
+		if kp.Algorithm != ed25519.Algorithm {
+			return fmt.Errorf("filestore: key %q has algorithm %q, want %q", keyID, kp.Algorithm, ed25519.Algorithm)
 		}
 	}
 	if _, err := os.Stat(dir); err == nil {
@@ -69,9 +85,6 @@ func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 	defer os.RemoveAll(tmp) // a no-op once renamed away.
 
 	for keyID, kp := range keys {
-		if kp == nil {
-			return fmt.Errorf("filestore: nil key pair for %q", keyID)
-		}
 		if err := writeFileSync(filepath.Join(tmp, keyFile(keyID)), kp.PrivateKey); err != nil {
 			return err
 		}
@@ -92,8 +105,32 @@ func (s *Store) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 	return fsyncDir(parent)
 }
 
+// Sign signs data with the Ed25519 private key held for (did, keyID) — the
+// crypto.Signer / keystore.KeyStore signing path. The raw key never leaves the
+// Store: it is read, used, and discarded here. An absent key is a wrapped
+// keystore.ErrNotFound; a malformed (wrong-size) stored key is a typed error,
+// not a panic. keyID is the DID fragment string (e.g. keystore.KeyIDSigning).
+func (s *Store) Sign(did string, keyID string, data []byte) ([]byte, error) {
+	priv, err := s.GetPrivateKey(did, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	sig, err := ed25519.Sign(priv, data)
+	if err != nil {
+		return nil, fmt.Errorf("filestore: sign %s#%s: %w", did, keyID, err)
+	}
+	return sig, nil
+}
+
 // GetPrivateKey returns the raw private key for (did, keyID), or a wrapped
 // keystore.ErrNotFound when no such key is held.
+//
+// This is the file backend's raw-key accessor — it is NOT part of the
+// keystore.KeyStore seam (a keep-keys-opaque backend such as a TPM or cloud KMS
+// has no equivalent; raw keys never leave it). It exists because raw-key egress
+// is a genuine capability of a file backend: Sign composes it internally, and it
+// is the seam tests read keys back through. The production signing path is Sign,
+// which never lets the raw key cross the boundary.
 func (s *Store) GetPrivateKey(did string, keyID keystore.KeyID) ([]byte, error) {
 	dir, err := s.didDir(did)
 	if err != nil {

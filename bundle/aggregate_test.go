@@ -80,7 +80,7 @@ func buildAggFixture(t *testing.T) aggFixture {
 		}
 		pubs[d] = kp.PublicKey
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 
 	srcA, err := b.BuildFirstDrop(srcADID, string(keystore.KeyIDSigning), srcADID+"#signing",
 		vc.CredentialSubjectFields{PipelineID: "sensa", ProcessID: "a1", TransformationClaim: vc.ClaimConvert, InputHash: hashA, OutputHash: hashA}, nil)
@@ -313,7 +313,7 @@ func TestAggregateComplete_ChainPreservingCommitment(t *testing.T) {
 		_ = ks.SaveKeyPair(d, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp})
 		pubs[d] = kp.PublicKey
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 	origin, err := b.BuildFirstDrop(srcADID, string(keystore.KeyIDSigning), srcADID+"#signing",
 		vc.CredentialSubjectFields{PipelineID: "sensa", ProcessID: "a1", TransformationClaim: vc.ClaimConvert, InputHash: hashA, OutputHash: hashMid}, nil)
 	if err != nil {
@@ -401,7 +401,7 @@ func TestAggregateComplete_NestedAggregates(t *testing.T) {
 		_ = ks.SaveKeyPair(d, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp})
 		pubs[d] = kp.PublicKey
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 	srcX, err := b.BuildFirstDrop(srcADID, string(keystore.KeyIDSigning), srcADID+"#signing",
 		vc.CredentialSubjectFields{PipelineID: "sensa", ProcessID: "a1", TransformationClaim: vc.ClaimConvert, InputHash: hashA, OutputHash: hashA}, nil)
 	if err != nil {

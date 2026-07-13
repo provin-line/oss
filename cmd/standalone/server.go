@@ -128,7 +128,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
 	// schemaSvc is built by main (shared with the data plane's schema wiring).
-	signerSvc := signer.New(ed25519.NewSigner(keyStore))
+	signerSvc := signer.New(keyStore)
 	didSvc := didregistry.New(
 		didStore, keyStore, ed25519.Generator{}, ed25519.Verifier{}, regCfg.ID,
 		didregistry.WithServiceEndpoints(regCfg.Endpoints),
@@ -142,7 +142,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// #auth key (composed here — the service layer stays proto-free, slice-13
 	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
 	nodeDID := nodeDIDOf(chainCfg)
-	peerCli := peerclient.New(ed25519.NewSigner(keyStore), nodeDID, guard.HTTPClient())
+	peerCli := peerclient.New(keyStore, nodeDID, guard.HTTPClient())
 
 	chainOpts := []chainmanager.Option{
 		chainmanager.WithInfraOperator(chainOp),

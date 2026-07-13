@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
 )
@@ -14,7 +15,7 @@ import (
 const did = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
 func kp(b byte) *crypto.KeyPair {
-	return &crypto.KeyPair{Algorithm: "Ed25519", PrivateKey: []byte{b, b, b, b}, PublicKey: []byte{b}}
+	return &crypto.KeyPair{Algorithm: ed25519.Algorithm, PrivateKey: []byte{b, b, b, b}, PublicKey: []byte{b}}
 }
 
 func newStore(t *testing.T) *filestore.Store {
@@ -111,6 +112,89 @@ func TestKeyFilePerms0600(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("key file perm = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+// Sign is the KMS-shaped path: the raw key never leaves the Store, yet the
+// signature verifies under the keypair's public key. This exercises the
+// crypto.Signer relationship end-to-end (the compile-time assertions live in
+// filestore.go).
+func TestSign_RoundTrip(t *testing.T) {
+	s := newStore(t)
+	pair, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: pair}); err != nil {
+		t.Fatalf("SaveKeyPair: %v", err)
+	}
+	data := []byte("bytes to sign")
+	sig, err := s.Sign(did, string(keystore.KeyIDSigning), data)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	ok, err := (ed25519.Verifier{}).Verify(pair.PublicKey, data, sig)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !ok {
+		t.Error("filestore.Sign output did not verify under the keypair's public key")
+	}
+}
+
+// Sign over an absent key is a wrapped ErrNotFound, so a caller (SignerService)
+// can map it to NotFound rather than an opaque internal failure.
+func TestSign_Absent_IsErrNotFound(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.Sign(did, string(keystore.KeyIDSigning), []byte("x")); !errors.Is(err, keystore.ErrNotFound) {
+		t.Fatalf("Sign absent: want ErrNotFound, got %v", err)
+	}
+}
+
+// A 4-byte "Ed25519" key stored via the create-only path signs to a typed
+// error, not a panic — the raw ed25519.Sign size check flows through.
+func TestSign_MalformedStoredKey(t *testing.T) {
+	s := newStore(t)
+	if err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp(2)}); err != nil {
+		t.Fatalf("SaveKeyPair: %v", err)
+	}
+	if _, err := s.Sign(did, string(keystore.KeyIDSigning), []byte("x")); err == nil {
+		t.Error("Sign with a wrong-size stored key: want error (not panic)")
+	}
+}
+
+// Fail-closed: a key carrying any algorithm other than Ed25519 is rejected at
+// save time and nothing is persisted — it can never be silently signed as
+// Ed25519 later.
+func TestSave_RejectsUnknownAlgorithm(t *testing.T) {
+	for _, alg := range []string{"", "RSA", "secp256k1"} {
+		s := newStore(t)
+		err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{
+			keystore.KeyIDSigning: {Algorithm: alg, PrivateKey: []byte{1, 2, 3, 4}},
+		})
+		if err == nil {
+			t.Errorf("SaveKeyPair(algorithm=%q): want error, got nil", alg)
+		}
+		if _, err := s.GetPrivateKey(did, keystore.KeyIDSigning); !errors.Is(err, keystore.ErrNotFound) {
+			t.Errorf("algorithm=%q: key persisted despite rejection (err=%v)", alg, err)
+		}
+	}
+}
+
+// A mixed keyset (one good, one bad-algorithm) is rejected atomically: the good
+// key must not be persisted either, since validation precedes any write.
+func TestSave_RejectsMixedAlgorithm(t *testing.T) {
+	s := newStore(t)
+	good, _ := (ed25519.Generator{}).Generate()
+	err := s.SaveKeyPair(did, map[keystore.KeyID]*crypto.KeyPair{
+		keystore.KeyIDSigning: good,
+		keystore.KeyIDAuth:    {Algorithm: "RSA", PrivateKey: []byte{9}},
+	})
+	if err == nil {
+		t.Fatal("mixed-algorithm keyset: want error, got nil")
+	}
+	if _, err := s.GetPrivateKey(did, keystore.KeyIDSigning); !errors.Is(err, keystore.ErrNotFound) {
+		t.Errorf("good key persisted despite a sibling rejection (err=%v)", err)
 	}
 }
 

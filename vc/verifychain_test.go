@@ -46,7 +46,7 @@ func buildChainFixture(t *testing.T, originIssuer, childIssuer string) (origin, 
 	if err := ks.SaveKeyPair(childIssuer, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpB}); err != nil {
 		t.Fatalf("SaveKeyPair B: %v", err)
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 
 	const (
 		hashIn  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -45,9 +46,17 @@ func (m *bundleMemKS) SaveKeyPair(didStr string, keys map[keystore.KeyID]*crypto
 func (m *bundleMemKS) GetPrivateKey(didStr string, keyID keystore.KeyID) ([]byte, error) {
 	k, ok := m.keys[didStr+"#"+string(keyID)]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 	}
 	return k, nil
+}
+
+func (m *bundleMemKS) Sign(didStr string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(didStr, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
 }
 
 func (m *bundleMemKS) DeleteKeys(string) error { return nil }
@@ -107,7 +116,7 @@ func newBundleNode(t *testing.T) (srv *httptest.Server, head string) {
 	ks := &bundleMemKS{keys: map[string][]byte{}}
 	_ = ks.SaveKeyPair(bundleOriginDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpA})
 	_ = ks.SaveKeyPair(bundleChildDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpB})
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 
 	origin, err := b.BuildFirstDrop(bundleOriginDID, string(keystore.KeyIDSigning), bundleOriginDID+"#signing",
 		vc.CredentialSubjectFields{
@@ -299,7 +308,7 @@ func newAggregateNode(t *testing.T, advertise string) (srv *httptest.Server, hea
 		_ = ks.SaveKeyPair(d, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp})
 		pubs[d] = kp.PublicKey
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 	mk := func(issuer, pipe, proc, in string) *vc.PipelinePassCredential {
 		c, err := b.BuildFirstDrop(issuer, string(keystore.KeyIDSigning), issuer+"#signing",
 			vc.CredentialSubjectFields{PipelineID: pipe, ProcessID: proc, TransformationClaim: vc.ClaimConvert,

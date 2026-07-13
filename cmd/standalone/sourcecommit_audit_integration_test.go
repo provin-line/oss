@@ -53,7 +53,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 		res.Add(capProcessDoc(iss, owner, kp.PublicKey))
 	}
 	res.Add(capOwnerDoc(owner))
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 
 	scHash := func(b []byte) string {
 		s := sha256.Sum256(b)

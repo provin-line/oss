@@ -1,8 +1,11 @@
 // Package ed25519 is the Ed25519 implementation of the crypto interfaces — the
-// PoC's only signature suite. KeyGenerator and Verifier are pure primitives.
-// Signer is the raw-key, KeyStore-backed signer the crypto.Signer contract
-// reserves for tests and CLI-local owner keys: production signing goes through
-// the registry's SignerService so private keys never leave it.
+// PoC's only signature suite — plus the raw signing primitive. Generator,
+// Verifier, and the package-level Sign are pure primitives over key bytes: they
+// hold no key custody and are unaware of DIDs.
+//
+// The DID-aware signing seam is crypto.Signer (Sign(did, keyID, data)),
+// implemented by keystore-backed stores that hold the keys; this package's raw
+// Sign(privateKey, data) is the low-level building block those stores compose.
 package ed25519
 
 import (
@@ -11,7 +14,6 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/crypto"
-	"github.com/provin-line/oss/keystore"
 )
 
 // Algorithm is the crypto.KeyPair.Algorithm tag for this suite.
@@ -59,28 +61,15 @@ func (Verifier) Verify(publicKey, data, sig []byte) (bool, error) {
 // Algorithm reports the suite name. Implements crypto.Verifier.
 func (Verifier) Algorithm() string { return Algorithm }
 
-// Signer is the KeyStore-backed raw-key signer. It resolves the private key for
-// (did, keyID) from the KeyStore and signs with Ed25519. Implements
-// crypto.Signer. Use only for tests and CLI-local owner keys — production uses
-// the registry SignerService.
-type Signer struct {
-	keys keystore.KeyStore
-}
-
-// NewSigner returns a Signer reading private keys from ks.
-func NewSigner(ks keystore.KeyStore) *Signer {
-	return &Signer{keys: ks}
-}
-
-// Sign signs data with the Ed25519 private key the KeyStore holds for
-// (did, keyID). A missing or malformed key is a typed error.
-func (s *Signer) Sign(did, keyID string, data []byte) ([]byte, error) {
-	priv, err := s.keys.GetPrivateKey(did, keystore.KeyID(keyID))
-	if err != nil {
-		return nil, fmt.Errorf("ed25519: load key for %s#%s: %w", did, keyID, err)
+// Sign is the raw signing primitive: it signs data with a full 64-byte Ed25519
+// private key (seed ‖ public key, as Generator emits). A wrong-size key is a
+// typed error, not a standard-library panic — the counterpart to Verifier.Verify
+// rejecting malformed sizes. This is NOT the DID-aware signing seam (that is
+// crypto.Signer); it is the building block a keystore-backed store composes to
+// implement crypto.Signer over the keys it holds.
+func Sign(privateKey, data []byte) ([]byte, error) {
+	if len(privateKey) != stded25519.PrivateKeySize {
+		return nil, fmt.Errorf("ed25519: private key size %d, want %d", len(privateKey), stded25519.PrivateKeySize)
 	}
-	if len(priv) != stded25519.PrivateKeySize {
-		return nil, fmt.Errorf("ed25519: private key size %d, want %d", len(priv), stded25519.PrivateKeySize)
-	}
-	return stded25519.Sign(stded25519.PrivateKey(priv), data), nil
+	return stded25519.Sign(stded25519.PrivateKey(privateKey), data), nil
 }

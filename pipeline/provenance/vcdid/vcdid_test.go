@@ -2,6 +2,7 @@ package vcdid_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/provin-line/oss/crypto"
@@ -40,13 +41,20 @@ func (m *memKeyStore) GetPrivateKey(did string, id keystore.KeyID) ([]byte, erro
 	}
 	return k, nil
 }
+func (m *memKeyStore) Sign(did string, id string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(did, keystore.KeyID(id))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
 func (m *memKeyStore) DeleteKeys(string) error { return nil }
 
 type errStr string
 
 func (e errStr) Error() string { return string(e) }
 
-var errNotFound = errStr("key not found")
+var errNotFound = fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 
 // fixture wires a real Ed25519 signer/builder for issuerDID and returns the
 // builder plus the issuer's public key.
@@ -60,7 +68,7 @@ func fixture(t *testing.T) (*vc.Builder, []byte) {
 	if err := ks.SaveKeyPair(issuerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("SaveKeyPair: %v", err)
 	}
-	return vc.NewBuilder(ed25519.NewSigner(ks)), kp.PublicKey
+	return vc.NewBuilder(ks), kp.PublicKey
 }
 
 func newSigner(t *testing.T, b *vc.Builder, opts func(*vcdid.Config)) *vcdid.Signer {

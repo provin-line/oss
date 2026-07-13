@@ -62,7 +62,7 @@ func signerFor(t *testing.T, subject string) (crypto.Signer, []byte) {
 	if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	return ed25519.NewSigner(ks), kp.PublicKey
+	return ks, kp.PublicKey
 }
 
 // testVerifier builds a Verifier whose clock sits 1s after `at()` (so a proof

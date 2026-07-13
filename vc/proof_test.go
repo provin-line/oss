@@ -2,6 +2,7 @@ package vc_test
 
 import (
 	stded25519 "crypto/ed25519"
+	"fmt"
 	"testing"
 
 	"github.com/provin-line/oss/crypto"
@@ -30,9 +31,16 @@ func (m *memKeyStore) GetPrivateKey(did string, keyID keystore.KeyID) ([]byte, e
 	}
 	return k, nil
 }
+func (m *memKeyStore) Sign(did string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(did, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
 func (m *memKeyStore) DeleteKeys(did string) error { return nil }
 
-var errNotFound = errStr("key not found")
+var errNotFound = fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 
 type errStr string
 
@@ -63,7 +71,7 @@ func fixture(t *testing.T) (crypto.Signer, []byte, map[string]any) {
 			"outputHash": "sha256:abc",
 		},
 	}
-	return ed25519.NewSigner(ks), kp.PublicKey, doc
+	return ks, kp.PublicKey, doc
 }
 
 func TestCreateVerifyProof_RoundTrip(t *testing.T) {

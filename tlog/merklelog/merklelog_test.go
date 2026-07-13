@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -65,9 +66,16 @@ func (m *memKS) SaveKeyPair(did string, keys map[keystore.KeyID]*crypto.KeyPair)
 func (m *memKS) GetPrivateKey(did string, keyID keystore.KeyID) ([]byte, error) {
 	k, ok := m.keys[did+"#"+string(keyID)]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 	}
 	return k, nil
+}
+func (m *memKS) Sign(did string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(did, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
 }
 func (m *memKS) DeleteKeys(string) error { return nil }
 
@@ -86,7 +94,7 @@ func signedLog(t *testing.T) *merklelog.Log {
 	}
 	l, err := merklelog.New(filepath.Join(t.TempDir(), "log"),
 		merklelog.WithCheckpointSigner(tlog.CheckpointSigner{
-			Signer:             ed25519.NewSigner(ks),
+			Signer:             ks,
 			SignerDID:          signerDID,
 			KeyID:              string(keystore.KeyIDSigning),
 			VerificationMethod: signerDID + "#signing",
@@ -310,7 +318,7 @@ func TestCheckpointSignatureVerifiesFromStruct(t *testing.T) {
 	}
 	l, err := merklelog.New(filepath.Join(t.TempDir(), "log"),
 		merklelog.WithCheckpointSigner(tlog.CheckpointSigner{
-			Signer:             ed25519.NewSigner(ks),
+			Signer:             ks,
 			SignerDID:          signerDID,
 			KeyID:              string(keystore.KeyIDSigning),
 			VerificationMethod: signerDID + "#signing",

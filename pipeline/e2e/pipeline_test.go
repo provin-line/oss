@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -169,9 +170,16 @@ func (m *memKeyStore) SaveKeyPair(d string, keys map[keystore.KeyID]*crypto.KeyP
 func (m *memKeyStore) GetPrivateKey(d string, id keystore.KeyID) ([]byte, error) {
 	k, ok := m.keys[d+"#"+string(id)]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 	}
 	return k, nil
+}
+func (m *memKeyStore) Sign(d string, id string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(id))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
 }
 func (m *memKeyStore) DeleteKeys(string) error { return nil }
 
@@ -225,7 +233,7 @@ func TestRegisteringSigner_AggregateOverridden(t *testing.T) {
 	if err := ks.SaveKeyPair(sourceDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("save key: %v", err)
 	}
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 	aggSig, err := vcdid.NewSigner(vcdid.Config{
 		Builder: builder, IssuerDID: sourceDID, KeyID: string(keystore.KeyIDSigning),
 		VerificationMethod: sourceDID + "#signing", PipelineID: "pipe", ProcessID: "agg",
@@ -390,7 +398,7 @@ func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resol
 	if err := ks.SaveKeyPair(chainedDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpChained}); err != nil {
 		t.Fatalf("save chained key: %v", err)
 	}
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 
 	didRes := local.New()
 	wireDocs(didRes, kpSource.PublicKey, kpChained.PublicKey)

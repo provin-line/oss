@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ const (
 
 // --- in-memory keystore -----------------------------------------------------
 
-var errKeyNotFound = errors.New("key not found")
+var errKeyNotFound = fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 
 type memKeyStore struct {
 	mu   sync.Mutex
@@ -64,6 +65,14 @@ func (m *memKeyStore) GetPrivateKey(d string, keyID keystore.KeyID) ([]byte, err
 		return nil, errKeyNotFound
 	}
 	return kp.PrivateKey, nil
+}
+
+func (m *memKeyStore) Sign(d string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
 }
 
 func (m *memKeyStore) DeleteKeys(d string) error {
@@ -101,7 +110,7 @@ func newService(t *testing.T) (*didregistry.Service, crypto.Signer, []byte) {
 			{ID: "#vc-resolver", Type: "VCResolver", ServiceEndpoint: "https://" + registry + "/vc"},
 		}),
 	)
-	return svc, ed25519.NewSigner(ownerKS), ownerKP.PublicKey
+	return svc, ownerKS, ownerKP.PublicKey
 }
 
 func ed25519JWK(pub []byte) map[string]any {
@@ -342,7 +351,7 @@ func TestRegisterOwner_RejectsForeignRegistry(t *testing.T) {
 	foreignDID := "did:dplaax:other.dplaax.dev:org:acme"
 	ks := newMemKS()
 	ks.SaveKeyPair(foreignDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: foreignKP})
-	fsigner := ed25519.NewSigner(ks)
+	fsigner := ks
 	base := did.New(did.DocumentFields{
 		ID: foreignDID, Controller: foreignDID,
 		VerificationMethod: []did.VerificationMethod{{

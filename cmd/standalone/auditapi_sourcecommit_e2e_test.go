@@ -52,7 +52,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 		res.Add(capProcessDoc(iss, owner, kp.PublicKey))
 	}
 	res.Add(capOwnerDoc(owner))
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 	apiHash := func(b []byte) string {
 		s := sha256.Sum256(b)
 		return "sha256:" + hex.EncodeToString(s[:])

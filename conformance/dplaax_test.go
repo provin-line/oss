@@ -611,7 +611,7 @@ func signedFixtureCred(t *testing.T) (*vc.PipelinePassCredential, []byte) {
 	if err := ks.SaveKeyPair(fxIssuer, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("save key: %v", err)
 	}
-	cred, err := vc.NewBuilder(ed25519.NewSigner(ks)).BuildFirstDrop(
+	cred, err := vc.NewBuilder(ks).BuildFirstDrop(
 		fxIssuer, string(keystore.KeyIDSigning), fxIssuer+"#signing",
 		vc.CredentialSubjectFields{
 			PipelineID:          "p1",
@@ -690,7 +690,7 @@ func fixtureSigner(t *testing.T, issuerDID string) (*crypto.KeyPair, crypto.Sign
 	if err := ks.SaveKeyPair(issuerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
 		t.Fatalf("save key: %v", err)
 	}
-	return kp, ed25519.NewSigner(ks)
+	return kp, ks
 }
 
 // ownerDoc builds the owner's self-controlled document carrying the signing

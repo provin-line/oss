@@ -34,12 +34,20 @@ func (m *memKeyStore) GetPrivateKey(d string, keyID keystore.KeyID) ([]byte, err
 	return nil, keystore.ErrNotFound
 }
 
+func (m *memKeyStore) Sign(d string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
+
 func (m *memKeyStore) DeleteKeys(d string) error { delete(m.keys, d); return nil }
 
 // handlerOver builds a Handler over the real domain backed by ks, so the domain
 // sentinels actually flow through mapError to Connect codes.
 func handlerOver(ks *memKeyStore) *handler.Handler {
-	return handler.New(signer.New(ed25519.NewSigner(ks)))
+	return handler.New(signer.New(ks))
 }
 
 func newKS() *memKeyStore {

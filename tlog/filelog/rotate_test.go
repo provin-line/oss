@@ -253,7 +253,7 @@ func TestRotate_SignedSeal(t *testing.T) {
 	}
 	dir := t.TempDir()
 	l, err := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
-		Signer: ed25519.NewSigner(ks), SignerDID: signerDID,
+		Signer: ks, SignerDID: signerDID,
 		KeyID: string(keystore.KeyIDSigning), VerificationMethod: vm, LogID: logID,
 	}))
 	if err != nil {

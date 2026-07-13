@@ -64,7 +64,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 	res.Add(capOwnerDoc(srOwner))
 	res.Add(capOwnerDoc(srEvilOwn))
 
-	builder := vc.NewBuilder(ed25519.NewSigner(ks))
+	builder := vc.NewBuilder(ks)
 
 	// Shared audit substrate: one local store + queue + status + receipts, read by
 	// both the sink's registrar (write side) and the audit runner (verdict side).

@@ -122,7 +122,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	if err := ownerKS.SaveKeyPair(ownerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: ownerKP}); err != nil {
 		t.Fatalf("save owner key: %v", err)
 	}
-	return srv, ed25519.NewSigner(ownerKS), ownerKP.PublicKey
+	return srv, ownerKS, ownerKP.PublicKey
 }
 
 // The standalone peer surface must record relationship evidence

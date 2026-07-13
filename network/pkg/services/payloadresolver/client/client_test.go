@@ -57,7 +57,7 @@ func newClient(t *testing.T, srv *fakeServer, maxBytes int) (*client.Resolver, s
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	return client.New(ed25519.NewSigner(ks), clientDID, httpSrv.Client(), maxBytes), httpSrv.URL
+	return client.New(ks, clientDID, httpSrv.Client(), maxBytes), httpSrv.URL
 }
 
 // Multi-chunk assembly: the client concatenates ordered frames into the whole

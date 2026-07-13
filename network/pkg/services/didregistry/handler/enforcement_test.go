@@ -63,6 +63,14 @@ func (m *memKeyStore) GetPrivateKey(d string, keyID keystore.KeyID) ([]byte, err
 	return nil, connect.NewError(connect.CodeNotFound, nil)
 }
 
+func (m *memKeyStore) Sign(d string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(d, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
+}
+
 func (m *memKeyStore) DeleteKeys(d string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -84,7 +92,7 @@ func newSvc(t *testing.T) (*didregistry.Service, crypto.Signer, []byte) {
 		yamlstore.New(t.TempDir()), newMemKS(), ed25519.Generator{}, ed25519.Verifier{}, registry,
 		didregistry.WithClock(func() time.Time { return time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC) }),
 	)
-	return svc, ed25519.NewSigner(ownerKS), ownerKP.PublicKey
+	return svc, ownerKS, ownerKP.PublicKey
 }
 
 func authClient(t *testing.T, svc *didregistry.Service, rules []endpoint.StaticRule) didpbconnect.DIDServiceClient {

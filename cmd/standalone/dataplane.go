@@ -230,7 +230,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	}
 
 	dp := &dataPlane{conn: conn, tlogs: map[string]tlog.Log{}}
-	builder := vc.NewBuilder(ed25519.NewSigner(keyStore))
+	builder := vc.NewBuilder(keyStore)
 	// newEmission builds one producing loop's emission log and registers it
 	// under its log id (the output subject). Durable + checkpoint-armed when
 	// TlogDir is set (the node path); in-memory otherwise (unit-test seam).
@@ -245,7 +245,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			sum := sha256.Sum256([]byte(subject))
 			dir := filepath.Join(deps.TlogDir, hex.EncodeToString(sum[:]))
 			fl, err := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
-				Signer:             ed25519.NewSigner(keyStore),
+				Signer:             keyStore,
 				SignerDID:          issuer.DID,
 				KeyID:              issuer.KeyID,
 				VerificationMethod: issuer.VerificationMethod,

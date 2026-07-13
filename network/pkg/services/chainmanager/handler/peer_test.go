@@ -517,7 +517,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 	if err := ks.SaveKeyPair(subscriber, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	signer := ed25519.NewSigner(ks)
+	signer := ks
 
 	// A real wireauth verifier resolving the subscriber's #auth document. Clock
 	// sits 1s after the signing instant (proof just inside the past window) and

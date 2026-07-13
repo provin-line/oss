@@ -45,9 +45,17 @@ func (m *memKeyStore) SaveKeyPair(didStr string, keys map[keystore.KeyID]*crypto
 func (m *memKeyStore) GetPrivateKey(didStr string, keyID keystore.KeyID) ([]byte, error) {
 	k, ok := m.keys[didStr+"#"+string(keyID)]
 	if !ok {
-		return nil, errors.New("key not found")
+		return nil, fmt.Errorf("key not found: %w", keystore.ErrNotFound)
 	}
 	return k, nil
+}
+
+func (m *memKeyStore) Sign(didStr string, keyID string, data []byte) ([]byte, error) {
+	priv, err := m.GetPrivateKey(didStr, keystore.KeyID(keyID))
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(priv, data)
 }
 
 func (m *memKeyStore) DeleteKeys(string) error { return nil }
@@ -123,7 +131,7 @@ func buildFixture(t *testing.T, originIssuer, childIssuer string) fixture {
 	if err := ks.SaveKeyPair(childIssuer, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpB}); err != nil {
 		t.Fatalf("SaveKeyPair B: %v", err)
 	}
-	b := vc.NewBuilder(ed25519.NewSigner(ks))
+	b := vc.NewBuilder(ks)
 
 	const (
 		hashIn  = "sha256:1111111111111111111111111111111111111111111111111111111111111111"

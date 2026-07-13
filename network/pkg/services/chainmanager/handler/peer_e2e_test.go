@@ -67,7 +67,7 @@ func e2eSigner(t *testing.T, subject string) (crypto.Signer, []byte) {
 	if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	return ed25519.NewSigner(ks), kp.PublicKey
+	return ks, kp.PublicKey
 }
 
 func e2eNonce(t *testing.T) string {
