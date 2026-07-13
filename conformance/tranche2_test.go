@@ -27,8 +27,10 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
@@ -36,6 +38,7 @@ import (
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/tlog/filelog"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
@@ -153,40 +156,75 @@ func runResolverBodyEncoding(t *testing.T, v dplaaxVector) {
 	}
 }
 
-// --- resolver.states (resolver-004, 005) ---
+// --- resolver.states (resolver-004, 005, 009) ---
 //
-// A resolver's lookup state maps to a confidence: Unavailable (transient) ->
-// indeterminate, NotFound (definitive) -> failed. Driven through the real
-// vc.Verifier confidence discipline: a fake resolver returns a transient error
-// (Unavailable) or one wrapping resolver.ErrNotFound (NotFound), and the
-// verifier's weakest-link overall reflects the state. This exercises the
-// DID-resolution axis — the one resolver in the tree that implements the full
-// Resolved/Unavailable/NotFound trichotomy (VC-content consumers fold both
-// misses to indeterminate; see gap-backlog).
+// A lookup state maps to a confidence under the authority-scoped rule
+// (resolver.states, revised P0-11): Unavailable -> indeterminate
+// (authority-independent); NotFound from a non-existence authority -> failed;
+// NotFound from a non-authoritative source -> indeterminate. The vectors carry
+// the authority premise explicitly (non_existence_authority) so the mapping's
+// input is pinned implementation-independently.
+//
+// The authoritative branch is driven through the DID-resolution axis — the DID
+// registry IS the naming authority for its DIDs, so its definitive miss is a
+// global non-existence assertion (vc.Verifier maps it to failed). The
+// non-authoritative branch is driven through the real consume-locus verifier:
+// a content-addressed VC store is not a non-existence authority, and
+// auditor.ConsumeVerifier maps its ErrSourceNotFound to indeterminate (orphan)
+// — never a definitive negative.
 func runResolverStates(t *testing.T, v dplaaxVector) {
 	var input struct {
-		ResolverState string `json:"resolver_state"`
+		ResolverState         string `json:"resolver_state"`
+		NonExistenceAuthority *bool  `json:"non_existence_authority"`
 	}
 	mustParse(t, v.Input, &input)
+	want := expectConfidence(t, v)
 
-	var r resolver.Resolver
-	switch input.ResolverState {
-	case "Unavailable":
-		r = errResolver{err: errors.New("resolver: transport failure")}
-	case "NotFound":
-		r = errResolver{err: resolver.ErrNotFound}
+	verifyDIDAxis := func(resolveErr error) {
+		cred, _ := signedFixtureCred(t)
+		res, err := vc.NewVerifier(errResolver{err: resolveErr}, ed25519.Verifier{}).Verify(context.Background(), cred)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if res.Overall != want {
+			t.Errorf("Overall = %v, want %v (axes %+v)", res.Overall, want, res.Axes)
+		}
+	}
+
+	switch {
+	case input.ResolverState == "Unavailable":
+		// Authority-independent mapping: a transient failure to answer.
+		verifyDIDAxis(errors.New("resolver: transport failure"))
+	case input.ResolverState == "NotFound" && input.NonExistenceAuthority != nil && *input.NonExistenceAuthority:
+		// Authoritative premise: the DID registry axis.
+		verifyDIDAxis(resolver.ErrNotFound)
+	case input.ResolverState == "NotFound" && input.NonExistenceAuthority != nil && !*input.NonExistenceAuthority:
+		// Non-authoritative premise: a VC content store's definitive local
+		// miss, through the real consume-locus verifier.
+		cv, err := auditor.NewConsumeVerifier(vc.NewVerifier(local.New(), ed25519.Verifier{}), notFoundSource{})
+		if err != nil {
+			t.Fatalf("NewConsumeVerifier: %v", err)
+		}
+		cred, _ := signedFixtureCred(t)
+		verdict, err := cv.Verify(context.Background(), cred,
+			[]string{"sha256:4444444444444444444444444444444444444444444444444444444444444444"})
+		if err != nil {
+			t.Fatalf("ConsumeVerifier.Verify: %v", err)
+		}
+		if verdict.State != want {
+			t.Errorf("consume-locus state = %v, want %v (reason %v)", verdict.State, want, verdict.Reason)
+		}
 	default:
-		t.Fatalf("unhandled resolver_state %q", input.ResolverState)
+		t.Fatalf("unhandled resolver_state %q (NotFound requires the non_existence_authority premise — resolver.states)", input.ResolverState)
 	}
+}
 
-	cred, _ := signedFixtureCred(t)
-	res, err := vc.NewVerifier(r, ed25519.Verifier{}).Verify(context.Background(), cred)
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if got, want := res.Overall, expectConfidence(t, v); got != want {
-		t.Errorf("Overall = %v, want %v (axes %+v)", got, want, res.Axes)
-	}
+// notFoundSource is a SourceResolver whose every lookup is a definitive local
+// miss — the content store's NotFound.
+type notFoundSource struct{}
+
+func (notFoundSource) Resolve(context.Context, string) (*vc.PipelinePassCredential, error) {
+	return nil, auditor.ErrSourceNotFound
 }
 
 // errResolver is a resolver.Resolver that fails every lookup with a fixed error,
@@ -205,8 +243,10 @@ func (e errResolver) Resolve(context.Context, string) (*did.DIDDocument, error) 
 // file-backed yamlstore, whose Save enforces the version key with O_EXCL. Notes:
 // the vector's key "schema/orders" is sanitized (yamlstore rejects "/" in a name
 // for path-traversal safety), and this drives the store layer directly — the
-// production schemaregistry.Service.Register auto-computes versions and cannot
-// express a caller-chosen re-committed version (recorded in gap-backlog).
+// vectors' caller-chosen versions are inexpressible through the production
+// Service (no version parameter). The production seam's append-only obligations
+// are pinned separately by TestRegistrySchemaServiceAppendOnly (P0-11 /
+// gap-backlog L6 resolution).
 func runRegistry(t *testing.T, v dplaaxVector) {
 	var input struct {
 		Sequence []struct {
@@ -281,6 +321,60 @@ func registryName(key string) string {
 	return strings.ReplaceAll(key, "/", "-")
 }
 
+// TestRegistrySchemaServiceAppendOnly pins registry.append-only through the
+// PRODUCTION seam — schemaregistry.Service.Register — which runRegistry cannot
+// drive (the vectors' caller-chosen versions are inexpressible there: the
+// Service auto-computes versions from content). Not a vector: a vector with no
+// version parameter would encode this implementation's API shape into the
+// impl-agnostic catalog (P0-11 ruling). What the seam guarantees:
+//
+//   - an update is a NEW entry (different content -> different version, never
+//     an overwrite),
+//   - a committed entry stays retrievable byte-identical under its original
+//     identifiers,
+//   - identical re-registration is idempotent (same version back, no new entry),
+//   - the forbidden operation itself — re-committing an existing version with
+//     different content — is structurally inexpressible at this seam (no
+//     version parameter), the strongest enforcement; the content-hash collision
+//     guard behind it is the behavioral backstop.
+func TestRegistrySchemaServiceAppendOnly(t *testing.T) {
+	// Versions are "YYYY-MM-DD-{hash16}" (date from the Service clock), and
+	// idempotency is same-UTC-day by design — pin the clock so the test never
+	// straddles a UTC midnight between registrations.
+	fixed := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	svc := schemaregistry.New(yamlstore.New(t.TempDir()),
+		schemaregistry.WithClock(func() time.Time { return fixed }))
+	ctx := context.Background()
+	schemaA := []byte(`{"type":"object","properties":{"amount":{"type":"number"}}}`)
+	schemaB := []byte(`{"type":"object","properties":{"currency":{"type":"string"}}}`)
+
+	recA, err := svc.Register(ctx, "orders", "JsonSchema", schemaA, "")
+	if err != nil {
+		t.Fatalf("Register A: %v", err)
+	}
+	recB, err := svc.Register(ctx, "orders", "JsonSchema", schemaB, "")
+	if err != nil {
+		t.Fatalf("Register B: %v", err)
+	}
+	if recB.Version == recA.Version {
+		t.Fatalf("different content produced the same version %q — update must be a new entry", recA.Version)
+	}
+	got, err := svc.Get(ctx, "orders", recA.Version)
+	if err != nil {
+		t.Fatalf("Get original version after second registration: %v", err)
+	}
+	if string(got.SchemaBody) != string(schemaA) {
+		t.Errorf("original version body changed after a later registration:\n got %s\nwant %s", got.SchemaBody, schemaA)
+	}
+	recA2, err := svc.Register(ctx, "orders", "JsonSchema", schemaA, "")
+	if err != nil {
+		t.Fatalf("idempotent re-register: %v", err)
+	}
+	if recA2.Version != recA.Version {
+		t.Errorf("identical re-registration minted a new version %q, want idempotent %q", recA2.Version, recA.Version)
+	}
+}
+
 // --- chain.trigger.retention (chain-001..005) ---
 //
 // A single-conformant-predecessor trigger MUST carry previousCredential; any
@@ -291,8 +385,11 @@ func registryName(key string) string {
 // through the real cred.PreviousCredential accessor. chain-005 is fan-out: N
 // credentials off one predecessor, all sharing that previousCredential.
 //
-// TODO: re-point at a runtime trigger classifier if one is ever exported
-// (gap-backlog: chain trigger classification has no callable seam today).
+// Pinning the wire projection is the settled conformance obligation, not a
+// stopgap: the trigger criterion is issuance-time, and its
+// conformance-observable projection is exactly previousCredential presence —
+// a runtime classifier seam is an implementation choice the protocol does not
+// require (chain.trigger.retention notes, recorded P0-11).
 func runChainTrigger(t *testing.T, v dplaaxVector) {
 	var input struct {
 		Trigger     string            `json:"trigger"`
@@ -331,11 +428,15 @@ func runChainTrigger(t *testing.T, v dplaaxVector) {
 //
 // Attribution resolves each chain segment's issuer to its Owner DID, and
 // attributes everything preceding the chain origin to the origin's Owner
-// (unconditionally — a source commitment does not shed it). On the did:dplaax
-// plane the Owner is a structural prefix of the issuer, so the driver composes
-// the real dplaax.Parse().OwnerDID() over each segment. No exported "attribution"
-// function exists in the tree (recorded in gap-backlog); this pins the vectors
-// against the real structural-owner derivation.
+// (unconditionally — a source commitment does not shed it). Driven against the
+// REAL attribution primitive, vc.Verifier.AttributeOwner (exported P0-11 /
+// gap-backlog L6), over a resolver built from the vector's controller-binding
+// fixture — so the resolver-walk branch of the controller chain is exercised,
+// not just the did:dplaax structural prefix. The structural derivation
+// (dplaax.Parse().OwnerDID()) stays as a cross-check: on the did:dplaax plane
+// the walk and the prefix must agree. Fixture credentials are pre-verified
+// inputs by construction — AttributeOwner's contract requires the caller to
+// verify a credential before attributing its issuer.
 func runAuditAttribution(t *testing.T, v dplaaxVector) {
 	var input struct {
 		Chain       []json.RawMessage `json:"chain"`
@@ -361,22 +462,23 @@ func runAuditAttribution(t *testing.T, v dplaaxVector) {
 		wantOwner[s.Index] = s.Owner
 	}
 
+	verifier := vc.NewVerifier(resolverFromControllers(input.Controllers), ed25519.Verifier{})
 	originIndex := -1
 	for i, raw := range input.Chain {
 		cred := mustCred(t, raw)
-		structural := ownerOf(t, cred.Issuer())
-		if structural != wantOwner[i] {
-			t.Errorf("segment %d owner = %q, want %q", i, structural, wantOwner[i])
+		owner, err := verifier.AttributeOwner(context.Background(), cred.Issuer())
+		if err != nil {
+			t.Fatalf("segment %d: AttributeOwner(%s): %v", i, cred.Issuer(), err)
 		}
-		// Cross-check the explicit controller chain the vector supplies against
-		// the structural prefix derivation. On the did:dplaax plane they must
-		// agree; asserting it future-proofs a vector where a controller is not
-		// the issuer's structural parent (which structural derivation alone
-		// would silently miss).
-		if len(input.Controllers) > 0 {
-			if viaCtl := ownerViaControllers(input.Controllers, cred.Issuer()); viaCtl != structural {
-				t.Errorf("segment %d: controllers-derived owner %q != structural owner %q", i, viaCtl, structural)
-			}
+		if owner != wantOwner[i] {
+			t.Errorf("segment %d owner = %q, want %q", i, owner, wantOwner[i])
+		}
+		// Cross-check the resolver walk against the structural prefix
+		// derivation. On the did:dplaax plane they must agree; asserting it
+		// future-proofs a vector where a controller is not the issuer's
+		// structural parent (which either derivation alone would miss).
+		if structural := ownerOf(t, cred.Issuer()); owner != structural {
+			t.Errorf("segment %d: walked owner %q != structural owner %q", i, owner, structural)
 		}
 		if cred.PreviousCredential() == "" {
 			originIndex = i
@@ -385,10 +487,33 @@ func runAuditAttribution(t *testing.T, v dplaaxVector) {
 	if originIndex < 0 {
 		t.Fatal("no chain origin: every credential carries previousCredential")
 	}
-	originOwner := ownerOf(t, mustCred(t, input.Chain[originIndex]).Issuer())
+	originOwner, err := verifier.AttributeOwner(context.Background(), mustCred(t, input.Chain[originIndex]).Issuer())
+	if err != nil {
+		t.Fatalf("AttributeOwner(origin): %v", err)
+	}
 	if originOwner != e.Attribution.PreChain {
 		t.Errorf("pre_chain = %q, want %q", originOwner, e.Attribution.PreChain)
 	}
+}
+
+// resolverFromControllers materializes the vector's controller-binding fixture
+// as DID documents in a local resolver: every key is a document whose
+// controller is its value; a DID that appears only as a value is terminal —
+// an Owner, self-controlled by omission (did.New leaves Controller empty).
+func resolverFromControllers(controllers map[string]string) *local.Resolver {
+	r := local.New()
+	terminal := map[string]bool{}
+	for _, ctrl := range controllers {
+		terminal[ctrl] = true
+	}
+	for id, ctrl := range controllers {
+		r.Add(did.New(did.DocumentFields{ID: id, Controller: ctrl}))
+		delete(terminal, id)
+	}
+	for id := range terminal {
+		r.Add(did.New(did.DocumentFields{ID: id}))
+	}
+	return r
 }
 
 // ownerOf structurally reduces a did:dplaax issuer to its Owner DID.
@@ -399,21 +524,6 @@ func ownerOf(t *testing.T, issuer string) string {
 		t.Fatalf("parse issuer %q: %v", issuer, err)
 	}
 	return d.OwnerDID().String()
-}
-
-// ownerViaControllers walks the explicit controller chain from issuer to its
-// fixpoint (an id with no controller entry is the Owner), cycle-guarded.
-func ownerViaControllers(controllers map[string]string, issuer string) string {
-	seen := map[string]bool{}
-	cur := issuer
-	for {
-		next, ok := controllers[cur]
-		if !ok || seen[cur] {
-			return cur
-		}
-		seen[cur] = true
-		cur = next
-	}
 }
 
 // --- process catalog (process-005, 006) ---

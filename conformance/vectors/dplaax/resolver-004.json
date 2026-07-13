@@ -1,7 +1,7 @@
 {
   "id": "resolver-004",
   "rule": "resolver.states",
-  "description": "Unavailable (currently not held; non-existence is not asserted) → indeterminate",
+  "description": "Unavailable (the lookup could not establish whether the source holds the key — e.g. transient inability to answer; no definitive report is made) → indeterminate",
   "input": {
     "resolver_state": "Unavailable"
   },

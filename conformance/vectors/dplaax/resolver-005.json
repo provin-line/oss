@@ -1,9 +1,10 @@
 {
   "id": "resolver-005",
   "rule": "resolver.states",
-  "description": "NotFound (a definitive assertion of non-existence) → failed",
+  "description": "NotFound from a non-existence authority (the queried source is authoritative for non-existence in the identifier's namespace, e.g. a DID registry for its DIDs — the report is a definitive global assertion) → failed",
   "input": {
-    "resolver_state": "NotFound"
+    "resolver_state": "NotFound",
+    "non_existence_authority": true
   },
   "expect": {
     "confidence": "failed"

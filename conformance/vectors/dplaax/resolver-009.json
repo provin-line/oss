@@ -1,0 +1,12 @@
+{
+  "id": "resolver-009",
+  "rule": "resolver.states",
+  "description": "NotFound from a non-authoritative source (a content-addressed VC store reports it does not hold the key — a store-local report, not a global non-existence claim) → indeterminate",
+  "input": {
+    "resolver_state": "NotFound",
+    "non_existence_authority": false
+  },
+  "expect": {
+    "confidence": "indeterminate"
+  }
+}

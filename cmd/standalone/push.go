@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	interceptors "github.com/o3co/protobuf.interceptors"
-	"github.com/o3co/protobuf.interceptors/endpoint"
+	"github.com/provin-line/oss/network/pkg/auth"
 
 	"github.com/provin-line/oss/pipeline/source/ingest/apipush"
 	"github.com/provin-line/oss/pipeline/transport"
@@ -53,7 +53,7 @@ func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
 
 // mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/.
 // Zero bindings mount nothing (HTTP-only and NATS-only deployments unchanged).
-func mountPushRoutes(mux *http.ServeMux, bindings []pushBinding, verifier endpoint.VerifierEndpoint, maxBodyBytes int) error {
+func mountPushRoutes(mux *http.ServeMux, bindings []pushBinding, verifier auth.Verifier, maxBodyBytes int) error {
 	for _, b := range bindings {
 		inner, err := apipush.New(apipush.Config{Publisher: b.publisher, MaxBodyBytes: maxBodyBytes})
 		if err != nil {
@@ -75,11 +75,11 @@ func mountPushRoutes(mux *http.ServeMux, bindings []pushBinding, verifier endpoi
 //     then readiness-gated, then handed to the adapter.
 //
 // The PDP check is the same L1 seam the RPC interceptors enforce: bearer from
-// the Authorization header into the context, then VerifierEndpoint.Verify with
+// the Authorization header into the context, then auth.Verifier.Verify with
 // resource "ingest", action "push" (proto policy-option naming convention).
 // Missing/empty bearer → 401; any Verify failure → 403 (the RPC interceptor
 // likewise does not distinguish PDP denial from PDP outage).
-func pushRoutes(inner http.Handler, verifier endpoint.VerifierEndpoint, ready <-chan struct{}) http.Handler {
+func pushRoutes(inner http.Handler, verifier auth.Verifier, ready <-chan struct{}) http.Handler {
 	requireReady := func(w http.ResponseWriter) bool {
 		select {
 		case <-ready:

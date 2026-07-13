@@ -6,11 +6,12 @@
 // the network services' ConnectRPC handlers.
 //
 // Policy is declared per-RPC in the .proto via the o3co.authz.v1.policy method
-// option (resource + action); Interceptors enforces it against a
-// VerifierEndpoint. An RPC with no policy option is not checked.
+// option (resource + action); Interceptors enforces it against a Verifier.
+// An RPC with no policy option is not checked.
 package auth
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 
@@ -19,21 +20,35 @@ import (
 	"github.com/o3co/protobuf.interceptors/endpoint"
 )
 
+// Verifier is the authorization verdict seam: one policy check — may the
+// caller in ctx perform action on resource; a nil error is the only allow.
+// It is package-owned so the exported auth surface carries no upstream type
+// identity (the o3co enforcement endpoints satisfy it structurally): swapping
+// the enforcement library never breaks this package's signatures. Caller
+// identity travels as a bearer token under the o3co interceptors' context
+// key (interceptors.WithBearerToken / BearerTokenFromContext) — the seam
+// stabilizes the SIGNATURES, and an alternative Verifier implementation must
+// still read that ctx convention to see the caller.
+type Verifier interface {
+	Verify(ctx context.Context, resource, action string) error
+}
+
 // Interceptors returns the ordered authorization interceptor chain for a
 // ConnectRPC handler: the policy-option interceptor (reads the proto option into
 // context) MUST precede the verification interceptor (reads the policy from
 // context and calls the verifier), and this constructor guarantees that order.
-func Interceptors(verifier endpoint.VerifierEndpoint) []connect.Interceptor {
+func Interceptors(verifier Verifier) []connect.Interceptor {
 	return []connect.Interceptor{
 		o3coconnect.PolicyOptionInterceptor(),
 		o3coconnect.VerificationInterceptor(verifier),
 	}
 }
 
-// NewVerifier builds the production VerifierEndpoint — the configured PDP
-// client — dispatching on cfg.Backend. It returns the backend-neutral
-// endpoint.VerifierEndpoint interface so callers depend on this seam, not on a
-// concrete backend, and it keeps this package free of any backend's option type.
+// NewVerifier builds the production Verifier — the configured PDP client —
+// dispatching on cfg.Backend. It returns the backend-neutral, package-owned
+// Verifier seam so callers depend on it, not on a concrete backend or the
+// upstream enforcement library, and it keeps this package free of any
+// backend's option type.
 //
 // Every backend is fail-closed: the selected backend's required config must
 // validate or NewVerifier returns an error (no verifier is built), and an
@@ -45,7 +60,7 @@ func Interceptors(verifier endpoint.VerifierEndpoint) []connect.Interceptor {
 // authenticate: it checks only bearer presence, so it is for single-tenant or
 // perimeter-authenticated deployments, never one relying on the PDP to
 // authenticate callers (see the config godoc and reference.conf).
-func NewVerifier(cfg *AuthConfig) (endpoint.VerifierEndpoint, error) {
+func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}

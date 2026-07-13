@@ -58,6 +58,7 @@ func init() {
 	dplaaxRunners["resolver-003"] = runResolverImmutability
 	registerRunner(runResolverStates, "resolver", 4, 5)
 	dplaaxRunners["resolver-008"] = runResolverBodyEncoding
+	dplaaxRunners["resolver-009"] = runResolverStates // non-authoritative NotFound (P0-11)
 	registerRunner(runProcess, "process", 5, 6)
 	dplaaxRunners["process-004"] = runProcessSinkVerify
 
@@ -69,12 +70,23 @@ func init() {
 	dplaaxRunners["transfer-003"] = runTransferIngressRetention
 	dplaaxRunners["transfer-004"] = runTransferRelationshipRecord
 
-	// Blocked on missing implementation surface — ledgered so the coverage
-	// guard keeps the gap visible rather than silently uncovered. These are
-	// recorded in the gap-backlog, not driver TODOs. Each reason names its own
-	// true blocker (not a blanket family reason).
-	dplaaxSkips["resolver-006"] = "blocked-on: no eviction/delete API in vcresolver.Store — the forbidden Resolved->NotFound transition cannot be constructed"
-	dplaaxSkips["resolver-007"] = "blocked-on: no batch-lookup RPC in dplaax.vc.v1 — batchresolver is an internal async worker, not a client endpoint"
+	// Not runnable by design — ledgered so the coverage guard keeps the
+	// reasoning visible rather than silently uncovered. Each reason names its
+	// own ground (not a blanket family reason).
+	//
+	// resolver-006 is STRUCTURALLY ENFORCED, not blocked (P0-11 ruling):
+	// vcresolver.Store exposes no eviction/delete surface (Put/Get/ListHashes —
+	// store.go), so the forbidden Resolved->NotFound transition is
+	// unconstructible; the API's absence is the strongest enforcement.
+	// (Pool.Remove is the unresolved-holes queue, not the credential store.)
+	// The vector is retained as the shape pin should an eviction surface ever
+	// appear — at which point this entry converts to a driver.
+	dplaaxSkips["resolver-006"] = "structurally enforced: vcresolver.Store has no eviction/delete surface, so the forbidden Resolved->NotFound transition is unconstructible (P0-11; vector retained as the shape pin for any future eviction surface)"
+	// resolver-007 is RESERVED, not blocked (P0-11 ruling): resolver.batch.shape
+	// binds any batch lookup surface an implementation or profile adds, without
+	// obligating one to exist; dplaax.vc.v1 defines none (batchresolver is an
+	// internal async worker, not a lookup surface).
+	dplaaxSkips["resolver-007"] = "reserved: resolver.batch.shape binds a future batch lookup surface; none exists in dplaax.vc.v1 (P0-11; the vector pins the shape such a surface must satisfy)"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
 }
 

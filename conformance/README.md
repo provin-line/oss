@@ -34,7 +34,7 @@ vectors: duplicating them here would create a second source of truth.
 ## dplaax protocol vectors (vendored)
 
 `vectors/dplaax/` vendors the protocol's own conformance vector catalog
-(`dplaax.spec_draft` `vectors/`, 95 vectors) byte-exact, pinned by
+(`dplaax.spec_draft` `vectors/`, 100 vectors) byte-exact, pinned by
 `MANIFEST.sha256`. The manifest test fails on any in-place edit — adopting a
 spec change is a deliberate act: run `scripts/sync-spec-vectors.sh` and commit
 the vendored diff.
@@ -53,7 +53,7 @@ subset without spuriously failing the guard.
 
 Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors`.
 
-### Coverage: 89 driven, 6 ledgered skips (95 total)
+### Coverage: 95 driven, 5 ledgered skips (100 total)
 
 **Tranche 1** — pure-function families (runners in `dplaax_test.go`):
 
@@ -74,25 +74,31 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 |---|---|
 | `commitment-012` | `vcresolver/filestore` durable store: Put → new instance over same dir (restart) → Get resolves |
 | `resolver-001..003, 008` | `vc.PipelinePassCredential.Hash` content-address (address form, immutability, base64url body) |
-| `resolver-004..005` | `vc.Verifier` confidence discipline via a fake resolver (Unavailable→indeterminate, NotFound→failed) |
+| `resolver-004..005, 009` | authority-scoped state→confidence mapping (resolver.states, P0-11): Unavailable and authoritative NotFound via `vc.Verifier` over a fake DID resolver (indeterminate / failed); non-authoritative NotFound via the real `auditor.ConsumeVerifier` (`ErrSourceNotFound` → indeterminate) |
 | `registry-001..002` | `schemaregistry/store/yamlstore` append-only (O_EXCL) + deprecate-retains-body |
 | `chain-001..005` | trigger↔`PreviousCredential` wire-shape invariant (no runtime classifier exists — see below) |
-| `audit-001..004` | `did/dplaax.Parse().OwnerDID()` per-segment structural attribution + origin default, cross-checked against the vector's controller chain |
+| `audit-001..004` | real `vc.Verifier.AttributeOwner` (exported P0-11) walking a resolver built from the vector's controller-binding fixture — per-segment attribution + origin default, cross-checked against the structural `did/dplaax.Parse().OwnerDID()` prefix |
 | `process-004` | real `sink.Processor`: order-recording `Verifier`+`Writer` assert the sink verifies the received credential strictly before its external write (driven for both production and observation-only kinds — verify precedes write regardless of verdict policy) |
 | `process-005..006` | receipt wire-form + `PreviousCredential` presence + the receipt identity shape (`transformationClaim == provin:sink-receipt`, `inputHash == outputHash`); Custom-origin must not carry `previousCredential` |
 
-**Ledgered skips (5)** — visible via the guard, recorded in the scope's
-gap-backlog, each with its own true blocker (not a blanket family reason):
+**Ledgered skips (5)** — visible via the guard, each with its own ground (not
+a blanket family reason):
 
-- `resolver-006` — blocked: no eviction/delete API exists, so the forbidden
-  Resolved→NotFound transition cannot be constructed (the no-demotion rule is
-  vacuously satisfied, not enforced).
-- `resolver-007` — blocked: no batch-lookup RPC in `dplaax.vc.v1`.
+- `resolver-006` — structurally enforced (P0-11): `vcresolver.Store` exposes no
+  eviction/delete surface, so the forbidden Resolved→NotFound transition is
+  unconstructible — the API's absence is the enforcement, stronger than a
+  behavioral test. The vector is retained as the shape pin should an eviction
+  surface ever appear.
+- `resolver-007` — reserved (P0-11): `resolver.batch.shape` binds any batch
+  lookup surface an implementation or profile adds, without obligating one to
+  exist; `dplaax.vc.v1` defines none. The vector pins the shape such a surface
+  must satisfy.
 - `process-001..003` — blocked: no process-type/behavior classifier seam (the
-  four-type catalog is a static deployment attribute, not a callable classifier).
+  four-type catalog is a static deployment attribute, not a callable classifier;
+  recorded in the scope's gap-backlog).
 
 Where a tranche-2 driver reconstructs a rule the implementation embodies
-structurally rather than in a callable function (chain trigger classification;
-audit attribution — no exported attribution surface exists), the driver comment
-and the gap-backlog record it: the harness pins the vectors against the real
-primitives it can reach, and flags the missing production seam.
+structurally rather than in a callable function (chain trigger classification —
+the wire projection is the settled conformance obligation per
+chain.trigger.retention's notes), the driver comment records it: the harness
+pins the vectors against the real primitives it can reach.
