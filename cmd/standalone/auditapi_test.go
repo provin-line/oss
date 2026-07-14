@@ -44,7 +44,10 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "audit", Action: "read"}})
 	chainCfg := natsChainCfg(t)
-	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("newDIDResolution: %v", derr)
+	}
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {

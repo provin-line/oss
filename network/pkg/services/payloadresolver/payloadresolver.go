@@ -43,6 +43,13 @@ type Store interface {
 	// (content-addressed) and a repeat owner; a new owner is appended to the
 	// address's owner set. Returns the recomputed content address.
 	Put(payload []byte, ownerDID string) (string, error)
+	// Owners returns the owner set recorded at hash WITHOUT reading (or hashing)
+	// the payload bytes — the cheap authorization basis the serving boundary
+	// consults before it commits to serving (see ServingBoundary.Serve). Returns
+	// ErrNotFound iff no entry exists at hash. A present entry with an
+	// absent/unreadable owner sidecar returns an empty set (fail-closed at the
+	// serving boundary: no owner admits), never ErrNotFound.
+	Owners(hash string) (owners []string, err error)
 	// Get returns the payload bytes and the owner set held at hash, or
 	// ErrNotFound. A stored payload whose bytes no longer hash to the key is a
 	// damaged entry (a distinct error), never a silent miss.
@@ -80,9 +87,26 @@ func (s *Service) Store(ctx context.Context, payload []byte, ownerDID string) (s
 	return s.store.Put(payload, ownerDID)
 }
 
+// Owners returns the owner set recorded at hash WITHOUT reading the payload
+// bytes — the cheap authorization basis a serving boundary consults before it
+// commits to reading and streaming. The hash must be a well-formed content
+// address (ErrInvalidArgument otherwise); a well-formed miss is ErrNotFound.
+func (s *Service) Owners(ctx context.Context, hash string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !vc.IsContentAddress(hash) {
+		return nil, fmt.Errorf("%w: hash %q is not a sha256:<hex> content address", ErrInvalidArgument, hash)
+	}
+	return s.store.Owners(hash)
+}
+
 // Resolve returns the payload bytes and owner set held at hash. The hash must be
 // a well-formed content address (ErrInvalidArgument otherwise); a well-formed
 // miss is ErrNotFound.
+//
+// Resolve reads AND hashes the bytes, so a serving boundary must authorize the
+// caller (via Owners) BEFORE calling it — see ServingBoundary.Serve.
 func (s *Service) Resolve(ctx context.Context, hash string) ([]byte, []string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err

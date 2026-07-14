@@ -58,6 +58,18 @@ func (s *Store) Put(payload []byte, ownerDID string) (string, error) {
 	return hash, nil
 }
 
+// Owners returns a copy of the owner set at hash without materializing the
+// payload bytes (the cheap authorization basis), or ErrNotFound.
+func (s *Store) Owners(hash string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.m[hash]
+	if !ok {
+		return nil, payloadresolver.ErrNotFound
+	}
+	return append([]string(nil), e.owners...), nil
+}
+
 // Get returns a copy of the payload bytes and owner set at hash, or ErrNotFound.
 func (s *Store) Get(hash string) ([]byte, []string, error) {
 	s.mu.RLock()

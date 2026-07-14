@@ -81,32 +81,55 @@ const (
 // the control plane (BuildHandler) and the data plane (sink-loop credential
 // verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
 // e2e) override the default https://{registry} mapping (D-m6).
-func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver) {
+func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
 	)
+	// F8: enabling private-network reachability closes DID resolution to the
+	// configured registry set. The only pre-signature, attacker-driven outbound
+	// path is DID resolution, and the attacker controls the registry segment,
+	// which reaches private space ONLY via the open https://{registry} fallback.
+	// So in private mode the fallback is disabled (closeUnmapped): an unmapped
+	// (attacker-supplied) registry fails resolution instead of probing an
+	// internal address. A single resolver-base-url is inherently closed (every
+	// registry maps to the one operator base), so it satisfies the requirement.
+	closeUnmapped := coreCfg.AllowPrivateNetworks
 	var resolverOpts []didresolver.Option
+	scoped := false
 	if chainCfg.Transport == chainconfig.TransportNATS {
 		switch {
 		case len(chainCfg.NATS.RegistryBaseURLs) > 0:
-			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(registryBaseURL(chainCfg.NATS.RegistryBaseURLs)))
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(registryBaseURL(chainCfg.NATS.RegistryBaseURLs, closeUnmapped)))
+			scoped = true
 		case chainCfg.NATS.ResolverBaseURL != "":
 			base := chainCfg.NATS.ResolverBaseURL
 			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(func(string) (string, error) { return base, nil }))
+			scoped = true
 		}
 	}
-	return guard, didresolver.New(guard, resolverOpts...)
+	if closeUnmapped && !scoped {
+		// Private mode with fully-open resolution (no map, no single base) is the
+		// exact F8 hole: any attacker-supplied registry would reach private space.
+		// Fail closed and tell the operator to scope resolution.
+		return nil, nil, fmt.Errorf("core: allow-private-networks=true requires configured registry resolution (%s or %s) so an unmapped registry cannot reach private space", "provin.network.chain.nats.registry-base-urls", "provin.network.chain.nats.resolver-base-url")
+	}
+	return guard, didresolver.New(guard, resolverOpts...), nil
 }
 
 // registryBaseURL derives a registry's resolution base URL from the configured
-// per-registry map; an unmapped registry falls back to the didresolver default
-// (https://{registry}), so a partial map for local/VPC peers composes with
-// public registries.
-func registryBaseURL(urls map[string]string) func(registry string) (string, error) {
+// per-registry map. When closeUnmapped is false, an unmapped registry falls back
+// to the didresolver default (https://{registry}), so a partial map for
+// local/VPC peers composes with public registries. When closeUnmapped is true
+// (allow-private-networks mode, F8), an unmapped registry is REFUSED — the open
+// fallback would let an attacker-supplied registry name reach private space.
+func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
 	return func(registry string) (string, error) {
 		if base, ok := urls[registry]; ok {
 			return base, nil
+		}
+		if closeUnmapped {
+			return "", fmt.Errorf("standalone: registry %q is not in the configured registry map; open fallback is disabled while allow-private-networks is set (an unmapped registry must not reach private space)", registry)
 		}
 		return didresolver.DefaultBaseURL(registry)
 	}
@@ -243,8 +266,11 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// PayloadService is the internet-facing L2 by-reference payload serving
 	// boundary: same wireauth proof + allow-list admission (chainSvc.Admit) as the
 	// chain peer surface, likewise no L1 interceptor. A ResolvePayload REQUEST is
-	// just a content hash + proof (responses stream, unbounded by this).
-	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, peerVerifier, chainSvc), proofCap)
+	// just a content hash + proof (responses stream, unbounded by this). The
+	// ServingBoundary authorizes on owner metadata BEFORE reading the bytes and
+	// collapses a not-admitted caller to NotFound (F9/F4 — no existence oracle).
+	payloadServing := payloadresolver.NewServingBoundary(payloadSvc, chainSvc)
+	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadServing, peerVerifier), proofCap)
 	mux.Handle(payloadPath, payloadHandler)
 
 	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4),

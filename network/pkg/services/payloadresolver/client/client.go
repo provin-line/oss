@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -29,36 +30,92 @@ import (
 // opResolvePayload MUST match the publisher verifier's signed view.
 const opResolvePayload = "ResolvePayload"
 
-// DefaultMaxBytes caps an assembled payload when the caller sets no positive
-// limit — a memory-safety bound, since the client buffers the whole payload to
-// verify it against the content address.
-const DefaultMaxBytes = 64 << 20 // 64 MiB
+// Fetch-budget defaults, applied when Config leaves them non-positive. They are
+// imposed on every fetch INDEPENDENT of the caller's context, because a
+// consuming loop passes the process-lifetime context (no per-fetch deadline),
+// and an untrusted serving boundary must not be able to pin that loop forever.
+const (
+	// DefaultMaxBytes caps an assembled payload — a memory-safety bound, since
+	// the client buffers the whole payload to verify it against the content
+	// address.
+	DefaultMaxBytes = 64 << 20 // 64 MiB
+	// DefaultFetchTimeout bounds one whole fetch (dial + every chunk). Generous
+	// enough for a large payload over a slow-but-honest link.
+	DefaultFetchTimeout = 2 * time.Minute
+	// DefaultIdleTimeout bounds the gap between received chunks (and between the
+	// request and the first chunk) — the trickle defense: a slow steady stream
+	// trips idle even when the total budget is generous.
+	DefaultIdleTimeout = 30 * time.Second
+)
 
-// ErrNotFound reports a definitive miss: the serving boundary authoritatively
-// holds no payload at the content address (a publisher that agreed to
-// by-reference delivery and cannot serve a payload it emitted has broken its
-// retention obligation). Distinguished for observability; the consuming runtime
-// treats it the same as any other fetch failure (a liveness failure).
-var ErrNotFound = errors.New("payloadresolver/client: payload not found")
+var (
+	// ErrNotFound reports a definitive miss: the serving boundary authoritatively
+	// holds no payload at the content address (a publisher that agreed to
+	// by-reference delivery and cannot serve a payload it emitted has broken its
+	// retention obligation). Distinguished for observability; the consuming runtime
+	// treats it the same as any other fetch failure (a liveness failure).
+	ErrNotFound = errors.New("payloadresolver/client: payload not found")
+	// ErrFetchTimeout reports that a fetch exceeded the total per-fetch budget
+	// (Config.FetchTimeout). A liveness failure, distinguished for observability.
+	ErrFetchTimeout = errors.New("payloadresolver/client: fetch exceeded total budget")
+	// ErrFetchStalled reports that a fetch made no progress within the idle budget
+	// (Config.IdleTimeout) — the malicious-trickle / no-response defense. A
+	// liveness failure, distinguished for observability.
+	ErrFetchStalled = errors.New("payloadresolver/client: fetch stalled (idle budget exceeded)")
+)
+
+// Config configures a Resolver. Signer/SignerDID/HTTPClient are required; the
+// three bounds fall back to their Default* when non-positive.
+type Config struct {
+	// Signer signs each call's wireauth proof as SignerDID.
+	Signer    crypto.Signer
+	SignerDID string
+	// HTTPClient dials the serving boundary; supply an SSRF-guarded client, e.g.
+	// core.URLGuard.HTTPClient().
+	HTTPClient connect.HTTPClient
+	// MaxBytes caps the assembled payload (<=0 → DefaultMaxBytes).
+	MaxBytes int
+	// FetchTimeout bounds one whole fetch (<=0 → DefaultFetchTimeout).
+	FetchTimeout time.Duration
+	// IdleTimeout bounds the gap between received chunks (<=0 → DefaultIdleTimeout).
+	IdleTimeout time.Duration
+}
 
 // Resolver is a node's handle to remote PayloadServices. One Resolver signs as a
 // single configured identity and dials any serving boundary passed to
 // ResolvePayload.
 type Resolver struct {
-	signer     crypto.Signer
-	signerDID  string
-	httpClient connect.HTTPClient
-	maxBytes   int
+	signer       crypto.Signer
+	signerDID    string
+	httpClient   connect.HTTPClient
+	maxBytes     int
+	fetchTimeout time.Duration
+	idleTimeout  time.Duration
 }
 
-// New returns a Resolver that signs as signerDID using signer and dials through
-// httpClient (supply an SSRF-guarded client, e.g. core.URLGuard.HTTPClient()).
-// A non-positive maxBytes falls back to DefaultMaxBytes.
-func New(signer crypto.Signer, signerDID string, httpClient connect.HTTPClient, maxBytes int) *Resolver {
+// New returns a Resolver from cfg, applying the Default* bounds for any
+// non-positive value.
+func New(cfg Config) *Resolver {
+	maxBytes := cfg.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxBytes
 	}
-	return &Resolver{signer: signer, signerDID: signerDID, httpClient: httpClient, maxBytes: maxBytes}
+	fetchTimeout := cfg.FetchTimeout
+	if fetchTimeout <= 0 {
+		fetchTimeout = DefaultFetchTimeout
+	}
+	idleTimeout := cfg.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = DefaultIdleTimeout
+	}
+	return &Resolver{
+		signer:       cfg.Signer,
+		signerDID:    cfg.SignerDID,
+		httpClient:   cfg.HTTPClient,
+		maxBytes:     maxBytes,
+		fetchTimeout: fetchTimeout,
+		idleTimeout:  idleTimeout,
+	}
 }
 
 // ResolvePayload fetches and assembles the payload bytes held at contentHash on
@@ -72,22 +129,74 @@ func New(signer crypto.Signer, signerDID string, httpClient connect.HTTPClient, 
 // The returned bytes carry NO trust — the caller's binding gate (sha256(payload)
 // == the credential's outputHash) is the sole integrity check, so this client
 // does not itself re-hash.
-func (r *Resolver) ResolvePayload(ctx context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
+func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
 	ap, err := r.proof(map[string]any{"content_hash": contentHash})
 	if err != nil {
 		return nil, err
 	}
+
+	// Per-fetch budgets, imposed independent of the caller's context: the caller
+	// passes the process-lifetime context, so an untrusted serving boundary that
+	// trickles or stalls must be bounded here, or it head-of-line-blocks every
+	// later event on this (sequential) subscription. A total budget bounds the
+	// whole fetch; an idle budget bounds the gap between chunks (the trickle
+	// defense — nonempty 1-byte chunks that never trip the byte cap still trip
+	// idle). Caller cancellation still wins (parent is the root).
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
+	if r.fetchTimeout > 0 {
+		total := time.AfterFunc(r.fetchTimeout, func() { cancel(ErrFetchTimeout) })
+		defer total.Stop()
+	}
+	// Serialized idle watchdog: a SINGLE goroutine owns the timing decision,
+	// reading a lastProgress mark the receive loop updates. Deliberately not a
+	// time.Reset-per-chunk timer — an AfterFunc callback can fire while a chunk is
+	// being processed, cancelling a fetch that just made progress. Arming before
+	// the first Receive covers a server that opens the stream but never sends a
+	// byte. Progress is tracked as a MONOTONIC duration since `start` (not a wall
+	// clock reading), so an NTP/VM clock step during a fetch cannot postpone stall
+	// detection or falsely abort an active transfer. lastProgress's zero value is
+	// the correct "no progress since start" mark, so no initial Store is needed.
+	start := time.Now()
+	var lastProgress atomic.Int64 // nanoseconds since start (monotonic)
+	if r.idleTimeout > 0 {
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			tick := r.idleTimeout / 2
+			if tick <= 0 {
+				tick = r.idleTimeout
+			}
+			t := time.NewTicker(tick)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if time.Since(start)-time.Duration(lastProgress.Load()) > r.idleTimeout {
+						cancel(ErrFetchStalled)
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	svc := payloadpbconnect.NewPayloadServiceClient(r.httpClient, upstreamEndpoint)
 	stream, err := svc.ResolvePayload(ctx, connect.NewRequest(&payloadpb.ResolvePayloadRequest{
 		AuthProof:   ap,
 		ContentHash: contentHash,
 	}))
 	if err != nil {
-		return nil, mapRemoteErr(err)
+		return nil, r.mapFetchErr(ctx, err)
 	}
 	defer stream.Close()
 	var buf []byte
 	for stream.Receive() {
+		lastProgress.Store(int64(time.Since(start))) // progress — restart the idle clock (monotonic)
 		chunk := stream.Msg().GetChunk()
 		// Reject empty chunks: a well-behaved server only frames non-empty slices
 		// of a non-empty payload, and forbidding them makes the max-bytes cap a
@@ -105,9 +214,26 @@ func (r *Resolver) ResolvePayload(ctx context.Context, upstreamEndpoint, content
 		buf = append(buf, chunk...)
 	}
 	if err := stream.Err(); err != nil {
-		return nil, mapRemoteErr(err)
+		return nil, r.mapFetchErr(ctx, err)
 	}
 	return buf, nil
+}
+
+// mapFetchErr routes every fetch-error exit (the stream-open error AND the
+// receive-loop end) through one cause-aware mapper: when the derived context was
+// cancelled by a per-fetch budget, the budget sentinel wins over the raw stream
+// error (a caller-context cancellation, whose cause is the parent's rather than
+// a budget, and any other transport failure fall through to mapRemoteErr). err
+// is never nil here — the caller checks that first.
+func (r *Resolver) mapFetchErr(ctx context.Context, err error) error {
+	switch context.Cause(ctx) {
+	case ErrFetchTimeout:
+		return fmt.Errorf("payloadresolver/client: fetch exceeded %s total budget: %w", r.fetchTimeout, ErrFetchTimeout)
+	case ErrFetchStalled:
+		return fmt.Errorf("payloadresolver/client: fetch made no progress within %s idle budget: %w", r.idleTimeout, ErrFetchStalled)
+	default:
+		return mapRemoteErr(err)
+	}
 }
 
 // proof signs op over fields as the configured identity and converts the

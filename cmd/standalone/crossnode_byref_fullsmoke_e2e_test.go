@@ -128,7 +128,7 @@ func TestCapstone_ByReferenceCrossNodeFetchAndDeliver(t *testing.T) {
 
 	var payloadReqs int32 // observed hits on the mounted PayloadService — teeth #2
 	peerPath, ph := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeer(pubChainSvc, v))
-	payloadPath, poh := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, v, pubChainSvc))
+	payloadPath, poh := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadresolver.NewServingBoundary(payloadSvc, pubChainSvc), v))
 	mux := http.NewServeMux()
 	mux.Handle(peerPath, ph)
 	mux.Handle(payloadPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +196,7 @@ func TestCapstone_ByReferenceCrossNodeFetchAndDeliver(t *testing.T) {
 	res.Add(capProcessDoc(capIssuerDID, capOwnerDID, kp.PublicKey))
 	res.Add(capOwnerDoc(capOwnerDID))
 	writer := &captureWriter{}
-	payloadResolver := payloadclient.New(subSigner, byrefSubDID, guard.HTTPClient(), 0)
+	payloadResolver := payloadclient.New(payloadclient.Config{Signer: subSigner, SignerDID: byrefSubDID, HTTPClient: guard.HTTPClient()})
 	subChainCfg := &chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},

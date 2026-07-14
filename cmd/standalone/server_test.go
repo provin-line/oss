@@ -102,7 +102,10 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 		{Resource: "chain", Action: "read-allowlist"},
 	})
 	chainCfg := natsChainCfg(t)
-	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("newDIDResolution: %v", derr)
+	}
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
@@ -138,7 +141,10 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint(nil)
 	chainCfg := natsChainCfg(t)
-	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("newDIDResolution: %v", derr)
+	}
 	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
@@ -473,15 +479,71 @@ func TestBoot_PayloadServiceMountedNoL1(t *testing.T) {
 	}
 }
 
-// registryBaseURL: mapped registries resolve to their configured base; the
-// rest fall back to the didresolver default — the "partial maps compose with
-// public registries" contract.
+// registryBaseURL: mapped registries resolve to their configured base; when the
+// fallback is OPEN (closeUnmapped=false) the rest fall back to the didresolver
+// default — the "partial maps compose with public registries" contract.
 func TestRegistryBaseURL_HitAndFallback(t *testing.T) {
-	f := registryBaseURL(map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"})
+	f := registryBaseURL(map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}, false)
 	if got, err := f("mfg.poc.dplaax.dev"); err != nil || got != "http://mfg:8443" {
 		t.Errorf("mapped: got %q err %v", got, err)
 	}
 	if got, err := f("public.dplaax.example"); err != nil || got != "https://public.dplaax.example" {
 		t.Errorf("fallback: got %q err %v", got, err)
+	}
+}
+
+// F8: with closeUnmapped=true (allow-private-networks mode) an UNMAPPED registry
+// must NOT fall back to https://{registry} — an attacker-supplied registry name
+// that would otherwise reach private space via the open fallback must fail
+// resolution outright. Mapped registries still resolve to their configured base.
+func TestRegistryBaseURL_ClosedFallbackInPrivateMode(t *testing.T) {
+	f := registryBaseURL(map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}, true)
+	if got, err := f("mfg.poc.dplaax.dev"); err != nil || got != "http://mfg:8443" {
+		t.Errorf("mapped: got %q err %v", got, err)
+	}
+	// An unmapped registry (attacker-controlled name resolving to an RFC-1918
+	// address) must be refused, not silently resolved via the open fallback.
+	if got, err := f("10.0.0.5"); err == nil {
+		t.Errorf("unmapped in closed mode: got %q, want error (closed fallback)", got)
+	}
+	if got, err := f("evil.attacker.example"); err == nil {
+		t.Errorf("unmapped public-looking name in closed mode: got %q, want error", got)
+	}
+}
+
+// F8: newDIDResolution fails boot when allow-private-networks is on but NO
+// registry resolution is scoped (neither a per-registry map nor a single
+// resolver-base-url) — that combination is the exact hole (open fallback +
+// blanket private allow). With scoping present, or with private off, it boots.
+func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
+	base := func() *core.CoreConfig {
+		return &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: "127.0.0.1:0"}
+	}
+	// private ON + no scoping (empty map, no resolver-base-url) → boot error.
+	cc := base()
+	cc.AllowPrivateNetworks = true
+	if _, _, err := newDIDResolution(cc, natsChainCfg(t)); err == nil {
+		t.Error("private ON + no registry scoping: want boot error (fail-closed)")
+	}
+	// private ON + per-registry map → OK.
+	cc = base()
+	cc.AllowPrivateNetworks = true
+	ch := natsChainCfg(t)
+	ch.NATS.RegistryBaseURLs = map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}
+	if _, _, err := newDIDResolution(cc, ch); err != nil {
+		t.Errorf("private ON + registry map: want boot OK, got %v", err)
+	}
+	// private ON + single resolver-base-url (inherently closed) → OK.
+	cc = base()
+	cc.AllowPrivateNetworks = true
+	ch = natsChainCfg(t)
+	ch.NATS.ResolverBaseURL = "http://resolver:8443"
+	if _, _, err := newDIDResolution(cc, ch); err != nil {
+		t.Errorf("private ON + resolver-base-url: want boot OK, got %v", err)
+	}
+	// private OFF + no scoping → OK (open resolution; guard blocks all private).
+	cc = base()
+	if _, _, err := newDIDResolution(cc, natsChainCfg(t)); err != nil {
+		t.Errorf("private OFF + no scoping: want boot OK, got %v", err)
 	}
 }

@@ -90,7 +90,10 @@ func main() {
 
 	// The SSRF guard + DID resolver are shared across both planes: the control plane's
 	// chain manager and the data plane's sink-loop credential verification (slice-17c).
-	guard, resolver := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, err := newDIDResolution(coreCfg, chainCfg)
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
 
 	// The evidence substrate is DURABLE (spec: evidence-persistence; e2e finding #23 —
 	// a restart must not erase what a later audit needs): every store below is
@@ -164,7 +167,7 @@ func main() {
 	// node fails closed at boot (ErrMissingPayloadResolver).
 	var payloadClient contract.PayloadResolver
 	if nodeDID := nodeDIDOf(chainCfg); nodeDID != "" {
-		payloadClient = payloadclient.New(keyStore, nodeDID, guard.HTTPClient(), 0)
+		payloadClient = payloadclient.New(payloadclient.Config{Signer: keyStore, SignerDID: nodeDID, HTTPClient: guard.HTTPClient()})
 	}
 	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
 		Resolver:        resolver,

@@ -66,16 +66,20 @@ func BundleExport(ctx context.Context, env Env, cfg BundleExportConfig) error {
 	if err != nil {
 		return err
 	}
+	// F8: --allow-private closes the open https://{registry} fallback for
+	// UNMAPPED registries. The issuer registries walked come from the chain being
+	// exported (attacker-influenceable credentials), so an unmapped registry
+	// resolving to a private address would be a probe. In private mode an
+	// unmapped registry must be explicitly mapped via --did-base, or the export
+	// fails closed rather than reaching internal space.
+	if cfg.AllowPrivate && len(cfg.DIDBases) == 0 {
+		return fmt.Errorf("bundle export: --allow-private requires at least one --did-base mapping so an unmapped registry cannot reach private space")
+	}
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(cfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(cfg.AllowPrivate),
 	)
-	docs := didresolver.New(guard, didresolver.WithRegistryBaseURL(func(registry string) (string, error) {
-		if base, ok := cfg.DIDBases[registry]; ok {
-			return base, nil
-		}
-		return didresolver.DefaultBaseURL(registry)
-	}))
+	docs := didresolver.New(guard, didresolver.WithRegistryBaseURL(bundleRegistryBase(cfg.DIDBases, cfg.AllowPrivate)))
 
 	exportOpts := bundle.ExportOptions{MaxDepth: cfg.MaxDepth, Source: env.Registry, AggregateComplete: cfg.AggregateComplete}
 	if cfg.AggregateComplete {
@@ -88,6 +92,8 @@ func BundleExport(ctx context.Context, env Env, cfg BundleExportConfig) error {
 			auditBases: cfg.AuditBases,
 			audit:      map[string]auditClient{},
 			vcs:        map[string]vcpbconnect.VCResolverServiceClient{},
+
+			closeUnmapped: cfg.AllowPrivate,
 		}
 	}
 	res, err := bundle.Export(ctx, cfg.Out, cfg.Head,
@@ -193,20 +199,39 @@ type wireConsumedSource struct {
 	auditBases map[string]string // registry -> #audit override (audit-specific split-horizon)
 	audit      map[string]auditClient
 	vcs        map[string]vcpbconnect.VCResolverServiceClient
+	// closeUnmapped mirrors --allow-private (F8): when set, an unmapped issuer
+	// registry does NOT fall back to https://{registry} — it must be mapped via
+	// --did-base, so an attacker-influenced credential cannot drive a private
+	// probe through the open fallback.
+	closeUnmapped bool
 }
 
 // auditClient aliases the generated client interface for the cache map.
 type auditClient = auditpbconnect.AuditServiceClient
+
+// bundleRegistryBase derives a registry's DID-document base URL from the
+// --did-base map. When closeUnmapped is false, an unmapped registry falls back
+// to the didresolver default (https://{registry}); when true (--allow-private,
+// F8), an unmapped registry is refused so the open fallback cannot reach private
+// space.
+func bundleRegistryBase(bases map[string]string, closeUnmapped bool) func(registry string) (string, error) {
+	return func(registry string) (string, error) {
+		if base, ok := bases[registry]; ok {
+			return base, nil
+		}
+		if closeUnmapped {
+			return "", fmt.Errorf("bundle export: registry %q is not mapped by --did-base; open fallback is disabled under --allow-private (an unmapped registry must not reach private space)", registry)
+		}
+		return didresolver.DefaultBaseURL(registry)
+	}
+}
 
 func (s *wireConsumedSource) registryBase(issuerDID string) (string, error) {
 	d, err := dplaax.Parse(issuerDID)
 	if err != nil {
 		return "", fmt.Errorf("bundle export: issuer %q: %w", issuerDID, err)
 	}
-	if base, ok := s.didBases[d.Registry]; ok {
-		return base, nil
-	}
-	return didresolver.DefaultBaseURL(d.Registry)
+	return bundleRegistryBase(s.didBases, s.closeUnmapped)(d.Registry)
 }
 
 // auditEndpoint resolves where an issuer's audit receipts can be fetched:

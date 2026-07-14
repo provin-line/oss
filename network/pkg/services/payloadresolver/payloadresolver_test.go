@@ -177,3 +177,157 @@ func sha256sum(b []byte) []byte {
 	sum := sha256.Sum256(b)
 	return sum[:]
 }
+
+// --- F9: authorize-before-read + owner-metadata-only lookup ---
+
+// TestStore_Owners_Contract pins the cheap owner-metadata lookup across both
+// backends: Owners returns the recorded set for a present entry and ErrNotFound
+// for a miss, WITHOUT the caller having to read the payload bytes.
+func TestStore_Owners_Contract(t *testing.T) {
+	for _, f := range factories() {
+		t.Run(f.name, func(t *testing.T) {
+			store := f.make(t)
+			payload := []byte("the produced bytes")
+			owner := "did:dplaax:reg:org:acme:pipeline:pipe-a"
+			hash, err := store.Put(payload, owner)
+			if err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			owners, err := store.Owners(hash)
+			if err != nil {
+				t.Fatalf("Owners: %v", err)
+			}
+			if len(owners) != 1 || owners[0] != owner {
+				t.Errorf("Owners = %v, want [%s]", owners, owner)
+			}
+			if _, err := store.Owners(addr([]byte("never stored"))); !errors.Is(err, payloadresolver.ErrNotFound) {
+				t.Errorf("Owners(absent) err = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// TestStore_Owners_CrashResidual_FailsClosed pins the fail-closed security
+// property for the bin-present/owners-absent crash residual (a crash between the
+// bin write and the .owners write): Owners must return an EMPTY owner set — NOT
+// ErrNotFound (the bytes DO exist) — so the serving boundary admits no one and
+// still returns ErrNotFound, leaking neither the bytes nor their existence.
+func TestStore_Owners_CrashResidual_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := filestore.NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	payload := []byte("bytes present but owner sidecar lost to a crash")
+	owner := "did:dplaax:reg:org:acme:pipeline:pipe-a"
+	hash, err := store.Put(payload, owner)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	// Simulate the crash: remove the .owners sidecar, leaving the bin present.
+	hexPart := hash[len("sha256:"):]
+	if err := os.Remove(filepath.Join(dir, hexPart+".owners")); err != nil {
+		t.Fatalf("remove owners sidecar: %v", err)
+	}
+	// Owners: present entry, empty owner set (NOT ErrNotFound).
+	owners, err := store.Owners(hash)
+	if err != nil {
+		t.Fatalf("Owners(residual): %v", err)
+	}
+	if len(owners) != 0 {
+		t.Errorf("Owners(residual) = %v, want empty set (fail-closed)", owners)
+	}
+	// Serve denies even an admit-everyone allow-list: an empty owner set has no
+	// owner to admit against, so no caller is served → ErrNotFound.
+	sb := payloadresolver.NewServingBoundary(payloadresolver.New(store), allowFunc(func(string, string) error { return nil }))
+	if _, err := sb.Serve(context.Background(), hash, "did:dplaax:reg:org:sub"); err != payloadresolver.ErrNotFound {
+		t.Errorf("Serve(residual) = %v, want ErrNotFound (fail-closed, no leak)", err)
+	}
+}
+
+// spyStore records which read path Serve takes, proving it authorizes on owner
+// metadata BEFORE reading (and hashing) the payload bytes (F9).
+type spyStore struct {
+	owners      []string
+	payload     []byte
+	ownersErr   error
+	ownersCalls int
+	getCalls    int
+}
+
+func (s *spyStore) Put(payload []byte, owner string) (string, error) { return addr(payload), nil }
+func (s *spyStore) Owners(hash string) ([]string, error) {
+	s.ownersCalls++
+	if s.ownersErr != nil {
+		return nil, s.ownersErr
+	}
+	return append([]string(nil), s.owners...), nil
+}
+func (s *spyStore) Get(hash string) ([]byte, []string, error) {
+	s.getCalls++
+	return s.payload, append([]string(nil), s.owners...), nil
+}
+
+type allowFunc func(pipelineDID, callerDID string) error
+
+func (f allowFunc) Admit(pipelineDID, callerDID string) error { return f(pipelineDID, callerDID) }
+
+// TestServingBoundary_Serve_AuthorizeBeforeRead is the F9 core: a valid-signer-
+// but-not-admitted caller and an absent hash both get ErrNotFound (oracle
+// collapse), and in neither denial case are the payload bytes read.
+func TestServingBoundary_Serve_AuthorizeBeforeRead(t *testing.T) {
+	want := []byte("the confidential payload bytes")
+	hash := addr(want)
+	caller := "did:dplaax:reg:org:sub"
+	owner := "did:dplaax:reg:org:acme:pipeline:pipe-a"
+
+	t.Run("not admitted → NotFound, bytes never read", func(t *testing.T) {
+		store := &spyStore{owners: []string{owner}, payload: want}
+		deny := allowFunc(func(string, string) error { return errors.New("not admitted") })
+		sb := payloadresolver.NewServingBoundary(payloadresolver.New(store), deny)
+		_, err := sb.Serve(context.Background(), hash, caller)
+		// Byte-identical to the absent case below (== the bare sentinel): the
+		// serving boundary must not wrap the cause, or the differing message
+		// would itself be an existence oracle (Codex-3).
+		if err != payloadresolver.ErrNotFound {
+			t.Fatalf("Serve(not admitted) err = %v, want the bare payloadresolver.ErrNotFound (collapsed, unwrapped)", err)
+		}
+		if store.getCalls != 0 {
+			t.Errorf("Get called %d times — payload bytes must NOT be read for a non-admitted caller", store.getCalls)
+		}
+		if store.ownersCalls == 0 {
+			t.Error("Owners was never consulted")
+		}
+	})
+
+	t.Run("absent → NotFound, bytes never read", func(t *testing.T) {
+		store := &spyStore{ownersErr: payloadresolver.ErrNotFound}
+		allow := allowFunc(func(string, string) error { return nil })
+		sb := payloadresolver.NewServingBoundary(payloadresolver.New(store), allow)
+		_, err := sb.Serve(context.Background(), hash, caller)
+		if err != payloadresolver.ErrNotFound {
+			t.Fatalf("Serve(absent) err = %v, want the bare payloadresolver.ErrNotFound (identical to not-admitted)", err)
+		}
+		if store.getCalls != 0 {
+			t.Errorf("Get called %d times for an absent hash", store.getCalls)
+		}
+	})
+
+	t.Run("admitted → bytes served", func(t *testing.T) {
+		store := &spyStore{owners: []string{owner}, payload: want}
+		allow := allowFunc(func(pipelineDID, _ string) error {
+			if pipelineDID == owner {
+				return nil
+			}
+			return errors.New("no")
+		})
+		sb := payloadresolver.NewServingBoundary(payloadresolver.New(store), allow)
+		got, err := sb.Serve(context.Background(), hash, caller)
+		if err != nil {
+			t.Fatalf("Serve(admitted): %v", err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("Serve = %q, want %q", got, want)
+		}
+	})
+}

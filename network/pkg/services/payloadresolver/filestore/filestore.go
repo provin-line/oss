@@ -113,6 +113,35 @@ func (s *Store) Put(payload []byte, ownerDID string) (string, error) {
 	return hash, nil
 }
 
+// Owners returns the owner set at hash WITHOUT reading (or hashing) the payload
+// bytes — the cheap authorization basis the serving boundary consults before it
+// commits to reading. Existence is a stat of the bin file (no byte read, no
+// alloc, no re-hash); a present entry with an absent/unreadable owner sidecar
+// returns an empty set (fail-closed at serving), a definitive miss is ErrNotFound.
+func (s *Store) Owners(hash string) ([]string, error) {
+	binPath, ownersPath, err := s.paths(hash)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, err := os.Stat(binPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Distinguish a definitive miss from a vanished STORE (matches Get).
+			if _, statErr := os.Stat(s.dir); statErr != nil {
+				return nil, fmt.Errorf("filestore: payload store root %s unavailable: %w", s.dir, statErr)
+			}
+			return nil, payloadresolver.ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: stat payload %s: %w", hash, err)
+	}
+	owners, err := readOwners(ownersPath)
+	if err != nil {
+		return nil, fmt.Errorf("filestore: read owners %s: %w", hash, err)
+	}
+	return owners, nil
+}
+
 // Get returns the payload bytes and owner set at hash, payloadresolver.ErrNotFound
 // when the bytes are absent, or a distinct error for a damaged entry (bytes that
 // no longer hash to the key).

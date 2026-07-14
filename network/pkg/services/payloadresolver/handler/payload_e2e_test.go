@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
-
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
@@ -106,14 +104,15 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 	}
 	svc := payloadresolver.New(memstore.New())
 	allow := allowStub{ownerPBA: {nodeDID: true}}
-	path, h := payloadpbconnect.NewPayloadServiceHandler(handler.New(svc, v, allow))
+	serving := payloadresolver.NewServingBoundary(svc, allow)
+	path, h := payloadpbconnect.NewPayloadServiceHandler(handler.New(serving, v))
 	mux := http.NewServeMux()
 	mux.Handle(path, h)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &harness{
 		svc:    svc,
-		client: client.New(sgn, nodeDID, srv.Client(), maxBytes),
+		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: srv.Client(), MaxBytes: maxBytes}),
 		url:    srv.URL,
 		allow:  allow,
 	}
@@ -138,6 +137,11 @@ func TestPayloadService_RoundTrip(t *testing.T) {
 }
 
 // TestPayloadService_NotAdmitted denies a caller no owner admits (PermissionDenied).
+// TestPayloadService_NotAdmitted proves the F9/F4 existence-oracle closure: a
+// valid-signer-but-not-admitted caller gets the SAME client.ErrNotFound as a
+// well-formed miss (TestPayloadService_NotFound), so a caller who may not receive
+// the bytes cannot tell "present but forbidden" from "absent" — same code AND
+// same message on the wire (was CodePermissionDenied before P1-4d).
 func TestPayloadService_NotAdmitted(t *testing.T) {
 	h := newHarness(t, 0)
 	delete(h.allow, ownerPBA) // node no longer admitted by the sole owner
@@ -147,8 +151,11 @@ func TestPayloadService_NotAdmitted(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 	_, err = h.client.ResolvePayload(context.Background(), h.url, hash)
-	if connect.CodeOf(err) != connect.CodePermissionDenied {
-		t.Errorf("err code = %v, want PermissionDenied (got %v)", connect.CodeOf(err), err)
+	// The client re-maps a wire NotFound to client.ErrNotFound — the SAME error
+	// it returns for a well-formed miss (TestPayloadService_NotFound). Identical
+	// error ⇒ the caller cannot distinguish "present but forbidden" from "absent".
+	if !errors.Is(err, client.ErrNotFound) {
+		t.Errorf("err = %v, want client.ErrNotFound — identical to an absent hash (oracle closed)", err)
 	}
 }
 
