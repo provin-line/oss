@@ -80,6 +80,29 @@ own contracts, not by this credential-wire declaration.
   verification.
 - Defensive payload re-verification in the provenance signer: a non-nil
   payload must hash to the credential's `outputHash` or signing refuses.
+- Live claims push: a chain grant now takes effect without a broker restart —
+  the node pushes the updated account claims to the NATS system account
+  (`$SYS.REQ.CLAIMS.UPDATE`) at grant issuance
+  (`provin.network.chain.nats.sys-user-jwt-file` / `sys-user-seed-file`); the
+  manual runbook remains a documented fallback.
+- `/metrics` endpoint (OpenTelemetry → Prometheus exposition): per-loop
+  emit-attempt/success/failure, stripped-publish failure, verify-outcome, and
+  audit-verdict counters. Gated by `provin.network.core.metrics.enabled`
+  (default **off** — the listener is not loopback-bound and the series expose
+  loop names and traffic/verdict rates).
+- `#audit` service advertisement: an issuer's DID document advertises its
+  AuditService endpoint, giving `provin bundle export --aggregate-complete` a
+  stable receipt-routing derivation (overridable per registry with
+  `--audit-base`).
+- Node-native TLS: `provin.network.core.tls.cert-file` / `key-file` serve h2
+  over TLS (ALPN). A fail-closed boot guard rejects a non-loopback cleartext
+  listener unless the operator sets `tls.allow-cleartext` to acknowledge a
+  fronting TLS terminator.
+- Documentation tree under `docs/`: `architecture/` (overview, process
+  catalog, deployment), `protocol/` (service API, L1/L2 auth), and the
+  `did:dplaax` method spec.
+- `SECURITY.md`: the vulnerability-reporting channel and supported-versions
+  policy.
 
 ### Changed
 
@@ -95,6 +118,35 @@ own contracts, not by this credential-wire declaration.
 - **BREAKING** tlog checkpoint `SignedView` now binds a Checkpoint Origin
   (`logId`) into the signed bytes and REJECTS legacy checkpoints without it:
   checkpoints signed before this change no longer verify.
+- **BREAKING (default)** the default `listen-addr` is now `127.0.0.1:8443`
+  (was `:8443`): a fresh node binds loopback only (secure by default).
+  Exposing a non-loopback interface now requires a transport-security posture
+  — node TLS (`tls.cert-file`/`key-file`) or an explicit `tls.allow-cleartext`
+  acknowledgement — otherwise boot fails closed.
+- **BREAKING (config semantics)** `allow-private-networks = true` now CLOSES
+  cross-registry DID resolution to the configured registry set: an unmapped
+  registry no longer falls back to `https://{registry}`, and private mode with
+  no `registry-base-urls` / `resolver-base-url` scoping fails boot. This
+  removes a pre-signature internal-scan vector; a deployment that relied on
+  blanket-private with open resolution must now enumerate its registries.
+- **BREAKING (wire)** `PayloadService.ResolvePayload` now returns `NotFound`
+  (was `PermissionDenied`) for a caller not admitted by any owner, collapsing
+  the "present but forbidden" and "absent" cases so the serving boundary is no
+  longer an existence oracle.
+- **BREAKING (default)** `provin bundle export` now defaults to
+  `--aggregate-complete`: the offline source-commitment axis is complete by
+  default (pass `--aggregate-complete=false` for a linear-only bundle).
+- Pre-authentication resource-exhaustion hardening: per-RPC read caps plus an
+  outer request-size cap on every mount; a bounded, timed DID-resolution path
+  (per-resolve deadline + concurrency cap → `ErrResolverBusy`); nonce-store
+  eviction past the acceptance window; server-wide HTTP read/write/idle
+  timeouts and a cached `/readyz`; and PDP credentials redacted from logs.
+- The payload-fetch client now imposes per-fetch total and idle-read deadlines
+  independent of the caller context, so an untrusted serving boundary cannot
+  stall a consumer loop.
+- Cross-registry and receipt-routing derivations (batch resolver, bundle
+  export) now match on exact content address / registry id — no suffix or
+  substring matching.
 
 ### Removed
 

@@ -146,6 +146,29 @@ curl -s http://localhost:8443/metrics | grep '^provin_'
 
 See `docs/architecture/deployment.md` "Metrics" for the family reference.
 
+### 2f. Export an offline evidence bundle (from the host)
+
+`provin bundle export` archives a head's chain + authority documents into a
+self-contained bundle a relying party can verify offline. Using the
+`payload_hash` from step 2c as the head:
+
+```sh
+HEAD=sha256:…      # the payload_hash returned by step 2c
+
+$PROVIN --registry "$REGISTRY" --token "$TOKEN" \
+  bundle export --head "$HEAD" --out /tmp/bundle \
+  --did-base         "poc.dplaax.dev=$REGISTRY" \
+  --vc-resolver-base "poc.dplaax.dev=$REGISTRY" \
+  --audit-base       "poc.dplaax.dev=$REGISTRY"
+```
+
+The `--*-base` overrides are required from the host: the node's DID documents
+advertise the compose-internal `http://node:8443` (reachable only inside the
+compose network), while the host reaches the same services at `$REGISTRY`
+(`http://localhost:8443`). `--audit-base` is a separate override from
+`--did-base` because export defaults to `--aggregate-complete`, which fetches
+each issuer's `#audit` receipts to re-verify the source-commitment axis offline.
+
 ## How it fits together
 
 - **`provision`** (one-shot init container) generates the NATS operator-mode
