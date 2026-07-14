@@ -95,6 +95,30 @@ operational side needs this note.
 Wire supervisors accordingly (e.g. Kubernetes `livenessProbe` → `/healthz`,
 `readinessProbe` → `/readyz`).
 
+## Metrics
+
+`GET /metrics` serves OpenTelemetry counters in Prometheus exposition format,
+gated by `provin.network.core.metrics.enabled` (**default `false`**: the
+endpoint is unauthenticated on the serving listener and exposes loop names
+and traffic/failure/verdict rates — more than `/healthz`. Enable it only
+where the listener's network is trusted; the quickstart compose does).
+
+Stable metric families (operational contract — not part of the credential
+wire freeze, but renames are CHANGELOG-worthy):
+
+| Prometheus name | Attributes | Meaning |
+| --- | --- | --- |
+| `provin_pipeline_emit_attempts_total` | `loop`, `outcome=success\|failure` | Emit outcomes per producing loop, keyed on the Emit call's return (success = primary form delivered; a stripped-publish failure is still a success here) |
+| `provin_pipeline_emit_stripped_failures_total` | `loop` | Stripped-publish (dual-emit) failures per dual-emitting loop |
+| `provin_pipeline_verify_results_total` | `loop`, `outcome=verified\|failed\|indeterminate\|error` | Per-credential **verifier API** outcomes per consuming loop — the seam below the loop's accept/reject policy (`error` = the verifier returned a non-context error, or an anomalous nil result) |
+| `provin_audit_verdicts_total` | `verdict=verified\|failed\|indeterminate` | Durably recorded audit verdict **writes** by linear-chain overall verdict (writes, not audited heads: re-audits, per-tick hole re-records, and abandon finalizations each count) |
+
+Family presence follows capability: a family (and its fixed, zero-initialized
+label set) appears exactly when the node is configured with the capability —
+emit series only for producing loops, stripped series only when the node
+dual-emits (a payload store is wired), verify series only for consuming
+loops, audit verdicts only when the audit runner runs.
+
 ## Durable state
 
 All durable state lives under the configured data dir (see

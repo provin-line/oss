@@ -127,7 +127,11 @@ services:
         aliases:
           - poc.dplaax.dev
     ports:
-      - "8443:8443"
+      # Loopback-only publish: every documented flow talks to localhost, and
+      # the node serves the unauthenticated /metrics endpoint (enabled in this
+      # stack's application.conf) — publishing on all host interfaces would
+      # leak it to the host's network.
+      - "127.0.0.1:8443:8443"
     restart: on-failure
     depends_on:
       provision:

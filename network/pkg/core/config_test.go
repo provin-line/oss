@@ -45,6 +45,19 @@ func TestLoadCoreConfig_Defaults(t *testing.T) {
 	if cc.AllowLoopback {
 		t.Error("AllowLoopback = true, want false (default)")
 	}
+	if cc.MetricsEnabled {
+		t.Error("MetricsEnabled = true, want false (default: /metrics is unauthenticated on a non-loopback listener)")
+	}
+}
+
+func TestLoadCoreConfig_MetricsEnabledOverride(t *testing.T) {
+	cc, err := core.LoadCoreConfig(loadWith(t, "provin.network.core.metrics.enabled = true"))
+	if err != nil {
+		t.Fatalf("LoadCoreConfig: %v", err)
+	}
+	if !cc.MetricsEnabled {
+		t.Error("MetricsEnabled = false, want true (application.conf opt-in)")
+	}
 }
 
 func TestLoadCoreConfig_Override(t *testing.T) {

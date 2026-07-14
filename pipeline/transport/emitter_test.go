@@ -125,6 +125,57 @@ func TestEmitter_Emit_AppendFailureAfterPublish_ReturnsNil(t *testing.T) {
 	}
 }
 
+// Emit outcomes are counted monotonically per emitter: every error return is
+// one failure, every nil return (primary delivered) one success — the P1-2
+// metrics wiring point, polled from a separate goroutine like
+// StrippedPublishFailures.
+func TestEmitter_EmitCounters_OutcomePerReturn(t *testing.T) {
+	pub := &fakePublisher{failFirst: 1}
+	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	cred := newTestCredential(t, []byte(`{"a":1}`))
+
+	// Caller contract violation (nil credential) is a failure.
+	if err := e.Emit(context.Background(), nil, []byte(`{}`)); err == nil {
+		t.Fatal("nil credential: want error")
+	}
+	// Publish failure is a failure; the retry with the reused sequence succeeds.
+	if err := e.Emit(context.Background(), cred, []byte(`{"a":1}`)); err == nil {
+		t.Fatal("first publish: want error")
+	}
+	if err := e.Emit(context.Background(), cred, []byte(`{"a":1}`)); err != nil {
+		t.Fatalf("retry Emit: %v", err)
+	}
+	if got := e.EmitSuccesses(); got != 1 {
+		t.Errorf("EmitSuccesses = %d, want 1", got)
+	}
+	if got := e.EmitFailures(); got != 2 {
+		t.Errorf("EmitFailures = %d, want 2 (nil guard + publish failure)", got)
+	}
+}
+
+// An append failure after a successful publish is a SUCCESS for the emit
+// counter — the event was delivered (same boundary as Emit's nil return).
+func TestEmitter_EmitCounters_AppendFailureCountsSuccess(t *testing.T) {
+	tl := &fakeTlog{failErr: context.DeadlineExceeded}
+	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), tl, nil)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	cred := newTestCredential(t, []byte(`{"a":1}`))
+	if err := e.Emit(context.Background(), cred, []byte(`{"a":1}`)); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if got, want := e.EmitSuccesses(), uint64(1); got != want {
+		t.Errorf("EmitSuccesses = %d, want %d", got, want)
+	}
+	if got := e.EmitFailures(); got != 0 {
+		t.Errorf("EmitFailures = %d, want 0", got)
+	}
+}
+
 // A restart must not fork the sequence space: an Emitter constructed over a
 // log that already holds emission records resumes AFTER the last recorded
 // sequence — the durable log is the carrier of the discipline (tlog spec,

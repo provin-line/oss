@@ -267,6 +267,15 @@ func (p *Process) StrippedPublishFailures() uint64 {
 	return p.emitter.StrippedPublishFailures()
 }
 
+// EmitSuccesses reports this aggregate's monotonic count of delivered emits.
+// See transport.Emitter.EmitSuccesses for the counting boundary; same
+// metrics-surface wiring intent as StrippedPublishFailures.
+func (p *Process) EmitSuccesses() uint64 { return p.emitter.EmitSuccesses() }
+
+// EmitFailures reports this aggregate's monotonic count of failed emits.
+// Companion to EmitSuccesses.
+func (p *Process) EmitFailures() uint64 { return p.emitter.EmitFailures() }
+
 // Run subscribes every ingress, then folds on each window tick until ctx is
 // cancelled, at which point it drains the subscribers, applies the partial-window
 // policy (discard), and closes the publisher.

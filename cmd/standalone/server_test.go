@@ -305,6 +305,21 @@ func TestBoot_Healthz(t *testing.T) {
 	}
 }
 
+// BuildHandler must NEVER mount /metrics: the exposition is a composition-root
+// concern behind the default-off config gate (maybeMountMetrics in main), so a
+// handler built without it serves 404 there — the default posture.
+func TestBoot_NoMetricsWithoutGate(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("metrics status = %d, want 404 (BuildHandler must not mount /metrics)", resp.StatusCode)
+	}
+}
+
 // BuildHandler mounts /readyz (readiness — dependency-aware, unlike the static
 // /healthz). With zero checks configured (this HTTP-only assembly) it is
 // trivially ready.

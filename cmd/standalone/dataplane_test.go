@@ -307,6 +307,138 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	}
 }
 
+// The per-loop metrics bookkeeping follows capability (P1-2): a source loop
+// registers emit counting (but no verify, and no stripped counting without a
+// payload store); a sink registers verify counting only.
+func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+
+	src, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
+	if err != nil {
+		t.Fatalf("buildDataPlane (source): %v", err)
+	}
+	if len(src.metrics) != 1 {
+		t.Fatalf("source metrics entries: got %d want 1", len(src.metrics))
+	}
+	lm := src.metrics[0]
+	if lm.name != "src" || lm.role != pipelineconfig.RoleSource {
+		t.Errorf("source entry = %q/%q, want src/source", lm.name, lm.role)
+	}
+	if lm.emits == nil {
+		t.Error("source loop: emits accessor is nil, want registered")
+	}
+	if lm.stripped != nil {
+		t.Error("source loop without a payload store: stripped accessor registered, want nil")
+	}
+	if lm.verify != nil {
+		t.Error("source loop: verify accessor registered, want nil (source verifies nothing)")
+	}
+
+	snk, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+		Resolver:   stubResolver{},
+		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (sink): %v", err)
+	}
+	if len(snk.metrics) != 1 {
+		t.Fatalf("sink metrics entries: got %d want 1", len(snk.metrics))
+	}
+	lm = snk.metrics[0]
+	if lm.role != pipelineconfig.RoleSink {
+		t.Errorf("sink entry role = %q, want sink", lm.role)
+	}
+	if lm.verify == nil {
+		t.Error("sink loop: verify accessor is nil, want registered")
+	}
+	if lm.emits != nil || lm.stripped != nil {
+		t.Error("sink loop: emit/stripped accessors registered, want nil (a sink emits nothing)")
+	}
+}
+
+// The remaining bookkeeping branches: a dual-emitting node (payload store
+// wired) registers stripped counting on its producing loops, a chained loop
+// is both producer and consumer, and the aggregate's early-continue append
+// path records exactly one entry with the full producer+consumer set.
+func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+
+	// Source with a payload store: the dual-emit gate registers stripped.
+	src, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{
+		PayloadStore: fakePayloadStore{},
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (source+store): %v", err)
+	}
+	if lm := src.metrics[0]; lm.stripped == nil {
+		t.Error("source loop with a payload store: stripped accessor is nil, want registered (dual-emit)")
+	}
+
+	// Chained: producer AND consumer.
+	chd, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+		Resolver: stubResolver{},
+		VCStore:  dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (chained): %v", err)
+	}
+	if len(chd.metrics) != 1 {
+		t.Fatalf("chained metrics entries: got %d want 1", len(chd.metrics))
+	}
+	lm := chd.metrics[0]
+	if lm.role != pipelineconfig.RoleChained || lm.emits == nil || lm.verify == nil {
+		t.Errorf("chained entry = role %q emits %v verify %v; want chained + both registered", lm.role, lm.emits, lm.verify)
+	}
+	if lm.stripped != nil {
+		t.Error("chained loop without a payload store: stripped accessor registered, want nil")
+	}
+
+	// Aggregate: the early-continue path appends exactly once, producer+consumer.
+	aggCfg := &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name: "agg",
+		Role: pipelineconfig.RoleAggregate,
+		Aggregate: pipelineconfig.AggregateConfig{
+			OutputSubject: dpRelayDID,
+			Issuer: pipelineconfig.IssuerConfig{
+				DID: dpRelayIssr, KeyID: string(keystore.KeyIDSigning),
+				VerificationMethod: dpRelayIssr + "#signing",
+			},
+			PipelineID:           "relay",
+			ProcessID:            "r1",
+			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			Window:               100 * time.Millisecond,
+			Ingresses: []pipelineconfig.AggregateIngress{
+				{Subject: dpPipelineDID, UpstreamEndpoint: "https://acme.example/pipelines/pipe"},
+			},
+		},
+	}}}
+	agg, err := buildDataPlane(context.Background(), chainCfg, aggCfg, dpKeyStore(t), dataPlaneDeps{
+		Resolver:     stubResolver{},
+		VCStore:      dpVCStore(),
+		PayloadStore: fakePayloadStore{},
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (aggregate): %v", err)
+	}
+	if len(agg.metrics) != 1 {
+		t.Fatalf("aggregate metrics entries: got %d want 1 (early-continue path must append exactly once)", len(agg.metrics))
+	}
+	lm = agg.metrics[0]
+	if lm.role != pipelineconfig.RoleAggregate || lm.emits == nil || lm.verify == nil || lm.stripped == nil {
+		t.Errorf("aggregate entry = role %q emits %v verify %v stripped %v; want aggregate + all three registered",
+			lm.role, lm.emits, lm.verify, lm.stripped)
+	}
+}
+
 // Sink delivery writers come from per-loop config when no override is injected:
 // file outputs share ONE writer per cleaned path (two loops on one file must
 // never interleave lines), console is the default, junk types fail closed, and

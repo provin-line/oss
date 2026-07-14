@@ -225,6 +225,22 @@ func main() {
 		log.Fatalf("standalone: build audit runner: %v", err)
 	}
 
+	// The /metrics bridge composes OUTSIDE BuildHandler, after the audit
+	// runner exists (its VerdictCounts is one of the polled sources). Config
+	// gated, default off — the listener is not loopback-bound and metrics
+	// expose more than /healthz (see core reference.conf).
+	var verdicts func() map[string]uint64
+	if auditRunner != nil {
+		verdicts = auditRunner.VerdictCounts
+	}
+	handler, err = maybeMountMetrics(coreCfg.MetricsEnabled, handler, dp.metrics, verdicts)
+	if err != nil {
+		log.Fatalf("standalone: build metrics: %v", err)
+	}
+	if coreCfg.MetricsEnabled {
+		log.Printf("standalone: metrics exposition mounted at /metrics")
+	}
+
 	srv := &http.Server{
 		Addr:    coreCfg.ListenAddr,
 		Handler: h2c.NewHandler(handler, &http2.Server{}),

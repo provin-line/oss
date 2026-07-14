@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -88,6 +89,11 @@ type Runner struct {
 	// option unset) → linear-only audit, exactly the pre-17o behavior.
 	receipts ReceiptReader
 	scv      SourceCommitmentVerifier
+	// Verdict-write counters behind VerdictCounts (P1-2 metrics): atomics because a metrics
+	// surface polls them from a different goroutine than the drain loop.
+	verdictVerified      atomic.Uint64
+	verdictFailed        atomic.Uint64
+	verdictIndeterminate atomic.Uint64
 }
 
 // Option configures a Runner.
@@ -248,7 +254,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 	if abort := r.evaluateSourceCommitment(ctx, c.HeadHash, head, &rec); abort {
 		return // ctx cancelled mid-evaluation: record nothing, leave queued
 	}
-	if err := r.status.Put(c.HeadHash, rec); err != nil {
+	if err := r.recordVerdict(c.HeadHash, rec); err != nil {
 		r.logger.Printf("auditor: %s: record verdict: %v", c.HeadHash, err)
 		return // keep queued, retry next tick
 	}
@@ -396,13 +402,49 @@ func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash stri
 	r.bumpOrDrop(c, "predecessor "+holeHash+" absent from store and pool")
 }
 
+// recordVerdict durably writes one verdict record and, on success, counts the write by its
+// linear overall verdict — the single funnel every runner status.Put goes through, so the
+// counters behind VerdictCounts stay exactly "successful verdict-record writes" with no
+// per-call-site judgment. It returns the store error unchanged (a failed write counts
+// nothing: no durable record, no verdict).
+func (r *Runner) recordVerdict(headHash string, rec AuditRecord) error {
+	if err := r.status.Put(headHash, rec); err != nil {
+		return err
+	}
+	switch rec.Overall {
+	case vc.ConfidenceVerified:
+		r.verdictVerified.Add(1)
+	case vc.ConfidenceFailed:
+		r.verdictFailed.Add(1)
+	default:
+		// Indeterminate and any future/unknown state: "not verified, not failed"
+		// must not vanish from the counts (mirrors the fail-closed lattice).
+		r.verdictIndeterminate.Add(1)
+	}
+	return nil
+}
+
+// VerdictCounts returns the monotonic counts of durably recorded verdict WRITES keyed by
+// "verified" | "failed" | "indeterminate" — the linear-chain overall verdict only (the
+// distinct source-commitment verdict is not counted). It counts writes, not audited heads:
+// a re-audit, a per-tick hole re-record, and an abandon finalization each count again.
+// Every key is always present (zero-valued when never hit), so a metrics bridge can
+// register a fixed label set; safe to call from a different goroutine than the drain loop.
+func (r *Runner) VerdictCounts() map[string]uint64 {
+	return map[string]uint64{
+		"verified":      r.verdictVerified.Load(),
+		"failed":        r.verdictFailed.Load(),
+		"indeterminate": r.verdictIndeterminate.Load(),
+	}
+}
+
 // recordIndeterminate writes a synthetic Indeterminate record. Every axis is set EXPLICITLY
 // to Indeterminate — the AxisResult zero value is ConfidenceFailed (fail-closed lattice),
 // so leaving axes unset would wrongly read as Failed. It returns the store error so the
 // caller can avoid advancing queue state (dequeue/bump) on a failed write.
 func (r *Runner) recordIndeterminate(headHash, notation string) error {
 	ind := vc.ConfidenceIndeterminate
-	if err := r.status.Put(headHash, AuditRecord{
+	if err := r.recordVerdict(headHash, AuditRecord{
 		Overall:   ind,
 		Axes:      vc.AxisResult{DataIntegrity: ind, SignerAuthenticity: ind, ChainConsistency: ind},
 		Notations: []string{notation},
@@ -464,7 +506,7 @@ func (r *Runner) markAbandoned(headHash, reason string) error {
 	}
 	rec.Abandoned = true
 	rec.AuditedAt = r.now()
-	return r.status.Put(headHash, rec)
+	return r.recordVerdict(headHash, rec)
 }
 
 func (r *Runner) remove(headHash string) {

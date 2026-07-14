@@ -30,6 +30,7 @@ import (
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
+	"github.com/provin-line/oss/pipeline/provenance/verifycount"
 	"github.com/provin-line/oss/pipeline/sink"
 	sinkconsole "github.com/provin-line/oss/pipeline/sink/console"
 	sinkfile "github.com/provin-line/oss/pipeline/sink/file"
@@ -184,6 +185,43 @@ func parseDelivery(s string) contract.PayloadDelivery {
 	return d
 }
 
+// emitCounters is the emit-outcome accessor pair every producing handle
+// (transport.Loop, aggregate.Process) exposes — the metrics bridge's poll seam.
+type emitCounters interface {
+	EmitSuccesses() uint64
+	EmitFailures() uint64
+}
+
+// strippedCounter is the stripped-publish failure accessor producing handles
+// expose; registered only for loops that actually dual-emit.
+type strippedCounter interface {
+	StrippedPublishFailures() uint64
+}
+
+// verifyCounts is the per-loop verify-outcome snapshot the metrics bridge
+// polls — satisfied by *verifycount.Verifier.
+type verifyCounts interface {
+	Snapshot() map[string]uint64
+}
+
+// loopMetrics is one loop's metrics wiring for the composition root's
+// /metrics bridge (P1-2): name becomes the series' `loop` attribute, role
+// records which capability set the wiring followed (test/bookkeeping only —
+// not a series attribute), and the non-nil accessors decide which metric
+// families the loop participates in (nil = the loop does not have that
+// capability, so no series is registered — family presence is the capability
+// contract).
+type loopMetrics struct {
+	name string
+	role string // pipelineconfig.Role* value
+	// emits is non-nil for producing loops (source/chained/aggregate).
+	emits emitCounters
+	// stripped is non-nil when the loop dual-emits (a PayloadStore is wired).
+	stripped strippedCounter
+	// verify is non-nil for consuming loops (sink/chained/aggregate).
+	verify verifyCounts
+}
+
 // dataPlane is the node's set of running pipeline loops over one shared nats
 // connection. It owns the connection's lifecycle: Run starts the loops, waits for
 // them to drain on context cancellation, then closes the shared connection (the 17a
@@ -192,6 +230,9 @@ type dataPlane struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
 	aggregates []*aggregate.Process // self-triggered aggregate processes (contract.Process)
+	// metrics is the per-loop metrics wiring the /metrics bridge polls; one
+	// entry per constructed loop/aggregate, in construction order.
+	metrics []loopMetrics
 	// tlogs is the emission-log registry (log id = producing output subject →
 	// log) that BuildHandler mounts the TlogService over.
 	tlogs map[string]tlog.Log
@@ -348,6 +389,11 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	sinkWriters := newSinkWriters(deps.SinkWriter)
 	for _, lc := range pipeCfg.Loops {
 		var loop *transport.Loop
+		// lm collects this loop's metrics wiring; appended alongside the loop
+		// handle on success. dualEmits mirrors strippedPublisherFor's gate (a
+		// PayloadStore ⇒ every producing loop dual-emits, D-6).
+		lm := loopMetrics{name: lc.Name, role: lc.Role}
+		dualEmits := pw.store != nil
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
 			// The loop's ingress subscription; push-enabled loops get a readiness
@@ -375,6 +421,9 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
 				err = fmt.Errorf("standalone: loop %q: %w", lc.Name, err)
 			} else if err = ensureConsumer(lc.Name); err == nil {
+				// Per-loop verify counting over the shared verifier (P1-2).
+				vcnt := verifycount.New(verifier)
+				lm.verify = vcnt
 				// A receipt-issuing sink (MAY production / MUST archival) registers each
 				// receipt local-first (store → tlog → audit queue) before optional remote
 				// publish — the emissionRegistrar ordering doctrine. Needs the audit
@@ -389,16 +438,18 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 					rejectLog, err = newRejectLog(lc.Name)
 				}
 				if err == nil {
-					loop, err = buildSinkLoop(conn, verifier, ingressStore, w, receipts, rejectLog, pw, lc)
+					loop, err = buildSinkLoop(conn, vcnt, ingressStore, w, receipts, rejectLog, pw, lc)
 				}
 			}
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
+				vcnt := verifycount.New(verifier)
+				lm.verify = vcnt
 				var schemaRef vc.SchemaRef
 				if schemaRef, err = resolveSchema(lc.Name, lc.Chained.SchemaRef); err == nil {
 					var emission tlog.Log
 					if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
-						loop, err = buildChainedLoop(conn, builder, publisher, verifier, ingressStore, emission, schemaRef, pw, lc)
+						loop, err = buildChainedLoop(conn, builder, publisher, vcnt, ingressStore, emission, schemaRef, pw, lc)
 					}
 				}
 			}
@@ -408,6 +459,8 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			// window timer), so it is tracked in dp.aggregates, not dp.loops.
 			var agg *aggregate.Process
 			if err = ensureConsumer(lc.Name); err == nil {
+				vcnt := verifycount.New(verifier)
+				lm.verify = vcnt
 				// Emit-locus self-audit (slice-17o): the aggregate registers each emitted head
 				// (local store + receipt + queue + optional remote publish) BEFORE broadcasting.
 				// Wired only when the audit substrate is present; nil leaves it broadcast-only.
@@ -424,7 +477,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				if schemaRef, err = resolveSchema(lc.Name, lc.Aggregate.SchemaRef); err == nil {
 					var emission tlog.Log
 					if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
-						agg, err = buildAggregateProcess(conn, builder, verifier, ingressStore, registrar, emission, schemaRef, pw, lc)
+						agg, err = buildAggregateProcess(conn, builder, vcnt, ingressStore, registrar, emission, schemaRef, pw, lc)
 					}
 				}
 			}
@@ -433,6 +486,11 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				return nil, err
 			}
 			dp.aggregates = append(dp.aggregates, agg)
+			lm.emits = agg
+			if dualEmits {
+				lm.stripped = agg
+			}
+			dp.metrics = append(dp.metrics, lm)
 			continue
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
@@ -445,6 +503,14 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			return nil, err
 		}
 		dp.loops = append(dp.loops, loop)
+		// A source/chained transport.Loop is a producer; a sink is consume-only.
+		if lc.Role != pipelineconfig.RoleSink {
+			lm.emits = loop
+			if dualEmits {
+				lm.stripped = loop
+			}
+		}
+		dp.metrics = append(dp.metrics, lm)
 	}
 	return dp, nil
 }

@@ -49,4 +49,35 @@ func TestLoop_StrippedPublishHealthAccessors(t *testing.T) {
 	if n := loop.StrippedPublishFailures(); n != 1 {
 		t.Errorf("after a failing stripped publish: count = %d, want 1", n)
 	}
+	// The emit-outcome forwards: the delivered message is one emit success
+	// (the stripped failure does not make it an emit failure).
+	if n := loop.EmitSuccesses(); n != 1 {
+		t.Errorf("EmitSuccesses = %d, want 1", n)
+	}
+	if n := loop.EmitFailures(); n != 0 {
+		t.Errorf("EmitFailures = %d, want 0", n)
+	}
+}
+
+// Emit-outcome accessors are nil-safe before Run and for non-producing loops.
+func TestLoop_EmitCounters_NilSafeBeforeRun(t *testing.T) {
+	sub := newSyncSubscriber([]byte("raw input"))
+	loop, err := transport.NewLoop(transport.LoopConfig{
+		Behavior:   contract.ChainPreserving,
+		Strategy:   contract.VerificationAdjacent,
+		Processor:  &fakeProcessor{},
+		Subscriber: sub,
+		Publisher:  &fakePublisher{},
+		Codec:      envelopecodec.New(),
+		Emission:   &fakeTlog{},
+	})
+	if err != nil {
+		t.Fatalf("NewLoop: %v", err)
+	}
+	if n := loop.EmitSuccesses(); n != 0 {
+		t.Errorf("before Run: EmitSuccesses = %d, want 0", n)
+	}
+	if n := loop.EmitFailures(); n != 0 {
+		t.Errorf("before Run: EmitFailures = %d, want 0", n)
+	}
 }

@@ -401,3 +401,53 @@ func TestAuditOne_CtxCancelDuringVerify_RecordsNothing(t *testing.T) {
 		t.Errorf("queue len = %d, want 1 (retained on cancel)", q.Len())
 	}
 }
+
+// VerdictCounts is a monotonic counter of durably recorded verdict WRITES by
+// linear overall verdict (P1-2 metrics) — not a distribution of audited heads.
+func TestVerdictCounts_CountsDurableWrites(t *testing.T) {
+	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
+	r, _, _ := newRunner(t, cv, headStore(), fakePool{}, okCfg())
+
+	_ = r.drainOnce(context.Background())
+	got := r.VerdictCounts()
+	want := map[string]uint64{"verified": 1, "failed": 0, "indeterminate": 0}
+	for k, n := range want {
+		if got[k] != n {
+			t.Errorf("VerdictCounts[%q] = %d, want %d (full: %v)", k, got[k], n, got)
+		}
+	}
+}
+
+// A failed status write records no verdict, so it must not count.
+func TestVerdictCounts_NoCountOnFailedWrite(t *testing.T) {
+	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
+	q := NewMemQueue()
+	_ = q.Add(headH)
+	r, err := New(q, headStore(), cv, failingStatus{}, fakePool{}, okCfg(), WithClock(func() time.Time { return time.Unix(0, 0) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.drainOnce(context.Background())
+	for k, n := range r.VerdictCounts() {
+		if n != 0 {
+			t.Errorf("VerdictCounts[%q] = %d, want 0 (write failed)", k, n)
+		}
+	}
+}
+
+// Write-counter semantics: an indeterminate record immediately finalized as
+// abandoned in the same tick is TWO durable writes, so it counts twice.
+func TestVerdictCounts_AbandonFinalizationIsASecondWrite(t *testing.T) {
+	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return indeterminateResult(), nil }}
+	cfg := okCfg()
+	cfg.MaxAttempts = 1
+	r, q, _ := newRunner(t, cv, headStore(), fakePool{}, cfg)
+
+	_ = r.drainOnce(context.Background()) // record indeterminate + abandon in one tick
+	if q.Len() != 0 {
+		t.Fatalf("queue len = %d, want 0 (backstop dropped)", q.Len())
+	}
+	if got := r.VerdictCounts()["indeterminate"]; got != 2 {
+		t.Errorf(`VerdictCounts["indeterminate"] = %d, want 2 (verdict write + abandon write)`, got)
+	}
+}

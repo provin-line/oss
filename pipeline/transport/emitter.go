@@ -84,6 +84,13 @@ type Emitter struct {
 	// Emit.
 	strippedFailures    atomic.Uint64
 	lastStrippedFailure atomic.Int64 // UnixNano; 0 = never failed
+	// emitSuccesses / emitFailures count Emit outcomes by its return value
+	// (nil = the primary form was delivered; non-nil = it was not). Same
+	// wiring point and atomics rationale as strippedFailures: a metrics
+	// surface polls them from a different goroutine than the one calling
+	// Emit (see EmitSuccesses / EmitFailures).
+	emitSuccesses atomic.Uint64
+	emitFailures  atomic.Uint64
 	// strippedUnhealthy is the LAST stripped-publish outcome: true after a
 	// failure, false after a success (zero value false = healthy, the optimistic
 	// pre-first-emit default). It backs StrippedPublishHealthy — recovery is tied
@@ -164,6 +171,22 @@ func (e *Emitter) LastStrippedPublishFailure() (time.Time, bool) {
 // loop goes quiet, and clears only on a genuinely successful stripped publish —
 // so a node never re-advertises by-reference without evidence of recovery.
 func (e *Emitter) StrippedPublishHealthy() bool { return !e.strippedUnhealthy.Load() }
+
+// EmitSuccesses returns the number of Emit calls that returned nil (the
+// primary form was delivered) since construction — monotonic, never reset.
+// The boundary is exactly Emit's return value: an emission-log append failure
+// after a successful publish still counts as a success (the event WAS
+// delivered), and a stripped-publish failure counts as a success too (see
+// StrippedPublishFailures, which it increments instead). Same wiring intent
+// as StrippedPublishFailures: a metrics surface polls this from a separate
+// goroutine.
+func (e *Emitter) EmitSuccesses() uint64 { return e.emitSuccesses.Load() }
+
+// EmitFailures returns the number of Emit calls that returned an error (the
+// primary form was NOT delivered: a caller contract violation, a pre-publish
+// failure, or the publish itself) since construction — monotonic, never
+// reset. Companion to EmitSuccesses.
+func (e *Emitter) EmitFailures() uint64 { return e.emitFailures.Load() }
 
 // intentLog is the optional durable-sequence-intent capability an Emitter's
 // emission log may provide: it records, ahead of the risky publish, the
@@ -313,7 +336,20 @@ func committedTailSequence(ctx context.Context, emission tlog.Log) (uint64, erro
 // See publishStripped for why failing Emit here would be strictly worse (it
 // would duplicate the primary delivery on retry) and StrippedPublishFailures
 // for how the loss is made observable instead.
-func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, payload []byte) error {
+//
+// Every call increments exactly one of the outcome counters behind
+// EmitSuccesses / EmitFailures, keyed on the return value.
+func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, payload []byte) (err error) {
+	// Count the outcome off the actual return value so no present or future
+	// return path can escape the counters.
+	defer func() {
+		if err != nil {
+			e.emitFailures.Add(1)
+		} else {
+			e.emitSuccesses.Add(1)
+		}
+	}()
+
 	next := e.seq
 
 	// In-org producing processes always emit the full inline form

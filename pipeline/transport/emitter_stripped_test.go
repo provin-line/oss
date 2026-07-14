@@ -102,6 +102,14 @@ func TestEmitter_Stripped_FailureDoesNotFailEmit(t *testing.T) {
 	if _, ok := e.LastStrippedPublishFailure(); !ok {
 		t.Error("LastStrippedPublishFailure() ok = false, want true after a failure")
 	}
+	// The emit counter boundary: the primary delivered, so this is an emit
+	// SUCCESS even though the stripped publish failed — both counters move.
+	if got := e.EmitSuccesses(); got != 1 {
+		t.Errorf("EmitSuccesses = %d, want 1 (stripped failure is not an emit failure)", got)
+	}
+	if got := e.EmitFailures(); got != 0 {
+		t.Errorf("EmitFailures = %d, want 0", got)
+	}
 
 	// Seq advanced: the NEXT Emit uses sequence 2, on the primary publisher.
 	if err := e.Emit(context.Background(), cred, payload); err != nil {

@@ -46,6 +46,21 @@ push が無い時の症状: `chain subscribe` は成功する（コントロー�
 
 スーパーバイザはこれに合わせて配線する（例: Kubernetes の `livenessProbe` → `/healthz`、`readinessProbe` → `/readyz`）。
 
+## Metrics
+
+`GET /metrics` は OpenTelemetry counter を Prometheus exposition 形式で返す。`provin.network.core.metrics.enabled` でゲート（**default `false`**: このエンドポイントは serving listener 上で無認証であり、loop 名・流量・失敗率・判定率を露出する — `/healthz` より情報量が多い。listener のネットワークが信頼できる場所でのみ有効化する。quickstart compose は有効化済み）。
+
+安定 metric family（operational contract — credential wire 凍結の対象外だが、リネームは CHANGELOG 記載対象）:
+
+| Prometheus 名 | 属性 | 意味 |
+| --- | --- | --- |
+| `provin_pipeline_emit_attempts_total` | `loop`, `outcome=success\|failure` | producing loop ごとの Emit 結果。Emit の戻り値がキー（success = primary form 配送済み。stripped publish の失敗はここでは success のまま） |
+| `provin_pipeline_emit_stripped_failures_total` | `loop` | dual-emit する loop ごとの stripped publish 失敗数 |
+| `provin_pipeline_verify_results_total` | `loop`, `outcome=verified\|failed\|indeterminate\|error` | consuming loop ごとの per-credential **verifier API** 結果 — loop の accept/reject ポリシーの下にある seam（`error` = verifier が非 context エラーを返した、または異常な nil 結果） |
+| `provin_audit_verdicts_total` | `verdict=verified\|failed\|indeterminate` | durable に記録された audit verdict の **write** 数（linear-chain overall verdict 別。head 数ではなく write 数: 再 audit・hole の毎 tick 再記録・abandon 確定はそれぞれ数える） |
+
+family の存在は capability に従う: family（とその固定・ゼロ初期化のラベル集合）は node がその capability を構成しているときにのみ現れる — emit 系列は producing loop のみ、stripped 系列は dual-emit 構成（payload store 配線済み）のみ、verify 系列は consuming loop のみ、audit verdicts は audit runner 稼働時のみ。
+
 ## 永続状態
 
 すべての永続状態は設定した data dir 以下に置かれる（`network/README.ja.md` の「状態モデル」参照）: YAML のコントロールプレーン record と、ファイルバックの evidence ディレクトリ（credential、resolution pool、audit queue、verdict）。運用上の義務は 2 つ:

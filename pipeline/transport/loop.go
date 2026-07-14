@@ -106,6 +106,26 @@ func (l *Loop) StrippedPublishFailures() uint64 {
 	return 0
 }
 
+// EmitSuccesses reports this loop's monotonic count of delivered emits
+// (0 before Run / for non-producing loops). See Emitter.EmitSuccesses for the
+// counting boundary; same metrics-surface wiring intent as
+// StrippedPublishFailures.
+func (l *Loop) EmitSuccesses() uint64 {
+	if e := l.emitter.Load(); e != nil {
+		return e.EmitSuccesses()
+	}
+	return 0
+}
+
+// EmitFailures reports this loop's monotonic count of failed emits (0 before
+// Run / for non-producing loops). Companion to EmitSuccesses.
+func (l *Loop) EmitFailures() uint64 {
+	if e := l.emitter.Load(); e != nil {
+		return e.EmitFailures()
+	}
+	return 0
+}
+
 // isProducing reports whether the behavior requires a Publisher, Codec, and
 // Emission log.
 func isProducing(b contract.ChainBehavior) bool {

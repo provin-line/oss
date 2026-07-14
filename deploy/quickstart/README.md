@@ -127,6 +127,21 @@ curl -s -X POST "$REGISTRY/dplaax.audit.v1.AuditService/ListAuditStatuses" \
 `CONFIDENCE_VERIFIED` on all three axes — the record was authenticated, signed,
 chained, and audited entirely through the real provider + real verifier path.
 
+### 2e. Watch the counters (optional)
+
+The quickstart node enables the `/metrics` endpoint (OpenTelemetry counters,
+Prometheus exposition; **default-off** in the reference config — enabled here
+because the compose publishes the node port loopback-only):
+
+```sh
+curl -s http://localhost:8443/metrics | grep '^provin_'
+# provin_pipeline_emit_attempts_total{loop="src",outcome="success",...} 1
+# provin_pipeline_verify_results_total{loop="observer",outcome="verified",...} 1
+# provin_audit_verdicts_total{verdict="verified",...} 1
+```
+
+See `docs/architecture/deployment.md` "Metrics" for the family reference.
+
 ## How it fits together
 
 - **`provision`** (one-shot init container) generates the NATS operator-mode

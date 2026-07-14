@@ -22,6 +22,7 @@ const (
 	keyDataDir              = "provin.network.core.data-dir"
 	keyAllowLoopback        = "provin.network.core.dev.allow-loopback"
 	keyAllowPrivateNetworks = "provin.network.core.allow-private-networks"
+	keyMetricsEnabled       = "provin.network.core.metrics.enabled"
 )
 
 // CoreConfig is the server foundation's typed configuration. Every value comes
@@ -37,6 +38,12 @@ type CoreConfig struct {
 	// deployments whose peers live on RFC 1918 addresses (LAN, VPC, container
 	// networks).
 	AllowPrivateNetworks bool
+	// MetricsEnabled mounts the unauthenticated /metrics endpoint (OpenTelemetry
+	// counters, Prometheus exposition) on the serving listener. Default false:
+	// the listener is not loopback-bound, and metrics expose loop names and
+	// traffic/failure/verdict rates — materially more than /healthz. Enable it
+	// where the listener's network is trusted (e.g. the quickstart compose).
+	MetricsEnabled bool
 }
 
 // LoadCoreConfig reads and validates the core block from a loaded hocon config.
@@ -65,11 +72,16 @@ func LoadCoreConfig(cfg *hoconconfig.Config) (*CoreConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("core: config %s: %w", keyAllowPrivateNetworks, err)
 	}
+	metricsEnabled, err := cfg.Bool(keyMetricsEnabled)
+	if err != nil {
+		return nil, fmt.Errorf("core: config %s: %w", keyMetricsEnabled, err)
+	}
 	return &CoreConfig{
 		ListenAddr:           listenAddr,
 		DataDir:              dataDir,
 		AllowLoopback:        allowLoopback,
 		AllowPrivateNetworks: allowPrivate,
+		MetricsEnabled:       metricsEnabled,
 	}, nil
 }
 
