@@ -11,3 +11,7 @@ dist/
 # stray local build artifacts (go build ./deploy/quickstart/provision, ./cmd/provin)
 /provision
 /provin
+
+# machine-local agent working directory (audit reports, scratch); the tracked
+# AI guidance is AGENTS.md + CLAUDE.md at the repo root, never here.
+.claude/
