@@ -247,27 +247,18 @@ func main() {
 	// largest legitimate request (a stored credential or a pushed body) plus
 	// headroom; per-RPC caps stay tight below it.
 	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
-	bounded := http.MaxBytesHandler(h2c.NewHandler(handler, h2cServer()), int64(maxHTTPRequestBytes))
-
-	srv := &http.Server{
-		Addr:    coreCfg.ListenAddr,
-		Handler: bounded,
-		// Slowloris defense on the HTTP/1 side. ReadTimeout/WriteTimeout are
-		// deliberately unset: a legitimate ResolvePayload streams a large body,
-		// and an absolute read/write deadline would abort it. IdleTimeout bounds
-		// kept-alive-but-idle connections; the HTTP/2 stalls are bounded by
-		// h2cServer's own timeouts (h2c hijacks into that server).
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+	srv, listen, mode, err := buildServer(coreCfg, handler, maxHTTPRequestBytes)
+	if err != nil {
+		log.Fatalf("standalone: build server: %v", err)
 	}
-
+	log.Printf("standalone: serving mode = %s", mode)
 	log.Printf("standalone: listening on %s (registry %q, %d data-plane loop(s))",
 		coreCfg.ListenAddr, regCfg.ID, len(pipeCfg.Loops))
 
 	// A failed boot (e.g. the HTTP port is already in use) or a data-plane failure is
 	// NOT a clean stop: exit non-zero so a supervisor restarts the node. This preserves
 	// the fatal-on-serve-error behavior the pre-data-plane main had via log.Fatalf.
-	if err := runServices(ctx, srv, dp, batchRunner, auditRunner); err != nil {
+	if err := runServices(ctx, srv, listen, dp, batchRunner, auditRunner); err != nil {
 		log.Printf("standalone: %v", err)
 		os.Exit(1)
 	}
@@ -283,7 +274,7 @@ func main() {
 // HTTP server down. Both background runners are degraded-tolerant (log-and-continue,
 // D-17g-9 / D-17h-8): they never cancel their siblings and return nil on shutdown; each is
 // nil for a source-only node (no consuming loop).
-func runServices(ctx context.Context, srv *http.Server, dp *dataPlane, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {
+func runServices(ctx context.Context, srv *http.Server, listen func() error, dp *dataPlane, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -293,7 +284,7 @@ func runServices(ctx context.Context, srv *http.Server, dp *dataPlane, batchRunn
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		if err := serveHTTP(runCtx, srv); err != nil {
+		if err := serveHTTP(runCtx, srv, listen); err != nil {
 			errs <- fmt.Errorf("http server: %w", err)
 		}
 	}()
@@ -344,13 +335,49 @@ func outerRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
 	return largest*2 + 64<<10
 }
 
-// h2cServer builds the HTTP/2 server the h2c handler hijacks connections into.
-// http.Server's timeouts do not reach these streams, so the stall defenses are
-// set here: IdleTimeout bounds an idle connection, and ReadIdleTimeout +
-// PingTimeout make the server probe a silent peer and drop it if unanswered.
-// WriteByteTimeout bounds per-write stalls WITHOUT imposing an absolute
-// stream duration, so a legitimate large ResolvePayload stream is unaffected.
-func h2cServer() *http2.Server {
+// buildServer assembles the HTTP server, its listen function, and a serving-mode
+// label from the transport posture (F6). It serves TLS directly when
+// cert-file/key-file are configured (h2 over TLS via ALPN), else cleartext h2c.
+// The boot guard (core.LoadCoreConfig) has already ensured any non-loopback
+// cleartext listener was explicitly acknowledged. The outer MaxBytesHandler
+// (F0 pre-Connect bound) is the outermost handler on BOTH paths; the shared
+// http2Server timeouts apply on both.
+func buildServer(coreCfg *core.CoreConfig, handler http.Handler, maxHTTPRequestBytes int) (*http.Server, func() error, string, error) {
+	srv := &http.Server{
+		Addr: coreCfg.ListenAddr,
+		// Slowloris defense on the HTTP/1 side. ReadTimeout/WriteTimeout are
+		// deliberately unset: a legitimate ResolvePayload streams a large body,
+		// and an absolute read/write deadline would abort it. IdleTimeout bounds
+		// kept-alive-but-idle connections; HTTP/2 stalls are bounded by
+		// http2Server's own timeouts.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if coreCfg.TLS.ServesTLS() {
+		srv.Handler = http.MaxBytesHandler(handler, int64(maxHTTPRequestBytes))
+		if err := http2.ConfigureServer(srv, http2Server()); err != nil {
+			return nil, nil, "", fmt.Errorf("configure http/2 over TLS: %w", err)
+		}
+		cert, key := coreCfg.TLS.CertFile, coreCfg.TLS.KeyFile
+		return srv, func() error { return srv.ListenAndServeTLS(cert, key) }, "direct-tls", nil
+	}
+	srv.Handler = http.MaxBytesHandler(h2c.NewHandler(handler, http2Server()), int64(maxHTTPRequestBytes))
+	mode := "cleartext-acknowledged"
+	if core.ListenerIsLoopback(coreCfg.ListenAddr) {
+		mode = "loopback-cleartext"
+	}
+	return srv, srv.ListenAndServe, mode, nil
+}
+
+// http2Server builds the HTTP/2 server used by both transport paths — h2c
+// hijacks connections into it, and http2.ConfigureServer attaches it to the
+// TLS server. http.Server's timeouts do not reach these streams, so the stall
+// defenses are set here: IdleTimeout bounds an idle connection, and
+// ReadIdleTimeout + PingTimeout make the server probe a silent peer and drop
+// it if unanswered. WriteByteTimeout bounds per-write stalls WITHOUT imposing
+// an absolute stream duration, so a legitimate large ResolvePayload stream is
+// unaffected.
+func http2Server() *http2.Server {
 	return &http2.Server{
 		IdleTimeout:      120 * time.Second,
 		ReadIdleTimeout:  30 * time.Second,
@@ -359,13 +386,13 @@ func h2cServer() *http2.Server {
 	}
 }
 
-// serveHTTP runs srv.ListenAndServe and shuts it down gracefully when ctx is
+// serveHTTP runs listen (srv.ListenAndServe or ListenAndServeTLS) and shuts it down gracefully when ctx is
 // cancelled, using a fresh bounded context (the cancelled ctx must not abort the
 // drain). http.ErrServerClosed is the graceful path, not an error.
-func serveHTTP(ctx context.Context, srv *http.Server) error {
+func serveHTTP(ctx context.Context, srv *http.Server, listen func() error) error {
 	errCh := make(chan error, 1)
 	go func() {
-		err := srv.ListenAndServe()
+		err := listen()
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}

@@ -57,6 +57,14 @@ names which boundary it crosses. None of these substitutes for another.
 - **L2 — peer wire proof.** Internet-facing peer and payload surfaces carry
   a per-RPC Ed25519 proof over a canonical view, with replay defense; there
   is no auth-off mode. See [docs/protocol/auth.md](docs/protocol/auth.md).
+- **Transport confidentiality.** The node serves cleartext h2c; bearer tokens
+  and payloads are only as confidential as the transport. A boot guard
+  requires **either** node-native TLS **or** an explicit cleartext
+  acknowledgement before a non-loopback listener will start — the guard
+  enforces that a posture is *chosen*, not that TLS is *present*: the
+  acknowledgement path relies on the operator isolating the cleartext backend
+  behind a real terminator. See
+  [deployment.md → TLS termination](docs/architecture/deployment.md#tls-termination).
 - **L3 — provenance.** The credential chain — Data Integrity proofs,
   content-addressed links, transparency logs, audit verdicts — is
   independently verifiable. That independence covers **cryptographic

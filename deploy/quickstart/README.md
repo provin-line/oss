@@ -14,8 +14,12 @@ end-to-end — from HTTP push ingest to a `VERIFIED` audit verdict — through t
 
 > **Not a production reference.** This stack takes deliberate dev shortcuts: one
 > HS256 secret shared across the auth layer, freshly-generated NATS seeds, a
-> loopback-friendly node, a long-lived node service token. It exists to *evaluate*
-> dPLaaX with real authentication in the loop — see [Going to production](#going-to-production).
+> long-lived node service token, and **cleartext h2c** (`tls.allow-cleartext =
+> true`) on the compose bridge with the node port published loopback-only. In
+> production the node must serve TLS (`tls.cert-file`/`key-file`) or sit behind
+> a TLS terminator with an isolated backend — see
+> [deployment.md → TLS termination](../../docs/architecture/deployment.md#tls-termination)
+> and [Going to production](#going-to-production).
 
 ## Prerequisites
 

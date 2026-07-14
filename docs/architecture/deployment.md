@@ -97,6 +97,39 @@ operational side needs this note.
 Wire supervisors accordingly (e.g. Kubernetes `livenessProbe` → `/healthz`,
 `readinessProbe` → `/readyz`).
 
+## TLS termination
+
+The node serves cleartext **h2c** (HTTP/2 cleartext). L1 RPCs carry a bearer
+token in the clear, so a non-loopback cleartext listener would let an on-path
+attacker capture and replay it. The default `listen-addr` is therefore
+**loopback-only** (`127.0.0.1:8443`, secure by default), and a boot guard
+**fails closed** if you move the listener off loopback without choosing a
+transport posture. Choose one:
+
+**(a) Node-native TLS.** Set `provin.network.core.tls.cert-file` and
+`key-file` (both or neither). The node serves HTTP/2 over TLS (ALPN). Then:
+
+- The certificate is loaded **once at boot** — replacing the files does not
+  hot-reload; rotation requires a restart.
+- DID resolution expects `https://{registry}` on port **443**, while the
+  listener defaults to `:8443`. Map/serve on 443, or override the resolver
+  base (`resolver-base-url` / `registry-base-urls`), so relying parties reach
+  the TLS endpoint.
+- Advertised service endpoints (`#vc-resolver`, `#audit`), the VC-store and
+  upstream URLs, and the auth-provider registry URL must be `https://` where
+  they reach the TLS endpoint.
+- The certificate **SAN must cover the hostname clients use**; a private CA
+  must be installed in every client's / container's trust store.
+- `/healthz`, `/readyz`, and `/metrics` move onto HTTPS with the rest of the
+  handler — update probes and scrapers accordingly.
+
+**(b) A TLS terminator in front.** Terminate TLS at a reverse proxy / load
+balancer and set `provin.network.core.tls.allow-cleartext = true` to
+acknowledge the cleartext listener. This is an **acknowledgement, not
+enforcement**: you MUST make the cleartext backend reachable **only from the
+terminator** (bind loopback in a shared network namespace, a private network,
+or firewall / security-group rules). The guard cannot verify that isolation.
+
 ## Metrics
 
 `GET /metrics` serves OpenTelemetry counters in Prometheus exposition format,

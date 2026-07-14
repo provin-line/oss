@@ -46,6 +46,20 @@ push が無い時の症状: `chain subscribe` は成功する（コントロー�
 
 スーパーバイザはこれに合わせて配線する（例: Kubernetes の `livenessProbe` → `/healthz`、`readinessProbe` → `/readyz`）。
 
+## TLS 終端
+
+ノードは平文 **h2c**（HTTP/2 cleartext）を提供する。L1 RPC は bearer token を平文で運ぶので、非 loopback な平文 listener は on-path 攻撃者に捕捉・replay される。そのため default `listen-addr` は **loopback 限定**（`127.0.0.1:8443`、secure by default）で、listener を loopback から外す際に transport posture を選ばないと boot guard が **fail-closed** する。いずれかを選ぶ:
+
+**(a) ノード自前 TLS。** `provin.network.core.tls.cert-file` と `key-file` を設定（両方 or どちらも無し）。ノードが HTTP/2 over TLS（ALPN）を提供する。留意:
+
+- 証明書は **boot 時に 1 回 load** — ファイル差し替えでは hot reload されず、rotation は restart が必要。
+- DID resolution は `https://{registry}` の **443** を期待する一方、listener の default は `:8443`。443 でマッピング/提供するか resolver base（`resolver-base-url` / `registry-base-urls`）を override して、relying party が TLS endpoint に到達できるようにする。
+- advertised service endpoint（`#vc-resolver`、`#audit`）・VC-store/upstream URL・auth-provider registry URL は、TLS endpoint に到達する箇所では `https://` にする。
+- 証明書の **SAN は client が使う hostname を覆う**こと。private CA は各 client / container の trust store に導入する。
+- `/healthz`・`/readyz`・`/metrics` も HTTPS に移る — probe/scraper を更新する。
+
+**(b) 前段の TLS terminator。** reverse proxy / LB で TLS を終端し、`provin.network.core.tls.allow-cleartext = true` で平文 listener を承認する。これは**承認であって強制ではない**: 平文 backend が **terminator からのみ到達可能**になるようにする責務が運用側にある（shared netns での loopback bind、private network、firewall / security group）。guard はこの隔離を検証できない。
+
 ## Metrics
 
 `GET /metrics` は OpenTelemetry counter を Prometheus exposition 形式で返す。`provin.network.core.metrics.enabled` でゲート（**default `false`**: このエンドポイントは serving listener 上で無認証であり、loop 名・流量・失敗率・判定率を露出する — `/healthz` より情報量が多い。listener のネットワークが信頼できる場所でのみ有効化する。quickstart compose は有効化済み）。

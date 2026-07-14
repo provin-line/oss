@@ -27,8 +27,19 @@ provin.network {
 
   # OPTIONAL (defaults shown). Listen address and durable-state root; stores
   # live under data-dir in dids/ , schemas/ , keys/ subdirs.
+  #
+  # The default listen-addr is loopback-only (secure by default). Exposing the
+  # node on a non-loopback interface serves cleartext h2c (bearer tokens in the
+  # clear), so the boot guard fails closed unless you choose a transport
+  # posture — either node-native TLS (tls.cert-file/key-file) or an explicit
+  # tls.allow-cleartext=true behind a real TLS terminator with an isolated
+  # backend. See docs/architecture/deployment.md "TLS termination".
   core {
-    listen-addr = ":8443"
+    listen-addr = "127.0.0.1:8443"
     data-dir    = "./data"
+    # To expose on a non-loopback interface, uncomment ONE posture:
+    #   tls { cert-file = "/etc/provin/tls.crt", key-file = "/etc/provin/tls.key" }
+    #   tls.allow-cleartext = true   # only behind a TLS terminator + isolated backend
+    # and set listen-addr accordingly, e.g. ":8443".
   }
 }
