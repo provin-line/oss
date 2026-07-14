@@ -702,3 +702,25 @@ func TestBundleExport_AuditAdvertisementForeignIDIgnored(t *testing.T) {
 		t.Fatalf("receipts missing:\n%s", out)
 	}
 }
+
+// The same empty-endpoint arm on the #vc-resolver derivation: exactly one
+// matching advertisement whose endpoint is empty is an error at the
+// derivation seam — never an incidental downstream URL-guard failure.
+func TestBundleExport_VCResolverAdvertisementEmptyEndpointFails(t *testing.T) {
+	ctx := context.Background()
+	// advertise="" leaves the issuer docs without the harness's own
+	// #vc-resolver entry; inject one with an empty endpoint instead.
+	srv, head, _ := newAggregateNodeWith(t, "", func(id string) []did.ServiceEndpoint {
+		return []did.ServiceEndpoint{{ID: id + "#vc-resolver", Type: "VCResolver", ServiceEndpoint: ""}}
+	}, false)
+
+	err := commands.BundleExport(ctx, env(srv, &bytes.Buffer{}), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty endpoint") {
+		t.Fatalf("empty #vc-resolver endpoint: want derivation-seam error, got %v", err)
+	}
+}

@@ -286,6 +286,9 @@ func assembleSegment(dir string, seg uint64, m segmentManifest) error {
 	if err := writeFileSync(filepath.Join(tmp, logFile), data, 0o600); err != nil {
 		return err
 	}
+	// A local archive locator/summary, not a signing scope: segment integrity
+	// rides the embedded signed Checkpoint and record replay, never a hash of
+	// manifest.json bytes (canonicalizer-hygiene-exempt).
 	mb, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("filelog: marshal manifest: %w", err)
@@ -426,6 +429,8 @@ func markerPresent(dir string) (bool, error) {
 // writeMarker atomically installs the rotation-intent marker (tmp → fsync →
 // rename → fsync dir), so a reader never sees a torn marker.
 func writeMarker(dir string, ri rotateIntent) error {
+	// A local crash-reconciliation record, not a signing scope
+	// (canonicalizer-hygiene-exempt).
 	b, err := json.Marshal(ri)
 	if err != nil {
 		return fmt.Errorf("filelog: marshal rotation marker: %w", err)

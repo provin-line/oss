@@ -1,7 +1,7 @@
 # デプロイメント
 > 日本語版 — English: [deployment.md](deployment.md)
 
-provin ノードのデプロイ形態と、**load-bearing な**（間違えるとノードは正常に起動するのに仕事ができない）少数の設定判断について。設定キーの正典は各 package の `reference.conf` — 本ページはそれらが局所的にしか説明できない横断的な判断を扱う。
+provin ノードのデプロイ形態と、**load-bearing な**（間違えるとノードは正常に起動するのに仕事ができない）少数の設定判断について。設定キーの正典は各 package の `reference.conf` — 本ページはそれらが局所的にしか説明できない横断的な判断を扱う。ノードが*何であるか*（平面・信頼層）は [overview.ja.md](overview.ja.md)、ループが何かは [processes.ja.md](processes.ja.md) を参照。
 
 ## デプロイ形態
 

@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -259,7 +258,11 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 }
 
 // deriveIssuerEndpoint resolves issuer's DID document and returns its single
-// #vc-resolver VCResolver service endpoint, failing closed on zero or multiple matches.
+// #vc-resolver VCResolver service endpoint, failing closed on zero or multiple
+// matches. The id must be exactly "#vc-resolver" or issuer+"#vc-resolver" —
+// another URI merely ending in the fragment is someone else's advertisement
+// and must be ignored, never captured or counted into a false ambiguity (the
+// same exact-id rule the bundle exporter applies).
 func (r *Runner) deriveIssuerEndpoint(ctx context.Context, issuer string) (string, error) {
 	doc, err := r.did.Resolve(ctx, issuer)
 	if err != nil {
@@ -271,7 +274,7 @@ func (r *Runner) deriveIssuerEndpoint(ctx context.Context, issuer string) (strin
 	var found string
 	var n int
 	for _, s := range doc.Service() {
-		if s.Type == vcResolverServiceType && strings.HasSuffix(s.ID, "#vc-resolver") {
+		if s.Type == vcResolverServiceType && (s.ID == "#vc-resolver" || s.ID == issuer+"#vc-resolver") {
 			found = s.ServiceEndpoint
 			n++
 		}

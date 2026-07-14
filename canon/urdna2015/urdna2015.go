@@ -159,6 +159,7 @@ func (l *offlineLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
 	// the TRUSTED embedded context documents, whose "@version": 1.1 members
 	// json-gold compares as float64. Untrusted input never flows through here.
 	var parsed any
+	// decoder-hygiene-exempt: trusted embedded contexts; strictness cannot matter.
 	if err := json.Unmarshal(doc, &parsed); err != nil {
 		return nil, fmt.Errorf("urdna2015: embedded context %q is not valid JSON: %w", u, err)
 	}

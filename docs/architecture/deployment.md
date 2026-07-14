@@ -4,7 +4,9 @@ How a provin node is deployed, and the handful of configuration choices that
 are **load-bearing** — get them wrong and the node boots fine but cannot do
 its job. Config keys live in each package's `reference.conf` (the canonical
 key documentation); this page covers the cross-cutting decisions those files
-can only describe locally.
+can only describe locally. For what the node *is* (planes, trust layers) see
+[overview.md](overview.md); for what the loops are, see
+[processes.md](processes.md).
 
 ## Deployment shapes
 

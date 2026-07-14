@@ -3,10 +3,10 @@
 
 | ディレクトリ | 内容 |
 |---|---|
-| `architecture/` | システム概要、プロセスピアカタログ、デプロイモデル |
-| `concepts/` | 来歴モデル（L1/L2/L3 信頼レイヤー）、パイプライン処理、スキーマルール |
-| `protocol/` | サービス API 仕様（DID レジストリ、ChainManager、VC リゾルバー）、認証仕様（L1/L2） |
-| `did/` | `did:dplaax` メソッド仕様 |
+| `architecture/` | [システム概要](architecture/overview.ja.md)、[プロセスピアカタログ](architecture/processes.ja.md)、[デプロイモデル](architecture/deployment.ja.md) |
+| `concepts/` | [監査義務](concepts/audit-obligations.ja.md)。来歴モデル・パイプライン処理・スキーマルールは *planned*（信頼レイヤーの導入は当面 [overview](architecture/overview.ja.md) が担う） |
+| `protocol/` | [サービス API 面](protocol/services.ja.md)（endpoint 導出含む）、[認証仕様 L1/L2](protocol/auth.ja.md) |
+| `did/` | [`did:dplaax` メソッド仕様](did/method.ja.md) |
 
 [GLOSSARY.ja.md](GLOSSARY.ja.md) が用語の語彙を定義する。定義は責務ベースで、実装値は決して持たない — 具体的なカタログや定数は package の契約と dPLaaX spec に置く。
 

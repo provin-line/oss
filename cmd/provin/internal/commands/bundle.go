@@ -353,6 +353,12 @@ func (s *wireConsumedSource) vcResolverEndpoint(ctx context.Context, issuerDID s
 	if n != 1 {
 		return "", fmt.Errorf("bundle export: issuer %s advertises %d #vc-resolver VCResolver services, want exactly one", issuerDID, n)
 	}
+	// A present advertisement must be usable (the shared derivation rule):
+	// enforce the empty-endpoint arm here rather than let it surface later as
+	// an unrelated URL-guard error.
+	if endpoint == "" {
+		return "", fmt.Errorf("bundle export: issuer %s advertises #vc-resolver with an empty endpoint", issuerDID)
+	}
 	return endpoint, nil
 }
 

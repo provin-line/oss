@@ -514,3 +514,93 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 		t.Fatal("Run did not return after context cancel")
 	}
 }
+
+// A service whose ID is another URI merely ENDING in "#vc-resolver" is not
+// this issuer's advertisement: it must be ignored — neither captured as the
+// endpoint nor counted into a false ambiguity (the exact-id rule the bundle
+// exporter applies; P1-3 alignment).
+func TestDeriveIssuerEndpoint_ForeignSuffixIgnored(t *testing.T) {
+	pool, svc := newWiring()
+	const legit = "https://issuer.example/vc"
+	doc := did.New(did.DocumentFields{
+		ID: issuer,
+		Service: []did.ServiceEndpoint{
+			{ID: "did:dplaax:reg:org:mallory#vc-resolver", Type: "VCResolver", ServiceEndpoint: "https://mallory.example/vc"},
+			{ID: issuer + "#vc-resolver", Type: "VCResolver", ServiceEndpoint: legit},
+		},
+	})
+	r, err := New(pool, svc, &fakeFetcher{}, fakeDID{doc: doc}, fakeGuard{}, okConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.deriveIssuerEndpoint(context.Background(), issuer)
+	if err != nil {
+		t.Fatalf("deriveIssuerEndpoint: %v (foreign-suffix id must not create ambiguity)", err)
+	}
+	if got != legit {
+		t.Errorf("endpoint = %q, want %q", got, legit)
+	}
+}
+
+// A document carrying ONLY a foreign-suffix id has no advertisement for this
+// issuer: zero matches, fail-closed error (never route to the foreign URI).
+func TestDeriveIssuerEndpoint_ForeignOnlyIsZeroMatches(t *testing.T) {
+	pool, svc := newWiring()
+	doc := did.New(did.DocumentFields{
+		ID: issuer,
+		Service: []did.ServiceEndpoint{
+			{ID: "did:dplaax:reg:org:mallory#vc-resolver", Type: "VCResolver", ServiceEndpoint: "https://mallory.example/vc"},
+		},
+	})
+	r, err := New(pool, svc, &fakeFetcher{}, fakeDID{doc: doc}, fakeGuard{}, okConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.deriveIssuerEndpoint(context.Background(), issuer); err == nil {
+		t.Fatal("want zero-matches error, got nil (foreign endpoint captured)")
+	}
+}
+
+// The bare "#fragment" advertisement form (as issued before fragment
+// re-anchoring) matches too — the same two accepted forms as the exporter.
+func TestDeriveIssuerEndpoint_BareFragmentAccepted(t *testing.T) {
+	pool, svc := newWiring()
+	const legit = "https://issuer.example/vc"
+	doc := did.New(did.DocumentFields{
+		ID: issuer,
+		Service: []did.ServiceEndpoint{
+			{ID: "#vc-resolver", Type: "VCResolver", ServiceEndpoint: legit},
+		},
+	})
+	r, err := New(pool, svc, &fakeFetcher{}, fakeDID{doc: doc}, fakeGuard{}, okConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.deriveIssuerEndpoint(context.Background(), issuer)
+	if err != nil {
+		t.Fatalf("deriveIssuerEndpoint: %v", err)
+	}
+	if got != legit {
+		t.Errorf("endpoint = %q, want %q", got, legit)
+	}
+}
+
+// Both accepted id forms present at once is an ambiguity: fail closed, never
+// pick one (the "two or more matches: error" arm of the shared rule).
+func TestDeriveIssuerEndpoint_BothFormsIsAmbiguous(t *testing.T) {
+	pool, svc := newWiring()
+	doc := did.New(did.DocumentFields{
+		ID: issuer,
+		Service: []did.ServiceEndpoint{
+			{ID: "#vc-resolver", Type: "VCResolver", ServiceEndpoint: "https://a.example/vc"},
+			{ID: issuer + "#vc-resolver", Type: "VCResolver", ServiceEndpoint: "https://b.example/vc"},
+		},
+	})
+	r, err := New(pool, svc, &fakeFetcher{}, fakeDID{doc: doc}, fakeGuard{}, okConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.deriveIssuerEndpoint(context.Background(), issuer); err == nil {
+		t.Fatal("want ambiguity error for two matching advertisements, got nil")
+	}
+}

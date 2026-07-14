@@ -2,10 +2,10 @@
 
 | Directory | Contents |
 |---|---|
-| `architecture/` | System overview, process peer catalog, deployment models |
-| `concepts/` | Provenance model (L1/L2/L3 trust layers), pipeline processing, schema rules |
-| `protocol/` | Service API specs (DID registry, ChainManager, VC resolver), auth spec (L1/L2) |
-| `did/` | `did:dplaax` method specification |
+| `architecture/` | [System overview](architecture/overview.md), [process peer catalog](architecture/processes.md), [deployment models](architecture/deployment.md) |
+| `concepts/` | [Audit obligations](concepts/audit-obligations.md); provenance model, pipeline processing, and schema rules are *planned* (trust layers are introduced in the [overview](architecture/overview.md#trust-layers) meanwhile) |
+| `protocol/` | [Service API surfaces](protocol/services.md) (incl. endpoint derivation), [auth spec L1/L2](protocol/auth.md) |
+| `did/` | [`did:dplaax` method specification](did/method.md) |
 
 [GLOSSARY.md](GLOSSARY.md) defines the term vocabulary. Definitions are
 responsibility-based and never carry implementation values — concrete catalogs and
