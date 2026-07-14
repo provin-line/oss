@@ -2,12 +2,27 @@ package wireauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/network/pkg/didresolver"
 )
+
+// isTransientResolverErr reports whether a signer-key resolution error is a
+// transient condition (the signer's authenticity could not be evaluated)
+// rather than a definitive identity failure: a context timeout/cancellation,
+// or the production resolver refusing new work at capacity
+// (didresolver.ErrResolverBusy). It keeps the retry/Unauthenticated
+// distinction in one place; any resolver implementation whose transient
+// failures surface as context errors is covered without coupling.
+func isTransientResolverErr(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, didresolver.ErrResolverBusy)
+}
 
 // maxNonceLen caps an accepted nonce's length. A nonce is opaque to the
 // verifier (it tracks it only for replay defense), but an unbounded one would
@@ -36,6 +51,23 @@ type Authorizer func(signerDID string, signerDoc *did.DIDDocument, fields map[st
 type AcceptanceWindow struct {
 	MaxPast   time.Duration
 	MaxFuture time.Duration
+}
+
+// NonceRetention is how long a nonce must be retained for replay defense: the
+// full reach of the window. A proof is acceptable until issuedAt+MaxPast, and
+// issuedAt may be as late as now+MaxFuture, so a nonce recorded at first use
+// could still be re-presented up to MaxPast+MaxFuture later. Past that it can
+// never be re-admitted, so it is safe to evict (see memNonceStore).
+func (w AcceptanceWindow) NonceRetention() time.Duration {
+	return w.MaxPast + w.MaxFuture
+}
+
+// DefaultAcceptanceWindow is the window applied when VerifierConfig.Window is
+// wholly unset. It is exported as the single authoritative source so the
+// composition root can derive the nonce-store retention from the SAME value the
+// verifier defaults to, preventing drift (see NewMemoryNonceStore).
+func DefaultAcceptanceWindow() AcceptanceWindow {
+	return AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 5 * time.Second}
 }
 
 // VerifierConfig configures a Verifier. Resolver, Crypto, and Nonces are
@@ -88,7 +120,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	// future-dated proof") stays expressible rather than being silently widened.
 	window := cfg.Window
 	if window == (AcceptanceWindow{}) {
-		window = AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 5 * time.Second}
+		window = DefaultAcceptanceWindow()
 	}
 	if window.MaxPast < 0 || window.MaxFuture < 0 {
 		return nil, fmt.Errorf("wireauth: VerifierConfig.Window durations must be non-negative")
@@ -154,6 +186,13 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 	// 4. Resolve the signer's #auth key.
 	doc, err := v.resolver.Resolve(ctx, proof.SignerDID)
 	if err != nil {
+		// A transient resolver condition (timeout, cancellation, or capacity) is
+		// not an identity failure — the signer's authenticity was never
+		// evaluated. Surface it distinctly so the handler returns a retryable
+		// code instead of Unauthenticated.
+		if isTransientResolverErr(err) {
+			return fmt.Errorf("%w: resolve %s: %w", ErrResolverUnavailable, proof.SignerDID, err)
+		}
 		return fmt.Errorf("%w: resolve %s: %v", ErrKeyResolution, proof.SignerDID, err)
 	}
 	pub, err := did.ExtractPublicKey(doc, proof.SignerDID+"#auth", did.RelationshipAuthentication)

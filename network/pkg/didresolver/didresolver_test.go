@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/network/pkg/core"
@@ -226,5 +228,91 @@ func TestResolveDocument_IdentityMismatch(t *testing.T) {
 	r := newResolver(t, s, loopbackGuard())
 	if _, _, err := r.ResolveDocument(context.Background(), testDID); !errors.Is(err, didresolver.ErrDIDIdentityMismatch) {
 		t.Fatalf("err = %v, want ErrDIDIdentityMismatch", err)
+	}
+}
+
+// The resolver bounds how many outbound fetches run at once: an
+// unauthenticated caller presenting attacker DIDs (wireauth resolves the
+// signer BEFORE checking the signature) cannot pin an unbounded number of
+// goroutines/connections. When the semaphore is full, a new resolution
+// fails fast with ErrResolverBusy rather than queueing.
+func TestResolve_ConcurrencyBounded_FailFast(t *testing.T) {
+	release := make(chan struct{})
+	blocked := make(chan struct{}, 1)
+	s := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		blocked <- struct{}{}
+		// Hold the sole slot until released — but also unblock if the client
+		// cancels, so the test server can close without hanging.
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		body, _ := did.New(did.DocumentFields{ID: testDID}).MarshalJSON()
+		w.Header().Set("Content-Type", "application/did+json")
+		_, _ = w.Write(body)
+	})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	srv := httptest.NewServer(s)
+	t.Cleanup(func() { closeRelease(); srv.Close() })
+	r := didresolver.New(loopbackGuard(), didresolver.WithRegistryBaseURL(func(string) (string, error) {
+		return srv.URL, nil
+	}))
+	didresolver.SetResolutionConcurrencyForTest(r, 1)
+
+	done := make(chan error, 1)
+	go func() { _, err := r.Resolve(context.Background(), testDID); done <- err }()
+	<-blocked // the first resolution now holds the only slot
+
+	if _, err := r.Resolve(context.Background(), testDID); !errors.Is(err, didresolver.ErrResolverBusy) {
+		t.Fatalf("second concurrent resolve: want ErrResolverBusy, got %v", err)
+	}
+	closeRelease()
+	if err := <-done; err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+}
+
+// A registry that accepts the connection but never responds must not pin the
+// caller forever: the per-resolve deadline bounds the whole fetch even when the
+// caller's context has no deadline of its own.
+func TestResolve_PerResolveTimeout(t *testing.T) {
+	s := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never respond; unblock when the client cancels
+	})
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	r := didresolver.New(loopbackGuard(), didresolver.WithRegistryBaseURL(func(string) (string, error) {
+		return srv.URL, nil
+	}))
+	didresolver.SetResolutionTimeoutForTest(r, 100*time.Millisecond)
+
+	start := time.Now()
+	_, err := r.Resolve(context.Background(), testDID) // background ctx: no caller deadline
+	if err == nil {
+		t.Fatal("stalling registry: want a timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("resolve took %v — the per-resolve deadline did not bound it", elapsed)
+	}
+}
+
+// A DNS lookup that runs into the per-resolve deadline must surface a
+// context-timeout identity (not an SSRF-rejection string), so wireauth
+// classifies it as transient/retryable rather than an identity failure.
+func TestResolve_PreflightTimeout_PreservesContextError(t *testing.T) {
+	slow := core.NewURLGuard(core.WithResolver(func(ctx context.Context, _ string) ([]netip.Addr, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}))
+	r := didresolver.New(slow, didresolver.WithRegistryBaseURL(func(string) (string, error) {
+		return "https://registry.example", nil
+	}))
+	didresolver.SetResolutionTimeoutForTest(r, 100*time.Millisecond)
+
+	_, err := r.Resolve(context.Background(), testDID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("preflight-timeout err = %v, want errors.Is(context.DeadlineExceeded)", err)
 	}
 }

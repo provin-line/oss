@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // ErrURLBlocked is the sentinel for every SSRF rejection. Callers map it with
@@ -22,6 +23,14 @@ var ErrURLBlocked = errors.New("core: outbound URL blocked")
 // maxRedirects is Go's default redirect cap, re-imposed by CheckRedirect (a
 // custom http.Client.CheckRedirect otherwise removes it).
 const maxRedirects = 10
+
+// dialTimeout / dialKeepAlive bound the guarded dialer's connect phase (a
+// custom DialContext bypasses http.DefaultTransport's own 30s dialer timeout,
+// so it must be re-imposed). These match net.Dialer's conventional defaults.
+const (
+	dialTimeout   = 30 * time.Second
+	dialKeepAlive = 30 * time.Second
+)
 
 // blockedPrefixes is the authoritative deny list: all IANA special-purpose
 // ranges plus deprecated local-use — everything that is not public global
@@ -237,8 +246,13 @@ func (g *URLGuard) DialContext(ctx context.Context, network, addr string) (net.C
 		}
 	}
 
-	// Dial only the validated IPs (pinned — no second resolution).
-	var d net.Dialer
+	// Dial only the validated IPs (pinned — no second resolution). The dialer
+	// carries an explicit connect timeout so a target that accepts the SYN but
+	// stalls the handshake cannot pin the caller (the http.DefaultTransport's
+	// own dialer timeout is bypassed once DialContext is overridden). It bounds
+	// connect only, not the request/stream — a per-request deadline is the
+	// caller's (e.g. the resolver's per-resolve context).
+	d := net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive}
 	var firstErr error
 	for _, ip := range validated {
 		conn, derr := d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))

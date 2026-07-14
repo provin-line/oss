@@ -215,3 +215,23 @@ func TestCheckURL_AllowPrivateNetworksOptIn(t *testing.T) {
 		}
 	}
 }
+
+// The guard's shared client bounds the DIAL phase but must NOT set a global
+// ResponseHeaderTimeout: that client is reused by the payload fetch, VC batch
+// resolution, and bundle export, and a short header timeout would cut a
+// legitimate (up-to-15s) DID resolution short. The per-resolve context
+// deadline bounds header-wait instead. This pins that decision against a
+// future regression.
+func TestHTTPClient_DialBoundedButNoGlobalHeaderTimeout(t *testing.T) {
+	c := core.NewURLGuard().HTTPClient()
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http.Transport", c.Transport)
+	}
+	if tr.ResponseHeaderTimeout != 0 {
+		t.Errorf("ResponseHeaderTimeout = %v, want 0 (a global header timeout would cut legitimate slow resolutions)", tr.ResponseHeaderTimeout)
+	}
+	if c.Timeout != 0 {
+		t.Errorf("client.Timeout = %v, want 0 (an overall timeout would abort streaming payloads)", c.Timeout)
+	}
+}

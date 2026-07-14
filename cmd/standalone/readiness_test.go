@@ -19,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/network/pkg/auth"
 )
@@ -42,10 +44,10 @@ func decodeReadyz(t *testing.T, rec *httptest.ResponseRecorder) (string, map[str
 
 // All checks passing → 200 {"status":"ok"} with every check reported ok.
 func TestReadyz_AllOK(t *testing.T) {
-	h := readyz([]readinessCheck{
+	h := newCachedReadiness([]readinessCheck{
 		{Name: "a", Check: func(context.Context) error { return nil }},
 		{Name: "b", Check: func(context.Context) error { return nil }},
-	})
+	}, time.Minute).handler()
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -68,10 +70,10 @@ func TestReadyz_AllOK(t *testing.T) {
 // and check errors carry internal topology (PDP URL, filesystem paths) —
 // detail goes to the server log only.
 func TestReadyz_OneFailing_Degraded(t *testing.T) {
-	h := readyz([]readinessCheck{
+	h := newCachedReadiness([]readinessCheck{
 		{Name: "good", Check: func(context.Context) error { return nil }},
 		{Name: "bad", Check: func(context.Context) error { return errors.New("pdp unreachable at http://10.0.0.7:3001") }},
-	})
+	}, time.Minute).handler()
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -95,7 +97,7 @@ func TestReadyz_OneFailing_Degraded(t *testing.T) {
 // Zero checks (an HTTP-only node with a static PDP) is trivially ready.
 func TestReadyz_NoChecks_OK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	readyz(nil)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	newCachedReadiness(nil, time.Minute).handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -103,7 +105,7 @@ func TestReadyz_NoChecks_OK(t *testing.T) {
 
 func TestReadyz_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
-	readyz(nil)(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
+	newCachedReadiness(nil, time.Minute).handler()(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
@@ -165,5 +167,95 @@ func TestPdpCheck(t *testing.T) {
 		t.Error("opa backend produced no pdp check")
 	} else if err := check.Check(context.Background()); err != nil {
 		t.Errorf("opa probe: %v", err)
+	}
+}
+
+// An unreachable-PDP error (which /readyz logs) must carry only scheme://host,
+// never the path or query where a token or internal detail could ride.
+func TestPdpCheck_ErrorRedactsToHost(t *testing.T) {
+	// A closed port on loopback: the probe fails, producing the log-bound error.
+	check, ok := pdpCheck(&auth.AuthConfig{
+		Backend:           auth.BackendO3co,
+		PolicyVerifierURL: "http://127.0.0.1:1/secret-path?token=shhh",
+	})
+	if !ok {
+		t.Fatal("o3co backend produced no pdp check")
+	}
+	err := check.Check(context.Background())
+	if err == nil {
+		t.Fatal("want unreachable error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "secret-path") || strings.Contains(msg, "token=shhh") {
+		t.Errorf("error leaks path/query: %q", msg)
+	}
+	if !strings.Contains(msg, "http://127.0.0.1:1") {
+		t.Errorf("error should name scheme://host, got %q", msg)
+	}
+}
+
+func TestHostOnly(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://user:pass@pv.example:3001/x?q=1": "https://pv.example:3001",
+		"http://127.0.0.1:8181":                   "http://127.0.0.1:8181",
+		"://bogus":                                "<redacted>",
+	} {
+		if got := hostOnly(raw); got != want {
+			t.Errorf("hostOnly(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// The cache bounds outbound probes: a burst of /readyz requests within one TTL
+// runs the checks ONCE (amplification defense F7), and the very first request
+// refreshes synchronously so a zero snapshot never reads as ready.
+func TestCachedReadiness_CoalescesProbes(t *testing.T) {
+	var probes int64
+	c := newCachedReadiness([]readinessCheck{
+		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
+	}, time.Minute) // long TTL: everything in this test is one window
+	h := c.handler()
+
+	for i := 0; i < 50; i++ {
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status %d, want 200", i, rec.Code)
+		}
+	}
+	if got := atomic.LoadInt64(&probes); got != 1 {
+		t.Errorf("check probed %d times across 50 requests, want 1 (cache must coalesce)", got)
+	}
+}
+
+// A fresh cache must not serve a zero snapshot as ready: the first request
+// refreshes synchronously, so a failing check yields 503 on the very first hit.
+func TestCachedReadiness_FirstRequestRefreshesSynchronously(t *testing.T) {
+	c := newCachedReadiness([]readinessCheck{
+		{Name: "bad", Check: func(context.Context) error { return errors.New("down") }},
+	}, time.Minute)
+	rec := httptest.NewRecorder()
+	c.handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("first request: status %d, want 503 (must not serve a zero snapshot as ready)", rec.Code)
+	}
+}
+
+// Past the TTL the cache re-probes: staleness is bounded.
+func TestCachedReadiness_RefreshesAfterTTL(t *testing.T) {
+	var probes int64
+	now := time.Unix(0, 0)
+	c := newCachedReadiness([]readinessCheck{
+		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
+	}, 5*time.Second)
+	c.now = func() time.Time { return now }
+	h := c.handler()
+
+	h(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil)) // probe 1
+	h(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil)) // cached
+	now = now.Add(6 * time.Second)                                                 // past TTL
+	h(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil)) // probe 2
+	if got := atomic.LoadInt64(&probes); got != 2 {
+		t.Errorf("probes = %d, want 2 (one per TTL window)", got)
 	}
 }

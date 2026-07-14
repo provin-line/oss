@@ -241,9 +241,24 @@ func main() {
 		log.Printf("standalone: metrics exposition mounted at /metrics")
 	}
 
+	// Outer raw-body cap: h2c.NewHandler reads an HTTP/1 upgrade request's body
+	// in full before the inner Connect handler (and its per-RPC read cap) runs,
+	// so a single generous outer bound closes that pre-auth path. Sized to the
+	// largest legitimate request (a stored credential or a pushed body) plus
+	// headroom; per-RPC caps stay tight below it.
+	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
+	bounded := http.MaxBytesHandler(h2c.NewHandler(handler, h2cServer()), int64(maxHTTPRequestBytes))
+
 	srv := &http.Server{
 		Addr:    coreCfg.ListenAddr,
-		Handler: h2c.NewHandler(handler, &http2.Server{}),
+		Handler: bounded,
+		// Slowloris defense on the HTTP/1 side. ReadTimeout/WriteTimeout are
+		// deliberately unset: a legitimate ResolvePayload streams a large body,
+		// and an absolute read/write deadline would abort it. IdleTimeout bounds
+		// kept-alive-but-idle connections; the HTTP/2 stalls are bounded by
+		// h2cServer's own timeouts (h2c hijacks into that server).
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("standalone: listening on %s (registry %q, %d data-plane loop(s))",
@@ -308,6 +323,40 @@ func runServices(ctx context.Context, srv *http.Server, dp *dataPlane, batchRunn
 		}
 	}
 	return nil
+}
+
+// outerRequestCapBytes sizes the outermost raw-request-body limit so it is
+// never smaller than any legitimate request under a per-RPC read cap. It must
+// cover EVERY message class — the per-RPC read caps bound the DECODED message,
+// but a Connect JSON request base64-encodes a bytes field (~4/3 inflation), so
+// the raw body is larger than the decoded cap. It is deliberately generous —
+// the tight bounds are the per-RPC caps below it; this only closes the
+// pre-Connect (h2c-upgrade) path that no interceptor guards.
+func outerRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
+	largest := maxCredentialSize
+	for _, v := range []int{maxPushBodySize, maxDocumentRequestBytes, maxProofRequestBytes} {
+		if v > largest {
+			largest = v
+		}
+	}
+	// 2x covers base64 (~4/3) plus JSON field-name/escaping overhead with
+	// margin; +64 KiB is framing/header headroom.
+	return largest*2 + 64<<10
+}
+
+// h2cServer builds the HTTP/2 server the h2c handler hijacks connections into.
+// http.Server's timeouts do not reach these streams, so the stall defenses are
+// set here: IdleTimeout bounds an idle connection, and ReadIdleTimeout +
+// PingTimeout make the server probe a silent peer and drop it if unanswered.
+// WriteByteTimeout bounds per-write stalls WITHOUT imposing an absolute
+// stream duration, so a legitimate large ResolvePayload stream is unaffected.
+func h2cServer() *http2.Server {
+	return &http2.Server{
+		IdleTimeout:      120 * time.Second,
+		ReadIdleTimeout:  30 * time.Second,
+		PingTimeout:      15 * time.Second,
+		WriteByteTimeout: 30 * time.Second,
+	}
 }
 
 // serveHTTP runs srv.ListenAndServe and shuts it down gracefully when ctx is

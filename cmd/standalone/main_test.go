@@ -47,3 +47,44 @@ func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 		t.Fatal("runServices did not return after the data-plane loop failed")
 	}
 }
+
+// The HTTP/2 (h2c) server the connection is hijacked into must carry its own
+// stall defenses: http.Server's timeouts do not reach HTTP/2 streams, so a
+// regression to zero here would reopen the slow-stream DoS (adversarial-review
+// F7 / Codex Issue 7).
+func TestH2CServer_HasStallTimeouts(t *testing.T) {
+	s := h2cServer()
+	if s.IdleTimeout <= 0 {
+		t.Error("IdleTimeout unset — idle HTTP/2 connections would never be reaped")
+	}
+	if s.ReadIdleTimeout <= 0 || s.PingTimeout <= 0 {
+		t.Errorf("ReadIdleTimeout=%v PingTimeout=%v — a silent peer is never probed/dropped", s.ReadIdleTimeout, s.PingTimeout)
+	}
+	if s.WriteByteTimeout <= 0 {
+		t.Error("WriteByteTimeout unset — a per-write stall is unbounded")
+	}
+}
+
+// The outer raw-body cap is the largest legitimate request plus headroom — big
+// enough for the biggest real request (credential or push body), never smaller
+// (which would reject legitimate traffic).
+func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
+	const cred, push = 1 << 20, 4 << 20
+	got := outerRequestCapBytes(cred, push)
+	if got <= push {
+		t.Errorf("cap %d not above the largest legit request %d", got, push)
+	}
+	if outerRequestCapBytes(push, cred) != got {
+		t.Error("cap must not depend on argument order (it takes the max)")
+	}
+	// Even with credential/push configured BELOW the document-class per-RPC cap,
+	// the outer bound must still exceed a document-class request plus its JSON
+	// base64 inflation — otherwise a legit doc request is rejected pre-auth.
+	small := outerRequestCapBytes(4<<10, 4<<10)
+	if small <= maxDocumentRequestBytes {
+		t.Errorf("outer cap %d does not cover the document class %d when cred/push are tiny", small, maxDocumentRequestBytes)
+	}
+	if small <= maxDocumentRequestBytes*4/3 {
+		t.Errorf("outer cap %d does not cover base64-inflated document request (~4/3 of %d)", small, maxDocumentRequestBytes)
+	}
+}

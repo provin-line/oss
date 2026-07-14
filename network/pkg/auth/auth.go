@@ -103,5 +103,11 @@ func validateVerifierURL(raw string) error {
 	if u.Host == "" {
 		return fmt.Errorf("must have a host (got %q)", raw)
 	}
+	if u.User != nil {
+		// Credentials in the URL would be carried into probe logs and error
+		// messages (e.g. the /readyz PDP probe); the PDP is authenticated by
+		// its own mechanism, not URL userinfo. Reject at boot, fail-closed.
+		return fmt.Errorf("must not embed userinfo credentials in the URL")
+	}
 	return nil
 }

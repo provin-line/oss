@@ -120,6 +120,16 @@ func mapError(err error) error {
 		errors.Is(err, wireauth.ErrInvalidView),
 		errors.Is(err, payloadresolver.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	// Inbound caller hung up mid-resolution: CodeCanceled, not a server-side
+	// "unavailable". Precedes ErrResolverUnavailable, which the cancellation
+	// also wraps (the later context.Canceled case covers non-resolver paths).
+	case errors.Is(err, context.Canceled):
+		return connect.NewError(connect.CodeCanceled, err)
+	// Transient resolver condition (timeout/capacity): retryable, NOT an
+	// identity rejection. Must precede the Unauthenticated cases — the error
+	// also wraps ErrResolverUnavailable, and order decides the mapping.
+	case errors.Is(err, wireauth.ErrResolverUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
 	// Failed to prove identity.
 	case errors.Is(err, wireauth.ErrExpired),
 		errors.Is(err, wireauth.ErrFromFuture),

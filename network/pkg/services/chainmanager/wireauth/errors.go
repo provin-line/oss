@@ -37,7 +37,16 @@ var (
 	ErrFromFuture = errors.New("wireauth: proof from the future")
 	// ErrKeyResolution is a failure resolving the signer's #auth key (resolver
 	// miss, key not under the authentication relationship, controller mismatch).
+	// It is a DEFINITIVE identity failure (→ Unauthenticated), distinct from
+	// ErrResolverUnavailable below.
 	ErrKeyResolution = errors.New("wireauth: cannot resolve signer auth key")
+	// ErrResolverUnavailable is a TRANSIENT resolver condition — a timeout,
+	// cancellation, or the resolver refusing new work at capacity — while
+	// resolving the signer's key. It is NOT an identity failure: the signer's
+	// authenticity could not be evaluated at all, so a handler maps it to a
+	// retryable code (Unavailable), never Unauthenticated (which would tell an
+	// honest peer its identity was rejected).
+	ErrResolverUnavailable = errors.New("wireauth: signer-key resolver unavailable")
 	// ErrSignatureInvalid is a proof whose signature does not verify against the
 	// resolved key over the rebuilt view.
 	ErrSignatureInvalid = errors.New("wireauth: signature does not verify")

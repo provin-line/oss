@@ -52,9 +52,10 @@ func TestLoadAuthConfig_BackendDefaultsO3co(t *testing.T) {
 
 func TestLoadAuthConfig_FailsClosed(t *testing.T) {
 	cases := map[string]string{
-		"empty default":   "",                                                             // reference.conf default is "" + backend o3co
-		"scheme-less":     `provin.network.auth.policy-verifier-url = "pv.internal:3001"`, // no http(s)://
-		"hostless":        `provin.network.auth.policy-verifier-url = "https://"`,         // scheme set, no host
+		"empty default":   "",                                                                               // reference.conf default is "" + backend o3co
+		"scheme-less":     `provin.network.auth.policy-verifier-url = "pv.internal:3001"`,                   // no http(s)://
+		"hostless":        `provin.network.auth.policy-verifier-url = "https://"`,                           // scheme set, no host
+		"userinfo creds":  `provin.network.auth.policy-verifier-url = "https://user:pass@pv.internal:3001"`, // credentials in URL: rejected so they can't leak to logs
 		"unknown backend": `provin.network.auth.backend = "bogus"`,
 		"opa empty url":   `provin.network.auth.backend = "opa"`, // opa selected, no base-url
 		"opa missing policy-path": `

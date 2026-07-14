@@ -235,6 +235,17 @@ func peerMapError(err error) error {
 		errors.Is(err, wireauth.ErrMalformedProof),
 		errors.Is(err, wireauth.ErrInvalidView):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	// Inbound caller hung up mid-resolution: report it as such, not as a
+	// server-side "unavailable" (which would inflate server-fault metrics).
+	// Precedes ErrResolverUnavailable, which the cancellation also wraps.
+	case errors.Is(err, context.Canceled):
+		return connect.NewError(connect.CodeCanceled, err)
+	// Transient resolver condition: the signer's authenticity could not be
+	// evaluated (timeout/capacity). Retryable — NOT an identity rejection, so
+	// it must precede the Unauthenticated cases below (the error also wraps
+	// ErrResolverUnavailable, and order decides the mapping).
+	case errors.Is(err, wireauth.ErrResolverUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
 	// Failed to prove identity.
 	case errors.Is(err, wireauth.ErrExpired),
 		errors.Is(err, wireauth.ErrFromFuture),

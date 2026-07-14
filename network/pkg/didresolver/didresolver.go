@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
@@ -26,6 +27,24 @@ import (
 // an over-cap response is an error rather than unbounded memory.
 const maxDocumentSize = 1 << 20 // 1 MiB
 
+// maxConcurrentResolutions bounds simultaneous outbound fetches. Because
+// wireauth resolves an inbound proof's signer DID BEFORE verifying its
+// signature, an unauthenticated attacker can drive resolutions with arbitrary
+// registry hosts; without a bound, a flood of stalling targets would pin an
+// unbounded number of goroutines/connections. When the bound is hit a new
+// resolution fails fast (ErrResolverBusy) rather than queueing (a queue just
+// moves the pin). 64 is a generous starting bound shared across L2 verification
+// and internal control/data-plane resolution; configurability, fairness, and
+// metrics are follow-ups.
+const maxConcurrentResolutions = 64
+
+// resolveTimeout bounds one whole resolution (preflight + dial + request +
+// body read) even when the caller's context has no deadline of its own (the
+// wireauth path passes the long-lived inbound request context). DID documents
+// are ≤ maxDocumentSize, so an overall deadline is safe here (unlike a
+// streaming path).
+const resolveTimeout = 15 * time.Second
+
 var (
 	// ErrDIDNotFound is returned when the registry has no such DID (HTTP 404).
 	// It wraps resolver.ErrNotFound: a 404 from the owning registry is a
@@ -38,6 +57,11 @@ var (
 	// equal the requested DID — a misconfigured or hostile base mapping returning
 	// a substituted identity. Fail closed rather than trust it.
 	ErrDIDIdentityMismatch = errors.New("didresolver: resolved document id does not match requested DID")
+	// ErrResolverBusy is returned when the concurrent-resolution bound is
+	// reached (see maxConcurrentResolutions). It is transient: a caller (and the
+	// wireauth verifier, which maps it to a retryable RPC code) should treat it
+	// as "try again", never as a definitive resolution failure.
+	ErrResolverBusy = errors.New("didresolver: resolver at capacity")
 )
 
 // Resolver resolves did:dplaax DIDs over HTTP against their owning registry.
@@ -45,6 +69,11 @@ type Resolver struct {
 	client  *http.Client
 	guard   *core.URLGuard
 	baseURL func(registry string) (string, error)
+	// sem bounds concurrent outbound resolutions (fail-fast when full); timeout
+	// bounds one whole resolution. Both defend the pre-signature-verification
+	// resolution path against unauthenticated resource exhaustion.
+	sem     chan struct{}
+	timeout time.Duration
 }
 
 // Option configures a Resolver.
@@ -76,6 +105,8 @@ func New(guard *core.URLGuard, opts ...Option) *Resolver {
 		client:  guard.HTTPClient(),
 		guard:   guard,
 		baseURL: DefaultBaseURL,
+		sem:     make(chan struct{}, maxConcurrentResolutions),
+		timeout: resolveTimeout,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -107,9 +138,35 @@ func (r *Resolver) ResolveDocument(ctx context.Context, didStr string) (*did.DID
 	if err != nil {
 		return nil, nil, err
 	}
+	// Admit under the concurrency bound BEFORE any network work — CheckURL below
+	// performs DNS, so the semaphore must cover it too. Fail fast when full
+	// rather than queueing (a queue just moves the pin).
+	if r.sem != nil {
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		default:
+			return nil, nil, ErrResolverBusy
+		}
+	}
+	// Bound the whole resolution (preflight + dial + request + body read) even
+	// when the caller's context has no deadline; caller cancellation still wins.
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
 	// Early typed SSRF rejection before dialing; the guarded client also re-guards
 	// at dial time (DNS-rebinding), so this preflight is defense-in-depth.
 	if err := r.guard.CheckURL(ctx, url); err != nil {
+		// CheckURL performs DNS and string-formats its cause, so a lookup that
+		// runs into the per-resolve deadline would otherwise surface as an
+		// SSRF rejection and be misclassified as an identity failure. Preserve
+		// the context error's identity so callers (wireauth) see it as
+		// transient/retryable.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, nil, fmt.Errorf("didresolver: resolve %s: %w", didStr, ctxErr)
+		}
 		return nil, nil, fmt.Errorf("didresolver: endpoint rejected: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

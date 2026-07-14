@@ -15,6 +15,8 @@ import (
 	"github.com/nats-io/nkeys"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
+	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
+	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	chainpbconnect "github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
@@ -302,6 +304,24 @@ func TestBoot_Healthz(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("healthz status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// An oversized request body is rejected with ResourceExhausted BEFORE the auth
+// interceptor runs — connect reads/decompresses the body first, so the per-RPC
+// read cap is the pre-auth memory bound (adversarial-review F0). AuditService
+// carries the proof-class cap (256 KiB); a >256 KiB request trips it.
+func TestBoot_RequestReadCap_RejectsOversizedBeforeAuth(t *testing.T) {
+	srv, _, _ := assembled(t)
+	client := auditpbconnect.NewAuditServiceClient(srv.Client(), srv.URL)
+	req := connect.NewRequest(&auditpb.GetAuditStatusRequest{
+		HeadHash: strings.Repeat("a", (256<<10)+1), // one byte over the proof cap
+	})
+	// No bearer set: if the cap did NOT fire first, this would fail at auth
+	// (Unauthenticated). ResourceExhausted proves the body was capped pre-auth.
+	_, err := client.GetAuditStatus(context.Background(), req)
+	if got := connect.CodeOf(err); got != connect.CodeResourceExhausted {
+		t.Fatalf("oversized request: code = %v, want ResourceExhausted (read cap must fire before auth)", got)
 	}
 }
 

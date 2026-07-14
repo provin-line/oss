@@ -13,10 +13,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -46,60 +48,118 @@ type readinessCheck struct {
 // stall the whole readiness response past a supervisor's probe timeout.
 const perCheckTimeout = 2 * time.Second
 
-// readyz aggregates the given checks into a readiness handler: HTTP 200 with
-// {"status":"ok"} when every check passes, HTTP 503 with {"status":"degraded"}
-// otherwise. Checks run concurrently, so the whole response is bounded by one
-// perCheckTimeout, not their sum (supervisor probe timeouts are short). The
-// bound is best-effort: a probe that ignores its ctx (os.Stat on a dead
-// network mount) can still hang its goroutine — the failure direction stays
-// correct (the supervisor's own probe timeout reads as not-ready).
-func readyz(checks []readinessCheck) http.HandlerFunc {
+// readinessCacheTTL bounds how stale a served readiness snapshot may be, and so
+// bounds the outbound PDP-probe rate to ~1/TTL regardless of inbound /readyz
+// request rate. Kept well below a typical supervisor failure-detection window.
+const readinessCacheTTL = 3 * time.Second
+
+// readySnapshot is the aggregate readiness result at one instant.
+type readySnapshot struct {
+	ready   bool
+	results map[string]struct {
+		Status string `json:"status"`
+	}
+}
+
+// runReadyChecks runs every check concurrently under one perCheckTimeout and
+// aggregates the outcome. Check errors are logged server-side only (they carry
+// internal topology and /readyz is public).
+func runReadyChecks(ctx context.Context, checks []readinessCheck) readySnapshot {
+	results := make(map[string]struct {
+		Status string `json:"status"`
+	}, len(checks))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	ready := true
+	for _, c := range checks {
+		wg.Add(1)
+		go func(c readinessCheck) {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, perCheckTimeout)
+			err := c.Check(cctx)
+			cancel()
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				log.Printf("readyz: check %s failed: %v", c.Name, err)
+				ready = false
+				results[c.Name] = struct {
+					Status string `json:"status"`
+				}{Status: "failed"}
+				return
+			}
+			results[c.Name] = struct {
+				Status string `json:"status"`
+			}{Status: "ok"}
+		}(c)
+	}
+	wg.Wait()
+	return readySnapshot{ready: ready, results: results}
+}
+
+func writeSnapshot(w http.ResponseWriter, snap readySnapshot) {
+	status, code := "ok", http.StatusOK
+	if !snap.ready {
+		status, code = "degraded", http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": status,
+		"checks": snap.results,
+	})
+}
+
+// cachedReadiness serves a readiness snapshot refreshed at most once per ttl,
+// so a flood of unauthenticated /readyz requests cannot amplify into one
+// outbound PDP probe (and one goroutine-per-dependency) per request. The
+// refresh is coalesced under a mutex — concurrent stale requests share one
+// refresh — and the FIRST request refreshes synchronously, so a never-yet-
+// refreshed cache reports degraded/probe-derived state, never a zero snapshot
+// that would falsely read as ready. The refresh uses its own bounded context,
+// decoupled from any single caller's cancellation. No background goroutine, so
+// no lifecycle to manage (BuildHandler receives no context).
+type cachedReadiness struct {
+	checks []readinessCheck
+	ttl    time.Duration
+	now    func() time.Time
+
+	mu          sync.Mutex
+	lastRefresh time.Time
+	snapshot    readySnapshot
+	fresh       bool
+}
+
+func newCachedReadiness(checks []readinessCheck, ttl time.Duration) *cachedReadiness {
+	return &cachedReadiness{checks: checks, ttl: ttl, now: time.Now}
+}
+
+func (c *cachedReadiness) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		type checkResult struct {
-			Status string `json:"status"`
-		}
-		results := make(map[string]checkResult, len(checks))
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		ready := true
-		for _, c := range checks {
-			wg.Add(1)
-			go func(c readinessCheck) {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(r.Context(), perCheckTimeout)
-				err := c.Check(ctx)
-				cancel()
-				mu.Lock()
-				defer mu.Unlock()
-				if err != nil {
-					// Server-side detail only: check errors carry internal
-					// topology and this endpoint is public.
-					log.Printf("readyz: check %s failed: %v", c.Name, err)
-					ready = false
-					results[c.Name] = checkResult{Status: "failed"}
-					return
-				}
-				results[c.Name] = checkResult{Status: "ok"}
-			}(c)
-		}
-		wg.Wait()
-		status := "ok"
-		code := http.StatusOK
-		if !ready {
-			status = "degraded"
-			code = http.StatusServiceUnavailable
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": status,
-			"checks": results,
-		})
+		writeSnapshot(w, c.get())
 	}
+}
+
+func (c *cachedReadiness) get() readySnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if c.fresh && now.Sub(c.lastRefresh) < c.ttl {
+		return c.snapshot
+	}
+	// Refresh under a fresh bounded context so one caller's cancellation cannot
+	// poison the shared snapshot. Held under the lock so concurrent stale
+	// requests coalesce onto this single refresh.
+	ctx, cancel := context.WithTimeout(context.Background(), perCheckTimeout)
+	defer cancel()
+	c.snapshot = runReadyChecks(ctx, c.checks)
+	c.lastRefresh = now
+	c.fresh = true
+	return c.snapshot
 }
 
 // evidenceStoreCheck probes the durable evidence substrate: the directory must
@@ -134,6 +194,18 @@ func natsCheck(healthy func() bool) readinessCheck {
 			return nil
 		},
 	}
+}
+
+// hostOnly reduces a URL to scheme://host[:port] for logging — never the
+// userinfo, path, or query. url.Redacted() is insufficient here: it masks a
+// password but keeps the username and the query string. A URL that fails to
+// parse is reported as "<redacted>" rather than echoed raw.
+func hostOnly(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<redacted>"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // pdpCheck probes the configured external PDP for REACHABILITY: an HTTP
@@ -174,7 +246,15 @@ func pdpCheck(cfg *auth.AuthConfig) (readinessCheck, bool) {
 			}
 			res, err := client.Do(req)
 			if err != nil {
-				return fmt.Errorf("pdp unreachable at %s: %w", base, err)
+				// client.Do returns a *url.Error whose message embeds the FULL
+				// request URL (path + query). Unwrap to its inner cause so the
+				// log carries only scheme://host (see hostOnly) plus the reason.
+				cause := err
+				var ue *url.Error
+				if errors.As(err, &ue) {
+					cause = ue.Err
+				}
+				return fmt.Errorf("pdp unreachable at %s: %w", hostOnly(base), cause)
 			}
 			// Drain a bounded slice so the connection is pooled, not dropped.
 			_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 512))

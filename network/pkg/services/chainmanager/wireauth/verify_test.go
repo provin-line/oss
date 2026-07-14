@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
@@ -194,5 +196,54 @@ func TestNewVerifier_RequiresDeps(t *testing.T) {
 				t.Errorf("%s: want error, got nil", m.name)
 			}
 		})
+	}
+}
+
+// errResolver always fails resolution with a fixed error — to exercise the
+// transient (retryable) vs definitive (identity-failure) classification.
+type errResolver struct{ err error }
+
+func (e errResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	return nil, e.err
+}
+
+// A transient resolver condition (timeout, cancellation, at-capacity) must
+// surface as ErrResolverUnavailable — NOT ErrKeyResolution — so the signer's
+// authenticity is reported "could not be evaluated, retry", never "rejected".
+func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.T) {
+	signer, _ := signerFor(t, subDID)
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+
+	for name, resErr := range map[string]error{
+		"timeout":      context.DeadlineExceeded,
+		"cancelled":    context.Canceled,
+		"at capacity":  didresolver.ErrResolverBusy,
+		"wrapped busy": fmt.Errorf("resolve chain: %w", didresolver.ErrResolverBusy),
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := testVerifier(t, errResolver{err: resErr})
+			err := v.Verify(context.Background(), "Op", okFields(), proof, nil)
+			if !errors.Is(err, wireauth.ErrResolverUnavailable) {
+				t.Errorf("err = %v, want ErrResolverUnavailable", err)
+			}
+			if errors.Is(err, wireauth.ErrKeyResolution) {
+				t.Errorf("transient resolver error misclassified as ErrKeyResolution: %v", err)
+			}
+		})
+	}
+}
+
+// A definitive resolver failure (a plain not-found, no transient marker) stays
+// ErrKeyResolution → Unauthenticated.
+func TestVerify_DefinitiveResolverError_IsKeyResolution(t *testing.T) {
+	signer, _ := signerFor(t, subDID)
+	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	v := testVerifier(t, errResolver{err: errors.New("registry: no such DID")})
+	err := v.Verify(context.Background(), "Op", okFields(), proof, nil)
+	if !errors.Is(err, wireauth.ErrKeyResolution) {
+		t.Errorf("err = %v, want ErrKeyResolution", err)
+	}
+	if errors.Is(err, wireauth.ErrResolverUnavailable) {
+		t.Errorf("definitive failure misclassified as transient: %v", err)
 	}
 }

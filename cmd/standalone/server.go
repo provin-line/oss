@@ -49,6 +49,23 @@ import (
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 )
 
+// Inbound request read caps by message class. connect reads and decompresses
+// the request body BEFORE the auth interceptor, and readMaxBytes=0 is
+// unlimited, so every mounted service is capped to bound pre-auth allocation.
+//
+//   - maxProofRequestBytes: wireauth proofs + small control fields (peer,
+//     payload, audit, tlog). Small and fixed-shape.
+//   - maxDocumentRequestBytes: schema bodies, DID documents/delegations, and
+//     full-replacement allowlists, which can legitimately be larger.
+//
+// The credential class (StoreVC) keeps its own maxCredentialSize (a boot
+// config value). No SEND cap is set: list RPCs return unpaginated results that
+// can exceed any request cap.
+const (
+	maxProofRequestBytes    = 256 << 10 // 256 KiB
+	maxDocumentRequestBytes = 1 << 20   // 1 MiB
+)
+
 // BuildHandler wires the services into one mux: the Connect RPC services
 // sit behind the L1 authorization interceptors (verifier injected — main builds
 // it from config, tests inject a static endpoint), while the public W3C DID
@@ -177,15 +194,30 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 
+	// Per-RPC inbound read caps: connect reads and DECOMPRESSES the request
+	// body before the auth interceptor runs, and readMaxBytes=0 (the default)
+	// is unlimited — so an unauthenticated compressed body could inflate to
+	// exhaust memory. Cap every service to its message class (a send cap is
+	// deliberately NOT set: list RPCs return unpaginated, legitimately large
+	// responses). The outer MaxBytesHandler in main bounds the raw body /
+	// h2c-upgrade path on top of these.
+	proofCap := connect.WithReadMaxBytes(maxProofRequestBytes)
+	docCap := connect.WithReadMaxBytes(maxDocumentRequestBytes)
 	mux := http.NewServeMux()
 	for _, p := range []handlerPair{
-		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), authz)),
-		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz)),
-		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz)),
+		// schema bodies, DID docs/delegations, and full-replacement allowlists
+		// can exceed the proof cap → document class.
+		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), authz, docCap)),
+		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz, docCap)),
+		// SignRequest.data can be a canonicalized credential, so it shares the
+		// credential class (the config value StoreVC uses) — not the fixed doc
+		// constant, or the two would diverge when max-credential-size is raised.
+		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
-		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts)), authz)),
-		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz)),
-		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc), chainhandler.WithAllowListReader(chainSvc)), authz)),
+		// Read-mostly / small-request control surfaces → proof class.
+		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts)), authz, proofCap)),
+		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz, proofCap)),
+		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc), chainhandler.WithAllowListReader(chainSvc)), authz, docCap)),
 	} {
 		mux.Handle(p.path, p.h)
 	}
@@ -202,14 +234,17 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	evLog := evidence.New(evFilelog)
 
 	// ChainPeerService is the internet-facing L2 surface: mounted WITHOUT the L1
-	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11).
-	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog))
+	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11). The
+	// read cap matters MORE here than on L1 surfaces: there is no interceptor to
+	// bound the request first, and the requests are small proofs + fields.
+	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog), proofCap)
 	mux.Handle(peerPath, peerHandler)
 
 	// PayloadService is the internet-facing L2 by-reference payload serving
 	// boundary: same wireauth proof + allow-list admission (chainSvc.Admit) as the
-	// chain peer surface, likewise no L1 interceptor.
-	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, peerVerifier, chainSvc))
+	// chain peer surface, likewise no L1 interceptor. A ResolvePayload REQUEST is
+	// just a content hash + proof (responses stream, unbounded by this).
+	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadSvc, peerVerifier, chainSvc), proofCap)
 	mux.Handle(payloadPath, payloadHandler)
 
 	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4),
@@ -217,9 +252,11 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// /healthz stays STATIC (liveness: "restart me if this fails");
 	// /readyz is dependency-aware (readiness: "route no new work here") —
 	// the checks are assembled by main from what this node is configured with.
+	// Cached (readinessCacheTTL) so a /readyz flood cannot amplify into a
+	// per-request outbound PDP probe (adversarial-review F7).
 	mux.Handle("/did/", didhandler.NewResolutionHandler(didSvc, regCfg.ID))
 	mux.HandleFunc("/healthz", healthz)
-	mux.HandleFunc("/readyz", readyz(readiness))
+	mux.HandleFunc("/readyz", newCachedReadiness(readiness, readinessCacheTTL).handler())
 
 	// HTTP push ingest (apipush) for push-enabled source loops: /ingest/<loop>/push
 	// (PDP-guarded) and /ingest/<loop>/health (public). Zero bindings mount nothing.
