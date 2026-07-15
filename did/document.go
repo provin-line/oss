@@ -180,14 +180,14 @@ func (d *DIDDocument) Service() []ServiceEndpoint {
 // Body returns a defensive copy of the canonical body map.
 func (d *DIDDocument) Body() map[string]any { return deepCopyMap(d.body) }
 
-// Hash returns "sha256:<hex>" over the JCS-canonical body — the document's
+// Hash returns "sha256:<hex>" over the RFC 8785 canonical body — the document's
 // content address recorded as a snapshot into the append-only lifecycle log.
 // Unknown members participate in the hash (see the type doc).
-func (d *DIDDocument) Hash() (string, error) { return jcs.Hash(d.body) }
+func (d *DIDDocument) Hash() (string, error) { return jcs.HashRFC8785(d.body) }
 
-// MarshalJSON emits the JCS-canonical wire form. Deterministic output keeps the
-// recorded snapshot and any byte comparison stable.
-func (d *DIDDocument) MarshalJSON() ([]byte, error) { return jcs.Canonicalize(d.body) }
+// MarshalJSON emits the RFC 8785 canonical wire form. Deterministic output keeps
+// the recorded snapshot and any byte comparison stable.
+func (d *DIDDocument) MarshalJSON() ([]byte, error) { return jcs.CanonicalizeRFC8785(d.body) }
 
 // UnmarshalJSON parses the wire form under strict-decoder rules, preserving
 // unknown members in the body so the canonical hash commits to the document as

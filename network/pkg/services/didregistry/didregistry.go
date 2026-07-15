@@ -590,7 +590,7 @@ func (s *Service) appendEvent(d *dplaax.DID, ev store.LifecycleEvent) error {
 // tamper-evident. Every reader recomputes it over the read-back event, so the
 // chain verifies independent of on-disk serialization precision.
 func hashEvent(ev store.LifecycleEvent) (string, error) {
-	return jcs.Hash(ev.CanonicalMap())
+	return jcs.HashRFC8785(ev.CanonicalMap())
 }
 
 // storeResolver adapts a DIDStore to resolver.Resolver so delegation.Verify can

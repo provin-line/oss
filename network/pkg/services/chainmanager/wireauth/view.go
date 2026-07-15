@@ -36,7 +36,7 @@ func viewBytes(signerDID, op, nonce string, issuedAt time.Time, fields map[strin
 		"issuedAt":  issuedAt.UTC().Format(time.RFC3339),
 		"fields":    fields,
 	}
-	return jcs.Canonicalize(view)
+	return jcs.CanonicalizeRFC8785(view)
 }
 
 // validateFields enforces the fields value grammar (D-w11): the payload must be

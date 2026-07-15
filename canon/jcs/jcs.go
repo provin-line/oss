@@ -29,30 +29,79 @@ import (
 	"unicode/utf8"
 )
 
-// Name is the wire identifier of this canonicalization.
+// Name is the wire identifier of the legacy int64-verbatim canonicalization.
 const Name = "jcs"
 
-// Canonicalize returns the RFC 8785 canonical bytes for v.
-func Canonicalize(v any) ([]byte, error) {
+// NameRFC8785 is the wire identifier of the conformant canonicalization. It is
+// frozen: WireVariantIDs carry it (wire:v1:jcs-rfc8785:sha256:<hex>) and
+// source_root_canonical names it, so changing it is a protocol change.
+const NameRFC8785 = "jcs-rfc8785"
+
+// numberMode selects how numbers reach the wire. The two modes are the whole
+// difference between the conformant canonicalizer and the legacy one.
+type numberMode int
+
+const (
+	// modeLegacyInt64 emits 64-bit-range integer literals verbatim, skipping
+	// the binary64 round-trip (canon.jcs.int64-verbatim). Legacy verification
+	// only: it is a deliberate RFC 8785 deviation.
+	modeLegacyInt64 numberMode = iota
+	// modeRFC8785 rounds every number through binary64 per ES6
+	// Number::toString — byte-for-byte RFC 8785 (canon.jcs.base).
+	modeRFC8785
+)
+
+// Canonicalize returns the legacy int64-verbatim canonical bytes for v.
+//
+// This is NOT RFC 8785: integers in 64-bit range are emitted verbatim rather
+// than round-tripped through binary64. It exists to verify artifacts signed
+// under the historical deviation (canon.jcs.int64-verbatim). New signature
+// scopes and content hashes use CanonicalizeRFC8785.
+func Canonicalize(v any) ([]byte, error) { return canonicalize(v, modeLegacyInt64) }
+
+// CanonicalizeRFC8785 returns the byte-for-byte RFC 8785 canonical bytes for v
+// (canon.jcs.base) — the canonicalization every new signature scope and content
+// hash uses.
+//
+// It is a pure serializer: it rounds unsafe integers through binary64 exactly
+// as a strict-ES6 implementation does, and it does NOT reject them. Rejecting
+// an unsafe integer is admission's job, at the raw-token stage before
+// canonicalization (canon.AdmitSafeNumbers / canon.number.raw-token-guard) —
+// a serializer that rejected them could not stay RFC 8785 conformant, because
+// the RFC's own examples contain 1E30.
+func CanonicalizeRFC8785(v any) ([]byte, error) { return canonicalize(v, modeRFC8785) }
+
+func canonicalize(v any, mode numberMode) ([]byte, error) {
 	var sb strings.Builder
-	if err := serialize(&sb, v); err != nil {
+	if err := serialize(&sb, v, mode); err != nil {
 		return nil, err
 	}
 	return []byte(sb.String()), nil
 }
 
-// Hash returns "sha256:<hex>" over the canonical bytes of v — the standard
-// content address for VC bodies and chain links.
-func Hash(v any) (string, error) {
-	b, err := Canonicalize(v)
+// Hash returns "sha256:<hex>" over the legacy canonical bytes of v.
+// New content addresses use HashRFC8785.
+func Hash(v any) (string, error) { return hashWith(v, modeLegacyInt64) }
+
+// HashRFC8785 returns "sha256:<hex>" over the RFC 8785 canonical bytes of v —
+// the content address for VC bodies and chain links.
+func HashRFC8785(v any) (string, error) { return hashWith(v, modeRFC8785) }
+
+func hashWith(v any, mode numberMode) (string, error) {
+	b, err := canonicalize(v, mode)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(b)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return sha256Prefixed(b), nil
 }
 
-// Canonicalizer adapts this package to the canon.Canonicalizer interface.
+func sha256Prefixed(b []byte) string {
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// Canonicalizer adapts the legacy int64-verbatim canonicalization to the
+// canon.Canonicalizer interface. Legacy verification only — see Canonicalize.
 type Canonicalizer struct{}
 
 // Name implements canon.Canonicalizer.
@@ -61,7 +110,17 @@ func (Canonicalizer) Name() string { return Name }
 // Canonicalize implements canon.Canonicalizer.
 func (Canonicalizer) Canonicalize(v any) ([]byte, error) { return Canonicalize(v) }
 
-func serialize(sb *strings.Builder, v any) error {
+// RFC8785 adapts the conformant canonicalization to the canon.Canonicalizer
+// interface. This is the canonicalizer new artifacts are signed under.
+type RFC8785 struct{}
+
+// Name implements canon.Canonicalizer.
+func (RFC8785) Name() string { return NameRFC8785 }
+
+// Canonicalize implements canon.Canonicalizer.
+func (RFC8785) Canonicalize(v any) ([]byte, error) { return CanonicalizeRFC8785(v) }
+
+func serialize(sb *strings.Builder, v any, mode numberMode) error {
 	switch t := v.(type) {
 	case nil:
 		sb.WriteString("null")
@@ -77,7 +136,7 @@ func serialize(sb *strings.Builder, v any) error {
 		}
 		writeString(sb, t)
 	case json.Number:
-		s, err := numberFromLiteral(t)
+		s, err := numberFromLiteral(t, mode)
 		if err != nil {
 			return err
 		}
@@ -97,32 +156,32 @@ func serialize(sb *strings.Builder, v any) error {
 		}
 		sb.WriteString(s)
 	case int:
-		sb.WriteString(strconv.FormatInt(int64(t), 10))
+		return writeInt(sb, int64(t), mode)
 	case int8:
-		sb.WriteString(strconv.FormatInt(int64(t), 10))
+		return writeInt(sb, int64(t), mode)
 	case int16:
-		sb.WriteString(strconv.FormatInt(int64(t), 10))
+		return writeInt(sb, int64(t), mode)
 	case int32:
-		sb.WriteString(strconv.FormatInt(int64(t), 10))
+		return writeInt(sb, int64(t), mode)
 	case int64:
-		sb.WriteString(strconv.FormatInt(t, 10))
+		return writeInt(sb, t, mode)
 	case uint:
-		sb.WriteString(strconv.FormatUint(uint64(t), 10))
+		return writeUint(sb, uint64(t), mode)
 	case uint8:
-		sb.WriteString(strconv.FormatUint(uint64(t), 10))
+		return writeUint(sb, uint64(t), mode)
 	case uint16:
-		sb.WriteString(strconv.FormatUint(uint64(t), 10))
+		return writeUint(sb, uint64(t), mode)
 	case uint32:
-		sb.WriteString(strconv.FormatUint(uint64(t), 10))
+		return writeUint(sb, uint64(t), mode)
 	case uint64:
-		sb.WriteString(strconv.FormatUint(t, 10))
+		return writeUint(sb, t, mode)
 	case []any:
 		sb.WriteByte('[')
 		for i, e := range t {
 			if i > 0 {
 				sb.WriteByte(',')
 			}
-			if err := serialize(sb, e); err != nil {
+			if err := serialize(sb, e, mode); err != nil {
 				return err
 			}
 		}
@@ -143,7 +202,7 @@ func serialize(sb *strings.Builder, v any) error {
 			}
 			writeString(sb, k)
 			sb.WriteByte(':')
-			if err := serialize(sb, t[k]); err != nil {
+			if err := serialize(sb, t[k], mode); err != nil {
 				return err
 			}
 		}
@@ -203,16 +262,49 @@ func lessUTF16(a, b string) bool {
 	return len(ua) < len(ub)
 }
 
-// numberFromLiteral serializes a json.Number: 64-bit integer literals emit
-// their canonical decimal form verbatim (the package-level RFC 8785
-// deviation); everything else goes through the IEEE double / ES6 path.
-func numberFromLiteral(n json.Number) (string, error) {
-	s := string(n)
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return strconv.FormatInt(i, 10), nil
+// writeInt emits a typed signed integer. Under modeRFC8785 it takes the same
+// binary64 round-trip a literal would, so a typed value and its literal
+// spelling can never canonicalize differently.
+func writeInt(sb *strings.Builder, i int64, mode numberMode) error {
+	if mode == modeLegacyInt64 {
+		sb.WriteString(strconv.FormatInt(i, 10))
+		return nil
 	}
-	if u, err := strconv.ParseUint(s, 10, 64); err == nil {
-		return strconv.FormatUint(u, 10), nil
+	s, err := es6Number(float64(i))
+	if err != nil {
+		return err
+	}
+	sb.WriteString(s)
+	return nil
+}
+
+// writeUint is writeInt for unsigned values.
+func writeUint(sb *strings.Builder, u uint64, mode numberMode) error {
+	if mode == modeLegacyInt64 {
+		sb.WriteString(strconv.FormatUint(u, 10))
+		return nil
+	}
+	s, err := es6Number(float64(u))
+	if err != nil {
+		return err
+	}
+	sb.WriteString(s)
+	return nil
+}
+
+// numberFromLiteral serializes a json.Number. Under modeLegacyInt64, 64-bit
+// integer literals emit their canonical decimal form verbatim (the historical
+// RFC 8785 deviation); everything else — and everything under modeRFC8785 —
+// goes through the IEEE double / ES6 path.
+func numberFromLiteral(n json.Number, mode numberMode) (string, error) {
+	s := string(n)
+	if mode == modeLegacyInt64 {
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return strconv.FormatInt(i, 10), nil
+		}
+		if u, err := strconv.ParseUint(s, 10, 64); err == nil {
+			return strconv.FormatUint(u, 10), nil
+		}
 	}
 	f, err := n.Float64()
 	if err != nil {

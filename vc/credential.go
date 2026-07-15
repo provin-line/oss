@@ -389,16 +389,18 @@ func (c *PipelinePassCredential) Body() map[string]any {
 	return deepCopyMap(c.body)
 }
 
-// Hash returns "sha256:<hex>" over the JCS-canonical body — the credential's
-// content address used by previousCredential links and the VC resolver.
+// Hash returns "sha256:<hex>" over the RFC 8785 canonical body — the
+// credential's content address used by previousCredential links and the VC
+// resolver.
 func (c *PipelinePassCredential) Hash() (string, error) {
-	return jcs.Hash(c.body)
+	return jcs.HashRFC8785(c.body)
 }
 
-// MarshalJSON emits the wire form (body fields + proof). The bytes are
-// JCS-canonical — deterministic output keeps wire comparisons trivial.
+// MarshalJSON emits the wire form (body fields + proof). The bytes are RFC 8785
+// canonical — deterministic output keeps wire comparisons trivial, and it is
+// what source_root_canonical ("jcs-rfc8785") has always named.
 func (c *PipelinePassCredential) MarshalJSON() ([]byte, error) {
-	return jcs.Canonicalize(c.wireDocument())
+	return jcs.CanonicalizeRFC8785(c.wireDocument())
 }
 
 // UnmarshalJSON parses the wire form under strict-decoder rules, preserving

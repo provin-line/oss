@@ -160,7 +160,7 @@ func (h *Handler) ReadLifecycleLog(ctx context.Context, req *connect.Request[did
 	}
 	out := make([][]byte, 0, len(events))
 	for _, ev := range events {
-		b, err := jcs.Canonicalize(ev.CanonicalMap())
+		b, err := jcs.CanonicalizeRFC8785(ev.CanonicalMap())
 		if err != nil {
 			return nil, mapError(err)
 		}
@@ -203,7 +203,7 @@ func delegationToBytes(dlg *delegation.DelegationCredential) ([]byte, error) {
 	if err := canon.NewStrictDecoder(raw).Decode(&v); err != nil {
 		return nil, err
 	}
-	return jcs.Canonicalize(v)
+	return jcs.CanonicalizeRFC8785(v)
 }
 
 // delegationFromBytes decodes an inbound delegation through the strict decoder

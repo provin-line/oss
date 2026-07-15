@@ -49,7 +49,7 @@ func (cp *Checkpoint) SignedView() ([]byte, error) {
 	if cp.SignedBy == "" {
 		return nil, errors.New("tlog: checkpoint carries no signer identity")
 	}
-	return jcs.Canonicalize(map[string]any{
+	return jcs.CanonicalizeRFC8785(map[string]any{
 		"v":         1,
 		"purpose":   checkpointPurpose,
 		"logId":     cp.Origin,
