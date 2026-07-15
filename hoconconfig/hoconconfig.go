@@ -14,6 +14,24 @@
 //
 // Every default lives in a reference.conf. Every accessor returns an error for
 // a missing key or a type mismatch; no accessor silently returns a zero value.
+// # Known parser defect (gurkankaymak/hocon v1.2.23)
+//
+// The HOCON spec says "anything between // or # and the next newline is
+// considered a comment and ignored, unless the // or # is inside a quoted
+// string". This parser breaks that for one shape: a '#' comment containing a
+// '//' sequence SWALLOWS THE FOLLOWING LINE. Two documents differing only in
+// comment text therefore parse to different results — a URL in an explanatory
+// comment is enough to trip it.
+//
+// It fails loudly only when the swallowed line carries a brace; a swallowed KEY
+// parses clean and the setting silently disappears. Three reference defaults had
+// vanished that way before it was found (2026-07-15, via the P0-6 actual-boot
+// condition). A '//'-marked comment containing '//' is handled correctly, so
+// comments needing a literal URL use that marker.
+//
+// The workaround is enforced by TestNoHashCommentContainsDoubleSlash
+// (deploy/quickstart/config_parse_test.go), which forbids the shape across every
+// .conf this repository ships. Retire it if the dependency is fixed or replaced.
 package hoconconfig
 
 import (

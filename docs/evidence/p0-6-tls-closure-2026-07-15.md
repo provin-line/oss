@@ -39,19 +39,32 @@ The stack reported ready while the node had **never booted**:
 no published port. Two independent defects, both predating this work
 (reproduced at `bf03095`, the very commit the P0-6 debate reviewed):
 
-1. **The quickstart's node config never parsed.** A `//` inside a `#` comment —
-   a URL in an explanatory comment — makes the HOCON parser's structural view
-   diverge from the document's, and it rejects the file's final brace as a stray.
-   `docker compose config` validates the compose file, not the node config the
-   container reads, so static checking could never have caught it.
+1. **The quickstart's node config never parsed** — because of a parser bug, not
+   a malformed config. gurkankaymak/hocon v1.2.23 violates the HOCON spec
+   ("anything between `//` or `#` and the next newline is considered a comment
+   and ignored"): a `#` comment containing `//` swallows the FOLLOWING line, so
+   comment TEXT changes the parsed document. Here the swallowed line was
+   `service-endpoints {` — an opening brace vanished, so the parser rejected the
+   file's final `}` as a stray. `docker compose config` validates the compose
+   file, not the node config the container reads, so static checking could never
+   have caught it.
+
+   Chasing this precisely mattered: the same bug had **silently deleted three
+   reference defaults** (`auth.opa.base-url`, `auth.cedar.base-url`,
+   `registry.service-endpoints` all resolved to nil) in files that parse
+   perfectly. Had the investigation stopped at "the quickstart config is
+   malformed", those would still be gone. Both `#` and `//` are legal HOCON
+   comment markers and `//`-marked comments handle `//` correctly, so the fix is
+   per-comment: prose drops the scheme's slashes, comments needing a literal URL
+   switch marker, and `TestNoHashCommentContainsDoubleSlash` forbids the shape.
 2. **`up --wait` could not tell a crash-loop from a healthy node.** The node
    service had no healthcheck, so `restart: on-failure` kept a never-booting
    container "running" and the stack declared itself ready.
 
-Fixed: the comments keep their information without `//`;
-`TestShippedConfigsParse` now parses every `.conf` the repository ships (the
-property, not the rule — the parser's exact condition is not fully
-characterized, and a narrowly-stated rule would miss the next variant); the node
+Fixed: every affected comment across the repository; `TestShippedConfigsParse`
+parses every shipped `.conf` and `TestNoHashCommentContainsDoubleSlash` forbids
+the swallowing shape (the parse test alone is insufficient — it only fires when
+the swallowed line carries a brace, and a swallowed KEY parses clean); the node
 service gained a `/readyz` healthcheck.
 
 After the fixes, the full sequence:

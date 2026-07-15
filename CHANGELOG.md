@@ -153,16 +153,33 @@ closure required, now met with executed evidence rather than review.
 
 ### Fixed
 
+- **Config comments were silently deleting the line below them** — a bug in the
+  HOCON parser we depend on, worked around here. The spec is unambiguous
+  ("anything between `//` or `#` and the next newline is considered a comment and
+  ignored"), but gurkankaymak/hocon v1.2.23 lets a `#` comment containing a `//`
+  sequence swallow the FOLLOWING line: two documents differing only in comment
+  text parse to different results. A `//`-marked comment containing `//` is
+  handled correctly, so it is specifically the `#` marker that mis-tokenizes, and
+  a URL in an explanatory comment is the natural way to trip it.
+
+  Three shipped defaults had silently vanished this way, parsing cleanly with
+  nobody the wiser: `provin.network.auth.opa.base-url`,
+  `provin.network.auth.cedar.base-url`, and
+  `provin.network.registry.service-endpoints` all resolved to nil. Every
+  affected comment is fixed — prose drops the scheme's slashes; comments that
+  must show a literal URL switch to the `//` marker — and
+  `TestNoHashCommentContainsDoubleSlash` forbids the shape repository-wide,
+  because today's harmless swallow (the eaten line happens to be another
+  comment) becomes tomorrow's lost setting the moment someone inserts a key
+  after it.
+
 - **The quickstart never booted.** `deploy/quickstart/node/config/application.conf`
-  failed to parse — for its whole history, on every machine. A `//` inside a `#`
-  comment (a URL in an explanatory comment) makes the HOCON parser's structural
-  view diverge from the document's, and it then rejects the file's final brace as
-  a stray. Nothing caught it: `docker compose config` validates the compose file,
-  not the node config inside the container. The comments are rewritten to keep
-  their information without the `//`, and `TestShippedConfigsParse` now parses
-  every `.conf` this repository ships — asserting the property (it parses)
-  rather than the rule (avoid `//`), since the parser's exact condition is not
-  fully characterized.
+  failed to parse — for its whole history, on every machine. Same root cause,
+  loud instead of quiet: there the swallowed line carried an opening brace
+  (`service-endpoints {`), so the braces stopped balancing and the parser
+  rejected the file's final `}` as a stray. Nothing caught it — `docker compose
+  config` validates the compose file, not the node config inside the container —
+  and `TestShippedConfigsParse` now parses every `.conf` the repository ships.
 - **The quickstart reported a crash-looping node as healthy.** The node service
   had no healthcheck, so `docker compose up --wait` saw a container that
   `restart: on-failure` kept "running" and declared the stack ready. It now
