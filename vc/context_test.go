@@ -142,3 +142,40 @@ func TestContextDocumentDefensiveCopy(t *testing.T) {
 		}
 	}
 }
+
+// The sha256 pinned in the profile spec's contexts/README.md
+// (provin-line/profile.spec). Same discipline as the protocol context above,
+// and for the same reason: the @context array rides the signing scope, so a
+// byte divergence from the canonical document partitions hashes across
+// implementations instead of failing loudly.
+//
+// This pin is what makes the ownership move real. Until profile.spec existed
+// this file was the canonical, so there was nothing to drift FROM and no test
+// could exist; now the profile owns the document and this proves the vendored
+// copy still is it.
+const contextProvinVCV1SHA256 = "35c8066d47eba1c0c284632f3b390fdb525162b45f5629b31457b030e41a9b86"
+
+func TestProvinContextDocumentMatchesProfileSpec(t *testing.T) {
+	doc := vc.ContextProvinVCV1Document()
+	sum := sha256.Sum256(doc)
+	if got := hex.EncodeToString(sum[:]); got != contextProvinVCV1SHA256 {
+		t.Errorf("vendored profile context sha256 = %s, want %s (sync byte-exact from provin-line/profile.spec contexts/v1.jsonld)", got, contextProvinVCV1SHA256)
+	}
+
+	// Grounding is the document's whole job: the prefix must map to the
+	// vocabulary URL the claim registry is written against. A context that
+	// parsed but grounded nothing would leave every provin: claim ownerless
+	// while looking correct.
+	var parsed struct {
+		Context map[string]any `json:"@context"`
+	}
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		t.Fatalf("profile context does not parse: %v", err)
+	}
+	if got := parsed.Context["provin"]; got != "https://provin.dev/vocab#" {
+		t.Errorf("provin prefix grounds to %v, want https://provin.dev/vocab#", got)
+	}
+	if protected, _ := parsed.Context["@protected"].(bool); !protected {
+		t.Error("profile context is not @protected: it could redefine protocol terms")
+	}
+}

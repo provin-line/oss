@@ -48,15 +48,24 @@ func ContextDplaaxVCV1Document() []byte {
 	return out
 }
 
-// contextProvinVCV1Document is the provin profile context. Unlike the
-// protocol context (vendored from the spec), THIS file is the canonical
-// document — the profile context's source of truth lives with the profile.
+// contextProvinVCV1Document is the vendored byte-exact copy of the provin
+// PROFILE context (canonical: provin-line/profile.spec contexts/v1.jsonld).
+// Model A says the profile context's source of truth lives with the profile;
+// until that repository existed this file WAS the canonical, because the
+// implementation was standing in for a spec nobody had written. It is now
+// vendored like the protocol context, and pinned the same way.
+//
 // Its job is grounding: it maps the "provin" claim namespace prefix to its
 // vocabulary URL, making claim identity the (grounding URL, label) pair
 // rather than the bare prefix string (spec rule credential.claim.grounding
 // — a bare prefix has no owner; the grounding rides the signing scope, so
 // an impostor "provin:" with different grounding is byte-distinguishable).
 // It also hosts any future provin-owned custom subject field terms.
+//
+// What each grounded label ASSERTS is not here and not anywhere in this
+// package: that is the profile's claim registry (profile.spec rules/claim.yaml).
+// This implementation's claim check is deliberately structural — see
+// ValidateTransformationClaim.
 //
 //go:embed contexts/provin-v1.jsonld
 var contextProvinVCV1Document []byte
