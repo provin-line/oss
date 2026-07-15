@@ -21,7 +21,7 @@
           "credentialSubject": {
             "pipelineId": "pl-line1",
             "processId": "proc-p1",
-            "transformationClaim": "provin:transform",
+            "transformationClaim": "provin:convert",
             "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "previousCredential": null
           },
@@ -52,7 +52,7 @@
           "credentialSubject": {
             "pipelineId": "pl-line1",
             "processId": "proc-p1",
-            "transformationClaim": "provin:transform",
+            "transformationClaim": "provin:convert",
             "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "previousCredential": null
           },
@@ -70,7 +70,7 @@
   },
   "expect": {
     "variant_set": [
-      "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+      "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c"
     ]
   }
 }

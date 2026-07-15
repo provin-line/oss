@@ -6,29 +6,29 @@
     "sequence": [
       {
         "op": "legacy-put",
-        "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
-        "stored_bytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:transform\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}"
+        "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048",
+        "stored_bytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:convert\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}"
       },
       {
         "op": "list-variants",
-        "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d"
+        "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048"
       },
       {
         "op": "get-variant",
-        "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
-        "wire_variant_id": "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+        "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048",
+        "wire_variant_id": "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c"
       },
       {
         "op": "get",
-        "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d"
+        "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048"
       }
     ]
   },
   "expect": {
     "variant_set": [
-      "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+      "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c"
     ],
-    "exact_bytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:transform\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}",
-    "projection_variant_id": "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+    "exact_bytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:convert\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}",
+    "projection_variant_id": "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c"
   }
 }

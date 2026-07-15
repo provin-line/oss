@@ -18,7 +18,7 @@
       "credentialSubject": {
         "pipelineId": "pl-line1",
         "processId": "proc-p1",
-        "transformationClaim": "provin:transform",
+        "transformationClaim": "provin:convert",
         "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "previousCredential": null
       },
@@ -33,8 +33,8 @@
     }
   },
   "expect": {
-    "canonical": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:transform\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}",
-    "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
-    "wire_variant_id": "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+    "canonical": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:convert\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}",
+    "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048",
+    "wire_variant_id": "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c"
   }
 }

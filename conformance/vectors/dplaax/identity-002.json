@@ -19,7 +19,7 @@
         "credentialSubject": {
           "pipelineId": "pl-line1",
           "processId": "proc-p1",
-          "transformationClaim": "provin:transform",
+          "transformationClaim": "provin:convert",
           "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
           "previousCredential": null
         },
@@ -47,7 +47,7 @@
         "credentialSubject": {
           "pipelineId": "pl-line1",
           "processId": "proc-p1",
-          "transformationClaim": "provin:transform",
+          "transformationClaim": "provin:convert",
           "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
           "previousCredential": null
         },
@@ -63,10 +63,10 @@
     ]
   },
   "expect": {
-    "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
+    "body_address": "sha256:b1e4bcd733518b3a546058f0b63b4b030e3e2e4e8e6e35295073e0ba87134048",
     "wire_variant_ids": [
-      "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21",
-      "wire:v1:jcs-rfc8785:sha256:edefc3a78f018f1400251d20905f7f9a62a2d0465b6c0376d997395ed84b265c"
+      "wire:v1:jcs-rfc8785:sha256:dffe0c40d7e6e69d10cb15cbbcaba9c5123e86236b8bd9e302aba567b9d9362c",
+      "wire:v1:jcs-rfc8785:sha256:deca345e8e25d9a05a25c72dd0844ddf9791d90ad0be3e012ae8f7cfe885bb4c"
     ]
   }
 }
