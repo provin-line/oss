@@ -5,6 +5,7 @@
 package vc
 
 import (
+	"encoding/json" // decoder-hygiene-exempt: raw-message probe for the proof @context null check only
 	"errors"
 	"fmt"
 	"sort"
@@ -478,4 +479,31 @@ func deepCopyValue(v any) any {
 		// Scalars (string, json.Number, bool, nil) are immutable.
 		return v
 	}
+}
+
+// UnmarshalJSON parses a wire proof, refusing a present-but-null @context.
+//
+// After a plain parse, "@context": null and an absent @context are the same nil
+// — and absence is what classifies a proof as the legacy contract, where the
+// context mirror check does not run. The member name is allowlisted and the
+// proof rides outside the body hash, so a null member appended to a stored
+// legacy proof would change the wire bytes without moving the content address
+// or breaking the signature: malleability on exactly the row that cannot pin
+// the member. No contract accepts the shape, so the parse is where it dies —
+// null is not absence.
+func (p *DataIntegrityProof) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if ctx, present := raw[keyContext]; present && string(ctx) == "null" {
+		return errors.New("vc: proof carries \"@context\": null (present-but-null is no contract's shape; omit the member instead)")
+	}
+	type plain DataIntegrityProof
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*p = DataIntegrityProof(v)
+	return nil
 }

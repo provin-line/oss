@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/delegation"
@@ -155,6 +156,14 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 	}
 	if err := s.requireOwnRegistry(owner); err != nil {
 		return nil, err
+	}
+	// Admission gate (canon.number.safe-integer): the document body is
+	// body-as-SoT — unknown members survive into the RFC 8785 canonical bytes
+	// this registry stores and snapshots. An unsafe integer would be silently
+	// rounded at rest, so the stored document's self-signed proof would never
+	// verify again: the registry would mint damaged evidence. Reject instead.
+	if err := canon.AdmitSafeNumbers(doc.Body()); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	if err := s.verifyDocProof(doc); err != nil {
 		return nil, err
@@ -572,8 +581,14 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 	}
 	// Carried on presence, not on truthiness: the proof config distinguishes an
 	// absent @context from a null one, so dropping the member here would
-	// reconstruct a different signing scope than the issuer signed.
+	// reconstruct a different signing scope than the issuer signed. A
+	// present-but-null member is refused outright — after parsing it reads as
+	// absence, and no contract accepts the shape (vc.DataIntegrityProof
+	// closes its typed parse the same way).
 	if ctx, present := pm["@context"]; present {
+		if ctx == nil {
+			return nil, nil, fmt.Errorf("%w: proof carries %q: null (present-but-null is no contract's shape)", ErrUnauthorized, "@context")
+		}
 		p.Context = ctx
 	}
 	return p, signing, nil

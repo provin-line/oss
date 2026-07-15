@@ -251,6 +251,13 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 			return ConfidenceFailed
 		}
 	}
+	// "@context": null is present-but-nil: after parsing it reads as absence,
+	// which classifies as the legacy row — where the mirror check cannot pin
+	// it. No contract accepts the shape (see DataIntegrityProof.UnmarshalJSON,
+	// which closes the typed path the same way).
+	if v, present := cred.proof[keyContext]; present && v == nil {
+		return ConfidenceFailed
+	}
 	// FCoT: the verificationMethod MUST be an absolute issuer#fragment reference
 	// naming the issuer; a bare DID, or a key fragment in another DID's document,
 	// must not be honoured.
@@ -436,13 +443,21 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	// per-credential notations concatenate onto the chain verdict.
 	acc := AxisResult{ConfidenceVerified, ConfidenceVerified, ConfidenceVerified}
 	var notations []string
-	for _, cred := range chain {
+	var headContract SuiteContract
+	for i, cred := range chain {
 		r, err := v.Verify(ctx, cred)
 		if err != nil {
 			return nil, err
 		}
 		acc = glbAxes(acc, r.Axes)
 		notations = append(notations, r.Notations...)
+		if i == len(chain)-1 {
+			// The chain verdict reports the HEAD credential's contract (the
+			// field's documented meaning). A mixed chain's per-credential
+			// contracts are not collapsible into one; a caller needing them
+			// verifies per credential.
+			headContract = r.SuiteContract
+		}
 	}
 
 	// 2. Chain-structure checks contributing to DataIntegrity / ChainConsistency.
@@ -489,7 +504,12 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 		SignerAuthenticity: ConfidenceVerified,
 		ChainConsistency:   cc,
 	})
-	return &VerifyResult{Overall: EvaluateConfidence(acc), Axes: acc, Notations: notations}, nil
+	return &VerifyResult{
+		Overall:       EvaluateConfidence(acc),
+		Axes:          acc,
+		Notations:     notations,
+		SuiteContract: headContract,
+	}, nil
 }
 
 // glbAxes folds two axis results by the per-axis greatest lower bound.

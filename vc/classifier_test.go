@@ -1,11 +1,14 @@
 package vc_test
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -138,5 +141,163 @@ func TestVerifyProofWithContract_RejectsSwappedProofContext(t *testing.T) {
 	// Multikey encoding puts this on the W3C row, where the mirror is enforced.
 	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, proof, doc); err == nil {
 		t.Error("a swapped wire proof.@context was accepted — the member is malleable on this verify path")
+	}
+}
+
+func TestClassifyProof_RDFCRow(t *testing.T) {
+	// eddsa-rdfc-2022 is a production suite (v0-mandatory, p0-7/p0-12 ruling);
+	// the dispatch must route it, not reject it. Its W3C shape is the same as
+	// the jcs sibling's — proof-local @context + Multikey — and RDF expansion
+	// needs the context anyway, so nothing else classifies.
+	tests := []struct {
+		name       string
+		hasContext bool
+		encoding   did.KeyEncoding
+		want       vc.SuiteContract
+		wantErr    bool
+	}{
+		{"W3C shape classifies", true, did.EncodingMultikey, vc.ContractW3CEdDSARDFC2022, false},
+		{"no context fails", false, did.EncodingMultikey, "", true},
+		{"JWK fails", true, did.EncodingJWK, "", true},
+		{"neither fails", false, did.EncodingJWK, "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := vc.ClassifyProof(vc.CryptosuiteEdDSARDFC2022, tc.hasContext, tc.encoding)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("accepted, returning %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ClassifyProof: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("contract = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := vc.ContractW3CEdDSARDFC2022.CanonicalizerID(); got != "urdna2015" {
+		t.Errorf("rdfc contract canonicalizer = %q, want urdna2015", got)
+	}
+	if got := string(vc.ContractW3CEdDSARDFC2022); got != "W3C_EDDSA_RDFC_2022_REC_20250515@1" {
+		t.Errorf("rdfc contract id = %q — frozen by the scope catalog", got)
+	}
+}
+
+func TestVerify_PresentNullContextIsRejected(t *testing.T) {
+	// "@context": null is present-but-nil: presence-carry maps it to a nil
+	// Context, which reads as "no context" and classifies as the legacy row —
+	// where the mirror check does not run. Since the member name is allowlisted
+	// and the proof sits outside the body hash, appending it to a stored legacy
+	// proof would change the wire bytes without changing the content address or
+	// breaking the signature: a malleable member, on the one row that cannot
+	// pin it. Both ForkW-1 reviewers converged on this; the fix is to refuse
+	// the shape outright — null is not absence, and no contract accepts it.
+	signer, pub, doc := fixture(t)
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{"p": proof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	pm := m["p"].(map[string]any)
+	pm["@context"] = nil
+	nullified, err := json.Marshal(pm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reparsed vc.DataIntegrityProof
+	if err := json.Unmarshal(nullified, &reparsed); err == nil {
+		// The typed unmarshal is the delegation / external-consumer path: it
+		// must refuse the shape at parse, because after parsing the null is
+		// indistinguishable from absence.
+		t.Error("DataIntegrityProof.UnmarshalJSON accepted a present-but-null @context")
+	}
+	_ = pub
+}
+
+func TestVerify_RawProofNullContextFailsVerification(t *testing.T) {
+	// The raw-map path: a stored credential whose proof map carries
+	// "@context": null must fail signer authenticity, not classify as legacy.
+	// The wire is crafted by hand because no builder emits the shape — which is
+	// the point: only an attacker appends it.
+	cred, pub := signedCred(t)
+	wire, err := json.Marshal(cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(wire, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["proof"].(map[string]any)["@context"] = nil
+	tamperedWire, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tampered vc.PipelinePassCredential
+	if err := json.Unmarshal(tamperedWire, &tampered); err != nil {
+		t.Fatalf("unmarshal tampered wire: %v", err)
+	}
+
+	r := local.New()
+	r.Add(didDoc(issuerDID, ownerDID, vmID, pub))
+	r.Add(didDoc(ownerDID, ownerDID, "", nil))
+	v := vc.NewVerifier(r, ed25519.Verifier{})
+	res, err := v.Verify(context.Background(), &tampered)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Axes.SignerAuthenticity == vc.ConfidenceVerified {
+		t.Error("a present-but-null proof @context verified")
+	}
+}
+
+func TestVerifyChain_ReportsTheHeadSuiteContract(t *testing.T) {
+	// The field's own doc promises it: "For a chain, this is the contract of
+	// the head credential." A chain result with an empty contract would leave
+	// consumers unable to tell W3C from legacy verification — the compression
+	// claims.headline.suite-contract forbids.
+	cred, pub := signedCred(t)
+	r := local.New()
+	r.Add(didDoc(issuerDID, ownerDID, vmID, pub))
+	r.Add(didDoc(ownerDID, ownerDID, "", nil))
+	v := vc.NewVerifier(r, ed25519.Verifier{})
+
+	res, err := v.VerifyChain(context.Background(), []*vc.PipelinePassCredential{cred})
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if res.Axes.SignerAuthenticity != vc.ConfidenceVerified {
+		t.Fatalf("SignerAuthenticity = %v, want Verified", res.Axes.SignerAuthenticity)
+	}
+	if res.SuiteContract != vc.ContractW3CEdDSAJCS2022 {
+		t.Errorf("chain SuiteContract = %q, want the head credential's %q", res.SuiteContract, vc.ContractW3CEdDSAJCS2022)
+	}
+}
+
+func TestVerifyProof_EnforcesTheMirrorToo(t *testing.T) {
+	// VerifyProof stays exported as the registry-suite path (rdfc, and any
+	// external consumer of this OSS API). It reconstructs the proof config from
+	// the DOCUMENT's context, so without its own mirror check it would accept
+	// the swapped-proof.@context artifact the classifier path rejects — the
+	// same bytes, two verdicts, depending on which entry point a consumer
+	// picked. Every entry point pins the member.
+	signer, pub, doc := fixture(t)
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	proof.Context = []any{"https://attacker.example/context/v2"}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, doc); err == nil {
+		t.Error("VerifyProof accepted a swapped proof-local @context")
 	}
 }

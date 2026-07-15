@@ -598,3 +598,40 @@ func TestRegisterOwner_RejectsWrongRelationshipKey(t *testing.T) {
 		t.Errorf("wrong-relationship bootstrap key: want ErrUnauthorized, got %v", err)
 	}
 }
+
+func TestRegisterOwner_RejectsUnsafeIntegerInsteadOfRoundingAtRest(t *testing.T) {
+	// The registry stores and snapshots the document's RFC 8785 canonical
+	// bytes, and unknown members survive into them (body-as-SoT). An unsafe
+	// integer in one would be silently rounded at rest — the stored document's
+	// self-signed proof would never verify again, minted as damaged evidence by
+	// the registry itself. The admission gate makes that a loud
+	// invalid-argument instead.
+	svc, signer, signPub := newService(t)
+	// Build a signed owner doc, then splice an unsafe-integer unknown member
+	// into the wire AFTER signing — modeling an external submission whose body
+	// carries one (a locally-built doc cannot: CreateProof gates it).
+	doc := signedOwnerDoc(t, signer, signPub, nil)
+	wire, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(wire, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["extCounter"] = json.Number("9007199254740993")
+	spliced, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var submitted did.DIDDocument
+	if err := json.Unmarshal(spliced, &submitted); err != nil {
+		t.Fatalf("unmarshal spliced doc: %v", err)
+	}
+	doc = &submitted
+	if _, err := svc.RegisterOwner(context.Background(), doc, nil); err == nil {
+		t.Fatal("RegisterOwner admitted a document whose bytes it would silently rewrite")
+	} else if !errors.Is(err, didregistry.ErrInvalidArgument) {
+		t.Errorf("err = %v, want ErrInvalidArgument", err)
+	}
+}

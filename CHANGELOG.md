@@ -94,9 +94,11 @@ unreleased freeze declaration above rather than breaking a shipped wire.
   Legacy JWK documents remain resolvable; proofs signed under them verify as
   the legacy contract.
 - **Exact suite dispatch**: one classifier resolves (suite id, proof shape, key
-  encoding) to exactly one claim contract — `W3C_EDDSA_JCS_2022_REC_20250515@1`
-  or `LEGACY_PROVIN_EDDSA_JCS_INT64@1` — with no canonicalizer fallback.
-  `VerifyResult.SuiteContract` reports which contract produced every verdict.
+  encoding) to exactly one claim contract — `W3C_EDDSA_JCS_2022_REC_20250515@1`,
+  `W3C_EDDSA_RDFC_2022_REC_20250515@1`, or `LEGACY_PROVIN_EDDSA_JCS_INT64@1` —
+  with no canonicalizer fallback. `VerifyResult.SuiteContract` reports which
+  contract produced every verdict; a chain result carries the head
+  credential's.
 
 **Migration notes** (pre-release deployments only; there is no public tag):
 
@@ -113,6 +115,13 @@ unreleased freeze declaration above rather than breaking a shipped wire.
   artifacts here; the tool exists for deployments that have them).
 - Old verifiers reject the new seven-member proofs as carrying an unknown
   member (fail-closed). Roll out readers before writers.
+- **Legacy sunset schedule** (`confidence.legacy.sunset`): the legacy
+  int64-verbatim contract is **Deprecated as of 2026-07-14**; **new legacy
+  issuance stops 2026-10-01** (Sunset); the **issuer-side legacy path is
+  removed 2027-04-01**. Until Sunset, externally-signed legacy-shaped
+  registrations are still admitted (the "read-only" contract governs what this
+  repository issues, not yet what it admits); after it, admission requires the
+  W3C shape.
 
 ### Added
 

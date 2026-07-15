@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -55,6 +56,14 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 	// decode through canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(credential, &cred); err != nil {
 		return "", fmt.Errorf("%w: decode credential: %v", ErrInvalidArgument, err)
+	}
+	// Admission gate (canon.number.safe-integer): this is a body-as-SoT
+	// boundary — unknown members survive into the stored canonical bytes, and
+	// the RFC 8785 re-serialization would silently ROUND an unsafe integer at
+	// rest, storing bytes the original signature never covered. Reject loudly
+	// instead; values beyond ±(2^53-1) belong in the string domain.
+	if err := canon.AdmitSafeNumbers(cred.Body()); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	prev, hasPrev, err := rawPreviousCredential(cred.Body())
 	if err != nil {

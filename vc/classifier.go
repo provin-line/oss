@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/canon/urdna2015"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/multibase"
@@ -28,6 +29,10 @@ const (
 	// ContractW3CEdDSAJCS2022 is the W3C Data Integrity suite: jcs-rfc8785,
 	// proof-local @context, Multikey (signer.suite.eddsa-jcs-2022).
 	ContractW3CEdDSAJCS2022 SuiteContract = "W3C_EDDSA_JCS_2022_REC_20250515@1"
+	// ContractW3CEdDSARDFC2022 is the W3C Data Integrity RDFC suite: urdna2015,
+	// proof-local @context, Multikey (signer.suite.eddsa-rdfc-2022). Phase-2
+	// opt-in, v0-mandatory.
+	ContractW3CEdDSARDFC2022 SuiteContract = "W3C_EDDSA_RDFC_2022_REC_20250515@1"
 	// ContractLegacyProvinEdDSAJCSInt64 is the projection of proofs provin
 	// issued under the historical int64-verbatim deviation
 	// (signer.suite.legacy-projection). It is a read-only contract: it names
@@ -43,6 +48,8 @@ func (c SuiteContract) CanonicalizerID() string {
 	switch c {
 	case ContractW3CEdDSAJCS2022:
 		return jcs.NameRFC8785
+	case ContractW3CEdDSARDFC2022:
+		return urdna2015.Name
 	case ContractLegacyProvinEdDSAJCSInt64:
 		return jcs.Name
 	default:
@@ -55,6 +62,16 @@ func (c SuiteContract) canonicalizer() (canonicalizerFunc, error) {
 	switch c {
 	case ContractW3CEdDSAJCS2022:
 		return jcs.RFC8785{}.Canonicalize, nil
+	case ContractW3CEdDSARDFC2022:
+		// The registered suite canonicalizer: urdna2015 over the frozen embedded
+		// contexts, probed at init. The registry is safe to consult here because
+		// it can only ever hold conformant canonicalizers — the legacy deviation
+		// is the one thing it structurally cannot hand out.
+		rc, err := canonicalizerFor(CryptosuiteEdDSARDFC2022)
+		if err != nil {
+			return nil, err
+		}
+		return rc.Canonicalize, nil
 	case ContractLegacyProvinEdDSAJCSInt64:
 		return jcs.Canonicalizer{}.Canonicalize, nil
 	default:
@@ -93,18 +110,29 @@ type canonicalizerFunc func(any) ([]byte, error)
 //     with a Multikey — reclassifying evidence on the strength of a change made
 //     after it was signed.
 func ClassifyProof(cryptosuite string, hasProofContext bool, encoding did.KeyEncoding) (SuiteContract, error) {
-	if cryptosuite != CryptosuiteEdDSAJCS2022 {
-		return "", fmt.Errorf("vc: cryptosuite %q has no claim contract (want %q)", cryptosuite, CryptosuiteEdDSAJCS2022)
-	}
-	switch {
-	case hasProofContext && encoding == did.EncodingMultikey:
-		return ContractW3CEdDSAJCS2022, nil
-	case !hasProofContext && encoding == did.EncodingJWK:
-		return ContractLegacyProvinEdDSAJCSInt64, nil
-	default:
+	switch cryptosuite {
+	case CryptosuiteEdDSAJCS2022:
+		switch {
+		case hasProofContext && encoding == did.EncodingMultikey:
+			return ContractW3CEdDSAJCS2022, nil
+		case !hasProofContext && encoding == did.EncodingJWK:
+			return ContractLegacyProvinEdDSAJCSInt64, nil
+		default:
+			return "", fmt.Errorf(
+				"vc: proof shape does not match any %s contract (proof-local @context: %t, key encoding: %q)",
+				cryptosuite, hasProofContext, encoding)
+		}
+	case CryptosuiteEdDSARDFC2022:
+		// One shape only: the suite postdates the legacy era, so there is no
+		// projection row — a non-W3C rdfc proof is malformed, not historical.
+		if hasProofContext && encoding == did.EncodingMultikey {
+			return ContractW3CEdDSARDFC2022, nil
+		}
 		return "", fmt.Errorf(
-			"vc: proof shape does not match any %s contract (proof-local @context: %t, key encoding: %q)",
+			"vc: proof shape does not match the %s contract (proof-local @context: %t, key encoding: %q)",
 			cryptosuite, hasProofContext, encoding)
+	default:
+		return "", fmt.Errorf("vc: cryptosuite %q has no claim contract", cryptosuite)
 	}
 }
 
@@ -205,7 +233,11 @@ func VerifyProofWithContract(
 	if err != nil {
 		return "", err
 	}
-	if contract == ContractW3CEdDSAJCS2022 {
+	switch contract {
+	case ContractW3CEdDSAJCS2022, ContractW3CEdDSARDFC2022:
+		// Both W3C contracts carry the proof-local @context, and on this verify
+		// path the wire member is otherwise outside the signature — the mirror
+		// is what pins it (see requireProofContextMirrorsDocument).
 		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
 			return "", err
 		}

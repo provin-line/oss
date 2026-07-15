@@ -121,6 +121,15 @@ func VerifyProof(
 	if err != nil {
 		return err
 	}
+	// The config below is rebuilt from the DOCUMENT's context, so the wire
+	// proof.@context member would otherwise ride outside this check — the same
+	// artifact could verify here and fail under VerifyProofWithContract. Every
+	// entry point pins the member the same way.
+	if proof.Context != nil {
+		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
+			return err
+		}
+	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
 
