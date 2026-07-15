@@ -354,7 +354,111 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 		return nil, fmt.Errorf("did: verification method controller %q != document %q", vm.Controller, subject)
 	}
 
+	// Exclusivity is checked against the RAW method, not the typed copy: the
+	// projection turns a wrong-typed or null foreign member into a zero value,
+	// which reads as absent (see rawVMByID).
+	raw, err := doc.rawVMByID(subject, wantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkEncodingExclusivity(raw, vm); err != nil {
+		return nil, err
+	}
 	return decodeVMPublicKey(vm)
+}
+
+// KeyEncoding names the wire encoding a verification method used for its public
+// key. It is a wire fact, and the suite classifier dispatches on it, so it is
+// resolved in the same operation as the key itself — never re-derived from a
+// second reading that could disagree.
+type KeyEncoding string
+
+const (
+	// EncodingMultikey is publicKeyMultibase on a Multikey method.
+	EncodingMultikey KeyEncoding = "Multikey"
+	// EncodingJWK is publicKeyJwk on a JsonWebKey2020 method.
+	EncodingJWK KeyEncoding = "JsonWebKey2020"
+)
+
+// ExtractPublicKeyAndEncoding resolves a key exactly as ExtractPublicKey does
+// and additionally reports the encoding it resolved through.
+//
+// The pair comes from one reading of one method on purpose: a caller that
+// resolved the key here and inspected the encoding separately could see two
+// different methods (or two different members of one), and a suite dispatch
+// built on that discrepancy would not be the exact dispatch it claims to be.
+func ExtractPublicKeyAndEncoding(doc *DIDDocument, keyID string, rel VerificationRelationship) ([]byte, KeyEncoding, error) {
+	key, err := ExtractPublicKey(doc, keyID, rel)
+	if err != nil {
+		return nil, "", err
+	}
+	// ExtractPublicKey has already proven the method exists, is unique, is
+	// listed, is controlled by the subject, and carries exactly one encoding —
+	// so the type here is the encoding, with no second decision to get wrong.
+	vm, err := doc.verificationMethodByID(keyID)
+	if err != nil {
+		return nil, "", err
+	}
+	switch vm.Type {
+	case vmTypeMultikey:
+		return key, EncodingMultikey, nil
+	case vmTypeJSONWebKey2020:
+		return key, EncodingJWK, nil
+	default:
+		return nil, "", fmt.Errorf("did: unsupported verification method type %q", vm.Type)
+	}
+}
+
+// verificationMethodByID returns the typed method with the given absolute id.
+func (d *DIDDocument) verificationMethodByID(keyID string) (*VerificationMethod, error) {
+	subject := d.ID()
+	wantID := absoluteKeyID(subject, keyID)
+	methods := d.VerificationMethod()
+	for i := range methods {
+		if absoluteKeyID(subject, methods[i].ID) == wantID {
+			return &methods[i], nil
+		}
+	}
+	return nil, fmt.Errorf("did: no verification method for key %q", keyID)
+}
+
+// rawVMByID returns the verification method as it appears on the wire.
+func (d *DIDDocument) rawVMByID(subject, wantID string) (map[string]any, error) {
+	list, _ := d.body[keyVerificationMethod].([]any)
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if absoluteKeyID(subject, getString(m, "id")) == wantID {
+			return m, nil
+		}
+	}
+	return nil, fmt.Errorf("did: no verification method for key %q", wantID)
+}
+
+// checkEncodingExclusivity rejects a method that carries the encoding member
+// belonging to the other type, whatever its value.
+//
+// Presence is the violation. A null, empty, or wrong-typed foreign member is
+// still a member the document's hash commits to, and a reader that keys on raw
+// presence would see a dual-encoded method where the typed projection sees a
+// clean one — the disagreement about key identity this exclusivity exists to
+// prevent.
+func checkEncodingExclusivity(raw map[string]any, vm *VerificationMethod) error {
+	var foreign string
+	switch vm.Type {
+	case vmTypeMultikey:
+		foreign = "publicKeyJwk"
+	case vmTypeJSONWebKey2020:
+		foreign = "publicKeyMultibase"
+	default:
+		return nil // decodeVMPublicKey rejects the unknown type with a better message
+	}
+	if _, present := raw[foreign]; present {
+		return fmt.Errorf("did: %s method %q also carries %s (type and encoding are exclusive)", vm.Type, vm.ID, foreign)
+	}
+	return nil
 }
 
 // Verification method types whose key encodings this package reads.
