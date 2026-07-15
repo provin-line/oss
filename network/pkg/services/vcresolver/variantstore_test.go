@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -593,62 +595,107 @@ func TestRollbackWrittenFlatIsNotLost(t *testing.T) {
 	}
 }
 
-// TestListVariantIDsPagesAcrossTheFlatCandidate: the flat slot's variant must
-// take its place in the ORDER, not be appended or dropped, or a paging caller
-// would see it twice or never.
-func TestListVariantIDsPagesAcrossTheFlatCandidate(t *testing.T) {
-	backend := memstore.NewBackend()
-	store := vcresolver.NewVariantStore(backend)
-	body := ""
-	var all []string
-	for _, pv := range []string{"zA", "zB", "zC"} {
-		b, id := mustPut(t, store, credWithProof(t, "s1", pv))
-		body = b
-		all = append(all, id)
+// TestListVariantIDsPagesAcrossAFlatOnlyCandidate exercises the merge's two
+// window branches, which had no coverage at all until a reviewer disabled
+// mergeFlatCandidate entirely and watched the test that claimed to cover them
+// keep passing.
+//
+// The vacuity was in the setup: it seeded the flat slot with a variant that had
+// ALSO been admitted normally, so the dedup check short-circuited and the
+// arithmetic below was never reached. The flat candidate here is admitted
+// NOWHERE else — the rollback shape, and the only shape in which the merge does
+// any work.
+//
+// Both branches matter for different reasons. Deferring (window full, candidate
+// sorts after it) must not drop the candidate — a later page has to reach it.
+// Truncating (window full, candidate sorts inside it) must not drop the entry it
+// displaces — the cursor stays behind that entry, so the next page re-offers it.
+// Either mistake silently shortens a body's evidence.
+func TestListVariantIDsPagesAcrossAFlatOnlyCandidate(t *testing.T) {
+	tests := []struct {
+		name     string
+		flatAt   int // which id (in sorted order) is reachable ONLY via the flat slot
+		exercise string
+	}{
+		{"candidate defers to a later page", 2, "window full and the candidate sorts after it"},
+		{"candidate displaces a dir entry out of a full window", 1, "window full and the candidate sorts inside it"},
 	}
-	// Leave one variant reachable ONLY through the flat slot, so the merge is
-	// load-bearing for this listing.
-	sortAll(all)
-	if err := backend.WriteProjection(strings.TrimPrefix(body, "sha256:"), mustGetVariant(t, store, body, all[1])); err != nil {
-		t.Fatal(err)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			creds, ids := orderedVariantSet(t, 4)
+			backend := memstore.NewBackend()
+			store := vcresolver.NewVariantStore(backend)
 
-	var paged []string
-	cursor := ""
-	for {
-		page, err := store.ListVariantIDs(body, cursor, 2)
-		if err != nil {
-			t.Fatalf("ListVariantIDs: %v", err)
-		}
-		if len(page) == 0 {
-			break
-		}
-		paged = append(paged, page...)
-		cursor = page[len(page)-1]
-		if len(page) < 2 {
-			break
-		}
-	}
-	if !reflect.DeepEqual(paged, all) {
-		t.Errorf("paged listing = %v, want %v", paged, all)
+			var body string
+			for i, c := range creds {
+				if i == tc.flatAt {
+					continue // this one exists only in the flat slot
+				}
+				body, _ = mustPut(t, store, c)
+			}
+			// The rollback: an older binary writes bytes the set does not hold.
+			if err := backend.WriteProjection(strings.TrimPrefix(body, "sha256:"), canonicalOf(t, creds[tc.flatAt])); err != nil {
+				t.Fatal(err)
+			}
+
+			var paged []string
+			cursor := ""
+			for range ids { // bounded: a merge that loops would hang the suite otherwise
+				page, err := store.ListVariantIDs(body, cursor, 2)
+				if err != nil {
+					t.Fatalf("ListVariantIDs: %v", err)
+				}
+				if len(page) == 0 {
+					break
+				}
+				// The page contract, checked per call and not only at the end:
+				// a merge that forgets to cut back to the window over-returns,
+				// and the concatenation still looks right.
+				if len(page) > 2 {
+					t.Fatalf("page of %d exceeds the limit of 2: %v", len(page), page)
+				}
+				paged = append(paged, page...)
+				cursor = page[len(page)-1]
+				if len(page) < 2 {
+					break
+				}
+			}
+			if !reflect.DeepEqual(paged, ids) {
+				t.Errorf("paging %s produced\n %v\nwant\n %v", tc.exercise, paged, ids)
+			}
+		})
 	}
 }
 
-func mustGetVariant(t *testing.T, s *vcresolver.VariantStore, body, id string) []byte {
+// orderedVariantSet returns n credentials of ONE body and their variant ids in
+// lexicographic order. The ids are digests, so the order is not choosable —
+// it is searched for, and the test then assigns roles by position.
+func orderedVariantSet(t *testing.T, n int) ([]*vc.PipelinePassCredential, []string) {
 	t.Helper()
-	wire, err := s.GetVariant(body, id)
-	if err != nil {
-		t.Fatalf("GetVariant(%s): %v", id, err)
+	type pair struct {
+		cred *vc.PipelinePassCredential
+		id   string
 	}
-	return wire
-}
-
-func sortAll(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
+	var found []pair
+	for i := 0; i < 40 && len(found) < n; i++ {
+		c := credWithProof(t, "s1", fmt.Sprintf("zP%02d", i))
+		id, err := c.WireVariantID()
+		if err != nil {
+			t.Fatal(err)
 		}
+		found = append(found, pair{c, id})
 	}
+	if len(found) < n {
+		t.Fatalf("could not build %d variants", n)
+	}
+	found = found[:n]
+	sort.Slice(found, func(i, j int) bool { return found[i].id < found[j].id })
+	creds := make([]*vc.PipelinePassCredential, n)
+	ids := make([]string, n)
+	for i, p := range found {
+		creds[i], ids[i] = p.cred, p.id
+	}
+	return creds, ids
 }
 
 // TestGetRejectsACorruptProjection: the legacy read is not exempt from

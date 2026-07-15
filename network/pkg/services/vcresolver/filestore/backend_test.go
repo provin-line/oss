@@ -591,3 +591,36 @@ func TestAnAbsentBodyDirectoryIsStillARealMiss(t *testing.T) {
 		t.Errorf("ListVariantHexes on a body with no variants = %v (err %v), want an empty page", page, err)
 	}
 }
+
+// TestBootSweepsOrphanedTempsInBodyDirectories: a kill between os.CreateTemp
+// and its deferred cleanup leaves a temp file one level deeper than openDir
+// ever looked — in variants/<bodyHex>/ — so no restart removed it. Harmless to
+// every read (the .json + hex64 filter excludes it) and an unbounded disk leak,
+// which is why it stayed invisible.
+func TestBootSweepsOrphanedTempsInBodyDirectories(t *testing.T) {
+	b, dir := newBackend(t)
+	body := hex64('d')
+	if _, err := b.PutIfAbsent(body, hex64('e'), []byte(`{"held":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	bodyDir := filepath.Join(dir, "variants", body)
+	orphan := filepath.Join(bodyDir, ".tmp-crashed")
+	write(t, orphan, []byte("half a variant"))
+	// Also one directly in the subtree, which openDir did already handle — the
+	// sweep must not regress it.
+	write(t, filepath.Join(dir, "variants", ".tmp-old"), []byte("x"))
+
+	if _, err := filestore.NewBackend(dir); err != nil { // the restart
+		t.Fatalf("NewBackend: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("the orphaned temp in %s survived a restart (err %v)", bodyDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "variants", ".tmp-old")); !os.IsNotExist(err) {
+		t.Error("the subtree's own temp survived a restart")
+	}
+	// The sweep must take temps and nothing else.
+	if _, err := os.Stat(filepath.Join(bodyDir, hex64('e')+".json")); err != nil {
+		t.Errorf("the sweep removed a held variant: %v", err)
+	}
+}

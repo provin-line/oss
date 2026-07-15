@@ -57,7 +57,47 @@ func NewBackend(dir string) (*Backend, error) {
 	if err := fsyncDir(dir); err != nil {
 		return nil, fmt.Errorf("filestore: durably create %s: %w", vdir, err)
 	}
+	if err := sweepVariantTemps(vdir); err != nil {
+		return nil, fmt.Errorf("filestore: sweep %s: %w", vdir, err)
+	}
 	return &Backend{dir: dir, vdir: vdir}, nil
+}
+
+// sweepVariantTemps removes orphaned temp files from every per-body directory.
+//
+// openDir sweeps the directory it is handed, which is the root and the subtree
+// itself — but a variant's temp file is created in variants/<bodyHex>/, one
+// level deeper, and nothing ever looked there. A kill between os.CreateTemp and
+// its deferred cleanup left a file that no restart would ever remove: harmless
+// to correctness (every listing and read filters on the .json + hex64 name), and
+// an unbounded disk leak, in the one path this store otherwise treats as
+// carefully as it treats evidence.
+//
+// It runs at boot, before anything is acknowledged, so a failure here is a boot
+// failure rather than a silent one.
+func sweepVariantTemps(vdir string) error {
+	bodies, err := os.ReadDir(vdir)
+	if err != nil {
+		return err
+	}
+	for _, body := range bodies {
+		if !body.IsDir() {
+			continue
+		}
+		dir := filepath.Join(vdir, body.Name())
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".tmp-") {
+				if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // hexName validates a name and returns its file name. Backends are handed hex

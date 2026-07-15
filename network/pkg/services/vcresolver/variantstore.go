@@ -547,11 +547,16 @@ func (s *VariantStore) mergeFlatCandidate(bodyHex string, page []string, fromHex
 			return page, nil
 		}
 	}
-	// It belongs in THIS window only if the window has room or it sorts before
-	// the last entry; otherwise a later page reaches it.
-	if len(page) >= limit && flat.hex > page[len(page)-1] {
-		return page, nil
-	}
+	// Insert in order, then cut back to the window. The truncation is what
+	// keeps the page contract: at most `limit`, and whatever it drops — the
+	// candidate itself when it sorts past the window, or the entry it displaced
+	// — is still ahead of the cursor, so the next call offers it again.
+	//
+	// An earlier version short-circuited here when the window was full and the
+	// candidate sorted after it. That branch was pure optimization dressed as
+	// logic: append-sort-truncate reaches the identical answer, and deleting it
+	// changed no test. A branch whose absence is unobservable is a trap for the
+	// next reader, not a saving.
 	page = append(page, flat.hex)
 	sort.Strings(page)
 	if len(page) > limit {
