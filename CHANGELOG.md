@@ -27,13 +27,21 @@ participates in a credential signature — is frozen**. Concretely:
   sha256-pinned), and the credential/subject wire members they define.
 - The Data Integrity proof algorithm:
   `hashData = SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document))`, the
-  six-member proof configuration, and the base58btc (`z` multibase)
-  `proofValue` encoding.
-- Both cryptosuites and their canonicalizations: `eddsa-jcs-2022` (RFC 8785,
-  Phase-1 MUST, issuance default) and `eddsa-rdfc-2022` (URDNA2015, Phase-2,
-  opt-in), each anchored to the official W3C vc-di-eddsa test vectors with
-  every intermediate pinned. The URDNA2015 behavior is additionally pinned by
-  a provin-shape KAT against json-gold v0.8.0.
+  W3C proof configuration — the six typed members plus the proof-local
+  `@context` copied from the document when it has one (vc-di-eddsa §3.3.1
+  step 2; amended within this unreleased line by the Fork W entry below, which
+  post-dates and supersedes the original six-member wording) — and the
+  base58btc (`z` multibase) `proofValue` encoding.
+- Both cryptosuites and their canonicalizations: `eddsa-jcs-2022`
+  (actual RFC 8785 via the `jcs-rfc8785` canonicalizer, Phase-1 MUST, issuance
+  default, Multikey verification methods) and `eddsa-rdfc-2022` (URDNA2015,
+  Phase-2, opt-in), each anchored to the official W3C vc-di-eddsa test vectors
+  with every intermediate pinned — for `eddsa-jcs-2022`, end to end: the
+  official Example 39 `proofValue` verifies through the production classifier
+  path. Artifacts signed under the historical int64-verbatim deviation verify
+  only as the `LEGACY_PROVIN_EDDSA_JCS_INT64@1` claim contract. The URDNA2015
+  behavior is additionally pinned by a provin-shape KAT against json-gold
+  v0.8.0.
 - The source-commitment form riding inside the signed credential: the RFC
   6962 Merkle tree hash over JCS-canonicalized source credentials (leaf
   prefix `0x00`, interior `0x01`, odd leaves promoted; empty set = hash of
@@ -57,6 +65,54 @@ separate protocol contracts, each pinned by its own golden tests. Changes
 there are compatibility-relevant and are called out in this changelog (see
 the checkpoint entry under Changed below), but they are versioned by their
 own contracts, not by this credential-wire declaration.
+
+### Fork W — full W3C `eddsa-jcs-2022` conformance (BREAKING within Unreleased)
+
+Ratified architecture decision (debate P0-4 = Fork W, 2026-07-15): external
+W3C-DI verifier interop is a product goal. `eddsa-jcs-2022` now means what W3C
+says it means. All changes below land before any public tag, so they revise the
+unreleased freeze declaration above rather than breaking a shipped wire.
+
+- **Canonicalization**: new `jcs-rfc8785` canonicalizer (byte-for-byte RFC 8785;
+  unsafe integers round through binary64 like any strict-ES6 implementation).
+  Every stored-address path — credential body hash / wire form, DID-document
+  hash, source-root leaves, tlog checkpoint views, lifecycle-event maps,
+  wire-auth views — now canonicalizes with it, making the long-advertised
+  `source_root_canonical: "jcs-rfc8785"` name true. The historical
+  int64-verbatim canonicalizer remains for legacy verification only and is
+  unreachable from any issuance path.
+- **Safe-number admission**: `canon.AdmitSafeNumbers` rejects integer-valued
+  JSON numbers outside ±(2^53−1) — in every spelling — before signing. A value
+  above the range belongs in the string domain under a versioned schema.
+- **Proof wire shape**: proofs carry a proof-local `@context` copied from the
+  document (present exactly when the document has one). Verification requires
+  the wire member to equal the document's on canonical bytes — without that
+  check it would be the one proof member a swap could not break.
+- **Verification methods**: issued DID documents (owner, pipeline, process) use
+  `Multikey` and carry the frozen contexts
+  `["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"]`.
+  Legacy JWK documents remain resolvable; proofs signed under them verify as
+  the legacy contract.
+- **Exact suite dispatch**: one classifier resolves (suite id, proof shape, key
+  encoding) to exactly one claim contract — `W3C_EDDSA_JCS_2022_REC_20250515@1`
+  or `LEGACY_PROVIN_EDDSA_JCS_INT64@1` — with no canonicalizer fallback.
+  `VerifyResult.SuiteContract` reports which contract produced every verdict.
+
+**Migration notes** (pre-release deployments only; there is no public tag):
+
+- Re-generate owner/pipeline/process DID documents (`provin owner init` against
+  a fresh registry, or re-issue). A JWK-era owner document can still be READ,
+  but a new binary signs W3C-shaped proofs, which no contract accepts over a
+  JWK key — issuance from an old document fails closed until it is re-issued.
+- Before upgrading a deployment that has persisted stores, run
+  `go run ./internal/numberinventory/cmd/numberinventory <DataDir>` and hold
+  the upgrade if it reports BLOCK (an artifact carrying an unsafe integer
+  would become unreadable at its stored address under the canonicalizer
+  switch). Evidence record for this checkout:
+  `docs/evidence/forkw-1-number-inventory-2026-07-15.md` (zero stored
+  artifacts here; the tool exists for deployments that have them).
+- Old verifiers reject the new seven-member proofs as carrying an unknown
+  member (fail-closed). Roll out readers before writers.
 
 ### Added
 
