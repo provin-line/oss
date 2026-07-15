@@ -38,6 +38,15 @@ func CreateProof(
 	if err != nil {
 		return nil, err
 	}
+	// Admission runs before the signature exists (canon.number.safe-integer):
+	// an integer outside ±(2^53-1) canonicalizes differently under a parser that
+	// rounds, so signing one mints evidence a second implementation cannot
+	// reproduce. Refusing here is the only place the failure is still cheap.
+	// Verification deliberately does NOT gate — legacy artifacts carry such
+	// integers by design, and the int64-verbatim projection exists to read them.
+	if err := canon.AdmitSafeNumbers(document); err != nil {
+		return nil, err
+	}
 	created := time.Now().UTC().Format(time.RFC3339)
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proofType, cryptosuite, verificationMethod, proofPurposeSign, created, ctx, hasCtx)
