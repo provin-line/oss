@@ -3,8 +3,10 @@ package storecontract
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -22,6 +24,7 @@ func Backend(t *testing.T, newBackend func(t *testing.T) vcresolver.VariantBacke
 	t.Helper()
 	t.Run("create and read back", func(t *testing.T) { backendCreateReadBack(t, newBackend(t)) })
 	t.Run("put if absent is create-only", func(t *testing.T) { backendPutIfAbsent(t, newBackend(t)) })
+	t.Run("put if absent is atomic", func(t *testing.T) { backendPutIfAbsentIsAtomic(t, newBackend(t)) })
 	t.Run("bytes are not shared with the caller", func(t *testing.T) { backendOwnsItsBytes(t, newBackend(t)) })
 	t.Run("variant listing", func(t *testing.T) { backendVariantListing(t, newBackend(t)) })
 	t.Run("projection slot", func(t *testing.T) { backendProjection(t, newBackend(t)) })
@@ -74,6 +77,71 @@ func backendPutIfAbsent(t *testing.T, b vcresolver.VariantBackend) {
 	}
 	if !bytes.Equal(got, first) {
 		t.Errorf("a taken name was overwritten: holds %s, want %s", got, first)
+	}
+}
+
+// backendPutIfAbsentIsAtomic is where "create-only" is actually decided.
+//
+// Sequentially, any implementation passes: a plain existence check catches the
+// second call before it writes anything. The property only has teeth under
+// CONCURRENCY, where every writer sees the name free and then races to take
+// it. An implementation built on a replacing primitive (rename rather than
+// link, or a check separated from its write) lets several of them believe they
+// created the entry, and the last one silently destroys the first one's bytes —
+// the exact overwrite the write-once gate above cannot detect afterwards,
+// because the evidence it would compare against is already gone.
+//
+// Exactly one writer creates. The bytes that survive are that writer's, and
+// they never move afterwards.
+func backendPutIfAbsentIsAtomic(t *testing.T, b vcresolver.VariantBackend) {
+	const writers = 8
+	body, variant := hex64(11), hex64(12)
+
+	payloads := make([][]byte, writers)
+	for i := range payloads {
+		payloads[i] = []byte(fmt.Sprintf(`{"writer":%d}`, i))
+	}
+	var (
+		mu       sync.Mutex
+		created  int
+		creator  []byte
+		failures []error
+		wg       sync.WaitGroup
+	)
+	start := make(chan struct{})
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release them together
+			existed, err := b.PutIfAbsent(body, variant, payloads[i])
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failures = append(failures, err)
+				return
+			}
+			if !existed {
+				created++
+				creator = payloads[i]
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for _, err := range failures {
+		t.Errorf("PutIfAbsent: %v", err)
+	}
+	if created != 1 {
+		t.Errorf("%d of %d concurrent writers believed they created the entry, want exactly 1 (the others must report existed)", created, writers)
+	}
+	held, err := b.ReadVariant(body, variant)
+	if err != nil {
+		t.Fatalf("ReadVariant: %v", err)
+	}
+	if creator != nil && !bytes.Equal(held, creator) {
+		t.Errorf("the entry holds %s but the writer that created it wrote %s — a later writer replaced it", held, creator)
 	}
 }
 

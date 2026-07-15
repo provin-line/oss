@@ -29,3 +29,13 @@ func TestContract_Pool(t *testing.T) {
 		return p
 	})
 }
+
+func TestContract_VariantBackend(t *testing.T) {
+	storecontract.Backend(t, func(t *testing.T) vcresolver.VariantBackend {
+		b, err := filestore.NewBackend(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	})
+}
