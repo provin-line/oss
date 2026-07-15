@@ -41,16 +41,19 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 		return fmt.Errorf("emissionRegistrar: marshal emitted credential: %w", err)
 	}
 	// An aggregate FirstDrop has no predecessor → no upstream hint, assembly depth 0. StoreVC
-	// returns the server-recomputed content address, the authoritative head hash used as both
-	// the receipt key and the audit-queue key (so all three agree).
-	head, err := r.local.StoreVC(ctx, b, "", 0)
+	// returns the server-recomputed addresses; the BODY address is the authoritative head hash
+	// used as both the receipt key and the audit-queue key (so all three agree). Keying on the
+	// admitted variant instead is P0-1 slices B/C: it is the verdict that has to name the exact
+	// bytes evaluated (invariants 6 and 12), and neither the receipt store nor the audit queue
+	// can carry that yet.
+	res, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("emissionRegistrar: local store emitted head: %w", err)
 	}
-	if err := r.receipts.Put(head, consumedHashes); err != nil {
+	if err := r.receipts.Put(res.BodyAddress, consumedHashes); err != nil {
 		return fmt.Errorf("emissionRegistrar: write consumed-set receipt: %w", err)
 	}
-	if err := r.audit.Add(head); err != nil {
+	if err := r.audit.Add(res.BodyAddress); err != nil {
 		return fmt.Errorf("emissionRegistrar: enqueue head for self-audit: %w", err)
 	}
 	if r.publisher != nil {

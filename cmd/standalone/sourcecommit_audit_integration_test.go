@@ -62,7 +62,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 
 	// The node's local store — shared by the registrar (writes) and the runner (reads).
 	localPool := memstore.NewPool()
-	localSvc := vcresolver.New(memstore.NewStore(), localPool)
+	localSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), localPool)
 
 	// Two real signed source FirstDrops, stored content-addressed in the local store.
 	signSource := func(iss, proc string, payload []byte) *vc.PipelinePassCredential {

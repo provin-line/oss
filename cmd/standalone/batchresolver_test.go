@@ -83,7 +83,7 @@ func brConfig(loops []pipelineconfig.LoopConfig, interval time.Duration, maxByte
 func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
 	guard := core.NewURLGuard()
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	resolver := didresolver.New(guard)
 
 	for _, tc := range []struct {
@@ -117,7 +117,7 @@ func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
 // and returns the server plus its service so a test can seed credentials.
 func peerVCResolver(t *testing.T, maxBytes int) (*httptest.Server, *vcresolver.Service) {
 	t.Helper()
-	svc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	var opts []connect.HandlerOption
 	if maxBytes > 0 {
 		opts = append(opts, connect.WithReadMaxBytes(maxBytes))
@@ -154,7 +154,7 @@ func TestBatchResolver_Integration_DrainsFromPeer(t *testing.T) {
 	}
 
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	h := brCred(t, pAddr, "")
 	if _, err := svc.StoreVC(ctx, brMarshal(t, h), peer.URL, 0); err != nil { // hint = peer
 		t.Fatalf("seed local: %v", err)
@@ -195,7 +195,7 @@ func TestBatchResolver_Integration_OverCapFetchRejected(t *testing.T) {
 	}
 
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	h := brCred(t, bigAddr, "")
 	if _, err := svc.StoreVC(ctx, brMarshal(t, h), peer.URL, 0); err != nil {
 		t.Fatalf("seed local: %v", err)
@@ -237,7 +237,7 @@ func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	ctx := context.Background()
 	const token = "audit-token"
 
-	peerSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	peerSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	_, ph := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(peerSvc), requireBearer(token))
 	peer := httptest.NewServer(ph)
 	t.Cleanup(peer.Close)
@@ -248,7 +248,7 @@ func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	}
 
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	h := brCred(t, pAddr, "")
 	if _, err := svc.StoreVC(ctx, brMarshal(t, h), peer.URL, 0); err != nil {
 		t.Fatalf("seed local: %v", err)

@@ -37,7 +37,7 @@ import (
 // dpVCStore returns a fresh in-memory vcresolver.Service for use in data-plane tests
 // that build consuming loops (slice-17f: all consuming loops require a VCStore).
 func dpVCStore() *vcresolver.Service {
-	return vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 }
 
 // dpAccountServer embeds a single-account operator-trusted nats-server and returns

@@ -6,23 +6,7 @@ import (
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
-	"github.com/provin-line/oss/vc"
 )
-
-func TestStore_PutGetNotFound(t *testing.T) {
-	s := memstore.NewStore()
-	if _, err := s.Get("sha256:x"); !errors.Is(err, vcresolver.ErrNotFound) {
-		t.Fatalf("absent: want ErrNotFound, got %v", err)
-	}
-	cred := &vc.PipelinePassCredential{}
-	if err := s.Put("sha256:abc", cred); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	got, err := s.Get("sha256:abc")
-	if err != nil || got != cred {
-		t.Fatalf("Get: got %v err %v", got, err)
-	}
-}
 
 func TestPool_NewestFirst_Upsert_RetryRemove(t *testing.T) {
 	p := memstore.NewPool()

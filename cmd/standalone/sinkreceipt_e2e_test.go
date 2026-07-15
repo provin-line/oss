@@ -68,7 +68,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 
 	// Shared audit substrate: one local store + queue + status + receipts, read by
 	// both the sink's registrar (write side) and the audit runner (verdict side).
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	pool := memstore.NewPool()
 	localSvc := vcresolver.New(store, pool)
 	queue := auditor.NewMemQueue()
@@ -174,7 +174,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 
 // findSinkReceiptHead returns the content address of the stored provin:sink-receipt
 // credential, or "" if none is stored yet.
-func findSinkReceiptHead(t *testing.T, ctx context.Context, store *memstore.Store, svc *vcresolver.Service) string {
+func findSinkReceiptHead(t *testing.T, ctx context.Context, store *vcresolver.VariantStore, svc *vcresolver.Service) string {
 	t.Helper()
 	hashes, err := store.ListHashes("", 1000)
 	if err != nil {

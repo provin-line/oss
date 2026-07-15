@@ -85,7 +85,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	// audit runner (verdict). This is the emit-locus guarantee: the aggregate stores its
 	// consumed sources AND its emitted head into the same store the runner reads.
 	localPool := memstore.NewPool()
-	localSvc := vcresolver.New(memstore.NewStore(), localPool)
+	localSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), localPool)
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()

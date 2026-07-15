@@ -62,23 +62,22 @@ func runCommitmentPersistence(t *testing.T, v dplaaxVector) {
 	mustParse(t, v.Expect, &e)
 
 	dir := t.TempDir()
-	s, err := vcfilestore.NewStore(dir)
+	backend, err := vcfilestore.NewBackend(dir)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("NewBackend: %v", err)
 	}
+	s := vcresolver.NewVariantStore(backend)
 	cred, _ := signedFixtureCred(t)
-	hash, err := cred.Hash()
+	hash, _, err := s.PutVariant(cred)
 	if err != nil {
-		t.Fatalf("Hash: %v", err)
-	}
-	if err := s.Put(hash, cred); err != nil {
-		t.Fatalf("Put: %v", err)
+		t.Fatalf("PutVariant: %v", err)
 	}
 
-	restarted, err := vcfilestore.NewStore(dir) // a fresh instance over the same dir
+	restartedBackend, err := vcfilestore.NewBackend(dir) // a fresh instance over the same dir
 	if err != nil {
-		t.Fatalf("NewStore (restart): %v", err)
+		t.Fatalf("NewBackend (restart): %v", err)
 	}
+	restarted := vcresolver.NewVariantStore(restartedBackend)
 	_, getErr := restarted.Get(hash)
 	resolved := getErr == nil
 	if want := e.State == "Resolved"; resolved != want {
@@ -823,12 +822,13 @@ func runTransferEvidenceDefinition(t *testing.T, v dplaaxVector) {
 	}
 
 	// Ingress side: the real ingress VC store.
-	ingress, err := vcfilestore.NewStore(t.TempDir())
+	ingressBackend, err := vcfilestore.NewBackend(t.TempDir())
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("NewBackend: %v", err)
 	}
-	if err := ingress.Put(wantHash, cred); err != nil {
-		t.Fatalf("Put: %v", err)
+	ingress := vcresolver.NewVariantStore(ingressBackend)
+	if _, _, err := ingress.PutVariant(cred); err != nil {
+		t.Fatalf("PutVariant: %v", err)
 	}
 	got, err := ingress.Get(wantHash)
 	if err != nil {
@@ -915,8 +915,8 @@ func runTransferEmissionAppendOnly(t *testing.T, v dplaaxVector) {
 // credential in the real ingress vcfilestore, open a SECOND store instance
 // over the same dir (the restart), Get it back, and assert the retained
 // credential's marshaled bytes are byte-identical to what was stored — plus
-// assert it is enumerable via ListHashes (vcresolver.Store's enumeration
-// primitive; already-existing I1 surface, no new method needed).
+// assert it is enumerable via ListHashes (the store's enumeration primitive;
+// already-existing I1 surface, no new method needed).
 func runTransferIngressRetention(t *testing.T, v dplaaxVector) {
 	var e struct {
 		State string `json:"state"`
@@ -924,27 +924,26 @@ func runTransferIngressRetention(t *testing.T, v dplaaxVector) {
 	mustParse(t, v.Expect, &e)
 
 	dir := t.TempDir()
-	s, err := vcfilestore.NewStore(dir)
+	backend, err := vcfilestore.NewBackend(dir)
 	if err != nil {
-		t.Fatalf("NewStore: %v", err)
+		t.Fatalf("NewBackend: %v", err)
 	}
+	s := vcresolver.NewVariantStore(backend)
 	cred, _ := signedFixtureCred(t)
-	hash, err := cred.Hash()
-	if err != nil {
-		t.Fatalf("Hash: %v", err)
-	}
 	wantBytes, err := cred.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
-	if err := s.Put(hash, cred); err != nil {
-		t.Fatalf("Put: %v", err)
+	hash, _, err := s.PutVariant(cred)
+	if err != nil {
+		t.Fatalf("PutVariant: %v", err)
 	}
 
-	restarted, err := vcfilestore.NewStore(dir) // a fresh instance over the same dir
+	restartedBackend, err := vcfilestore.NewBackend(dir) // a fresh instance over the same dir
 	if err != nil {
-		t.Fatalf("NewStore (restart): %v", err)
+		t.Fatalf("NewBackend (restart): %v", err)
 	}
+	restarted := vcresolver.NewVariantStore(restartedBackend)
 	got, err := restarted.Get(hash)
 	if err != nil {
 		t.Fatalf("Get (restart): %v", err)

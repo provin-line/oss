@@ -1,16 +1,19 @@
-// Package storecontract is the shared behavioral suite for vcresolver Store
-// and Pool implementations: the mem and file stores both run it, so their
-// semantics (upsert merge, ordering, sentinel errors) cannot drift apart
-// silently — the parity the evidence-persistence spec pins. Implementation-
-// specific behavior (restart survival, damage handling) stays in each
-// package's own tests.
+// Package storecontract is the shared behavioral suite for vcresolver backend
+// and Pool implementations: the mem and file versions both run it, so their
+// semantics (atomic create, upsert merge, ordering, sentinel errors) cannot
+// drift apart silently — the parity the evidence-persistence spec pins.
+// Implementation-specific behavior (restart survival, damage handling) stays in
+// each package's own tests.
+//
+// The suite asks a BACKEND nothing about identity, canonicality, write-once or
+// projection winners: those are enforced in vcresolver.VariantStore, above
+// every backend, so asserting them here would test one implementation twice and
+// imply a backend could get them wrong. See backend.go.
 package storecontract
 
 import (
 	"encoding/json"
 	"errors"
-	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -49,65 +52,6 @@ func CredentialWithProcess(t *testing.T, processID string) *vc.PipelinePassCrede
 		t.Fatal(err)
 	}
 	return &c
-}
-
-// Store runs the Store contract against a fresh implementation.
-func Store(t *testing.T, newStore func(t *testing.T) vcresolver.Store) {
-	t.Helper()
-	s := newStore(t)
-	cred := Credential(t)
-	h, err := cred.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Get(h); !errors.Is(err, vcresolver.ErrNotFound) {
-		t.Fatalf("absent: want ErrNotFound, got %v", err)
-	}
-	if err := s.Put(h, cred); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	got, err := s.Get(h)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if gh, err := got.Hash(); err != nil || gh != h {
-		t.Fatalf("roundtrip hash = %q (err %v), want %q", gh, err, h)
-	}
-
-	// Enumeration: ListHashes in lexicographic order regardless of insertion
-	// order, exclusive cursor, limit — the primitive the forward index and
-	// any future export/GC path build on.
-	lister := newStore(t)
-	var addrs []string
-	for _, id := range []string{"pD", "pA", "pC", "pB"} {
-		c := CredentialWithProcess(t, id)
-		ch, err := c.Hash()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := lister.Put(ch, c); err != nil {
-			t.Fatal(err)
-		}
-		addrs = append(addrs, ch)
-	}
-	sort.Strings(addrs)
-	all, err := lister.ListHashes("", 10)
-	if err != nil {
-		t.Fatalf("ListHashes: %v", err)
-	}
-	if !reflect.DeepEqual(all, addrs) {
-		t.Fatalf("ListHashes(\"\", 10) = %v, want %v", all, addrs)
-	}
-	page, err := lister.ListHashes(addrs[0], 2)
-	if err != nil || !reflect.DeepEqual(page, addrs[1:3]) {
-		t.Fatalf("ListHashes(after first, 2) = %v (err %v), want %v", page, err, addrs[1:3])
-	}
-	if rest, err := lister.ListHashes(addrs[3], 5); err != nil || len(rest) != 0 {
-		t.Fatalf("ListHashes past the end = %v (err %v), want empty", rest, err)
-	}
-	if none, err := newStore(t).ListHashes("", 5); err != nil || len(none) != 0 {
-		t.Fatalf("ListHashes on empty store = %v (err %v), want empty", none, err)
-	}
 }
 
 // Pool runs the Pool contract against a fresh implementation: newest-first

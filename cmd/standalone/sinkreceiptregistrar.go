@@ -107,8 +107,9 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 	}
 
 	// 1. Local store — the head must be locally resolvable before the audit runner
-	// dequeues it. StoreVC returns the server-recomputed content address (the head).
-	head, err := r.local.StoreVC(ctx, b, "", 0)
+	// dequeues it. StoreVC returns the server-recomputed addresses; the queue is
+	// body-keyed (see emissionregistrar.go on why the variant is not carried yet).
+	res, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: local store receipt: %w", err)
 	}
@@ -118,7 +119,7 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 		return fmt.Errorf("sinkReceiptRegistrar: append receipt tlog: %w", err)
 	}
 	// 3. Enqueue the receipt head for self-audit (verifies receipt→consumed→…).
-	if err := r.audit.Add(head); err != nil {
+	if err := r.audit.Add(res.BodyAddress); err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: enqueue receipt head: %w", err)
 	}
 	// 4. Optional remote publish — external visibility strictly after (1)–(3).

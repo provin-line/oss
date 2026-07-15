@@ -50,7 +50,7 @@ func (ix *successorIndex) insert(prev, succ string) {
 // page returns up to limit successors of prev in lexicographic order,
 // strictly after fromExclusive, and whether more remain past the page.
 // It builds the index from store on first use.
-func (ix *successorIndex) page(store Store, prev, fromExclusive string, limit int) (successors []string, more bool, err error) {
+func (ix *successorIndex) page(store *VariantStore, prev, fromExclusive string, limit int) (successors []string, more bool, err error) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if !ix.built {
@@ -77,7 +77,7 @@ func (ix *successorIndex) page(store Store, prev, fromExclusive string, limit in
 // entry is a hard error: silently skipping it could answer a recall
 // investigation with a false "no descendants" (the one caller class for whom
 // a silently incomplete index is worse than an error).
-func (ix *successorIndex) build(store Store) error {
+func (ix *successorIndex) build(store *VariantStore) error {
 	m := make(map[string]map[string]struct{})
 	cursor := ""
 	for {

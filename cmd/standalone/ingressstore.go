@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/vc"
 )
@@ -12,7 +13,7 @@ import (
 // satisfied by *vcresolver.Service. cmd/standalone owns this local interface so the data
 // plane depends on the capability, not the concrete service.
 type ingressStorer interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
 }
 
 // auditRegistrar registers a consumed head's content address for async audit (slice-17h).
@@ -48,15 +49,21 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	}
 	// A consumed ingress credential is directly received — assembly depth 0; its
 	// missing predecessor enqueues at depth 1.
-	headHash, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
+	res, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
 	if err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
 	}
 	// Register the consumed head for async audit (slice-17h, D-17h-2). Fail-closed, like the
 	// store above: losing the registration would drop this credential from the audit trail,
 	// the failure 17f's "never continue without the audit trail" contract guards against.
+	//
+	// The head is registered by BODY address: the audit queue is body-keyed
+	// today, which is exactly what P0-1 invariants 6 and 12 rule out — a verdict
+	// must name the variant it evaluated. Slice B carries that; naming the
+	// variant here would only move the mismatch, since nothing downstream can
+	// yet receive it.
 	if s.audit != nil {
-		if err := s.audit.Add(headHash); err != nil {
+		if err := s.audit.Add(res.BodyAddress); err != nil {
 			return fmt.Errorf("ingressstore: register audit head: %w", err)
 		}
 	}

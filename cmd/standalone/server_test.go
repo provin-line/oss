@@ -122,7 +122,7 @@ func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, cr
 	if derr != nil {
 		t.Fatalf("newDIDResolution: %v", derr)
 	}
-	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
 		t.Fatalf("chainOperator: %v", err)
@@ -158,7 +158,7 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 	if derr != nil {
 		t.Fatalf("newDIDResolution: %v", derr)
 	}
-	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
 		t.Fatalf("chainOperator: %v", err)

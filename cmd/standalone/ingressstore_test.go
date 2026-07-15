@@ -44,7 +44,7 @@ func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 // together with the underlying memstore Pool and the audit queue so tests can inspect both.
 func newTestIngressSetup() (*serviceIngressStore, *vcresolver.Service, *memstore.Pool, *auditor.MemQueue) {
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	queue := auditor.NewMemQueue()
 	store := &serviceIngressStore{store: svc, audit: queue}
 	return store, svc, pool, queue
@@ -73,7 +73,7 @@ func TestServiceIngressStore_RegistersHeadForAudit(t *testing.T) {
 // StoreIngressVC fail (fail-closed — never continue without the audit trail).
 func TestServiceIngressStore_AuditRegisterFailsClosed(t *testing.T) {
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	store := &serviceIngressStore{store: svc, audit: failingRegistrar{}}
 
 	cred := makeIngressCred(t, nil)

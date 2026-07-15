@@ -13,7 +13,7 @@ import (
 
 // newTestVCSvc returns a fresh *vcresolver.Service backed by in-memory stores.
 func newTestVCSvc() *vcresolver.Service {
-	return vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 }
 
 // TestBuildDataPlane_SinkRequiresVCStore asserts that a sink loop without a VCStore

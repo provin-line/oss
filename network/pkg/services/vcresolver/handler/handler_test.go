@@ -17,7 +17,7 @@ import (
 )
 
 func newHandler() *handler.Handler {
-	return handler.New(vcresolver.New(memstore.NewStore(), memstore.NewPool()))
+	return handler.New(vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool()))
 }
 
 func TestHandler_StoreVC_ErrorCodes(t *testing.T) {

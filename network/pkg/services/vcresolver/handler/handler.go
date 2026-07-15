@@ -24,7 +24,7 @@ import (
 // on (defined here to keep the dependency pointing inward). *vcresolver.Service
 // satisfies it.
 type Service interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
 	ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassCredential, error)
 	ListSuccessors(ctx context.Context, hash, fromExclusive string, limit int) ([]string, bool, error)
 }
@@ -49,11 +49,11 @@ func (h *Handler) StoreVC(ctx context.Context, req *connect.Request[vcpb.StoreVC
 	// A VC submitted over the wire (a producer publishing, or a peer) is a
 	// directly-received credential — assembly depth 0. Depth is a local-only audit
 	// concept and never crosses the wire (the request carries no depth field).
-	hash, err := h.svc.StoreVC(ctx, req.Msg.GetCredential(), req.Msg.GetUpstreamEndpoint(), 0)
+	res, err := h.svc.StoreVC(ctx, req.Msg.GetCredential(), req.Msg.GetUpstreamEndpoint(), 0)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&vcpb.StoreVCResponse{Hash: hash}), nil
+	return connect.NewResponse(&vcpb.StoreVCResponse{Hash: res.BodyAddress}), nil
 }
 
 func (h *Handler) ResolveVC(ctx context.Context, req *connect.Request[vcpb.ResolveVCRequest]) (*connect.Response[vcpb.ResolveVCResponse], error) {

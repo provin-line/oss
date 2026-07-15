@@ -72,7 +72,7 @@ func TestConsumeVerify_Integration_RealDIDGraph(t *testing.T) {
 	}
 
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	signSource := func(iss, proc string, payload []byte) (*vc.PipelinePassCredential, string) {
 		s, err := vcdid.NewSigner(vcdid.Config{
 			Builder: builder, IssuerDID: iss, KeyID: string(keystore.KeyIDSigning),
@@ -95,7 +95,7 @@ func TestConsumeVerify_Integration_RealDIDGraph(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store %q: %v", iss, err)
 		}
-		return cred, stored
+		return cred, stored.BodyAddress
 	}
 	srcA, hA := signSource(srcAIss, "sa", []byte(`{"reading":1}`))
 	srcB, hB := signSource(srcBIss, "sb", []byte(`{"reading":2}`))

@@ -96,7 +96,7 @@ func notFound() error { return connect.NewError(connect.CodeNotFound, errors.New
 // newWiring returns a real pool + service (the Submitter) over memstore.
 func newWiring() (*memstore.Pool, *vcresolver.Service) {
 	pool := memstore.NewPool()
-	return pool, vcresolver.New(memstore.NewStore(), pool)
+	return pool, vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 }
 
 func TestNew_RejectsNilDepsAndBadConfig(t *testing.T) {

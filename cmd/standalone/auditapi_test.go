@@ -48,7 +48,7 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	if derr != nil {
 		t.Fatalf("newDIDResolution: %v", derr)
 	}
-	vcSvc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	chainOp, err := chainOperator(chainCfg)
 	if err != nil {
 		t.Fatalf("chainOperator: %v", err)

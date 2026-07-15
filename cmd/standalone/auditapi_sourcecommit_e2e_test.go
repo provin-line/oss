@@ -59,7 +59,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 	}
 
 	localPool := memstore.NewPool()
-	localSvc := vcresolver.New(memstore.NewStore(), localPool)
+	localSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), localPool)
 	signSource := func(iss, proc string, payload []byte) (*vc.PipelinePassCredential, string) {
 		s, err := vcdid.NewSigner(vcdid.Config{
 			Builder: builder, IssuerDID: iss, KeyID: string(keystore.KeyIDSigning),
@@ -82,7 +82,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store %q: %v", iss, err)
 		}
-		return cred, stored
+		return cred, stored.BodyAddress
 	}
 	srcA, hA := signSource(srcAIss, "sa", []byte(`{"reading":1}`))
 	srcB, hB := signSource(srcBIss, "sb", []byte(`{"reading":2}`))

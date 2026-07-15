@@ -115,7 +115,7 @@ func main() {
 	// into consuming loops' ingress store so every verified ingress credential is
 	// immediately resolvable and its predecessor is enqueued in the one shared pool. The
 	// pool is a named var so the batch resolver drains exactly the pool StoreVC feeds (D-17g-1).
-	credStore, err := vcfilestore.NewStore(filepath.Join(evidenceDir, "credentials"))
+	credBackend, err := vcfilestore.NewBackend(filepath.Join(evidenceDir, "credentials"))
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}
@@ -123,7 +123,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}
-	vcSvc := vcresolver.New(credStore, pool)
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(credBackend), pool)
 
 	// The audit substrate (slice-17h): a registry of consumed heads (fed at ingress) and a
 	// verdict store, both shared between the ingress path and the audit runner.

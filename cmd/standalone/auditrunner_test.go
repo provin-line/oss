@@ -35,7 +35,7 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := memstore.NewPool()
-			svc := vcresolver.New(memstore.NewStore(), pool)
+			svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 			r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil,
 				auditCfg([]pipelineconfig.LoopConfig{{Role: tc.role}}))
 			if err != nil {
@@ -48,7 +48,7 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 	}
 	// No loops → nil.
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	if r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg(nil)); err != nil || r != nil {
 		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
@@ -74,7 +74,7 @@ func waitUntil(t *testing.T, cond func() bool, msg string) {
 func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 	ctx := context.Background()
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 
@@ -136,7 +136,7 @@ func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 func TestAuditRunner_Integration_RealVerifyTerminal(t *testing.T) {
 	ctx := context.Background()
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 

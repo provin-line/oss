@@ -19,7 +19,7 @@ import (
 // (canon.number.safe-integer: a new artifact's integers are gated at the
 // boundary, before anything durable happens).
 func TestStoreVC_RejectsUnsafeIntegerInsteadOfRoundingAtRest(t *testing.T) {
-	svc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 
 	wire := `{
 		"@context": ["https://www.w3.org/ns/credentials/v2", "https://dplaax.dev/vc/v1", "https://provin.dev/vc/v1"],

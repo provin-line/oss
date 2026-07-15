@@ -43,7 +43,7 @@ type Pool interface {
 // Submitter re-submits a fetched predecessor (satisfied by *vcresolver.Service):
 // StoreVC fills the entry's hole and enqueues the next predecessor at assemblyDepth+1.
 type Submitter interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
 }
 
 // Fetcher fetches a credential by content address from a specific peer endpoint

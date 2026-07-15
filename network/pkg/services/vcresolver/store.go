@@ -15,31 +15,10 @@
 // query lands with the service API, not with this storage contract.
 package vcresolver
 
-import (
-	"errors"
-
-	"github.com/provin-line/oss/vc"
-)
+import "errors"
 
 // ErrNotFound is returned for misses. Handlers map it with errors.Is.
 var ErrNotFound = errors.New("vcresolver: not found")
-
-// Store holds resolved VCs keyed by their content address
-// ("sha256:<hex>" over the JCS-canonical body).
-type Store interface {
-	Put(hash string, cred *vc.PipelinePassCredential) error
-	Get(hash string) (*vc.PipelinePassCredential, error)
-	// ListHashes returns EXACTLY min(remaining, limit) held content
-	// addresses in lexicographic order, strictly after fromExclusive (""
-	// starts at the beginning) — the enumeration primitive the service's
-	// forward index (and any future export/GC path) builds on. The
-	// full-page rule is contract, not convenience: the index build infers
-	// "store exhausted" from a short page, so an implementation returning
-	// fewer entries than remain would build a silently incomplete index —
-	// a recall answering a false "no descendants". Listing names what is
-	// held; it reads no credential bodies.
-	ListHashes(fromExclusive string, limit int) ([]string, error)
-}
 
 // UnresolvedEntry is one queued chain hole: a previousCredential hash we do
 // not hold, plus the upstream endpoint to fetch it from.

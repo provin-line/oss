@@ -37,16 +37,16 @@ func chainWire(t *testing.T, processID, prev string) []byte {
 
 func newIndexedService(t *testing.T) *vcresolver.Service {
 	t.Helper()
-	return vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 }
 
 func mustStore(t *testing.T, s *vcresolver.Service, wire []byte) string {
 	t.Helper()
-	h, err := s.StoreVC(context.Background(), wire, "", 0)
+	res, err := s.StoreVC(context.Background(), wire, "", 0)
 	if err != nil {
 		t.Fatalf("StoreVC: %v", err)
 	}
-	return h
+	return res.BodyAddress
 }
 
 func TestListSuccessors_ForwardTraversal(t *testing.T) {
@@ -132,29 +132,45 @@ func TestListSuccessors_MalformedHash(t *testing.T) {
 	}
 }
 
-// damageStore wraps a Store, failing Get for one hash — the index build must
-// hard-error, never build a silently incomplete index (false "no
-// descendants" is the failure recall cannot tolerate).
-type damageStore struct {
-	vcresolver.Store
-	damaged string
+// damageBackend fails every read of one body — damaged STORAGE, injected at
+// the only seam that still takes an interface. (The store above it is
+// concrete: nothing can substitute a VariantStore that skips its checks, which
+// is the whole point of that design. So damage goes in underneath it, which is
+// also where real damage comes from.)
+type damageBackend struct {
+	vcresolver.VariantBackend
+	damagedBodyHex string
 }
 
-func (d damageStore) Get(hash string) (*vc.PipelinePassCredential, error) {
-	if hash == d.damaged {
+func (d damageBackend) ReadVariant(bodyHex, variantHex string) ([]byte, error) {
+	if bodyHex == d.damagedBodyHex {
 		return nil, errors.New("damaged credential entry")
 	}
-	return d.Store.Get(hash)
+	return d.VariantBackend.ReadVariant(bodyHex, variantHex)
 }
 
+func (d damageBackend) ReadProjection(bodyHex string) ([]byte, error) {
+	if bodyHex == d.damagedBodyHex {
+		return nil, errors.New("damaged credential entry")
+	}
+	return d.VariantBackend.ReadProjection(bodyHex)
+}
+
+// TestListSuccessors_BuildHardErrorsOnDamage: the index build must hard-error,
+// never build a silently incomplete index — a false "no descendants" is the
+// one answer a recall investigation cannot tolerate.
 func TestListSuccessors_BuildHardErrorsOnDamage(t *testing.T) {
 	ctx := context.Background()
-	inner := memstore.NewStore()
-	seed := vcresolver.New(inner, memstore.NewPool())
+	backend := memstore.NewBackend()
+	seed := vcresolver.New(vcresolver.NewVariantStore(backend), memstore.NewPool())
 	origin := mustStore(t, seed, chainWire(t, "origin", ""))
 	child := mustStore(t, seed, chainWire(t, "child", origin))
 
-	s := vcresolver.New(damageStore{Store: inner, damaged: child}, memstore.NewPool())
+	damaged := vcresolver.NewVariantStore(damageBackend{
+		VariantBackend: backend,
+		damagedBodyHex: strings.TrimPrefix(child, "sha256:"),
+	})
+	s := vcresolver.New(damaged, memstore.NewPool())
 	if _, _, err := s.ListSuccessors(ctx, origin, "", 10); err == nil {
 		t.Fatal("index build over a damaged store: want error, got a (possibly incomplete) listing")
 	}
@@ -166,17 +182,17 @@ func TestListSuccessors_BuildHardErrorsOnDamage(t *testing.T) {
 // fail loudly instead (Codex P2).
 func TestListSuccessors_BuildRejectsMalformedLink(t *testing.T) {
 	ctx := context.Background()
-	inner := memstore.NewStore()
+	inner := vcresolver.NewVariantStore(memstore.NewBackend())
 	var cred vc.PipelinePassCredential
 	// decoder-hygiene-exempt: test fixture from bytes this test just built.
 	if err := json.Unmarshal(chainWire(t, "bad", "not-a-content-address"), &cred); err != nil {
 		t.Fatal(err)
 	}
-	h, err := cred.Hash()
+	// Straight to the store, bypassing StoreVC's link validation the way
+	// tampering would: the store recomputes addresses but has no opinion about
+	// chain links, so this admits a credential StoreVC would have refused.
+	h, _, err := inner.PutVariant(&cred)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.Put(h, &cred); err != nil { // bypasses StoreVC validation, as tampering would
 		t.Fatal(err)
 	}
 	s := vcresolver.New(inner, memstore.NewPool())

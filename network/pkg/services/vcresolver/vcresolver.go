@@ -17,15 +17,34 @@ var ErrInvalidArgument = errors.New("vcresolver: invalid argument")
 // Service stores VCs by content address and queues unresolved previousCredential
 // holes. The async batch resolver that drains the pool is a later slice; this
 // service stores, serves, and enqueues.
+//
+// The store is the CONCRETE façade, not an interface: identity recomputation,
+// write-once admission and canonical validation are enforced there, and taking
+// an interface here would let a deployment wire in something that skips them.
+// Storage choice is made at the backend seam (vcresolver.VariantBackend),
+// which is below all of that.
 type Service struct {
-	store Store
+	store *VariantStore
 	pool  Pool
 	index successorIndex
 }
 
 // New returns a Service over store and pool.
-func New(store Store, pool Pool) *Service {
+func New(store *VariantStore, pool Pool) *Service {
 	return &Service{store: store, pool: pool}
+}
+
+// StoreVCResult is the identity a submission was admitted under: the body
+// address every successor links to, and the variant naming the exact signed
+// form those bytes are. It is a struct rather than two strings so the promotion
+// and evidence-view work (P0-1 slices B/C) can add what it learns without
+// breaking every caller again.
+type StoreVCResult struct {
+	// BodyAddress is the content address of the proof-excluded body.
+	BodyAddress string
+	// WireVariantID names the exact wire bytes admitted — the key an evidence
+	// path fetches with (admission.resolve-variant.exact).
+	WireVariantID string
 }
 
 // StoreVC stores a submitted VC at its recomputed content address and, when the
@@ -44,40 +63,50 @@ func New(store Store, pool Pool) *Service {
 // resolver enforces a max-depth against it to bound assembly. A directly-received
 // credential at depth 0 therefore resets its predecessor to depth 1 even if the
 // credential was itself previously queued as a deeper hole.
-func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error) {
+func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (StoreVCResult, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return StoreVCResult{}, err
 	}
 	if assemblyDepth < 0 {
-		return "", fmt.Errorf("%w: assemblyDepth %d is negative", ErrInvalidArgument, assemblyDepth)
+		return StoreVCResult{}, fmt.Errorf("%w: assemblyDepth %d is negative", ErrInvalidArgument, assemblyDepth)
+	}
+	// Admission gate (canon.number.safe-integer) over the FULL wire document,
+	// proof included. This is a body-as-SoT boundary: unknown members survive
+	// into the stored canonical bytes, and the RFC 8785 re-serialization would
+	// silently ROUND an unsafe integer at rest, storing bytes the original
+	// signature never covered. Values beyond ±(2^53-1) belong in the string
+	// domain, so this rejects loudly instead.
+	//
+	// It runs on the raw submission and not on the decoded credential because
+	// by then the split has happened: gating only the body would let an unsafe
+	// integer in a proof member through, and the variant id digests the whole
+	// document — so a rounded proof would be admitted under an id naming bytes
+	// nobody sent. The decode is lossless (json.Number), which the catalog
+	// requires: the check has to see the literal, not a value already rounded
+	// by parsing it.
+	var doc any
+	if err := canon.NewStrictDecoder(credential).Decode(&doc); err != nil {
+		return StoreVCResult{}, fmt.Errorf("%w: decode credential: %v", ErrInvalidArgument, err)
+	}
+	if err := canon.AdmitSafeNumbers(doc); err != nil {
+		return StoreVCResult{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	var cred vc.PipelinePassCredential
 	// Delegates to PipelinePassCredential.UnmarshalJSON, which routes the
 	// decode through canon.StrictDecoder (decoder-hygiene-exempt).
 	if err := json.Unmarshal(credential, &cred); err != nil {
-		return "", fmt.Errorf("%w: decode credential: %v", ErrInvalidArgument, err)
-	}
-	// Admission gate (canon.number.safe-integer): this is a body-as-SoT
-	// boundary — unknown members survive into the stored canonical bytes, and
-	// the RFC 8785 re-serialization would silently ROUND an unsafe integer at
-	// rest, storing bytes the original signature never covered. Reject loudly
-	// instead; values beyond ±(2^53-1) belong in the string domain.
-	if err := canon.AdmitSafeNumbers(cred.Body()); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		return StoreVCResult{}, fmt.Errorf("%w: decode credential: %v", ErrInvalidArgument, err)
 	}
 	prev, hasPrev, err := rawPreviousCredential(cred.Body())
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		return StoreVCResult{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	if hasPrev && !isContentAddress(prev) {
-		return "", fmt.Errorf("%w: previousCredential %q is not a sha256:<hex> content address", ErrInvalidArgument, prev)
+		return StoreVCResult{}, fmt.Errorf("%w: previousCredential %q is not a sha256:<hex> content address", ErrInvalidArgument, prev)
 	}
-	hash, err := cred.Hash()
+	hash, variant, err := s.store.PutVariant(&cred)
 	if err != nil {
-		return "", fmt.Errorf("%w: hash credential: %v", ErrInvalidArgument, err)
-	}
-	if err := s.store.Put(hash, &cred); err != nil {
-		return "", err
+		return StoreVCResult{}, err
 	}
 	// Maintain the forward index AFTER the durable put (a crash between the
 	// two loses only the in-memory edge, which the next build re-derives).
@@ -102,21 +131,21 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 				ReferrerIssuer:   cred.Issuer(),
 				AssemblyDepth:    assemblyDepth + 1,
 			}); err != nil {
-				return "", err
+				return StoreVCResult{}, err
 			}
 		default:
 			// A real store failure (not a miss) — propagate it rather than
 			// silently dropping the chain hole.
-			return "", err
+			return StoreVCResult{}, err
 		}
 	}
 	// Storing this VC resolves any queued hole for its own hash — an out-of-order
 	// submission (a successor queued this predecessor before it arrived). Remove
 	// is idempotent, so this is a no-op when the hash was never queued.
 	if err := s.pool.Remove(hash); err != nil {
-		return "", err
+		return StoreVCResult{}, err
 	}
-	return hash, nil
+	return StoreVCResult{BodyAddress: hash, WireVariantID: variant}, nil
 }
 
 // ResolveVC returns the VC held at a content address. The hash must be a
@@ -130,6 +159,59 @@ func (s *Service) ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassC
 		return nil, fmt.Errorf("%w: hash %q is not a sha256:<hex> content address", ErrInvalidArgument, hash)
 	}
 	return s.store.Get(hash)
+}
+
+// ResolveVariant returns the EXACT canonical wire bytes of one variant —
+// byte-for-byte what was admitted, which is what evidence means
+// (admission.resolve-variant.exact).
+//
+// This is the fetch an auditor, a bundle exporter, or anything reproducing a
+// verdict uses. ResolveVC cannot serve that purpose: it answers with SOME
+// signed form of the body (the projection), and which one it picks can change
+// as the set grows.
+//
+// A malformed address is InvalidArgument; a well-formed pair this node does
+// not hold is ErrNotFound. Damage is neither — the store reports it as such,
+// because "we hold nothing" and "what we hold is not what it claims to be" are
+// different facts about provenance.
+func (s *Service) ResolveVariant(ctx context.Context, bodyAddress, wireVariantID string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.store.GetVariant(bodyAddress, wireVariantID)
+}
+
+// ListVariants returns up to limit variant ids of bodyAddress in lexicographic
+// order strictly after fromExclusive, plus whether more remain.
+//
+// The cursor is a plain variant id: opaque continuation tokens are the
+// handler's concern, matching ListSuccessors. An unknown body is an empty page,
+// never an error — holding no variants is a normal answer, not a claim that
+// none exist anywhere.
+//
+// Consistency is per-call: a variant admitted between two pages, sorting before
+// the cursor, is not observed by that iteration. Every page is exact as of its
+// own call and the set only grows, so a caller needing a complete snapshot
+// re-lists until nothing new appears, or works from an evidence view that
+// commits its spine (P0-1 slice B).
+func (s *Service) ListVariants(ctx context.Context, bodyAddress, fromExclusive string, limit int) ([]string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("%w: limit %d is not positive", ErrInvalidArgument, limit)
+	}
+	// One extra: the store's full-page rule makes a short page mean exhausted,
+	// so asking for limit+1 answers "is there more" without a second call and
+	// without claiming more when the set ends exactly on the boundary.
+	page, err := s.store.ListVariantIDs(bodyAddress, fromExclusive, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(page) > limit {
+		return page[:limit], true, nil
+	}
+	return page, false, nil
 }
 
 // rawPreviousCredential reads previousCredential from the credential body

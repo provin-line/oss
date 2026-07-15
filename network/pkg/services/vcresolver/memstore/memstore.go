@@ -1,70 +1,15 @@
-// Package memstore is the in-memory PoC implementation of the vcresolver Store
-// and Pool. State is lost on restart (the chain re-fills as new VCs arrive);
-// audit-reachable deployments require the durable substrate instead.
+// Package memstore is the in-memory PoC implementation of the vcresolver
+// variant backend and unresolved pool. State is lost on restart (the chain
+// re-fills as new VCs arrive); audit-reachable deployments require the durable
+// substrate instead.
 package memstore
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/vc"
 )
-
-// Store is an in-memory vcresolver.Store keyed by content address.
-type Store struct {
-	mu sync.RWMutex
-	m  map[string]*vc.PipelinePassCredential
-}
-
-var _ vcresolver.Store = (*Store)(nil)
-
-// NewStore returns an empty Store.
-func NewStore() *Store {
-	return &Store{m: make(map[string]*vc.PipelinePassCredential)}
-}
-
-// Put stores cred at hash (overwriting is harmless — content-addressed, so the
-// same hash carries the same body).
-func (s *Store) Put(hash string, cred *vc.PipelinePassCredential) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[hash] = cred
-	return nil
-}
-
-// Get returns the VC at hash, or vcresolver.ErrNotFound.
-func (s *Store) Get(hash string) (*vc.PipelinePassCredential, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.m[hash]
-	if !ok {
-		return nil, vcresolver.ErrNotFound
-	}
-	return c, nil
-}
-
-// ListHashes returns up to limit held content addresses in lexicographic
-// order, strictly after fromExclusive.
-func (s *Store) ListHashes(fromExclusive string, limit int) ([]string, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.m))
-	for h := range s.m {
-		if h > fromExclusive {
-			out = append(out, h)
-		}
-	}
-	sort.Strings(out)
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
 
 // Pool is an in-memory vcresolver.Pool: newest-first, deduped/upserted by hash.
 type Pool struct {

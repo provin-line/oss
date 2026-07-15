@@ -48,7 +48,7 @@ type fullChain struct {
 	auditStatus *auditor.MemStatusStore
 }
 
-func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler) http.Handler) fullChain {
+func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http.Handler) http.Handler) fullChain {
 	t.Helper()
 	url, accSeed := dpAccountServer(t)
 
@@ -87,7 +87,7 @@ func setupFullChain(t *testing.T, store vcresolver.Store, wrap func(http.Handler
 	// writes consumed credentials here and registers consumed heads) and the async audit
 	// runner (which assembles each head's chain from this store and records a verdict).
 	localPool := memstore.NewPool()
-	localSvc := vcresolver.New(memstore.NewStore(), localPool)
+	localSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), localPool)
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
 	cfg := fullChainCfg(srv.URL)
@@ -155,7 +155,7 @@ func (fc fullChain) awaitRecord(t *testing.T, raw string) *recordSnapshot {
 // Verified-path gap 17h deferred (its runner Verified test used a fake ChainVerifier); the
 // batch-resolver fetch path is covered separately by TestBatchResolver_Integration_DrainsFromPeer.
 func TestFullChain_AsyncAuditRecordsVerified(t *testing.T) {
-	fc := setupFullChain(t, memstore.NewStore(), nil)
+	fc := setupFullChain(t, vcresolver.NewVariantStore(memstore.NewBackend()), nil)
 	rec := fc.awaitRecord(t, `{"reading":42}`)
 
 	// The relay transformed the payload (proves it is the relayed event, not a passthrough).
@@ -212,7 +212,7 @@ func TestFullChain_BearerReachesStore(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	}
-	fc := setupFullChain(t, memstore.NewStore(), wrap)
+	fc := setupFullChain(t, vcresolver.NewVariantStore(memstore.NewBackend()), wrap)
 	fc.awaitRecord(t, `{"reading":42}`) // forces publishes + a full-verify resolve through the wrap
 
 	// At least one request (a publish or the sink's predecessor resolve) carried the bearer.

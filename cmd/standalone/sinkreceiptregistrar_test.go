@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -37,12 +38,12 @@ type fakeLocalStore struct {
 	order *[]string
 }
 
-func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (string, error) {
+func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (vcresolver.StoreVCResult, error) {
 	f.calls++
 	if f.order != nil {
 		*f.order = append(*f.order, "local")
 	}
-	return f.head, f.err
+	return vcresolver.StoreVCResult{BodyAddress: f.head}, f.err
 }
 
 type fakeReceiptLog struct {

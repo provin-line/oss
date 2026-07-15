@@ -1,9 +1,12 @@
 package vcresolver_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -15,7 +18,7 @@ import (
 const issuer = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 
 func newSvc() *vcresolver.Service {
-	return vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 }
 
 // vcBytes builds a minimal VC. prev sets credentialSubject.previousCredential
@@ -41,14 +44,17 @@ func vcBytes(t *testing.T, issuerDID string, prev any) []byte {
 
 func TestStoreVC_StoreAndResolve(t *testing.T) {
 	svc := newSvc()
-	hash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
+	res, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
 	if err != nil {
 		t.Fatalf("StoreVC: %v", err)
 	}
-	if !strings.HasPrefix(hash, "sha256:") {
-		t.Errorf("hash = %q, want sha256: prefix", hash)
+	if !strings.HasPrefix(res.BodyAddress, "sha256:") {
+		t.Errorf("body address = %q, want sha256: prefix", res.BodyAddress)
 	}
-	got, err := svc.ResolveVC(context.Background(), hash)
+	if !vc.IsWireVariantID(res.WireVariantID) {
+		t.Errorf("wire variant id = %q, want a well-formed variant id", res.WireVariantID)
+	}
+	got, err := svc.ResolveVC(context.Background(), res.BodyAddress)
 	if err != nil {
 		t.Fatalf("ResolveVC: %v", err)
 	}
@@ -58,7 +64,7 @@ func TestStoreVC_StoreAndResolve(t *testing.T) {
 }
 
 func TestStoreVC_EnqueuesUnheldPredecessor(t *testing.T) {
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	pool := memstore.NewPool()
 	svc := vcresolver.New(store, pool)
 	prev := "sha256:" + strings.Repeat("a", 64)
@@ -76,16 +82,16 @@ func TestStoreVC_EnqueuesUnheldPredecessor(t *testing.T) {
 }
 
 func TestStoreVC_HeldPredecessor_NoEnqueue(t *testing.T) {
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	pool := memstore.NewPool()
 	svc := vcresolver.New(store, pool)
 
 	// Store the predecessor first, then a successor referencing it.
-	prevHash, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
+	prev, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, nil), "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prevHash), "", 0); err != nil {
+	if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev.BodyAddress), "", 0); err != nil {
 		t.Fatalf("StoreVC successor: %v", err)
 	}
 	if pool.Len() != 0 {
@@ -131,7 +137,7 @@ func TestStoreVC_NullPreviousCredential_AcceptedAsOrigin(t *testing.T) {
 }
 
 func TestStoreVC_Idempotent(t *testing.T) {
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	svc := vcresolver.New(store, memstore.NewPool())
 	b := vcBytes(t, issuer, nil)
 	h1, _ := svc.StoreVC(context.Background(), b, "", 0)
@@ -155,7 +161,7 @@ func TestResolveVC_Errors(t *testing.T) {
 // Out-of-order submission: a successor queues its predecessor as a hole; when
 // the predecessor later arrives, storing it removes the now-resolved hole.
 func TestStoreVC_OutOfOrder_RemovesResolvedHole(t *testing.T) {
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	pool := memstore.NewPool()
 	svc := vcresolver.New(store, pool)
 
@@ -226,7 +232,7 @@ func TestStoreVC_EnqueuesPredecessorAtDepthPlusOne(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := memstore.NewPool()
-			svc := vcresolver.New(memstore.NewStore(), pool)
+			svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 			prev := "sha256:" + strings.Repeat("a", 64)
 			if _, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", tc.depth); err != nil {
 				t.Fatal(err)
@@ -243,7 +249,7 @@ func TestStoreVC_EnqueuesPredecessorAtDepthPlusOne(t *testing.T) {
 // head depth — not the stale deep-hole depth+1.
 func TestStoreVC_HeadAlsoQueuedHole_UsesHeadDepth(t *testing.T) {
 	pool := memstore.NewPool()
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 
 	pAddr := "sha256:" + strings.Repeat("e", 64) // P: H's predecessor, never stored
 	hBytes := vcBytes(t, issuer, pAddr)
@@ -277,24 +283,23 @@ func TestStoreVC_NegativeDepth_Rejected(t *testing.T) {
 	}
 }
 
-// getErrStore returns a non-ErrNotFound error from Get to exercise the
-// store-failure path; Put delegates to a real store.
-type getErrStore struct {
-	inner *memstore.Store
-	err   error
+// readErrBackend fails every read with a real error (not a miss), exercising
+// the store-failure path. Writes go to a real backend, so the failure is
+// isolated to reads.
+type readErrBackend struct {
+	vcresolver.VariantBackend
+	err error
 }
 
-func (s getErrStore) Put(hash string, c *vc.PipelinePassCredential) error {
-	return s.inner.Put(hash, c)
-}
-func (s getErrStore) Get(string) (*vc.PipelinePassCredential, error) { return nil, s.err }
-func (s getErrStore) ListHashes(string, int) ([]string, error)       { return nil, s.err }
+func (b readErrBackend) ReadVariant(string, string) ([]byte, error) { return nil, b.err }
+func (b readErrBackend) ReadProjection(string) ([]byte, error)      { return nil, b.err }
 
 // A predecessor lookup that fails for a real reason (not a miss) must propagate,
 // not be swallowed into a silent success that drops the chain hole.
 func TestStoreVC_PropagatesStoreError(t *testing.T) {
 	sentinel := errors.New("boom")
-	svc := vcresolver.New(getErrStore{inner: memstore.NewStore(), err: sentinel}, memstore.NewPool())
+	failing := vcresolver.NewVariantStore(readErrBackend{VariantBackend: memstore.NewBackend(), err: sentinel})
+	svc := vcresolver.New(failing, memstore.NewPool())
 	prev := "sha256:" + strings.Repeat("a", 64)
 	_, err := svc.StoreVC(context.Background(), vcBytes(t, issuer, prev), "", 0)
 	if !errors.Is(err, sentinel) {
@@ -303,7 +308,7 @@ func TestStoreVC_PropagatesStoreError(t *testing.T) {
 }
 
 func TestStoreVC_UpsertRepairsHint(t *testing.T) {
-	store := memstore.NewStore()
+	store := vcresolver.NewVariantStore(memstore.NewBackend())
 	pool := memstore.NewPool()
 	svc := vcresolver.New(store, pool)
 	prev := "sha256:" + strings.Repeat("c", 64)
@@ -349,17 +354,236 @@ func (p *opRecordingPool) Remove(hash string) error {
 func TestStoreVC_AddsNextHoleBeforeRemovingResolved(t *testing.T) {
 	ctx := context.Background()
 	pool := &opRecordingPool{Pool: memstore.NewPool()}
-	svc := vcresolver.New(memstore.NewStore(), pool)
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 
 	// A middle credential referencing a missing predecessor: storing it must
 	// add the predecessor hole first, then remove its own (possibly queued) hash.
 	missingPrev := "sha256:" + strings.Repeat("ab", 32)
 	mid := vcBytes(t, issuer, missingPrev)
-	midHash, err := svc.StoreVC(ctx, mid, "", 0)
+	midRes, err := svc.StoreVC(ctx, mid, "", 0)
 	if err != nil {
 		t.Fatalf("StoreVC: %v", err)
 	}
-	if len(pool.ops) != 2 || pool.ops[0] != "add:"+missingPrev || pool.ops[1] != "remove:"+midHash {
-		t.Fatalf("pool op order = %v, want [add:%s remove:%s]", pool.ops, missingPrev, midHash)
+	if len(pool.ops) != 2 || pool.ops[0] != "add:"+missingPrev || pool.ops[1] != "remove:"+midRes.BodyAddress {
+		t.Fatalf("pool op order = %v, want [add:%s remove:%s]", pool.ops, missingPrev, midRes.BodyAddress)
 	}
+}
+
+// TestNoWriterTakesACallerSuppliedKey is FCoT counter-argument #2, made
+// mechanical.
+//
+// Replacing an interface does not remove a method from a concrete type: the old
+// Put(hash, cred) could have stayed exported on memstore and filestore, still
+// compiling, still overwriting — the very semantics this slice exists to end,
+// reachable by anyone who happened to hold the concrete type. Deleting it is
+// what actually removed it; this asserts it stays deleted, because reintroducing
+// a keyed writer would silently reopen the hole rather than fail a build.
+//
+// reflect is the point: a compile-time reference would only prove the method is
+// gone from the ONE type named, and would itself stop compiling — which is not
+// an assertion, it is a deletion.
+func TestNoWriterTakesACallerSuppliedKey(t *testing.T) {
+	types := []struct {
+		name string
+		v    any
+	}{
+		{"vcresolver.VariantStore", vcresolver.NewVariantStore(memstore.NewBackend())},
+		{"memstore.Backend", memstore.NewBackend()},
+	}
+	for _, tc := range types {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := reflect.TypeOf(tc.v)
+			for i := 0; i < rt.NumMethod(); i++ {
+				m := rt.Method(i)
+				if m.Name == "Put" {
+					t.Errorf("%s exposes Put again: a caller-supplied key means misfiling is expressible, and overwriting is back", tc.name)
+				}
+			}
+		})
+	}
+}
+
+// TestStoreVCGatesUnsafeIntegersInTheProofToo is Codex spec-review #6.
+//
+// The gate used to run on cred.Body(), which is the wrong scope by exactly one
+// member: the variant id digests the FULL wire document, so an unsafe integer in
+// a proof member would be silently rounded by the RFC 8785 re-serialization and
+// then admitted under an id naming bytes the submitter never sent — with the
+// signature over the original literal.
+func TestStoreVCGatesUnsafeIntegersInTheProofToo(t *testing.T) {
+	unsafeInt := "9007199254740993" // 2^53+1: the first integer float64 cannot hold
+	tests := []struct {
+		name string
+		wire string
+	}{
+		{
+			name: "in the body",
+			wire: `{"@context":["https://www.w3.org/ns/credentials/v2"],"type":["VerifiableCredential"],` +
+				`"issuer":"` + issuer + `","credentialSubject":{"pipelineId":"p1","processId":"p","seq":` + unsafeInt + `}}`,
+		},
+		{
+			name: "in a proof member",
+			wire: `{"@context":["https://www.w3.org/ns/credentials/v2"],"type":["VerifiableCredential"],` +
+				`"issuer":"` + issuer + `","credentialSubject":{"pipelineId":"p1","processId":"p"},` +
+				`"proof":{"type":"DataIntegrityProof","cryptosuite":"eddsa-jcs-2022",` +
+				`"verificationMethod":"did:dplaax:poc.dplaax.dev:org:acme#signing","proofPurpose":"assertionMethod",` +
+				`"created":"2026-07-01T00:00:01Z","proofValue":"zA","nonce":` + unsafeInt + `}}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newSvc()
+			_, err := svc.StoreVC(context.Background(), []byte(tc.wire), "", 0)
+			if !errors.Is(err, vcresolver.ErrInvalidArgument) {
+				t.Fatalf("StoreVC = %v, want ErrInvalidArgument (an unsafe integer must not be admitted)", err)
+			}
+			if !strings.Contains(err.Error(), unsafeInt) {
+				t.Errorf("the rejection does not name the offending literal: %v", err)
+			}
+		})
+	}
+}
+
+// TestStoreVCAdmitsSafeIntegers: the gate is bounded by what the canonical
+// re-serialization can round, not by "numbers are scary". A safe integer
+// survives the round trip exactly, so it is admitted.
+func TestStoreVCAdmitsSafeIntegers(t *testing.T) {
+	svc := newSvc()
+	wire := `{"@context":["https://www.w3.org/ns/credentials/v2"],"type":["VerifiableCredential"],` +
+		`"issuer":"` + issuer + `","credentialSubject":{"pipelineId":"p1","processId":"p","seq":9007199254740991}}`
+	res, err := svc.StoreVC(context.Background(), []byte(wire), "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC rejected a safe integer (2^53-1): %v", err)
+	}
+	got, err := svc.ResolveVariant(context.Background(), res.BodyAddress, res.WireVariantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "9007199254740991") {
+		t.Errorf("the stored bytes lost the literal: %s", got)
+	}
+}
+
+// TestResolveVariantServesExactlyWhatWasAdmitted is what evidence needs and
+// ResolveVC cannot give: the bytes that were evaluated, not a re-serialization
+// of an equivalent document, and not whichever variant the projection currently
+// favours.
+func TestResolveVariantServesExactlyWhatWasAdmitted(t *testing.T) {
+	ctx := context.Background()
+	svc := newSvc()
+	a := signedWire(t, "zA")
+	b := signedWire(t, "zB")
+	resA, err := svc.StoreVC(ctx, a, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resB, err := svc.StoreVC(ctx, b, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resA.BodyAddress != resB.BodyAddress {
+		t.Fatalf("two proofs over one body landed on different bodies")
+	}
+	for _, tc := range []struct {
+		variant string
+		want    []byte
+	}{{resA.WireVariantID, a}, {resB.WireVariantID, b}} {
+		got, err := svc.ResolveVariant(ctx, resA.BodyAddress, tc.variant)
+		if err != nil {
+			t.Fatalf("ResolveVariant(%s): %v", tc.variant, err)
+		}
+		if !bytes.Equal(got, tc.want) {
+			t.Errorf("ResolveVariant(%s) =\n%s\nwant\n%s", tc.variant, got, tc.want)
+		}
+	}
+
+	// ...while ResolveVC answers with ONE of them, and does not say which.
+	// That is the asymmetry: a chain hole can take any signed form of the body,
+	// an audit cannot.
+	served, err := svc.ResolveVC(ctx, resA.BodyAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servedBytes, err := served.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(servedBytes, a) && !bytes.Equal(servedBytes, b) {
+		t.Errorf("ResolveVC served bytes that are neither variant: %s", servedBytes)
+	}
+}
+
+// TestListVariantsPagesAndReportsMore: the service hands back a plain cursor
+// and a more flag; opaque tokens are the handler's business (matching
+// ListSuccessors).
+func TestListVariantsPagesAndReportsMore(t *testing.T) {
+	ctx := context.Background()
+	svc := newSvc()
+	var body string
+	var want []string
+	for _, pv := range []string{"zA", "zB", "zC"} {
+		res, err := svc.StoreVC(ctx, signedWire(t, pv), "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = res.BodyAddress
+		want = append(want, res.WireVariantID)
+	}
+	sort.Strings(want)
+
+	var paged []string
+	cursor := ""
+	for {
+		page, more, err := svc.ListVariants(ctx, body, cursor, 2)
+		if err != nil {
+			t.Fatalf("ListVariants: %v", err)
+		}
+		paged = append(paged, page...)
+		if !more {
+			break
+		}
+		cursor = page[len(page)-1]
+	}
+	if !reflect.DeepEqual(paged, want) {
+		t.Errorf("paged variants = %v, want %v", paged, want)
+	}
+
+	// A page that exactly exhausts the set must not claim more: the store's
+	// full-page rule is what makes that answerable without a second call.
+	if page, more, err := svc.ListVariants(ctx, body, "", 3); err != nil || more || len(page) != 3 {
+		t.Errorf("ListVariants(limit=3) = %v more=%v err=%v, want the whole set and more=false", page, more, err)
+	}
+	if _, _, err := svc.ListVariants(ctx, body, "", 0); !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("ListVariants(limit=0) = %v, want ErrInvalidArgument", err)
+	}
+}
+
+// signedWire builds a signed credential's canonical wire bytes; distinct
+// proofValues are distinct variants of one body.
+func signedWire(t *testing.T, proofValue string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            issuer,
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "proc1"},
+		"proof": map[string]any{
+			"type": "DataIntegrityProof", "cryptosuite": "eddsa-jcs-2022",
+			"verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#signing",
+			"proofPurpose":       "assertionMethod", "created": "2026-07-01T00:00:01Z",
+			"proofValue": proofValue,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c vc.PipelinePassCredential
+	if err := c.UnmarshalJSON(raw); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := c.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

@@ -463,3 +463,84 @@ func mustPutVariant(t *testing.T, s *vcresolver.VariantStore, cred *vc.PipelineP
 	}
 	return body, variant
 }
+
+// TestTamperedFilesAreRejectedByTheFacade ports what the old flat store's own
+// Get enforced, to where that check lives now: the façade validates, this
+// backend just reads. The tampering is done to REAL files, which is the point —
+// the memstore-backed tests reach these branches through a fake, and only this
+// one proves the same verdicts hold over the filesystem the node actually runs
+// on.
+//
+// Damage must never read as absence. "We never held it" and "what we hold is
+// not what it claims to be" are different facts about provenance, and only one
+// of them means someone interfered.
+func TestTamperedFilesAreRejectedByTheFacade(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(t *testing.T, dir, bodyHex, variantHex string, other []byte)
+	}{
+		{
+			name: "a different document under the variant's name",
+			corrupt: func(t *testing.T, dir, bodyHex, variantHex string, other []byte) {
+				write(t, filepath.Join(dir, "variants", bodyHex, variantHex+".json"), other)
+			},
+		},
+		{
+			name: "unparseable bytes under the variant's name",
+			corrupt: func(t *testing.T, dir, bodyHex, variantHex string, _ []byte) {
+				write(t, filepath.Join(dir, "variants", bodyHex, variantHex+".json"), []byte("not json"))
+			},
+		},
+		{
+			name: "the same document, re-spelled",
+			corrupt: func(t *testing.T, dir, bodyHex, variantHex string, _ []byte) {
+				p := filepath.Join(dir, "variants", bodyHex, variantHex+".json")
+				held, err := os.ReadFile(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(t, p, []byte(strings.Replace(string(held), "{", "{ ", 1)))
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, dir := newBackend(t)
+			store := vcresolver.NewVariantStore(b)
+			body, variant := mustPutVariant(t, store, facadeCred(t, "zA"))
+			bodyHex := strings.TrimPrefix(body, "sha256:")
+			variantHex, _ := vc.WireVariantHex(variant)
+			other, err := facadeCred(t, "zB").MarshalJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tc.corrupt(t, dir, bodyHex, variantHex, other)
+
+			reader := vcresolver.NewVariantStore(mustBackend(t, dir))
+			_, err = reader.GetVariant(body, variant)
+			if err == nil {
+				t.Fatal("GetVariant served a tampered file")
+			}
+			if errors.Is(err, vcresolver.ErrNotFound) {
+				t.Errorf("a tampered file read as an absent variant: %v", err)
+			}
+		})
+	}
+}
+
+func write(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustBackend(t *testing.T, dir string) *filestore.Backend {
+	t.Helper()
+	b, err := filestore.NewBackend(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

@@ -81,13 +81,16 @@ func init() {
 	// own ground (not a blanket family reason).
 	//
 	// resolver-006 is STRUCTURALLY ENFORCED, not blocked (P0-11 ruling):
-	// vcresolver.Store exposes no eviction/delete surface (Put/Get/ListHashes —
-	// store.go), so the forbidden Resolved->NotFound transition is
-	// unconstructible; the API's absence is the strongest enforcement.
-	// (Pool.Remove is the unresolved-holes queue, not the credential store.)
-	// The vector is retained as the shape pin should an eviction surface ever
-	// appear — at which point this entry converts to a driver.
-	dplaaxSkips["resolver-006"] = "structurally enforced: vcresolver.Store has no eviction/delete surface, so the forbidden Resolved->NotFound transition is unconstructible (P0-11; vector retained as the shape pin for any future eviction surface)"
+	// nothing in the store can remove a credential — VariantStore offers
+	// PutVariant/Get/GetVariant/ListVariantIDs/ListHashes, and VariantBackend
+	// underneath it has no delete either — so the forbidden Resolved->NotFound
+	// transition is unconstructible; the API's absence is the strongest
+	// enforcement. The variant set is append-only, which makes the property
+	// stronger than it was: a body's evidence can now only grow. (Pool.Remove is
+	// the unresolved-holes queue, not the credential store.) The vector is
+	// retained as the shape pin should an eviction surface ever appear — at
+	// which point this entry converts to a driver.
+	dplaaxSkips["resolver-006"] = "structurally enforced: neither vcresolver.VariantStore nor VariantBackend has an eviction/delete surface, so the forbidden Resolved->NotFound transition is unconstructible (P0-11; vector retained as the shape pin for any future eviction surface)"
 	// resolver-007 is RESERVED, not blocked (P0-11 ruling): resolver.batch.shape
 	// binds any batch lookup surface an implementation or profile adds, without
 	// obligating one to exist; dplaax.vc.v1 defines none (batchresolver is an

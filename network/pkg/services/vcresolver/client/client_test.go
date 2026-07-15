@@ -27,7 +27,7 @@ const issuer = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 // server.
 func wireResolver(t *testing.T) *client.Resolver {
 	t.Helper()
-	svc := vcresolver.New(memstore.NewStore(), memstore.NewPool())
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	_, h := vcpbconnect.NewVCResolverServiceHandler(handler.New(svc))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
