@@ -1,0 +1,13 @@
+{
+  "id": "claims-coverage-003",
+  "rule": "claims.coverage.required-fail-closed",
+  "description": "A profile-required scope absent from the enumerated vector fails closed: the decision cannot be ACCEPT.",
+  "input": {
+    "decisionProfileId": "provenance-release@1",
+    "requiredScopes": ["LINEAR_ATTESTATION@1", "SOURCE_SET_BINDING@1"],
+    "vector": [
+      { "scope": "LINEAR_ATTESTATION@1", "coverage": "EVALUATED", "truthState": "VERIFIED" }
+    ]
+  },
+  "expect": { "decisionNot": "ACCEPT", "reason": "required scope SOURCE_SET_BINDING@1 absent (not enumerated) — fail closed" }
+}

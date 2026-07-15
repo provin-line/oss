@@ -1,0 +1,18 @@
+{
+  "id": "effect-007",
+  "rule": "effect.release.exact-bytes",
+  "description": "A ReleaseAuthorization whose payload digest does not match the stored quarantine bytes must not dispatch; the worker matches bytes, it does not re-fetch.",
+  "input": {
+    "authorization": {
+      "quarantineEntryId": "qe-0001",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "entry": {
+      "quarantineEntryId": "qe-0001",
+      "payloadDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "release-011",
+  "rule": "release.claim.baseline-cap",
+  "description": "A baseline-gate-only release claiming TRUSTED_SUPPLY_CHAIN is refused: the claim requires verified trusted-builder provenance.",
+  "input": {
+    "manifest": {
+      "claims": [
+        "TRUSTED_SUPPLY_CHAIN@1"
+      ],
+      "provenance": [],
+      "gate": "baseline"
+    }
+  },
+  "expect": "reject"
+}

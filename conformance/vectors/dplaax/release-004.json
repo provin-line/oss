@@ -1,0 +1,9 @@
+{
+  "id": "release-004",
+  "rule": "release.pin.image-digest",
+  "description": "A public-release image referenced by floating tag only, without a digest, is refused.",
+  "input": {
+    "image_ref": "ghcr.io/example-org/app:v1.2.3"
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "release-005",
+  "rule": "release.pin.action-sha",
+  "description": "A release workflow action referenced by major tag instead of a commit SHA is refused for a public release.",
+  "input": {
+    "workflow": {
+      "uses": "actions/checkout@v4",
+      "credentials": [
+        "packages:write"
+      ]
+    }
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "release-010",
+  "rule": "release.advisory.component-absent",
+  "description": "A component_absent classification while the final artifact's SBOM lists the component is refused; presence keeps it a finding.",
+  "input": {
+    "assessment": {
+      "classification": "component_absent",
+      "componentRef": "pkg:npm/example-dep@2.0.0",
+      "sbomRef": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "sbom_components": [
+      "pkg:npm/example-dep@2.0.0"
+    ]
+  },
+  "expect": "reject"
+}

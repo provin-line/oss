@@ -1,0 +1,12 @@
+{
+  "id": "effect-009",
+  "rule": "effect.state.closed-machine",
+  "description": "A transition from EFFECT_CONFIRMED back to DISPATCHING is outside the closed table: terminal effect observations are never re-dispatched.",
+  "input": {
+    "transition": {
+      "from": "EFFECT_CONFIRMED",
+      "to": "DISPATCHING"
+    }
+  },
+  "expect": "reject"
+}

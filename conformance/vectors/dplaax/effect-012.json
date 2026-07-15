@@ -1,0 +1,16 @@
+{
+  "id": "effect-012",
+  "rule": "effect.quarantine.no-fallback",
+  "description": "Quarantine quota exhaustion surfaces as backpressure; falling back to a direct unverified external write is refused.",
+  "input": {
+    "sequence": [
+      {
+        "op": "quota-exhausted"
+      },
+      {
+        "op": "attempt-unverified-write"
+      }
+    ]
+  },
+  "expect": "reject"
+}

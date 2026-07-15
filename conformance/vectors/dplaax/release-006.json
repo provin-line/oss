@@ -1,0 +1,15 @@
+{
+  "id": "release-006",
+  "rule": "release.scan.state-machine",
+  "description": "A scanner crash reported as zero advisories is refused: TOOL_ERROR never projects to CLEAN.",
+  "input": {
+    "scan": {
+      "state": "TOOL_ERROR"
+    },
+    "reported_as": {
+      "state": "CLEAN",
+      "advisories": 0
+    }
+  },
+  "expect": "reject"
+}

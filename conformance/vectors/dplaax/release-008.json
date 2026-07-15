@@ -1,0 +1,13 @@
+{
+  "id": "release-008",
+  "rule": "release.gate.high-critical-zero",
+  "description": "A potentially-reachable CRITICAL finding is treated as reachable for the hard gate; a waiver attempt against it is refused.",
+  "input": {
+    "assessment": {
+      "severity": "CRITICAL",
+      "classification": "potentially_reachable"
+    },
+    "attempt": "waiver"
+  },
+  "expect": "reject"
+}

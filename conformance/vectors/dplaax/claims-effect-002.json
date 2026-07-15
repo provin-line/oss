@@ -1,0 +1,12 @@
+{
+  "id": "claims-effect-002",
+  "rule": "claims.effect.scope-mapping",
+  "description": "RECEIPT_EXTERNAL_EFFECT@1 evaluated from a receipt signature alone — no EFFECT_CONFIRMED@1 record bound to the delivery identity — is refused.",
+  "input": {
+    "scope": "RECEIPT_EXTERNAL_EFFECT@1",
+    "evidence": {
+      "kind": "receipt-signature-only"
+    }
+  },
+  "expect": "reject"
+}

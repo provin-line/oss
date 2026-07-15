@@ -1,0 +1,22 @@
+{
+  "id": "release-009",
+  "rule": "release.waiver.invalidation",
+  "description": "Adding a shipped entrypoint invalidates a prior unreachable waiver before its expiry; releasing on the stale waiver is refused.",
+  "input": {
+    "sequence": [
+      {
+        "op": "waiver-issued",
+        "assessmentRef": "aa-0001"
+      },
+      {
+        "op": "entrypoint-added",
+        "entrypoint": "cmd/newtool"
+      },
+      {
+        "op": "release-with-waiver",
+        "waiverId": "rw-0001"
+      }
+    ]
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,72 @@
+{
+  "id": "identity-002",
+  "rule": "identity.body-address",
+  "description": "Re-issuing a proof over the same body leaves the body address unchanged (so successor links survive) while yielding a distinct WireVariantID",
+  "input": {
+    "variants": [
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1",
+        "validFrom": "2026-07-01T00:00:00Z",
+        "credentialSubject": {
+          "pipelineId": "pl-line1",
+          "processId": "proc-p1",
+          "transformationClaim": "provin:transform",
+          "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "previousCredential": null
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-07-01T00:00:01Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://dplaax.dev/vc/v1",
+          "https://provin.dev/vc/v1"
+        ],
+        "type": [
+          "VerifiableCredential",
+          "PipelinePassCredential"
+        ],
+        "issuer": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1",
+        "validFrom": "2026-07-01T00:00:00Z",
+        "credentialSubject": {
+          "pipelineId": "pl-line1",
+          "processId": "proc-p1",
+          "transformationClaim": "provin:transform",
+          "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "previousCredential": null
+        },
+        "proof": {
+          "type": "DataIntegrityProof",
+          "cryptosuite": "eddsa-jcs-2022",
+          "created": "2026-07-02T00:00:01Z",
+          "verificationMethod": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z2fixtureProofValueBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
+    "wire_variant_ids": [
+      "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21",
+      "wire:v1:jcs-rfc8785:sha256:edefc3a78f018f1400251d20905f7f9a62a2d0465b6c0376d997395ed84b265c"
+    ]
+  }
+}

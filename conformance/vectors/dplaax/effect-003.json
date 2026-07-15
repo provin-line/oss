@@ -1,0 +1,16 @@
+{
+  "id": "effect-003",
+  "rule": "effect.archive.observation-record",
+  "description": "An append-only ObservationRecord fixes the exact variant and payload with coverage NOT_EVALUATED — an existence statement that can never read as acceptance.",
+  "input": {
+    "credential": {
+      "observationRecordId": "or-0001",
+      "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "observedAt": "2026-07-14T23:59:00Z",
+      "coverage": "NOT_EVALUATED"
+    }
+  },
+  "expect": "accept"
+}

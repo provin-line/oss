@@ -1,0 +1,27 @@
+{
+  "id": "release-003",
+  "rule": "release.waiver.contract",
+  "description": "A waiver carrying advisory, exact subject digest, assessment evidence, owner, approver, expiry within the policy cap, reversal condition, and re-evaluation triggers, with auto-renewal pinned off.",
+  "input": {
+    "credential": {
+      "waiverId": "rw-0001",
+      "advisoryId": "CVE-2026-0001",
+      "componentRef": "pkg:golang/example.org/dep@v1.2.3",
+      "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "assessmentRef": "aa-0001",
+      "owner": "release-security",
+      "approver": "decision-owner",
+      "issuedAt": "2026-07-15T00:00:00Z",
+      "expiry": "2026-08-15T00:00:00Z",
+      "policyVersion": "release-policy@1",
+      "reversalCondition": "component becomes reachable from any shipped entrypoint",
+      "reevaluationTriggers": [
+        "dependency-graph-change",
+        "entrypoint-change",
+        "advisory-update"
+      ],
+      "autoRenew": false
+    }
+  },
+  "expect": "accept"
+}

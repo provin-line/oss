@@ -1,0 +1,13 @@
+{
+  "id": "effect-006",
+  "rule": "effect.gate.no-bare-verdict",
+  "description": "A release derived from a body-keyed latest overall verdict — no EvidenceViewID, no per-scope vector — is refused regardless of the verdict's value.",
+  "input": {
+    "release_input": {
+      "kind": "body-level-latest-verdict",
+      "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "overall": "VERIFIED"
+    }
+  },
+  "expect": "reject"
+}

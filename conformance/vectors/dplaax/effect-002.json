@@ -1,0 +1,22 @@
+{
+  "id": "effect-002",
+  "rule": "effect.quarantine.atomic-entry",
+  "description": "A quarantine entry atomically carrying wire variant, payload digest (the co-persisted blob's address), delivery metadata, and sink profile is admissible for evaluation.",
+  "input": {
+    "credential": {
+      "quarantineEntryId": "qe-0001",
+      "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "payloadSizeBytes": "2048",
+      "deliveryMetadata": {
+        "receivedAt": "2026-07-14T23:59:00Z",
+        "deliveryOccurrence": "qe-0001",
+        "transport": "nats",
+        "sourcePrincipal": "did:dplaax:owner-b:process-7"
+      },
+      "sinkProfileId": "external-effect-sink@1"
+    }
+  },
+  "expect": "accept"
+}

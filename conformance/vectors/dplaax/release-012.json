@@ -1,0 +1,25 @@
+{
+  "id": "release-012",
+  "rule": "release.build.once",
+  "description": "Rebuilding a scanned tag and publishing the new bytes as the same release is refused: the scanned digest and the published digest must be one artifact.",
+  "input": {
+    "sequence": [
+      {
+        "op": "build",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "op": "scan",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "op": "rebuild-same-tag",
+        "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+      },
+      {
+        "op": "publish-as-same-release"
+      }
+    ]
+  },
+  "expect": "reject"
+}

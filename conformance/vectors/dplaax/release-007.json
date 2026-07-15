@@ -1,0 +1,15 @@
+{
+  "id": "release-007",
+  "rule": "release.evidence.subject-binding",
+  "description": "A scan artifact bound to a different digest than the manifest's release subject is refused: evidence never travels across digests.",
+  "input": {
+    "manifest": {
+      "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "scan": {
+      "subjectDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "state": "CLEAN"
+    }
+  },
+  "expect": "reject"
+}

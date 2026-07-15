@@ -557,6 +557,97 @@ func runSignerRegister(t *testing.T, v dplaaxVector) {
 	}
 }
 
+// --- identity family: body address / wire variant id derivation ---
+//
+// identity-001/002 are the derivation half (this file); the store half
+// (003..007 — write-once, append-only, legacy projection) is driven against
+// the real variant store in tranche2_test.go.
+//
+// These vectors carry hashes the CATALOG derived from its own rule text
+// (dplaax.spec_draft tools/gen_identity_vectors.py), not values this
+// implementation printed. That is what makes them able to fail: a KAT the
+// implementation authored proves only that the code equals itself. For the
+// same reason identity-* is absent from the regen tool's allow-list.
+
+func runIdentityDerivation(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	cred := mustCred(t, input.Credential)
+
+	var want struct {
+		Canonical     string `json:"canonical"`
+		BodyAddress   string `json:"body_address"`
+		WireVariantID string `json:"wire_variant_id"`
+	}
+	mustParse(t, v.Expect, &want)
+
+	// The canonical projection is the intermediate the id is defined over, so
+	// it is pinned separately: a canonicalizer drift would otherwise surface
+	// only as an opaque hash mismatch.
+	canonical, err := cred.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	if string(canonical) != want.Canonical {
+		t.Errorf("canonical wire =\n%s\nwant\n%s", canonical, want.Canonical)
+	}
+	body, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if body != want.BodyAddress {
+		t.Errorf("body address = %s, want %s", body, want.BodyAddress)
+	}
+	variant, err := cred.WireVariantID()
+	if err != nil {
+		t.Fatalf("WireVariantID: %v", err)
+	}
+	if variant != want.WireVariantID {
+		t.Errorf("wire variant id = %s, want %s", variant, want.WireVariantID)
+	}
+	if !vc.IsWireVariantID(variant) {
+		t.Errorf("IsWireVariantID rejects the id the implementation just derived: %s", variant)
+	}
+}
+
+// runIdentityReissue drives identity-002: two wire documents over ONE body.
+// The body address must not move (successor links are body-addressed, so a
+// re-issued proof that moved it would orphan every descendant) while the
+// variant ids must separate.
+func runIdentityReissue(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Variants []json.RawMessage `json:"variants"`
+	}
+	mustParse(t, v.Input, &input)
+	var want struct {
+		BodyAddress    string   `json:"body_address"`
+		WireVariantIDs []string `json:"wire_variant_ids"`
+	}
+	mustParse(t, v.Expect, &want)
+	if len(input.Variants) != len(want.WireVariantIDs) {
+		t.Fatalf("vector carries %d variants but %d expected ids", len(input.Variants), len(want.WireVariantIDs))
+	}
+	for i, raw := range input.Variants {
+		cred := mustCred(t, raw)
+		body, err := cred.Hash()
+		if err != nil {
+			t.Fatalf("variant %d: Hash: %v", i, err)
+		}
+		if body != want.BodyAddress {
+			t.Errorf("variant %d: body address = %s, want %s (re-issuing a proof moved the body address)", i, body, want.BodyAddress)
+		}
+		variant, err := cred.WireVariantID()
+		if err != nil {
+			t.Fatalf("variant %d: WireVariantID: %v", i, err)
+		}
+		if variant != want.WireVariantIDs[i] {
+			t.Errorf("variant %d: wire variant id = %s, want %s", i, variant, want.WireVariantIDs[i])
+		}
+	}
+}
+
 // --- shared fixture helpers ---
 
 func vecID(family string, n int) string {

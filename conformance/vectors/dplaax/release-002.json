@@ -1,0 +1,39 @@
+{
+  "id": "release-002",
+  "rule": "release.advisory.reachability-binding",
+  "description": "An unreachable assessment bound to exact digests, entrypoints, platform, configuration assumptions, scanner ruleset, and positive call-graph evidence is admissible (and still waiver-governed).",
+  "input": {
+    "credential": {
+      "assessmentId": "aa-0001",
+      "advisoryId": "CVE-2026-0001",
+      "componentRef": "pkg:golang/example.org/dep@v1.2.3",
+      "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "sourceDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "severity": "MEDIUM",
+      "classification": "unreachable",
+      "reachabilityBinding": {
+        "entrypoints": [
+          "cmd/standalone"
+        ],
+        "platform": "linux/amd64",
+        "buildFlags": [
+          "-trimpath"
+        ],
+        "configurationAssumptions": [
+          "feature X disabled by default"
+        ]
+      },
+      "scanner": {
+        "tool": "scanner-x",
+        "toolVersion": "9.9.9",
+        "ruleset": "callgraph@3",
+        "dbSnapshotId": "db-2026-07-15"
+      },
+      "evidenceRefs": [
+        "callgraph-run-0001"
+      ],
+      "assessedAt": "2026-07-15T00:00:00Z"
+    }
+  },
+  "expect": "accept"
+}

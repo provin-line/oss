@@ -1,0 +1,40 @@
+{
+  "id": "identity-001",
+  "rule": "identity.wire-variant-id",
+  "description": "The WireVariantID digests the domain tag followed by the RFC 8785 canonical bytes of the full wire document — the canonical projection, so the id names the document rather than the octets it arrived in",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://dplaax.dev/vc/v1",
+        "https://provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1",
+      "validFrom": "2026-07-01T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-line1",
+        "processId": "proc-p1",
+        "transformationClaim": "provin:transform",
+        "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "previousCredential": null
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-07-01T00:00:01Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  },
+  "expect": {
+    "canonical": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\",\"https://dplaax.dev/vc/v1\",\"https://provin.dev/vc/v1\"],\"credentialSubject\":{\"outputHash\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"pipelineId\":\"pl-line1\",\"previousCredential\":null,\"processId\":\"proc-p1\",\"transformationClaim\":\"provin:transform\"},\"issuer\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1\",\"proof\":{\"created\":\"2026-07-01T00:00:01Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2fixtureProofValueAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:dplaax:poc.dplaax.dev:org:factory:pipeline:line1:process:p1#key-1\"},\"type\":[\"VerifiableCredential\",\"PipelinePassCredential\"],\"validFrom\":\"2026-07-01T00:00:00Z\"}",
+    "body_address": "sha256:b27ec3ab436fb366efbf0ad9e6c210d6bd8fc9f510d458257a944f1e0796516d",
+    "wire_variant_id": "wire:v1:jcs-rfc8785:sha256:57c6e5ceaf53648e3e3e175f6e1345790a08522d5689a5460d6435500bf6ff21"
+  }
+}

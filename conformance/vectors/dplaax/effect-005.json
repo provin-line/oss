@@ -1,0 +1,26 @@
+{
+  "id": "effect-005",
+  "rule": "effect.state.closed-machine",
+  "description": "An EFFECT_CONFIRMED transition record carries the authorization, the full delivery identity, and the target acknowledgement — the only success state, reached only through DISPATCHING.",
+  "input": {
+    "credential": {
+      "quarantineEntryId": "qe-0001",
+      "state": "EFFECT_CONFIRMED",
+      "previousState": "DISPATCHING",
+      "generation": "7",
+      "occurredAt": "2026-07-15T00:10:00Z",
+      "releaseAuthorizationId": "ra-0001",
+      "deliveryIdentity": {
+        "sinkContractId": "external-effect-sink@1",
+        "sinkInstanceId": "sink-tokyo-1",
+        "targetNamespace": "warehouse/events",
+        "deliveryOccurrence": "qe-0001",
+        "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "targetAcknowledgementRef": "target-ack-0001",
+      "writerProfile": "idempotency-capable@1"
+    }
+  },
+  "expect": "accept"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "effect-010",
+  "rule": "effect.verdict.mapping",
+  "description": "Adjacent VERIFIED with a FAILED required-scope ancestor in the spine cannot release: a required FAILED verdict blocks release while it stands.",
+  "input": {
+    "adjacent": {
+      "scope": "LINEAR_ATTESTATION@1",
+      "truthState": "VERIFIED"
+    },
+    "spine_verdicts": [
+      {
+        "position": 0,
+        "scope": "LINEAR_ATTESTATION@1",
+        "truthState": "FAILED"
+      }
+    ],
+    "attempt": "release"
+  },
+  "expect": "reject"
+}

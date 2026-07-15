@@ -1,0 +1,16 @@
+{
+  "id": "effect-004",
+  "rule": "effect.archive.decision-record",
+  "description": "A RELEASE DecisionRecord joins the ObservationRecord to the exact EvidenceViewID and the ReleaseAuthorization it was decided under — the only door to actionable consumption.",
+  "input": {
+    "credential": {
+      "decisionRecordId": "dr-0001",
+      "observationRecordId": "or-0001",
+      "evidenceViewId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "decision": "RELEASE",
+      "releaseAuthorizationId": "ra-0001",
+      "decidedAt": "2026-07-15T00:05:00Z"
+    }
+  },
+  "expect": "accept"
+}

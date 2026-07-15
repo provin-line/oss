@@ -1,0 +1,16 @@
+{
+  "id": "effect-011",
+  "rule": "effect.archive.decision-record",
+  "description": "A DecisionRecord with decision DENY does not enable actionable consumption; only RELEASE opens the archive to consumers.",
+  "input": {
+    "decision_record": {
+      "decisionRecordId": "dr-0002",
+      "observationRecordId": "or-0001",
+      "evidenceViewId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "decision": "DENY",
+      "decidedAt": "2026-07-15T00:05:00Z"
+    },
+    "attempt": "actionable-read"
+  },
+  "expect": "reject"
+}

@@ -56,6 +56,14 @@ func specVectorsDir() string {
 // regenerating those would flip a verdict or churn a decorative value, so they
 // are excluded. commitment-011 short-circuits too but shares its source set
 // with 005/013, so it is regenerated to keep the corpus internally honest.
+//
+// identity-* is excluded on stronger grounds: those hashes are derived by the
+// CATALOG (dplaax.spec_draft tools/gen_identity_vectors.py) from the rule text
+// alone, and provin.oss agreeing with them is the assertion. Regenerating them
+// through this code path would make the implementation the author of its own
+// exam — the vectors would pass by construction and could never fail. Do not
+// add them here; if they drift, one of the two derivations is wrong and that
+// is the finding.
 func TestRegenerateDplaaxDerivedHashes(t *testing.T) {
 	if os.Getenv("DPLAAX_REGEN") != "1" {
 		t.Skip("golden-update tool: set DPLAAX_REGEN=1 to rewrite derived-hash expects in the SoT vectors")

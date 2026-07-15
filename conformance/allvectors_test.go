@@ -47,6 +47,8 @@ func init() {
 	registerRunner(runDelegation, "delegation", 1, 5)
 	registerRunner(runSignerProof, "signer", 1, 2)
 	dplaaxRunners["signer-003"] = runSignerRegister
+	dplaaxRunners["identity-001"] = runIdentityDerivation
+	dplaaxRunners["identity-002"] = runIdentityReissue
 
 	// Tranche 2 — behavior-fixture families driven against real seams
 	// (tranche2_test.go).
@@ -88,6 +90,25 @@ func init() {
 	// internal async worker, not a lookup surface).
 	dplaaxSkips["resolver-007"] = "reserved: resolver.batch.shape binds a future batch lookup surface; none exists in dplaax.vc.v1 (P0-11; the vector pins the shape such a surface must satisfy)"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
+
+	// identity-003..007 drive the variant store's write-once/append-only
+	// admission and its legacy projection. Ledgered here for the length of
+	// T1 only: T2/T3 of this slice build that store and convert these to
+	// drivers (tranche 2).
+	registerSkip("identity", 3, 7, "blocked-on: no variant store yet — these drive PutVariant/GetVariant admission and the legacy body-only projection, landing in T2/T3 of this same slice")
+
+	// Vectors of rules whose SUBJECT does not exist in this implementation
+	// yet. They arrived here because vendoring is whole-corpus by design
+	// (scripts/sync-spec-vectors.sh mirrors the catalog; there is no partial
+	// adoption), so the catalog had outrun the harness silently — these
+	// entries are what makes that visible. Each converts to a driver in the
+	// slice that builds its subject; none is a judgment that the rule is
+	// unimportant.
+	registerSkip("claims-coverage", 1, 4, "blocked-on: no EvaluationViewManifest/EvidenceViewID type — the scoped evidence vector these pin is the artifact P0-1 slice B builds (inv 4-9); nothing here can carry a per-scope coverage/truth-state today")
+	registerSkip("claims-effect", 1, 2, "blocked-on: no effect-scope mapping or legacy receipt projection — both are surfaces of the P0-5 external-effect gate, unimplemented (spec transcribed 2026-07-15, catalog rules effect.*)")
+	registerSkip("claims-policy", 1, 1, "blocked-on: no policy-decision surface — claims.policy.no-accept-non-verified binds a decision profile consuming an evidence view; neither type exists until P0-1 slice B and the P0-5 effect gate land")
+	registerSkip("effect", 1, 13, "blocked-on: no external-effect gate — the P0-5 subject (ReleaseAuthorization, quarantine entries, ObservationRecord/DecisionRecord, the effect state machine) is spec-only; the catalog transcription landed 2026-07-15 ahead of any implementation")
+	registerSkip("release", 1, 13, "blocked-on: no release-engineering pipeline in this repo — the P0-7 subject (evidence manifests, advisory assessments, waivers, scan/build state machines) is CI/release infrastructure, not library code; these bind that pipeline when it is built")
 }
 
 // TestDplaaxAllVectors is the single CI-facing entry point. It first proves the

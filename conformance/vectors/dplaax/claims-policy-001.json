@@ -1,0 +1,13 @@
+{
+  "id": "claims-policy-001",
+  "rule": "claims.policy.no-accept-non-verified",
+  "description": "A required scope evaluated to INDETERMINATE maps to QUARANTINE, never ACCEPT.",
+  "input": {
+    "decisionProfileId": "provenance-release@1",
+    "requiredScopes": ["LINEAR_ATTESTATION@1"],
+    "vector": [
+      { "scope": "LINEAR_ATTESTATION@1", "coverage": "EVALUATED", "truthState": "INDETERMINATE" }
+    ]
+  },
+  "expect": { "decision": "QUARANTINE" }
+}

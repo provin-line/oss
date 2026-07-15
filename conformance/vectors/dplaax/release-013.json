@@ -1,0 +1,28 @@
+{
+  "id": "release-013",
+  "rule": "release.scan.coverage",
+  "description": "A multi-arch release with only one platform manifest scanned is refused: every platform manifest of the final image is a scan subject.",
+  "input": {
+    "manifest": {
+      "subjectType": "oci-image-index",
+      "platformManifests": [
+        {
+          "platform": "linux/amd64",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        {
+          "platform": "linux/arm64",
+          "manifestDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      ]
+    },
+    "scans": [
+      {
+        "platform": "linux/amd64",
+        "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "state": "CLEAN"
+      }
+    ]
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,42 @@
+{
+  "id": "effect-001",
+  "rule": "effect.authorization.artifact",
+  "description": "A ReleaseAuthorization committing the full normative field set — exact quarantine entry, variant vectors, evidence view, policy snapshot, verdict digest, validity bound — is a well-formed release capability.",
+  "input": {
+    "credential": {
+      "authorizationId": "ra-0001",
+      "issuer": "did:dplaax:owner-a:auditor-1",
+      "quarantineEntryId": "qe-0001",
+      "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "spineVariantIds": [
+        "wire:v1:jcs-rfc8785:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "sourceVariantIds": [
+        "wire:v1:jcs-rfc8785:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "evidenceViewId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "claimContractId": "EXTERNAL_EFFECT_RELEASE_AUTHORIZATION@1",
+      "scopeCatalogVersion": "scope-catalog@1",
+      "requiredScopes": [
+        "LINEAR_ATTESTATION@1",
+        "SOURCE_SET_BINDING@1",
+        "KEY_AUTHORIZATION_AT_STATE@1",
+        "CONTROLLER_CHAIN_AUTHORIZATION_AT_STATE@1",
+        "LIFECYCLE_FRESHNESS@1"
+      ],
+      "policyProfileId": "external-effect@1",
+      "policySnapshotDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "inputSnapshotDigests": [
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "verdictArtifactDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "decision": "RELEASE",
+      "issuedAt": "2026-07-15T00:00:00Z",
+      "validUntil": "2026-07-15T01:00:00Z"
+    }
+  },
+  "expect": "accept"
+}

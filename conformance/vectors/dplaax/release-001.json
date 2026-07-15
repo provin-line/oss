@@ -1,0 +1,82 @@
+{
+  "id": "release-001",
+  "rule": "release.evidence.subject-binding",
+  "description": "A ReleaseEvidenceManifest binding build, scan, SBOM, provenance, and decision to one exact subject digest, claiming only IMMUTABLE_ARTIFACT under the baseline gate.",
+  "input": {
+    "credential": {
+      "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "subjectType": "oci-image",
+      "sourceCommit": "1234567890abcdef1234567890abcdef12345678",
+      "buildWorkflowRef": {
+        "repository": "example-org/example-repo",
+        "workflowPath": ".github/workflows/release.yml",
+        "actionPins": [
+          {
+            "action": "actions/checkout",
+            "commitSha": "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+          }
+        ]
+      },
+      "toolchain": {
+        "go": "1.26.1",
+        "node": "22.12.0"
+      },
+      "buildInputManifest": [
+        {
+          "name": "alpine-base",
+          "kind": "base-image",
+          "pin": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        {
+          "name": "corepack",
+          "kind": "package-manager",
+          "pin": "unpinned"
+        }
+      ],
+      "scans": [
+        {
+          "tool": "scanner-x",
+          "toolVersion": "9.9.9",
+          "dbSnapshotId": "db-2026-07-15",
+          "dbUpdatedAt": "2026-07-15T00:00:00Z",
+          "policyVersion": "release-policy@1",
+          "platform": "linux/amd64",
+          "coverage": "oci-platform-manifest",
+          "state": "CLEAN",
+          "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ],
+      "sbom": {
+        "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "sbomDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "format": "cyclonedx",
+        "generator": "sbomgen",
+        "generatorVersion": "2.0.0",
+        "componentCoverage": "package-manager-graph+os-packages"
+      },
+      "provenance": [
+        {
+          "ecosystem": "oci",
+          "predicateType": "https://slsa.dev/provenance/v1",
+          "builderIdentity": "https://github.com/example-org/example-repo/.github/workflows/release.yml@refs/tags",
+          "repository": "example-org/example-repo",
+          "workflowPath": ".github/workflows/release.yml",
+          "sourceCommit": "1234567890abcdef1234567890abcdef12345678",
+          "subjectDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "attestationDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        }
+      ],
+      "waiverIds": [],
+      "releaseDecision": {
+        "policyId": "release-policy@1",
+        "decision": "ALLOW",
+        "waiverCount": "0"
+      },
+      "claims": [
+        "IMMUTABLE_ARTIFACT@1"
+      ],
+      "policyVersion": "release-policy@1"
+    }
+  },
+  "expect": "accept"
+}

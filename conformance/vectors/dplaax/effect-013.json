@@ -1,0 +1,19 @@
+{
+  "id": "effect-013",
+  "rule": "effect.expiry.deny-expired",
+  "description": "TTL exhaustion of a quarantined entry yields policy DENY_EXPIRED while the evidence verdict stays INDETERMINATE — expiry never fabricates FAILED.",
+  "input": {
+    "credential": {
+      "quarantineEntryId": "qe-0002",
+      "state": "DENY_EXPIRED",
+      "previousState": "QUARANTINED",
+      "generation": "3",
+      "occurredAt": "2026-07-16T00:00:00Z",
+      "reason": "quarantine-ttl-exhausted"
+    }
+  },
+  "expect": {
+    "evidence": "INDETERMINATE",
+    "policy_decision": "DENY_EXPIRED"
+  }
+}

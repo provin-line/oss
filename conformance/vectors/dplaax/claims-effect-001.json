@@ -1,0 +1,14 @@
+{
+  "id": "claims-effect-001",
+  "rule": "claims.effect.legacy-receipt",
+  "description": "A pre-B2 sink receipt projects only to LEGACY_SINK_RECEIPT@1; re-projecting it to EFFECT_CONFIRMED@1 without re-evaluation is refused.",
+  "input": {
+    "legacy_receipt": {
+      "receiptKind": "adjacent-write-era",
+      "hasReleaseAuthorizationDigest": false,
+      "hasTargetAcknowledgement": false
+    },
+    "attempt": "project-to-EFFECT_CONFIRMED@1"
+  },
+  "expect": "reject"
+}
