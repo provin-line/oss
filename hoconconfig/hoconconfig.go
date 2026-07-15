@@ -14,24 +14,17 @@
 //
 // Every default lives in a reference.conf. Every accessor returns an error for
 // a missing key or a type mismatch; no accessor silently returns a zero value.
-// # Known parser defect (gurkankaymak/hocon v1.2.23)
+// # Parser choice
 //
-// The HOCON spec says "anything between // or # and the next newline is
-// considered a comment and ignored, unless the // or # is inside a quoted
-// string". This parser breaks that for one shape: a '#' comment containing a
-// '//' sequence SWALLOWS THE FOLLOWING LINE. Two documents differing only in
-// comment text therefore parse to different results — a URL in an explanatory
-// comment is enough to trip it.
-//
-// It fails loudly only when the swallowed line carries a brace; a swallowed KEY
-// parses clean and the setting silently disappears. Three reference defaults had
-// vanished that way before it was found (2026-07-15, via the P0-6 actual-boot
-// condition). A '//'-marked comment containing '//' is handled correctly, so
-// comments needing a literal URL use that marker.
-//
-// The workaround is enforced by TestNoHashCommentContainsDoubleSlash
-// (deploy/quickstart/config_parse_test.go), which forbids the shape across every
-// .conf this repository ships. Retire it if the dependency is fixed or replaced.
+// The parser is o3co/go.hocon, a full Lightbend-spec implementation. The
+// previous dependency (gurkankaymak/hocon) violated the spec in ways that hit
+// this repository twice over: a '#' comment containing '//' silently swallowed
+// the FOLLOWING line — so comment text changed the parsed document, and three
+// reference defaults vanished without a parse error — and Get panicked when a
+// path traversed a scalar as an object, which the accessors below had to
+// recover from. Both are gone: the accessors read raw values through
+// UnmarshalPath, which reports a scalar traversal as a missing key rather than
+// panicking, and comments are comments again.
 package hoconconfig
 
 import (
@@ -44,7 +37,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurkankaymak/hocon"
+	hocon "github.com/o3co/go.hocon"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,71 +153,84 @@ type Config struct {
 // Has reports whether path exists in the configuration. Use this for optional
 // blocks such as schema references.
 //
-// Discovery: the HOCON library panics when Get traverses a scalar (String,
-// Int, …) as if it were an Object (e.g. path "a.b" where "a" is a string).
-// We recover from that panic and treat it as "key absent" — the same contract
-// a caller expects from Has on a non-existent nested path.
-func (c *Config) Has(path string) (ok bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			ok = false
-		}
-	}()
-	return c.h.Get(path) != nil
+// A path that traverses a scalar (e.g. "a.b" where "a" is a string) is absent,
+// not an error: nothing lives there.
+func (c *Config) Has(path string) bool { return c.h.Has(path) }
+
+// value reads the raw, resolved value at path as a plain Go value — string,
+// int64, float64, bool, []any, or map[string]any. Every accessor below goes
+// through it, so type strictness is decided HERE rather than delegated to the
+// library's typed getters, which coerce (GetString on an int yields "3"). The
+// facade's contract is that a type mismatch is an error, not a conversion:
+// config that says one thing and means another is how a deployment surprises
+// someone at 3am.
+func (c *Config) value(path string) (any, error) {
+	var v any
+	if err := c.h.UnmarshalPath(path, &v); err == nil {
+		return v, nil
+	}
+	// The library reports "key not found" both for a path nobody set and for a
+	// path that runs THROUGH a scalar ("a.b.c" where "a.b" is a string). Those
+	// are different problems and callers act on them differently: absent means
+	// "use the default", while a scalar in the way means the config says
+	// something the reader cannot mean — `tls = "yes"` instead of
+	// `tls { cert-file = ... }`. Collapsing the second into ErrMissingKey would
+	// let a caller's "absent, use default" branch swallow a misconfiguration.
+	if ancestor, ok := c.scalarAncestor(path); ok {
+		return nil, fmt.Errorf("%w: %q traverses %q, which is not an object", ErrTypeMismatch, path, ancestor)
+	}
+	return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
 }
 
-// String returns the value at path as a string. Returns ErrMissingKey (wrapped)
-// if the key is absent and ErrTypeMismatch (wrapped) if the value is not a
-// string type.
-//
-// Implementation note: the parser strips surrounding double-quote characters
-// from quoted HOCON strings at parse time, so hocon.String holds the bare
-// value. We extract it via a direct type assertion. We do NOT call
-// hocon.Config.GetString — that calls Value.String(), which re-wraps values
-// containing special characters (space, colon, slash, …) in literal quotes,
-// corrupting round-trip fidelity.
-//
-// Library defect: Get panics when traversing a scalar value as an Object
-// (e.g. path "a.b.c" where "a.b" resolves to a string). We recover from
-// that panic and return ErrTypeMismatch — the caller's expectation on any
-// shape error.
-func (c *Config) String(path string) (result string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			result = ""
-			err = fmt.Errorf("%w: scalar parent at %q (library panic: %v)", ErrTypeMismatch, path, r)
+// scalarAncestor reports the longest strict prefix of path that exists but is
+// not an object — the thing standing between the caller and their key.
+func (c *Config) scalarAncestor(path string) (string, bool) {
+	segments := strings.Split(path, ".")
+	for i := len(segments) - 1; i > 0; i-- {
+		prefix := strings.Join(segments[:i], ".")
+		if !c.h.Has(prefix) {
+			continue
 		}
-	}()
-	v := c.h.Get(path)
-	if v == nil {
-		return "", fmt.Errorf("%w: %q", ErrMissingKey, path)
+		if _, err := c.h.GetConfigE(prefix); err != nil {
+			return prefix, true
+		}
+		// The nearest existing ancestor is an object, so the key is simply absent.
+		return "", false
 	}
-	s, ok := v.(hocon.String)
+	return "", false
+}
+
+// String returns the value at path as a string. Returns ErrMissingKey
+// (wrapped) if the key is absent and ErrTypeMismatch (wrapped) if the value is
+// not a HOCON string. A number is NOT coerced: "3" and 3 are different config,
+// and a caller asking for a string wants the one that was written as one.
+func (c *Config) String(path string) (string, error) {
+	v, err := c.value(path)
+	if err != nil {
+		return "", err
+	}
+	s, ok := v.(string)
 	if !ok {
 		return "", fmt.Errorf("%w: %q is not a string (got %T)", ErrTypeMismatch, path, v)
 	}
-	return string(s), nil
+	return s, nil
 }
 
 // Int returns the value at path as an int. Returns ErrMissingKey (wrapped) if
 // the key is absent and ErrTypeMismatch (wrapped) if the value is not a HOCON
-// integer (strings that are not pure numeric literals are rejected — the
-// library would otherwise panic).
+// integer — a float is a mismatch, not a truncation.
 func (c *Config) Int(path string) (int, error) {
-	v := c.h.Get(path)
-	if v == nil {
-		return 0, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	v, err := c.value(path)
+	if err != nil {
+		return 0, err
 	}
-	if v.Type() != hocon.NumberType {
-		return 0, fmt.Errorf("%w: %q is not a number (got %T)", ErrTypeMismatch, path, v)
-	}
-	// Only hocon.Int is acceptable for Int(); Float32/Float64 are also NumberType
-	// but semantically different. Use a type switch for precision.
-	switch v.(type) {
-	case hocon.Int:
-		return c.h.GetInt(path), nil
-	default:
+	switch n := v.(type) {
+	case int64:
+		return int(n), nil
+	case float64:
 		return 0, fmt.Errorf("%w: %q is a float, not an integer", ErrTypeMismatch, path)
+	default:
+		return 0, fmt.Errorf("%w: %q is not a number (got %T)", ErrTypeMismatch, path, v)
 	}
 }
 
@@ -232,65 +238,57 @@ func (c *Config) Int(path string) (int, error) {
 // the key is absent and ErrTypeMismatch (wrapped) if the value is not a HOCON
 // boolean.
 func (c *Config) Bool(path string) (bool, error) {
-	v := c.h.Get(path)
-	if v == nil {
-		return false, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	v, err := c.value(path)
+	if err != nil {
+		return false, err
 	}
-	switch v.(type) {
-	case hocon.Boolean:
-		return c.h.GetBoolean(path), nil
-	default:
+	b, ok := v.(bool)
+	if !ok {
 		return false, fmt.Errorf("%w: %q is not a boolean (got %T)", ErrTypeMismatch, path, v)
 	}
+	return b, nil
 }
 
-// Duration returns the value at path as a time.Duration. The HOCON library
-// parses duration literals (e.g. "250 ms", "5 s") as a dedicated Duration
-// type. Returns ErrMissingKey (wrapped) if the key is absent and
-// ErrTypeMismatch (wrapped) if the value is not a HOCON duration.
-//
-// Discovery: hocon.Duration has Type() == StringType (same as hocon.String),
-// so type-checking requires a concrete type assertion, not a Type() comparison.
+// Duration returns the value at path as a time.Duration. HOCON duration
+// literals ("250 ms", "5 s") are strings on the wire, so this asks the library
+// to interpret one: the raw value must be a string, and it must parse as a
+// duration. Returns ErrMissingKey (wrapped) if the key is absent and
+// ErrTypeMismatch (wrapped) otherwise.
 func (c *Config) Duration(path string) (time.Duration, error) {
-	v := c.h.Get(path)
-	if v == nil {
-		return 0, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	v, err := c.value(path)
+	if err != nil {
+		return 0, err
 	}
-	switch v.(type) {
-	case hocon.Duration:
-		return c.h.GetDuration(path), nil
-	default:
+	if _, ok := v.(string); !ok {
 		return 0, fmt.Errorf("%w: %q is not a duration (got %T)", ErrTypeMismatch, path, v)
 	}
+	d, derr := c.h.GetDurationE(path)
+	if derr != nil {
+		return 0, fmt.Errorf("%w: %q is not a duration (%v)", ErrTypeMismatch, path, derr)
+	}
+	return d, nil
 }
 
 // StringList returns the value at path as []string. Returns ErrMissingKey
-// (wrapped) if the key is absent and ErrTypeMismatch (wrapped) if the value
-// is not a HOCON array or if any element is not a HOCON string.
-//
-// Implementation note: we iterate the underlying hocon.Array and type-assert
-// each element as hocon.String. This rejects non-string elements (int, bool,
-// …) with ErrTypeMismatch — GetStringSlice silently coerces them. The parser
-// stores hocon.String with quotes already stripped (same as String()), so no
-// additional trimming is needed. We do NOT call Value.String() on elements —
-// that re-wraps values containing special characters, corrupting round-trip
-// fidelity.
+// (wrapped) if the key is absent and ErrTypeMismatch (wrapped) if the value is
+// not a HOCON array or if any element is not a HOCON string. Elements are NOT
+// coerced: a list of numbers is a mismatch, not a list of numerals.
 func (c *Config) StringList(path string) ([]string, error) {
-	v := c.h.Get(path)
-	if v == nil {
-		return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
+	v, err := c.value(path)
+	if err != nil {
+		return nil, err
 	}
-	arr, ok := v.(hocon.Array)
+	arr, ok := v.([]any)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q is not an array (got %T)", ErrTypeMismatch, path, v)
 	}
 	out := make([]string, len(arr))
 	for i, elem := range arr {
-		s, ok := elem.(hocon.String)
+		s, ok := elem.(string)
 		if !ok {
 			return nil, fmt.Errorf("%w: %q element %d is not a string (got %T)", ErrTypeMismatch, path, i, elem)
 		}
-		out[i] = string(s)
+		out[i] = s
 	}
 	return out, nil
 }
@@ -301,31 +299,22 @@ func (c *Config) StringList(path string) ([]string, error) {
 // verbatim; the path parser would otherwise split them. Returns ErrMissingKey
 // if path is absent, and ErrTypeMismatch if path is not an object or any value
 // is not a string.
-//
-// Like String, a scalar parent (a non-object at path) surfaces as
-// ErrTypeMismatch rather than a library panic.
-func (c *Config) StringMap(path string) (m map[string]string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			m = nil
-			err = fmt.Errorf("%w: scalar parent at %q (library panic: %v)", ErrTypeMismatch, path, r)
-		}
-	}()
-	v := c.h.Get(path)
-	if v == nil {
-		return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
+func (c *Config) StringMap(path string) (map[string]string, error) {
+	v, err := c.value(path)
+	if err != nil {
+		return nil, err
 	}
-	obj, ok := v.(hocon.Object)
+	obj, ok := v.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q is not an object (got %T)", ErrTypeMismatch, path, v)
 	}
-	m = make(map[string]string, len(obj))
+	m := make(map[string]string, len(obj))
 	for k, val := range obj {
-		sv, ok := val.(hocon.String)
+		sv, ok := val.(string)
 		if !ok {
 			return nil, fmt.Errorf("%w: %q key %q is not a string (got %T)", ErrTypeMismatch, path, k, val)
 		}
-		m[k] = string(sv)
+		m[k] = sv
 	}
 	return m, nil
 }
@@ -336,25 +325,16 @@ func (c *Config) StringMap(path string) (m map[string]string, err error) {
 // accessor for object-keyed config blocks (e.g. a set of named service
 // endpoints): enumerate the keys here, then read each entry's fields with the
 // scalar accessors at "path.<key>.<field>".
-//
-// Like String, a scalar parent (a non-object at path) surfaces as
-// ErrTypeMismatch rather than a library panic.
-func (c *Config) Keys(path string) (keys []string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			keys = nil
-			err = fmt.Errorf("%w: scalar parent at %q (library panic: %v)", ErrTypeMismatch, path, r)
-		}
-	}()
-	v := c.h.Get(path)
-	if v == nil {
-		return nil, fmt.Errorf("%w: %q", ErrMissingKey, path)
+func (c *Config) Keys(path string) ([]string, error) {
+	v, err := c.value(path)
+	if err != nil {
+		return nil, err
 	}
-	obj, ok := v.(hocon.Object)
+	obj, ok := v.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q is not an object (got %T)", ErrTypeMismatch, path, v)
 	}
-	keys = make([]string, 0, len(obj))
+	keys := make([]string, 0, len(obj))
 	for k := range obj {
 		keys = append(keys, k)
 	}

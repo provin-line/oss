@@ -39,33 +39,35 @@ The stack reported ready while the node had **never booted**:
 no published port. Two independent defects, both predating this work
 (reproduced at `bf03095`, the very commit the P0-6 debate reviewed):
 
-1. **The quickstart's node config never parsed** — because of a parser bug, not
-   a malformed config. gurkankaymak/hocon v1.2.23 violates the HOCON spec
-   ("anything between `//` or `#` and the next newline is considered a comment
-   and ignored"): a `#` comment containing `//` swallows the FOLLOWING line, so
-   comment TEXT changes the parsed document. Here the swallowed line was
+1. **The quickstart's node config never parsed** — a defect in the HOCON library
+   then in use, not a malformed config. gurkankaymak/hocon v1.2.23 violates the
+   spec ("anything between `//` or `#` and the next newline is considered a
+   comment and ignored"): a `#` comment containing `//` swallows the FOLLOWING
+   line, so comment TEXT changes the parsed document. Here the swallowed line was
    `service-endpoints {` — an opening brace vanished, so the parser rejected the
    file's final `}` as a stray. `docker compose config` validates the compose
    file, not the node config the container reads, so static checking could never
    have caught it.
 
-   Chasing this precisely mattered: the same bug had **silently deleted three
-   reference defaults** (`auth.opa.base-url`, `auth.cedar.base-url`,
-   `registry.service-endpoints` all resolved to nil) in files that parse
-   perfectly. Had the investigation stopped at "the quickstart config is
-   malformed", those would still be gone. Both `#` and `//` are legal HOCON
-   comment markers and `//`-marked comments handle `//` correctly, so the fix is
-   per-comment: prose drops the scheme's slashes, comments needing a literal URL
-   switch marker, and `TestNoHashCommentContainsDoubleSlash` forbids the shape.
+   Chasing it to the root mattered twice over. The same defect had **silently
+   deleted three reference defaults** (`auth.opa.base-url`, `auth.cedar.base-url`,
+   `registry.service-endpoints` all nil) in files that parse perfectly — stopping
+   at "the quickstart config is malformed" would have left those gone. And the
+   defect turned out to be unfixable by upgrade: v1.2.23 is that library's
+   latest, every recent version reproduces it, and the upstream report (#27) has
+   been open since 2022. The config layer now uses `o3co/go.hocon`, a full
+   Lightbend-spec implementation, which handles every shape correctly — including
+   the quickstart config in its original, never-booted form. The comments keep
+   their URLs.
+
 2. **`up --wait` could not tell a crash-loop from a healthy node.** The node
    service had no healthcheck, so `restart: on-failure` kept a never-booting
    container "running" and the stack declared itself ready.
 
-Fixed: every affected comment across the repository; `TestShippedConfigsParse`
-parses every shipped `.conf` and `TestNoHashCommentContainsDoubleSlash` forbids
-the swallowing shape (the parse test alone is insufficient — it only fires when
-the swallowed line carries a brace, and a swallowed KEY parses clean); the node
-service gained a `/readyz` healthcheck.
+Fixed: the parser is replaced (`hoconconfig` package doc records why);
+`TestShippedConfigsParse` parses every shipped `.conf` with the parser the
+binaries use; `TestReferenceDefaultsSurviveURLComments` pins the silent-drop
+regression; the node service gained a `/readyz` healthcheck.
 
 After the fixes, the full sequence:
 

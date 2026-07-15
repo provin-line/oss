@@ -681,3 +681,35 @@ func TestStringMap(t *testing.T) {
 		t.Error("StringMap(non-string value): want ErrTypeMismatch")
 	}
 }
+
+// The defaults that a parser defect had silently deleted. gurkankaymak/hocon
+// let a '#' comment containing '//' swallow the FOLLOWING line, so a URL in an
+// explanatory comment removed the setting written under it — with no parse
+// error, in files that looked fine. These three had been nil in shipped
+// reference config; this pins that they resolve.
+//
+// The comments above them still carry their URLs, which is the point: the fix
+// was to use a parser that implements the spec, not to police what may be
+// written in a comment.
+func TestReferenceDefaultsSurviveURLComments(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-urlcomment"), `
+provin.test.urlcomment {
+  # backend = "opa": Open Policy Agent REST endpoint. base-url must carry an
+  # explicit http:// or https:// scheme; policy-path is the OPA data path.
+  opa.base-url = "kept"
+
+  # See the docs at https://example.com/guide for the endpoint map.
+  #   curl http://localhost:8443/metrics
+  endpoints {}
+}`)
+	cfg, err := hoconconfig.Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, err := cfg.String("provin.test.urlcomment.opa.base-url"); err != nil || got != "kept" {
+		t.Errorf("a key under a URL comment vanished: got %q, err %v", got, err)
+	}
+	if _, err := cfg.Keys("provin.test.urlcomment.endpoints"); err != nil {
+		t.Errorf("an object under a URL comment vanished: %v", err)
+	}
+}

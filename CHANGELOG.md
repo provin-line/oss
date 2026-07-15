@@ -153,25 +153,38 @@ closure required, now met with executed evidence rather than review.
 
 ### Fixed
 
-- **Config comments were silently deleting the line below them** — a bug in the
-  HOCON parser we depend on, worked around here. The spec is unambiguous
-  ("anything between `//` or `#` and the next newline is considered a comment and
-  ignored"), but gurkankaymak/hocon v1.2.23 lets a `#` comment containing a `//`
-  sequence swallow the FOLLOWING line: two documents differing only in comment
-  text parse to different results. A `//`-marked comment containing `//` is
-  handled correctly, so it is specifically the `#` marker that mis-tokenizes, and
-  a URL in an explanatory comment is the natural way to trip it.
+- **Replaced the HOCON parser; three silently-deleted defaults are back.** The
+  config layer now uses `o3co/go.hocon`, a full Lightbend-spec implementation, in
+  place of `gurkankaymak/hocon`.
 
-  Three shipped defaults had silently vanished this way, parsing cleanly with
-  nobody the wiser: `provin.network.auth.opa.base-url`,
-  `provin.network.auth.cedar.base-url`, and
-  `provin.network.registry.service-endpoints` all resolved to nil. Every
-  affected comment is fixed — prose drops the scheme's slashes; comments that
-  must show a literal URL switch to the `//` marker — and
-  `TestNoHashCommentContainsDoubleSlash` forbids the shape repository-wide,
-  because today's harmless swallow (the eaten line happens to be another
-  comment) becomes tomorrow's lost setting the moment someone inserts a key
-  after it.
+  The old parser violated the spec in a way that quietly cost us settings. HOCON
+  says "anything between `//` or `#` and the next newline is considered a comment
+  and ignored"; that parser let a `#` comment containing a `//` sequence swallow
+  the FOLLOWING line, so two documents differing only in comment text parsed to
+  different results — and a URL in an explanatory comment is the natural way to
+  trip it. It fails loudly only when the swallowed line carries a brace. When it
+  carries a key, the file parses and the setting is simply gone:
+
+      provin.network.auth.opa.base-url          => nil
+      provin.network.auth.cedar.base-url        => nil
+      provin.network.registry.service-endpoints => nil
+
+  all now resolving to their intended `""` / `{}`, with their URL-bearing
+  comments left exactly as written. Upgrading was not an option: v1.2.23 is that
+  library's latest, every recent version reproduces it, and the upstream report
+  (gurkankaymak/hocon#27) has been open since 2022. It had a second defect this
+  layer was also working around — `Get` panicked when a path traversed a scalar
+  as an object — and that recovery is gone too.
+
+  `hoconconfig`'s facade contract is unchanged (`String`/`Int`/`Bool`/`Duration`/
+  `StringList`/`StringMap`/`Keys`/`Has`, with `ErrMissingKey` vs
+  `ErrTypeMismatch`), and its test suite passes as written. Strictness is now
+  enforced in the facade rather than inherited: the new library coerces
+  (`GetString` on an int yields `"3"`), and this layer does not — a type mismatch
+  is an error, not a conversion. `ErrTypeMismatch` still distinguishes a path
+  that runs through a scalar (`tls = "yes"` where `tls { cert-file = … }` was
+  meant) from a key nobody set, so a caller's "absent, use the default" branch
+  cannot swallow a misconfiguration.
 
 - **The quickstart never booted.** `deploy/quickstart/node/config/application.conf`
   failed to parse — for its whole history, on every machine. Same root cause,
@@ -179,7 +192,10 @@ closure required, now met with executed evidence rather than review.
   (`service-endpoints {`), so the braces stopped balancing and the parser
   rejected the file's final `}` as a stray. Nothing caught it — `docker compose
   config` validates the compose file, not the node config inside the container —
-  and `TestShippedConfigsParse` now parses every `.conf` the repository ships.
+  and `TestShippedConfigsParse` now parses every `.conf` the repository ships
+  with the parser the binaries actually use. Its comments keep their URLs: the
+  fix was a spec-compliant parser, not a rule about what may be written in a
+  comment.
 - **The quickstart reported a crash-looping node as healthy.** The node service
   had no healthcheck, so `docker compose up --wait` saw a container that
   `restart: on-failure` kept "running" and declared the stack ready. It now
