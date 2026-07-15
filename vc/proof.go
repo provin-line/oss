@@ -110,6 +110,13 @@ func VerifyProof(
 	if proof == nil {
 		return errors.New("vc: nil proof")
 	}
+	// The registry names the ISSUANCE canonicalizer, so this path can only check
+	// artifacts signed under the current suite. An artifact signed under the
+	// historical deviation is verified through its claim contract instead —
+	// VerifyProofUnderContract — which is the only way to reach the legacy
+	// canonicalizer. Callers that resolve a verification method (and therefore
+	// know its encoding) should use VerifyProofWithContract: it classifies the
+	// proof exactly rather than trusting the suite identifier alone.
 	c, err := canonicalizerFor(proof.Cryptosuite)
 	if err != nil {
 		return err
@@ -156,11 +163,20 @@ func proofConfigMap(typ, cryptosuite, verificationMethod, proofPurpose, created 
 
 // proofHashData computes SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document)).
 func proofHashData(c canon.Canonicalizer, proofConfig, document map[string]any) ([]byte, error) {
-	pcBytes, err := c.Canonicalize(proofConfig)
+	return proofHashDataFunc(c.Canonicalize, proofConfig, document)
+}
+
+// proofHashDataFunc is proofHashData over a bare canonicalization function, so
+// the contract path (which resolves its canonicalizer from the claim contract,
+// not the registry) computes hashData through the same code. Two
+// implementations of "SHA-256(canon(config)) ‖ SHA-256(canon(document))" would
+// be two chances to disagree about the signing scope.
+func proofHashDataFunc(canonFn func(any) ([]byte, error), proofConfig, document map[string]any) ([]byte, error) {
+	pcBytes, err := canonFn(proofConfig)
 	if err != nil {
 		return nil, fmt.Errorf("vc: canonicalize proof config: %w", err)
 	}
-	docBytes, err := c.Canonicalize(document)
+	docBytes, err := canonFn(document)
 	if err != nil {
 		return nil, fmt.Errorf("vc: canonicalize document: %w", err)
 	}

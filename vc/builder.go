@@ -151,7 +151,7 @@ func requirePredecessorCommitted(previous *PipelinePassCredential, commitment *S
 // proofToMap renders the typed proof as the raw wire map stored on the
 // credential (the form MarshalJSON emits and Proof() reads).
 func proofToMap(p *DataIntegrityProof) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"type":               p.Type,
 		"cryptosuite":        p.Cryptosuite,
 		"verificationMethod": p.VerificationMethod,
@@ -159,4 +159,11 @@ func proofToMap(p *DataIntegrityProof) map[string]any {
 		"created":            p.Created,
 		"proofValue":         p.ProofValue,
 	}
+	// Carried on presence: the wire member the W3C shape requires and the suite
+	// classifier keys on (signer.suite.eddsa-jcs-2022). Dropping it here would
+	// mint proofs that classify as shapeless the moment they are read back.
+	if p.Context != nil {
+		m[keyContext] = deepCopyValue(p.Context)
+	}
+	return m
 }

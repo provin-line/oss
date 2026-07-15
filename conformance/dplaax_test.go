@@ -637,18 +637,19 @@ func fixtureResolver(t *testing.T, pub []byte) *local.Resolver {
 }
 
 func fixtureDoc(id, controller, vmID string, pub []byte) *did.DIDDocument {
-	fields := did.DocumentFields{ID: id, Controller: controller}
+	// Multikey + issued contexts: conformance fixtures sign with the production
+	// CreateProof, whose W3C-shaped proofs the classifier only accepts over a
+	// Multikey method (signer.suite.eddsa-jcs-2022).
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
 	if pub != nil {
-		fields.VerificationMethod = []did.VerificationMethod{{
-			ID:         vmID,
-			Type:       "JsonWebKey2020",
-			Controller: id,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}}
+		vm, err := did.NewMultikeyVerificationMethod(vmID, id, pub)
+		if err != nil {
+			panic(err) // a non-Ed25519 fixture key is a test bug
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
 		fields.AssertionMethod = []string{vmID}
 	}
 	return did.New(fields)

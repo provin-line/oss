@@ -2,7 +2,6 @@ package delegation_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -61,19 +60,19 @@ func signingDoc(subject string, pub []byte) *did.DIDDocument {
 // is identified under vmSubject — equal for a genuine doc, divergent to forge a
 // registry-substituted document for the substitution-defense test.
 func signingDocAs(docID, vmSubject string, pub []byte) *did.DIDDocument {
+	// Multikey + issued contexts: these fixtures model NEW owners, and the
+	// delegation proofs signed against them are W3C-shaped (proof-local
+	// @context), which the classifier only accepts over a Multikey method.
+	vm, err := did.NewMultikeyVerificationMethod(vmSubject+"#signing", docID, pub)
+	if err != nil {
+		panic(err) // fixture with a non-Ed25519 key is a test bug
+	}
 	return did.New(did.DocumentFields{
-		ID:         docID,
-		Controller: docID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         vmSubject + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: docID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP", "crv": "Ed25519",
-				"x": base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{vmSubject + "#signing"},
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 docID,
+		Controller:         docID,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{vmSubject + "#signing"},
 	})
 }
 

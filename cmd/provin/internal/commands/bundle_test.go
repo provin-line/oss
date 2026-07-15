@@ -3,7 +3,6 @@ package commands_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,19 +77,17 @@ func (s stubVCResolver) ResolveVC(_ context.Context, req *connect.Request[vcpb.R
 
 func bundleDoc(t *testing.T, id, controller string, pub []byte) []byte {
 	t.Helper()
-	fields := did.DocumentFields{ID: id, Controller: controller}
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
 	if pub != nil {
 		vmID := id + "#signing"
-		fields.VerificationMethod = []did.VerificationMethod{{
-			ID:         vmID,
-			Type:       "JsonWebKey2020",
-			Controller: id,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}}
+		vm, err := did.NewMultikeyVerificationMethod(vmID, id, pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
 		fields.AssertionMethod = []string{vmID}
 	}
 	raw, err := did.New(fields).MarshalJSON()
@@ -270,13 +267,17 @@ func (s stubAudit) GetConsumedSources(_ context.Context, req *connect.Request[au
 // service — what the CLI's normative endpoint derivation resolves.
 func serviceDoc(t *testing.T, id, controller string, pub []byte, vcResolverURL string, extra ...did.ServiceEndpoint) []byte {
 	t.Helper()
-	fields := did.DocumentFields{ID: id, Controller: controller}
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
 	if pub != nil {
 		vmID := id + "#signing"
-		fields.VerificationMethod = []did.VerificationMethod{{
-			ID: vmID, Type: "JsonWebKey2020", Controller: id,
-			PublicKeyJWK: map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)},
-		}}
+		vm, err := did.NewMultikeyVerificationMethod(vmID, id, pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
 		fields.AssertionMethod = []string{vmID}
 	}
 	if vcResolverURL != "" {

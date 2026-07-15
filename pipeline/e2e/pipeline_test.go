@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -271,20 +270,16 @@ func TestRegisteringSigner_AggregateOverridden(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func processDoc(processDID, owner string, pub []byte) *did.DIDDocument {
+	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
+	if err != nil {
+		panic(err) // a non-Ed25519 fixture key is a test bug
+	}
 	return did.New(did.DocumentFields{
-		ID:         processDID,
-		Controller: owner,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         processDID + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: processDID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{processDID + "#signing"},
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 processDID,
+		Controller:         owner,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{processDID + "#signing"},
 	})
 }
 

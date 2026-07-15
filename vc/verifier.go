@@ -85,6 +85,22 @@ type VerifyResult struct {
 	// the verdict is unannotated. For a chain, the per-credential notations are
 	// concatenated.
 	Notations []string
+	// SuiteContract names WHICH rules produced this verdict: the W3C suite or
+	// the legacy int64-verbatim projection. One cryptosuite identifier covers
+	// both, so "verified under eddsa-jcs-2022" is not an answer
+	// (claims.suite.contract-id).
+	//
+	// It is a typed field rather than a Notation because it is not advisory: a
+	// consumer deciding whether to accept an artifact needs it, and a headline
+	// that compresses it away to a bare "Verified" is exactly what
+	// claims.headline.suite-contract forbids. Notations are for exceptions;
+	// this is for every verdict.
+	//
+	// Empty when signer authenticity did not reach proof verification. For a
+	// chain, this is the contract of the head credential — the per-credential
+	// contracts of a mixed chain are not collapsible into one, so a caller
+	// needing them verifies per credential.
+	SuiteContract SuiteContract
 }
 
 // Verify performs single-credential verification across the three normative
@@ -110,12 +126,18 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 		return nil, err
 	}
 	var notations []string
+	var contract SuiteContract
 	axes := AxisResult{
 		DataIntegrity:      v.evalDataIntegrity(ctx, cred),
-		SignerAuthenticity: v.evalSignerAuthenticity(ctx, cred, &notations),
+		SignerAuthenticity: v.evalSignerAuthenticity(ctx, cred, &notations, &contract),
 		ChainConsistency:   v.evalChainConsistency(ctx, cred),
 	}
-	return &VerifyResult{Overall: EvaluateConfidence(axes), Axes: axes, Notations: notations}, nil
+	return &VerifyResult{
+		Overall:       EvaluateConfidence(axes),
+		Axes:          axes,
+		Notations:     notations,
+		SuiteContract: contract,
+	}, nil
 }
 
 // evalDataIntegrity evaluates the data-integrity axis for one credential: the
@@ -210,7 +232,7 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // is never honoured; because a misconfigured base mapping and a hostile
 // registry are indistinguishable at this point, it is indeterminate rather
 // than a terminal failed.
-func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string) ConfidenceState {
+func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string, outContract *SuiteContract) ConfidenceState {
 	proof := cred.Proof()
 	if proof == nil {
 		return ConfidenceFailed // unsigned
@@ -263,13 +285,25 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 	if doc.ID() != issuer {
 		return ConfidenceIndeterminate // registry-substitution defense on the signing path: never honoured, never verified
 	}
-	pub, err := did.ExtractPublicKey(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
+	// Key and encoding come from one resolution: the encoding decides which
+	// claim contract the proof is checked under, so reading it separately would
+	// let the dispatch and the key disagree about which method they mean.
+	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
 		return ConfidenceFailed
 	}
-	if err := VerifyProof(v.sigVerifier, pub, proof, cred.Body()); err != nil {
+	// Exact dispatch: the contract is resolved from the suite id, the proof
+	// shape, and the key encoding, and the canonicalizer follows from the
+	// contract. A proof whose shape matches no contract fails here rather than
+	// being retried under the other canonicalizer to see if it happens to check
+	// out (signer.suite.exact-dispatch).
+	contract, err := VerifyProofWithContract(v.sigVerifier, pub, encoding, proof, cred.Body())
+	if err != nil {
 		return ConfidenceFailed
 	}
+	// The contract reaches the caller as a typed field, not a notation: it
+	// applies to every verdict, and Notations are for exceptions.
+	*outContract = contract
 	if v.lifecycle != nil {
 		if phaseErr != nil {
 			return ConfidenceIndeterminate

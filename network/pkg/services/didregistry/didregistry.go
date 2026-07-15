@@ -282,7 +282,10 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	if err != nil {
 		return nil, nil, fmt.Errorf("didregistry: generate signing key: %w", err)
 	}
-	doc := s.assembleDoc(target, parent.String(), authKP.PublicKey, signKP.PublicKey)
+	doc, err := s.assembleDoc(target, parent.String(), authKP.PublicKey, signKP.PublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	switch kind {
 	case kindPipeline:
@@ -446,21 +449,32 @@ func (s *Service) ReadLifecycleLog(ctx context.Context, didStr string) ([]store.
 // #auth under authentication, #signing under assertionMethod, controller set to
 // the structural parent, and the configured service endpoints re-anchored to the
 // DID.
-func (s *Service) assembleDoc(target *dplaax.DID, controller string, authPub, signPub []byte) *did.DIDDocument {
+func (s *Service) assembleDoc(target *dplaax.DID, controller string, authPub, signPub []byte) (*did.DIDDocument, error) {
 	id := target.String()
 	vmAuth := id + "#" + string(keystore.KeyIDAuth)
 	vmSign := id + "#" + string(keystore.KeyIDSigning)
+	// Multikey, not JWK: the W3C eddsa-jcs-2022 suite requires it
+	// (signer.suite.eddsa-jcs-2022), and the proof shape and the key encoding
+	// move together — a W3C-shaped proof over a JWK key matches no claim
+	// contract and is refused by the classifier.
+	auth, err := did.NewMultikeyVerificationMethod(vmAuth, id, authPub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode auth key: %v", ErrInvalidArgument, err)
+	}
+	sign, err := did.NewMultikeyVerificationMethod(vmSign, id, signPub)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode signing key: %v", ErrInvalidArgument, err)
+	}
 	return did.New(did.DocumentFields{
-		ID:         id,
-		Controller: controller,
-		VerificationMethod: []did.VerificationMethod{
-			{ID: vmAuth, Type: jwkType, Controller: id, PublicKeyJWK: ed25519JWK(authPub)},
-			{ID: vmSign, Type: jwkType, Controller: id, PublicKeyJWK: ed25519JWK(signPub)},
-		},
-		Authentication:  []string{vmAuth},
-		AssertionMethod: []string{vmSign},
-		Service:         s.endpointsFor(id),
-	})
+		// Load-bearing for the suite classifier — see did.IssuedDocumentContexts.
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 id,
+		Controller:         controller,
+		VerificationMethod: []did.VerificationMethod{auth, sign},
+		Authentication:     []string{vmAuth},
+		AssertionMethod:    []string{vmSign},
+		Service:            s.endpointsFor(id),
+	}), nil
 }
 
 func (s *Service) endpointsFor(id string) []did.ServiceEndpoint {
@@ -500,11 +514,16 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 	if !found || vmDID != doc.ID() {
 		return fmt.Errorf("%w: verificationMethod %q does not name the owner %q", ErrUnauthorized, proof.VerificationMethod, doc.ID())
 	}
-	pub, err := did.ExtractPublicKey(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
+	// Key and encoding from one resolution: the encoding selects the claim
+	// contract, and the contract selects the canonicalization.
+	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
-	if err := vc.VerifyProof(s.verifier, pub, proof, signing); err != nil {
+	// Exact dispatch (signer.suite.exact-dispatch): a self-signed owner document
+	// whose proof shape matches no contract is unauthorized, not retried under
+	// the other canonicalizer.
+	if _, err := vc.VerifyProofWithContract(s.verifier, pub, encoding, proof, signing); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 	return nil

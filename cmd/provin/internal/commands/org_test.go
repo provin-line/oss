@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	stded25519 "crypto/ed25519"
-	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -35,19 +34,16 @@ func (f *orgFakeDNS) LookupTXT(context.Context, string) ([]string, error) {
 // orgDoc builds a DID document whose #signing key (assertionMethod) carries
 // an Ed25519 JWK for pub.
 func orgDoc(id string, pub []byte) []byte {
+	vm, err := did.NewMultikeyVerificationMethod(id+"#signing", id, pub)
+	if err != nil {
+		panic(err) // a non-Ed25519 fixture key is a test bug
+	}
 	doc := did.New(did.DocumentFields{
-		ID:         id,
-		Controller: id,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         id + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: id,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP", "crv": "Ed25519",
-				"x": base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{id + "#signing"},
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 id,
+		Controller:         id,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{id + "#signing"},
 	})
 	raw, err := doc.MarshalJSON()
 	if err != nil {

@@ -1,8 +1,8 @@
 package commands
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,15 +72,17 @@ func confirmRegisteredKey(ctx context.Context, c didpbconnect.DIDServiceClient, 
 	if err := canon.NewStrictDecoder(res.Msg.GetDidDocument()).Decode(&doc); err != nil {
 		return fmt.Errorf("owner init: parse registered document for %s: %w", key.DID, err)
 	}
-	want := base64.RawURLEncoding.EncodeToString(key.PublicKey)
-	for _, vm := range doc.VerificationMethod() {
-		if vm.ID != key.DID+"#signing" {
-			continue
-		}
-		if x, _ := vm.PublicKeyJWK["x"].(string); x == want {
-			fmt.Fprintf(env.out(), "owner %s already registered with this key; nothing to do (key: %s)\n", key.DID, keyPath)
-			return nil
-		}
+	// Compare raw key bytes, not one encoding's rendering of them: the same key
+	// is the same key whether the registered document carries it as Multikey or
+	// as a legacy JWK, and a comparison pinned to publicKeyJwk["x"] would report
+	// a Multikey-registered owner as a DIFFERENT key on every re-run.
+	registered, _, err := did.ExtractPublicKeyAndEncoding(&doc, key.DID+"#signing", did.RelationshipAssertionMethod)
+	if err != nil {
+		return fmt.Errorf("owner init: %s is already registered but its #signing key is unreadable: %v — the file at %s cannot be confirmed against it", key.DID, err, keyPath)
+	}
+	if bytes.Equal(registered, key.PublicKey) {
+		fmt.Fprintf(env.out(), "owner %s already registered with this key; nothing to do (key: %s)\n", key.DID, keyPath)
+		return nil
 	}
 	return fmt.Errorf("owner init: %s is registered under a DIFFERENT key — the file at %s cannot act for this DID (locate the original key file, or register a new DID)", key.DID, keyPath)
 }
@@ -115,16 +117,20 @@ func ensureKey(path, ownerDID string) (*keyfile.Key, error) {
 // proved with an EdDSA-JCS-2022 data-integrity proof by that same key (the
 // registration bootstrap — there is no prior authority to sign under).
 func selfSignedOwnerDoc(key *keyfile.Key) ([]byte, error) {
+	// Multikey, not JWK: the W3C eddsa-jcs-2022 suite requires it, and the proof
+	// this document carries is W3C-shaped (signer.suite.eddsa-jcs-2022).
+	vm, err := did.NewMultikeyVerificationMethod(key.DID+"#signing", key.DID, key.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode owner signing key: %w", err)
+	}
 	base := did.New(did.DocumentFields{
-		ID: key.DID, Controller: key.DID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID: key.DID + "#signing", Type: "JsonWebKey2020", Controller: key.DID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP", "crv": "Ed25519",
-				"x": base64.RawURLEncoding.EncodeToString(key.PublicKey),
-			},
-		}},
-		AssertionMethod: []string{key.DID + "#signing"},
+		// The @context is load-bearing: the W3C proof shape mirrors it onto the
+		// proof, and the suite classifier requires that mirror (a context-free
+		// document would self-sign into a proof matching no claim contract).
+		Context: did.IssuedDocumentContexts(),
+		ID:      key.DID, Controller: key.DID,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{key.DID + "#signing"},
 	})
 	body := base.Body()
 	proof, err := vc.CreateProof(key.Signer(), key.DID, string(keystore.KeyIDSigning), key.DID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)

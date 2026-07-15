@@ -162,11 +162,16 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 	if doc.ID() != cred.Issuer {
 		return fmt.Errorf("delegation: resolved document id %q != issuer %q (registry-substitution defense)", doc.ID(), cred.Issuer)
 	}
-	pub, err := did.ExtractPublicKey(doc, cred.Proof.VerificationMethod, did.RelationshipAssertionMethod)
+	// Key and encoding from one resolution: the encoding selects the claim
+	// contract, and the contract selects the canonicalization.
+	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, cred.Proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
 		return fmt.Errorf("delegation: extract owner key: %w", err)
 	}
-	if err := vc.VerifyProof(verifier, pub, cred.Proof, cred.signingBody()); err != nil {
+	// Exact dispatch (signer.suite.exact-dispatch): a delegation whose proof
+	// shape matches no contract fails here rather than being retried under the
+	// other canonicalizer to see which one accepts it.
+	if _, err := vc.VerifyProofWithContract(verifier, pub, encoding, cred.Proof, cred.signingBody()); err != nil {
 		return fmt.Errorf("delegation: %w", err)
 	}
 	return nil

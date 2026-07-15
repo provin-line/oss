@@ -3,7 +3,6 @@ package bundle_test
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -63,19 +62,17 @@ func (m *memKeyStore) DeleteKeys(string) error { return nil }
 // didDoc builds a DID Document; a non-nil pub attaches an AssertionMethod key.
 func didDoc(t *testing.T, id, controller string, pub []byte) []byte {
 	t.Helper()
-	fields := did.DocumentFields{ID: id, Controller: controller}
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
 	if pub != nil {
 		vmID := id + "#signing"
-		fields.VerificationMethod = []did.VerificationMethod{{
-			ID:         vmID,
-			Type:       "JsonWebKey2020",
-			Controller: id,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}}
+		vm, err := did.NewMultikeyVerificationMethod(vmID, id, pub)
+		if err != nil {
+			panic(err) // a non-Ed25519 fixture key is a test bug
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
 		fields.AssertionMethod = []string{vmID}
 	}
 	raw, err := did.New(fields).MarshalJSON()
@@ -454,8 +451,14 @@ func TestVerify_TamperedDIDDocument(t *testing.T) {
 	mutateJSONFile(t, docPath, func(m map[string]any) {
 		vms := m["verificationMethod"].([]any)
 		vm := vms[0].(map[string]any)
-		jwk := vm["publicKeyJwk"].(map[string]any)
-		jwk["x"] = base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+		// A validly-encoded DIFFERENT key: the honest tamper is substitution,
+		// not corruption — an undecodable value would fail earlier for a
+		// different reason than the signature mismatch this test pins.
+		mb, err := did.EncodeEd25519Multikey([]byte(strings.Repeat("k", 32)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		vm["publicKeyMultibase"] = mb
 	})
 	_, err := bundle.Verify(context.Background(), dir, bundle.VerifyOptions{ExpectedHead: f.head})
 	if !errors.Is(err, bundle.ErrBundleIntegrity) {

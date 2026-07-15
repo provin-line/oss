@@ -372,14 +372,14 @@ func (c *PipelinePassCredential) SourceCommitment() *SourceCommitment {
 }
 
 // Proof returns the typed proof view (defensive copy); nil when unsigned.
-// The view extracts the six Data Integrity members; unknown or non-string
+// The view extracts the seven Data Integrity members; unknown or non-string
 // proof members are not visible here but survive round-trips in the raw
 // proof map (see MarshalJSON).
 func (c *PipelinePassCredential) Proof() *DataIntegrityProof {
 	if c.proof == nil {
 		return nil
 	}
-	return &DataIntegrityProof{
+	p := &DataIntegrityProof{
 		Type:               getString(c.proof, "type"),
 		Cryptosuite:        getString(c.proof, "cryptosuite"),
 		VerificationMethod: getString(c.proof, "verificationMethod"),
@@ -387,6 +387,13 @@ func (c *PipelinePassCredential) Proof() *DataIntegrityProof {
 		Created:            getString(c.proof, "created"),
 		ProofValue:         getString(c.proof, "proofValue"),
 	}
+	// Carried on presence: the suite classifier keys on this member
+	// (signer.suite.legacy-projection), so a view that dropped it would
+	// reclassify every W3C proof as shapeless the moment it round-tripped.
+	if ctx, present := c.proof[keyContext]; present {
+		p.Context = deepCopyValue(ctx)
+	}
+	return p
 }
 
 // Body returns a defensive copy of the canonical body map (the signing

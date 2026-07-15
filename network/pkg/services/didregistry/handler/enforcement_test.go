@@ -112,13 +112,18 @@ func ed25519JWK(pub []byte) map[string]any {
 
 func signedOwnerDocBytes(t *testing.T, signer crypto.Signer, signPub []byte) []byte {
 	t.Helper()
+	// Multikey + issued contexts: this fixture models a NEW owner
+	// (signer.suite.eddsa-jcs-2022 requires Multikey for the W3C-shaped proof
+	// the production CreateProof now emits).
+	vm, err := did.NewMultikeyVerificationMethod(ownerDID+"#signing", ownerDID, signPub)
+	if err != nil {
+		t.Fatalf("NewMultikeyVerificationMethod: %v", err)
+	}
 	base := did.New(did.DocumentFields{
-		ID: ownerDID, Controller: ownerDID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID: ownerDID + "#signing", Type: "JsonWebKey2020", Controller: ownerDID,
-			PublicKeyJWK: ed25519JWK(signPub),
-		}},
-		AssertionMethod: []string{ownerDID + "#signing"},
+		Context: did.IssuedDocumentContexts(),
+		ID:      ownerDID, Controller: ownerDID,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{ownerDID + "#signing"},
 	})
 	body := base.Body()
 	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)

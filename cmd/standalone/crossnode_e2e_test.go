@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,20 +337,16 @@ func bridgeCapDir(t *testing.T, dir string) *server.MemAccResolver {
 // vc.Verifier's controller walk follows process → owner (the owner is a structural
 // ancestor), yielding ConfidenceVerified for a well-formed FirstDrop.
 func capProcessDoc(processDID, owner string, pub []byte) *did.DIDDocument {
+	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
+	if err != nil {
+		panic(err) // a non-Ed25519 fixture key is a test bug
+	}
 	return did.New(did.DocumentFields{
-		ID:         processDID,
-		Controller: owner,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         processDID + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: processDID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{processDID + "#signing"},
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 processDID,
+		Controller:         owner,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{processDID + "#signing"},
 	})
 }
 

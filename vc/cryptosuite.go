@@ -80,9 +80,16 @@ func canonicalizerFor(name string) (canon.Canonicalizer, error) {
 }
 
 func init() {
-	// eddsa-jcs-2022 is the Phase-1 MUST suite: JCS canonicalization. JCS needs
-	// no IRI-expansion probe (it is structural, not RDF-based).
-	RegisterCryptosuite(CryptosuiteEdDSAJCS2022, jcs.Canonicalizer{})
+	// eddsa-jcs-2022 is the Phase-1 MUST suite: RFC 8785 canonicalization
+	// (canon.jcs.base). JCS needs no IRI-expansion probe (it is structural, not
+	// RDF-based).
+	//
+	// The registry answers "what do we ISSUE?", so it names the conformant
+	// canonicalizer only. Verifying an artifact signed under the historical
+	// int64-verbatim deviation goes through its claim contract instead
+	// (ContractLegacyProvinEdDSAJCSInt64) — the registry must not be able to
+	// hand the deviation to a new signature.
+	RegisterCryptosuite(CryptosuiteEdDSAJCS2022, jcs.RFC8785{})
 
 	// eddsa-rdfc-2022: URDNA2015 canonicalization over the three frozen
 	// context documents, resolved offline from the embedded copies — a

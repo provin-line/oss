@@ -22,6 +22,17 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// mustMultikeyVM builds the Multikey verification method these fixtures model:
+// a NEW owner, whose W3C-shaped proofs the classifier only accepts over
+// Multikey (signer.suite.eddsa-jcs-2022).
+func mustMultikeyVM(id, controller string, pub []byte) did.VerificationMethod {
+	vm, err := did.NewMultikeyVerificationMethod(id, controller, pub)
+	if err != nil {
+		panic(err) // a non-Ed25519 fixture key is a test bug
+	}
+	return vm
+}
+
 const (
 	registry    = "poc.dplaax.dev"
 	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
@@ -122,15 +133,12 @@ func ed25519JWK(pub []byte) map[string]any {
 func signedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, aka []string) *did.DIDDocument {
 	t.Helper()
 	base := did.New(did.DocumentFields{
-		Context:     []string{"https://www.w3.org/ns/did/v1"},
-		ID:          ownerDID,
-		Controller:  ownerDID,
-		AlsoKnownAs: aka,
-		VerificationMethod: []did.VerificationMethod{{
-			ID: ownerDID + "#signing", Type: "JsonWebKey2020", Controller: ownerDID,
-			PublicKeyJWK: ed25519JWK(signPub),
-		}},
-		AssertionMethod: []string{ownerDID + "#signing"},
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 ownerDID,
+		Controller:         ownerDID,
+		AlsoKnownAs:        aka,
+		VerificationMethod: []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub)},
+		AssertionMethod:    []string{ownerDID + "#signing"},
 	})
 	body := base.Body()
 	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
@@ -353,12 +361,10 @@ func TestRegisterOwner_RejectsForeignRegistry(t *testing.T) {
 	ks.SaveKeyPair(foreignDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: foreignKP})
 	fsigner := ks
 	base := did.New(did.DocumentFields{
-		ID: foreignDID, Controller: foreignDID,
-		VerificationMethod: []did.VerificationMethod{{
-			ID: foreignDID + "#signing", Type: "JsonWebKey2020", Controller: foreignDID,
-			PublicKeyJWK: ed25519JWK(foreignKP.PublicKey),
-		}},
-		AssertionMethod: []string{foreignDID + "#signing"},
+		Context: did.IssuedDocumentContexts(),
+		ID:      foreignDID, Controller: foreignDID,
+		VerificationMethod: []did.VerificationMethod{mustMultikeyVM(foreignDID+"#signing", foreignDID, foreignKP.PublicKey)},
+		AssertionMethod:    []string{foreignDID + "#signing"},
 	})
 	body := base.Body()
 	proof, _ := vc.CreateProof(fsigner, foreignDID, "signing", foreignDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)

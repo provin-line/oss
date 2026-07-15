@@ -611,3 +611,60 @@ func deepCopyValue(v any) any {
 		return v
 	}
 }
+
+// EncodeEd25519Multikey renders an Ed25519 public key as a Multikey
+// publicKeyMultibase value: multibase base58btc ("z") over the ed25519-pub
+// multicodec prefix + the raw key. It is the inverse of the decoder above, and
+// exists as the one place issuance builds the value — a second, hand-rolled
+// encoder is how a key that cannot be read back gets published.
+func EncodeEd25519Multikey(key []byte) (string, error) {
+	if len(key) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	}
+	return multibase.EncodeBase58Btc(append(append([]byte{}, ed25519PubMulticodec...), key...)), nil
+}
+
+// NewMultikeyVerificationMethod builds a Multikey verification method for an
+// Ed25519 key — the encoding the W3C eddsa-jcs-2022 suite requires
+// (signer.suite.eddsa-jcs-2022).
+func NewMultikeyVerificationMethod(id, controller string, key []byte) (VerificationMethod, error) {
+	mb, err := EncodeEd25519Multikey(key)
+	if err != nil {
+		return VerificationMethod{}, err
+	}
+	return VerificationMethod{
+		ID:                 id,
+		Type:               vmTypeMultikey,
+		Controller:         controller,
+		PublicKeyMultibase: mb,
+	}, nil
+}
+
+// Frozen @context URIs for issued DID documents. DID Core requires @context on
+// the JSON-LD representation, and the Multikey verification-method type is
+// defined by the security/multikey context — a document carrying Multikey
+// methods without naming that context is not honestly self-describing to an
+// external resolver.
+//
+// Unlike the credential contexts (vc/context.go), these need no embedded
+// document copies: DID documents are canonicalized with JCS only, never RDF
+// expansion, so the URIs ride the signing scope as inert bytes. What must not
+// drift is the strings themselves — TestIssuedDocumentContextsAreFrozen pins
+// them — because a changed URI changes every issued document's hash.
+const (
+	// ContextDIDV1 is the W3C DID Core base context.
+	ContextDIDV1 = "https://www.w3.org/ns/did/v1"
+	// ContextMultikeyV1 is the W3C security context defining the Multikey
+	// verification-method type.
+	ContextMultikeyV1 = "https://w3id.org/security/multikey/v1"
+)
+
+// IssuedDocumentContexts returns the @context every document this repository
+// issues carries, in order. One function rather than N call-site literals: the
+// proof classifier keys on the presence of a proof-local @context mirrored from
+// the document (signer.suite.eddsa-jcs-2022), so an issuance path that forgot
+// the context would mint documents whose self-signed proofs match no claim
+// contract.
+func IssuedDocumentContexts() []string {
+	return []string{ContextDIDV1, ContextMultikeyV1}
+}

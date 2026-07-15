@@ -10,7 +10,6 @@ package auditor
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"strings"
 	"sync"
@@ -61,19 +60,17 @@ func (o *outageResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDo
 // ecDoc builds a DID Document; with a non-nil pub it carries an
 // AssertionMethod signing key controlled by the subject.
 func ecDoc(id, controller string, pub []byte) *did.DIDDocument {
-	fields := did.DocumentFields{ID: id, Controller: controller}
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
 	if pub != nil {
 		vmID := id + "#signing"
-		fields.VerificationMethod = []did.VerificationMethod{{
-			ID:         vmID,
-			Type:       "JsonWebKey2020",
-			Controller: id,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP",
-				"crv": "Ed25519",
-				"x":   base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}}
+		vm, err := did.NewMultikeyVerificationMethod(vmID, id, pub)
+		if err != nil {
+			panic(err) // a non-Ed25519 fixture key is a test bug
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
 		fields.AssertionMethod = []string{vmID}
 	}
 	return did.New(fields)
