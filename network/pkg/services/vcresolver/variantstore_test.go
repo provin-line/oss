@@ -668,3 +668,119 @@ func TestGetRejectsACorruptProjection(t *testing.T) {
 		t.Errorf("Get laundered damage into ErrNotFound: %v", err)
 	}
 }
+
+// TestAReadDoesNotDestroyARollbackWrittenVariant is Codex's P1, and it is the
+// worst class of bug this layer can have: a READ deleting evidence.
+//
+// After a rollback an older binary writes the flat slot without knowing about
+// variants. If those bytes sort AFTER the set's minimum they do not win, so
+// Get serves the set — and then repairs the flat slot to point at what it
+// served, overwriting the only copy of the rollback-written variant. It was
+// never materialized (only PutVariant does that), so it is gone: ListVariantIDs
+// answered with it a moment ago and now cannot.
+//
+// The earlier rollback test missed this by never calling Get in between.
+func TestAReadDoesNotDestroyARollbackWrittenVariant(t *testing.T) {
+	backend := memstore.NewBackend()
+	store := vcresolver.NewVariantStore(backend)
+
+	// Find two proofs whose variants sort in a known order, so the flat one is
+	// the LOSER — the case where the projection is about to be rewritten.
+	low, high := orderedVariantPair(t)
+	body, lowID := mustPut(t, store, low)
+	highID, err := high.WireVariantID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(lowID < highID) {
+		t.Fatalf("fixture bug: %s should sort before %s", lowID, highID)
+	}
+
+	// The rollback: an old binary replaces the flat slot with the losing variant.
+	bodyHex := strings.TrimPrefix(body, "sha256:")
+	if err := backend.WriteProjection(bodyHex, canonicalOf(t, high)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.ListVariantIDs(body, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 2 {
+		t.Fatalf("precondition: the set is %v, want both variants held", before)
+	}
+
+	// A plain read. Nothing about it says "delete evidence".
+	if _, err := store.Get(body); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	after, err := store.ListVariantIDs(body, "", 10)
+	if err != nil {
+		t.Fatalf("ListVariantIDs after the read: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("a read changed the variant set: %v → %v", before, after)
+	}
+	if _, err := store.GetVariant(body, highID); err != nil {
+		t.Errorf("the rollback-written variant is gone after a read: %v", err)
+	}
+}
+
+// orderedVariantPair returns two variants of one body, (lower id, higher id).
+func orderedVariantPair(t *testing.T) (low, high *vc.PipelinePassCredential) {
+	t.Helper()
+	a, b := credWithProof(t, "s1", "zA"), credWithProof(t, "s1", "zB")
+	idA, err := a.WireVariantID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := b.WireVariantID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idA < idB {
+		return a, b
+	}
+	return b, a
+}
+
+// TestAMisfiledLegacyEntryIsNotAdoptedIntoTheWrongBody is Codex's P2.
+//
+// Canonical bytes for a DIFFERENT body are perfectly well-formed, so a check
+// that only asks "are these canonical" adopts some other body's credential
+// into this body's variant set — and PutVariant reports success. The pre-slice
+// store made exactly this check on read ("tampered or misfiled"); the variant
+// layer has to keep it.
+func TestAMisfiledLegacyEntryIsNotAdoptedIntoTheWrongBody(t *testing.T) {
+	backend := memstore.NewBackend()
+	mine := credWithProof(t, "s1", "zA")
+	body, err := mine.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A canonical credential for ANOTHER body, filed under this one.
+	stranger := credWithProof(t, "SOME-OTHER-PROCESS", "zA")
+	if strangerBody, err := stranger.Hash(); err != nil || strangerBody == body {
+		t.Fatalf("fixture bug: the stranger must be a different body (%v)", err)
+	}
+	if err := backend.WriteProjection(strings.TrimPrefix(body, "sha256:"), canonicalOf(t, stranger)); err != nil {
+		t.Fatal(err)
+	}
+	store := vcresolver.NewVariantStore(backend)
+
+	if _, _, err := store.PutVariant(mine); !errors.Is(err, vcresolver.ErrCorrupt) {
+		t.Errorf("PutVariant over a misfiled legacy entry = %v, want ErrCorrupt", err)
+	}
+	strangerID, err := stranger.WireVariantID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetVariant(body, strangerID); errors.Is(err, nil) {
+		t.Error("a misfiled credential is fetchable under the wrong body")
+	}
+	if _, err := store.Get(body); err == nil {
+		t.Error("Get served a misfiled legacy entry")
+	} else if errors.Is(err, vcresolver.ErrNotFound) {
+		t.Errorf("a misfiled legacy entry read as absent: %v", err)
+	}
+}

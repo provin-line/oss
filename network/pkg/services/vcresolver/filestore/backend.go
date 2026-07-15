@@ -193,18 +193,22 @@ func (b *Backend) ReadVariant(bodyHex, variantHex string) ([]byte, error) {
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.readFile(path, "variant")
+	// The variant subtree is the witness, not the root: it can be removed or
+	// unmounted while the root stays, and then every variant this store holds
+	// would answer "never held" — a storage failure reported as a fact about
+	// provenance. (A body's own directory being absent IS a real miss: that
+	// body simply has no variants.)
+	return b.readFile(path, "variant", b.vdir)
 }
 
 // readFile reads path, mapping absence to ErrNotFound — but only after proving
-// the STORE is still there. A deleted or unmounted root must not read as
-// "this credential was never held": that is a storage failure being reported
-// as a fact about provenance.
-func (b *Backend) readFile(path, what string) ([]byte, error) {
+// the directory that WOULD hold it is still there. A deleted or unmounted
+// store must not read as "this credential was never held".
+func (b *Backend) readFile(path, what, witness string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		if _, statErr := os.Stat(b.dir); statErr != nil {
-			return nil, fmt.Errorf("filestore: credential store root %s unavailable: %w", b.dir, statErr)
+		if _, statErr := os.Stat(witness); statErr != nil {
+			return nil, fmt.Errorf("filestore: credential store %s unavailable: %w", witness, statErr)
 		}
 		return nil, vcresolver.ErrNotFound
 	}
@@ -227,7 +231,14 @@ func (b *Backend) ListVariantHexes(bodyHex, fromExclusive string, limit int) ([]
 	defer b.mu.RUnlock()
 	des, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil // no variants held: a normal answer
+		// A body with no directory holds no variants — a normal answer. But
+		// the SUBTREE being gone is storage damage, and answering "no
+		// variants" for every body would tell a caller this node never held
+		// evidence it is in fact losing.
+		if _, statErr := os.Stat(b.vdir); statErr != nil {
+			return nil, fmt.Errorf("filestore: variant store %s unavailable: %w", b.vdir, statErr)
+		}
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("filestore: list variants: %w", err)
@@ -250,7 +261,7 @@ func (b *Backend) ReadProjection(bodyHex string) ([]byte, error) {
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.readFile(path, "projection")
+	return b.readFile(path, "projection", b.dir)
 }
 
 // WriteProjection implements vcresolver.VariantBackend. Rename is correct here

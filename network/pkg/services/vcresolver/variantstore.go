@@ -180,7 +180,7 @@ func (s *VariantStore) readFlat(bodyHex string) (flatSlot, error) {
 	if err != nil {
 		return flatSlot{}, fmt.Errorf("vcresolver: read projection: %w", err)
 	}
-	hex, ok := validatedVariantHexOf(wire)
+	hex, ok := validatedFlatVariantHexOf(wire, bodyHex)
 	if !ok {
 		return flatSlot{present: true}, nil
 	}
@@ -287,16 +287,28 @@ func (s *VariantStore) winner(bodyHex string) (variantHex string, wire []byte, e
 	return setMin, wire, nil
 }
 
-// validatedVariantHexOf names wire's variant, but only if wire IS the
-// canonical projection of the credential it decodes to.
+// validatedFlatVariantHexOf names the variant a legacy flat slot holds — but
+// only if those bytes are the canonical projection of a credential AND that
+// credential is the body the slot is filed under.
 //
-// The canonicality check is not decoration here, it is the ONLY witness
-// available: this id is derived FROM these bytes, so recomputing a digest
-// would compare a value against itself and could never fail. Skip the check
-// and re-spelled bytes get filed under their own digest, after which every
-// fetch of that id serves bytes no signature covers.
-func validatedVariantHexOf(wire []byte) (string, bool) {
-	if _, err := validateWire(wire); err != nil {
+// Canonicality is the only witness available for the id: it is derived FROM
+// these bytes, so recomputing a digest would compare a value against itself
+// and could never fail. Skip the check and re-spelled bytes get filed under
+// their own digest, after which every fetch of that id serves bytes no
+// signature covers.
+//
+// The BODY check is the second half, and it is not redundant: canonical bytes
+// for a DIFFERENT body are perfectly well-formed, so canonicality alone would
+// adopt some other body's credential into this body's variant set. The
+// pre-slice store made exactly this check when it read the flat file
+// ("tampered or misfiled"); losing it here would be a regression.
+func validatedFlatVariantHexOf(wire []byte, bodyHex string) (string, bool) {
+	cred, err := validateWire(wire)
+	if err != nil {
+		return "", false
+	}
+	got, err := cred.Hash()
+	if err != nil || got != "sha256:"+bodyHex {
 		return "", false
 	}
 	return vc.WireVariantHex(vc.WireVariantIDOf(wire))
@@ -332,13 +344,42 @@ func (s *VariantStore) Get(hash string) (*vc.PipelinePassCredential, error) {
 	if got, err := cred.Hash(); err != nil || got != hash {
 		return nil, fmt.Errorf("%w: projection of body %s carries body %s", ErrCorrupt, hash, got)
 	}
-	// Best-effort repair so an older binary reading the flat slot directly
-	// sees the same variant this one just served. The answer above does not
-	// depend on it, so a read-only or failing store still resolves.
-	if held, herr := s.backend.ReadProjection(bodyHex); herr != nil || !bytes.Equal(held, wire) {
-		_ = s.backend.WriteProjection(bodyHex, wire)
-	}
+	s.healProjection(bodyHex, wire)
 	return cred, nil
+}
+
+// healProjection points the legacy flat slot at wire — the variant this read
+// just served — so an older binary reading that file directly sees the same
+// document. The answer above does not depend on it, so a read-only or failing
+// store still resolves; this is compatibility, not correctness.
+//
+// It ADOPTS what is there first, and that order is the whole point. The flat
+// slot can be the only copy of a variant: after a rollback an older binary
+// writes it without knowing variants exist, and nothing has materialized it
+// yet. If those bytes lose the tie-break they are not what this read serves —
+// so a naive repair would overwrite the sole copy of a held variant, and a
+// plain READ would destroy evidence that ListVariantIDs had just reported.
+// Nothing is replaced until it is preserved, and if preserving fails, nothing
+// is replaced at all.
+func (s *VariantStore) healProjection(bodyHex string, wire []byte) {
+	flat, err := s.readFlat(bodyHex)
+	if err != nil {
+		return
+	}
+	switch {
+	case flat.damaged():
+		// Not ours to launder. Overwriting bytes this store cannot classify
+		// would erase the only trace that something tampered with them; a new
+		// reader is unaffected either way, because it serves the set.
+		return
+	case flat.present && bytes.Equal(flat.wire, wire):
+		return // already pointing at what was served
+	case flat.present:
+		if err := s.admit(bodyHex, flat.hex, flat.wire); err != nil {
+			return // could not preserve it, so must not replace it
+		}
+	}
+	_ = s.backend.WriteProjection(bodyHex, wire)
 }
 
 // GetVariant returns the exact canonical wire bytes held at (bodyAddress,

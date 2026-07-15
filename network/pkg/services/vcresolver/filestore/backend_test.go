@@ -544,3 +544,50 @@ func mustBackend(t *testing.T, dir string) *filestore.Backend {
 	}
 	return b
 }
+
+// TestAVanishedVariantSubtreeIsNotAnAbsentVariant is Codex's third finding.
+//
+// The root can survive while the variant subtree is removed or unmounted. The
+// root check passes, the variant file is ENOENT, and every variant this store
+// holds would answer "never held" — a storage failure reported as a fact about
+// provenance, which is the same laundering the vanished-root check exists to
+// prevent, one directory down.
+func TestAVanishedVariantSubtreeIsNotAnAbsentVariant(t *testing.T) {
+	b, dir := newBackend(t)
+	body, variant := hex64('9'), hex64('a')
+	if _, err := b.PutIfAbsent(body, variant, []byte(`{"held":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The subtree goes; the root stays.
+	if err := os.RemoveAll(filepath.Join(dir, "variants")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("precondition: the root must still be there: %v", err)
+	}
+
+	_, err := b.ReadVariant(body, variant)
+	if err == nil {
+		t.Fatal("ReadVariant succeeded with the subtree gone")
+	}
+	if errors.Is(err, vcresolver.ErrNotFound) {
+		t.Errorf("a vanished variant subtree read as an absent variant: %v", err)
+	}
+	if _, err := b.ListVariantHexes(body, "", 10); err == nil {
+		t.Error("ListVariantHexes answered 'no variants' with the subtree gone")
+	}
+}
+
+// TestAnAbsentBodyDirectoryIsStillARealMiss: the check above must not turn
+// every ordinary miss into an error — a body that simply has no variants has
+// no directory, and that is a normal answer.
+func TestAnAbsentBodyDirectoryIsStillARealMiss(t *testing.T) {
+	b, _ := newBackend(t)
+	if _, err := b.ReadVariant(hex64('b'), hex64('c')); !errors.Is(err, vcresolver.ErrNotFound) {
+		t.Errorf("ReadVariant on a body with no variants = %v, want ErrNotFound", err)
+	}
+	page, err := b.ListVariantHexes(hex64('b'), "", 10)
+	if err != nil || len(page) != 0 {
+		t.Errorf("ListVariantHexes on a body with no variants = %v (err %v), want an empty page", page, err)
+	}
+}
