@@ -59,14 +59,21 @@ func CreateProof(
 	if err != nil {
 		return nil, fmt.Errorf("vc: sign proof: %w", err)
 	}
-	return &DataIntegrityProof{
+	p := &DataIntegrityProof{
 		Type:               proofType,
 		Cryptosuite:        cryptosuite,
 		VerificationMethod: verificationMethod,
 		ProofPurpose:       proofPurposeSign,
 		Created:            created,
 		ProofValue:         multibase.EncodeBase58Btc(sig),
-	}, nil
+	}
+	if hasCtx {
+		// vc-di-eddsa §3.3.1 step 2: the proof's @context is the document's.
+		// cfg already carries this value, so the wire member rides inside the
+		// signature rather than beside it.
+		p.Context = ctx
+	}
+	return p, nil
 }
 
 // VerifyProof reconstructs hashData from proof and document and verifies the

@@ -56,6 +56,12 @@ type PipelinePassCredential struct {
 // outside the signing scope of the document body (the proof configuration is
 // hashed separately — see CreateProof).
 type DataIntegrityProof struct {
+	// Context is the proof-local @context, copied from the document being
+	// signed (vc-di-eddsa §3.3.1 step 2). It is omitted for a document that
+	// carries none — absence stays absence, because an invented context would
+	// sign a term the issuer never asserted. It rides inside the signature: the
+	// proof config commits to the same value.
+	Context            any    `json:"@context,omitempty"`
 	Type               string `json:"type"`
 	Cryptosuite        string `json:"cryptosuite"`
 	VerificationMethod string `json:"verificationMethod"`

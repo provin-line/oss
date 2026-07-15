@@ -21,12 +21,35 @@ const maxControllerDepth = 8
 // Any other member is not covered by the signature and so is rejected at
 // verification (proof-malleability defense).
 var allowedProofMembers = map[string]bool{
+	// @context is the W3C shape's proof-local context (vc-di-eddsa §3.3.1
+	// step 2). It is admissible because the proof config commits to it: unlike
+	// an arbitrary extra member, it cannot be changed without breaking the
+	// signature.
+	"@context":           true,
 	"type":               true,
 	"cryptosuite":        true,
 	"verificationMethod": true,
 	"proofPurpose":       true,
 	"created":            true,
 	"proofValue":         true,
+}
+
+// AllowedProofMembers returns the exact wire member set a Data Integrity proof
+// may carry. Every member in it is covered by the signature; anything else rides
+// outside it and is rejected.
+//
+// It is exported because the proof shape is one contract with more than one
+// reader — the credential verifier and the DID registry both police it — and a
+// second, hand-maintained copy of the set drifts. When it drifts, one component
+// accepts a proof another rejects, which reads as an authorization bug long
+// before anyone suspects the list. The returned map is a copy: a caller
+// tightening or loosening its own view must not silently redefine everyone's.
+func AllowedProofMembers() map[string]bool {
+	out := make(map[string]bool, len(allowedProofMembers))
+	for k, v := range allowedProofMembers {
+		out[k] = v
+	}
+	return out
 }
 
 // Verifier performs credential verification: wire-form checks, issuer DID

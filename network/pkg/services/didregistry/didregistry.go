@@ -510,13 +510,15 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 	return nil
 }
 
-// proofMembers is the exact set the provin Data Integrity proof carries; a proof
-// with any other member is rejected (an extra member rides outside the signature
-// and would be malleable if a consumer trusted it).
-var proofMembers = map[string]bool{
-	"type": true, "cryptosuite": true, "verificationMethod": true,
-	"proofPurpose": true, "created": true, "proofValue": true,
-}
+// proofMembers is the exact set a Data Integrity proof may carry; a proof with
+// any other member is rejected (an extra member rides outside the signature and
+// would be malleable if a consumer trusted it).
+//
+// The set is vc.AllowedProofMembers, not a local copy: two lists of "what a
+// proof may contain" drift, and the drift shows up as one component accepting a
+// proof another rejects. @context is in it because the proof config commits to
+// it (vc-di-eddsa §3.3.1 step 2) — it rides inside the signature.
+var proofMembers = vc.AllowedProofMembers()
 
 // splitProof separates the embedded proof from the signing scope (the body
 // without the proof member). The body is a defensive copy, so the caller's
@@ -541,14 +543,21 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 			signing[k] = v
 		}
 	}
-	return &vc.DataIntegrityProof{
+	p := &vc.DataIntegrityProof{
 		Type:               getString(pm, "type"),
 		Cryptosuite:        getString(pm, "cryptosuite"),
 		VerificationMethod: getString(pm, "verificationMethod"),
 		ProofPurpose:       getString(pm, "proofPurpose"),
 		Created:            getString(pm, "created"),
 		ProofValue:         getString(pm, "proofValue"),
-	}, signing, nil
+	}
+	// Carried on presence, not on truthiness: the proof config distinguishes an
+	// absent @context from a null one, so dropping the member here would
+	// reconstruct a different signing scope than the issuer signed.
+	if ctx, present := pm["@context"]; present {
+		p.Context = ctx
+	}
+	return p, signing, nil
 }
 
 // appendEvent stamps the witnessed-at clock, chains PrevEventHash to the current
