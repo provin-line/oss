@@ -64,6 +64,10 @@ func init() {
 	registerRunner(runProcess, "process", 5, 6)
 	dplaaxRunners["process-004"] = runProcessSinkVerify
 
+	// identity family, store half: write-once/append-only admission and the
+	// legacy body-only projection, driven against the real variant store.
+	registerRunner(runIdentityStore, "identity", 3, 7)
+
 	// transfer family: audit-reachable transfer evidence records (emission,
 	// ingress, relationship) — the federation-layer domain settled 2026-07-11.
 	// Each vector has a distinct expect shape, so each is its own driver.
@@ -90,12 +94,6 @@ func init() {
 	// internal async worker, not a lookup surface).
 	dplaaxSkips["resolver-007"] = "reserved: resolver.batch.shape binds a future batch lookup surface; none exists in dplaax.vc.v1 (P0-11; the vector pins the shape such a surface must satisfy)"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
-
-	// identity-003..007 drive the variant store's write-once/append-only
-	// admission and its legacy projection. Ledgered here for the length of
-	// T1 only: T2/T3 of this slice build that store and convert these to
-	// drivers (tranche 2).
-	registerSkip("identity", 3, 7, "blocked-on: no variant store yet — these drive PutVariant/GetVariant admission and the legacy body-only projection, landing in T2/T3 of this same slice")
 
 	// Vectors of rules whose SUBJECT does not exist in this implementation
 	// yet. They arrived here because vendoring is whole-corpus by design

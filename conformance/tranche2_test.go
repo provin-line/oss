@@ -33,7 +33,9 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
+	vcmemstore "github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -1037,5 +1039,161 @@ func runTransferRelationshipRecord(t *testing.T, v dplaaxVector) {
 	}
 	if state != e.State {
 		t.Errorf("post-restart relationship record state = %q, want %q (got %+v, want %+v)", state, e.State, got, want)
+	}
+}
+
+// --- identity family, store half (identity-003..007) ---
+//
+// Driven against the real variant store: the vectors' ops (put-variant,
+// get-variant, list-variants, legacy-put, get) are the façade's own surface,
+// so these run the code a deployment runs, not a model of it. The mem backend
+// is used because what is under test is the façade — the durable backend's own
+// obligations are storecontract.Backend's, and filestore runs that same suite.
+//
+// identity-004 is the one that needs storage to misbehave: "the same id
+// carrying different bytes" is unreachable through the API (the id IS the
+// digest), so the vector supplies the tampered bytes and the driver injects
+// them underneath the façade.
+
+type identityStep struct {
+	Op            string          `json:"op"`
+	Credential    json.RawMessage `json:"credential"`
+	BodyAddress   string          `json:"body_address"`
+	WireVariantID string          `json:"wire_variant_id"`
+	StoredBytes   string          `json:"stored_bytes"`
+}
+
+// respellingBackend serves `bytes` in place of whatever is held at `at`.
+type respellingBackend struct {
+	vcresolver.VariantBackend
+	at    string
+	bytes []byte
+}
+
+func (b *respellingBackend) ReadVariant(bodyHex, variantHex string) ([]byte, error) {
+	if variantHex == b.at {
+		return b.bytes, nil
+	}
+	return b.VariantBackend.ReadVariant(bodyHex, variantHex)
+}
+
+func runIdentityStore(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Sequence []identityStep `json:"sequence"`
+	}
+	mustParse(t, v.Input, &input)
+	backend := vcmemstore.NewBackend()
+	store := vcresolver.NewVariantStore(backend)
+
+	var body string
+	for i, step := range input.Sequence {
+		switch step.Op {
+		case "put-variant":
+			b, _, err := store.PutVariant(mustCred(t, step.Credential))
+			if err != nil {
+				t.Fatalf("step %d: PutVariant: %v", i, err)
+			}
+			body = b
+		case "legacy-put":
+			// The pre-slice layout: a body-only entry, no variants. Written
+			// straight to the backend because the façade has no surface that
+			// produces one — which is the point of the migration this vector
+			// pins.
+			bodyHex, ok := strings.CutPrefix(step.BodyAddress, "sha256:")
+			if !ok {
+				t.Fatalf("step %d: body_address %q is not a content address", i, step.BodyAddress)
+			}
+			if err := backend.WriteProjection(bodyHex, []byte(step.StoredBytes)); err != nil {
+				t.Fatalf("step %d: seed legacy entry: %v", i, err)
+			}
+			body = step.BodyAddress
+		case "get-variant":
+			if step.StoredBytes == "" {
+				if _, err := store.GetVariant(step.BodyAddress, step.WireVariantID); err != nil {
+					t.Fatalf("step %d: GetVariant: %v", i, err)
+				}
+				continue
+			}
+			// Tampered storage: the vector says what is held, and the fetch
+			// must refuse it.
+			variantHex, ok := vc.WireVariantHex(step.WireVariantID)
+			if !ok {
+				t.Fatalf("step %d: %q is not a variant id", i, step.WireVariantID)
+			}
+			tampering := vcresolver.NewVariantStore(&respellingBackend{
+				VariantBackend: backend, at: variantHex, bytes: []byte(step.StoredBytes),
+			})
+			_, err := tampering.GetVariant(step.BodyAddress, step.WireVariantID)
+			if want := expectString(t, v); (err == nil) == (want == "reject") {
+				t.Fatalf("step %d: GetVariant on tampered storage err=%v, want %s", i, err, want)
+			}
+			return // a reject vector is decided by this step
+		case "list-variants", "get":
+			// Assertions below read the final state; these ops name what the
+			// expect block is about rather than mutating anything.
+			if step.BodyAddress != "" {
+				body = step.BodyAddress
+			}
+		default:
+			t.Fatalf("step %d: unhandled op %q", i, step.Op)
+		}
+	}
+
+	var want struct {
+		VariantSet          []string        `json:"variant_set"`
+		ExactBytes          json.RawMessage `json:"exact_bytes"`
+		ProjectionVariantID string          `json:"projection_variant_id"`
+	}
+	mustParse(t, v.Expect, &want)
+
+	ids, err := store.ListVariantIDs(body, "", 100)
+	if err != nil {
+		t.Fatalf("ListVariantIDs: %v", err)
+	}
+	if !reflect.DeepEqual(ids, want.VariantSet) {
+		t.Errorf("variant set = %v, want %v", ids, want.VariantSet)
+	}
+	assertIdentityExactBytes(t, store, body, want.ExactBytes, want.VariantSet)
+	if want.ProjectionVariantID != "" {
+		got, err := store.Get(body)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		gotID, err := got.WireVariantID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotID != want.ProjectionVariantID {
+			t.Errorf("projection served %s, want %s", gotID, want.ProjectionVariantID)
+		}
+	}
+}
+
+// assertIdentityExactBytes checks expect.exact_bytes, which is either the one
+// held variant's bytes (a string) or a per-variant map. Byte equality is the
+// assertion, not equivalence: evidence is the octets that were evaluated.
+func assertIdentityExactBytes(t *testing.T, store *vcresolver.VariantStore, body string, raw json.RawMessage, set []string) {
+	t.Helper()
+	if len(raw) == 0 {
+		return
+	}
+	want := map[string]string{}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		if len(set) != 1 {
+			t.Fatalf("expect.exact_bytes is a single string but the variant set has %d entries", len(set))
+		}
+		want[set[0]] = single
+	} else if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatalf("expect.exact_bytes: %v", err)
+	}
+	for id, wantBytes := range want {
+		got, err := store.GetVariant(body, id)
+		if err != nil {
+			t.Fatalf("GetVariant(%s): %v", id, err)
+		}
+		if string(got) != wantBytes {
+			t.Errorf("GetVariant(%s) =\n%s\nwant\n%s", id, got, wantBytes)
+		}
 	}
 }

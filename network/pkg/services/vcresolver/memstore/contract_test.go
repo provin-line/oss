@@ -17,3 +17,7 @@ func TestContract_Store(t *testing.T) {
 func TestContract_Pool(t *testing.T) {
 	storecontract.Pool(t, func(t *testing.T) vcresolver.Pool { return memstore.NewPool() })
 }
+
+func TestContract_VariantBackend(t *testing.T) {
+	storecontract.Backend(t, func(t *testing.T) vcresolver.VariantBackend { return memstore.NewBackend() })
+}

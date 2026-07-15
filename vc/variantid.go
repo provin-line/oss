@@ -76,11 +76,34 @@ func WireVariantIDOf(canonicalWire []byte) string {
 // It is a pure syntax check: it asserts nothing about whether the variant is
 // held, valid, or verified.
 func IsWireVariantID(s string) bool {
-	if len(s) != len(wireVariantPrefix)+wireVariantHexLen || s[:len(wireVariantPrefix)] != wireVariantPrefix {
-		return false
-	}
-	return isLowerHex(s[len(wireVariantPrefix):])
+	_, ok := WireVariantHex(s)
+	return ok
 }
+
+// WireVariantHex returns the hex payload of a well-formed variant id, and
+// whether s was one.
+//
+// It exists so a storage layer can name what it holds without re-implementing
+// this grammar: the payload is hex, so it is safe as a file name or map key by
+// construction, and a backend that never learns the prefix cannot drift from
+// it when the canonicalization profile moves. IsWireVariantID is this
+// function's answer with the payload dropped — one parser, so a string cannot
+// be valid to one caller and malformed to another.
+func WireVariantHex(s string) (string, bool) {
+	if len(s) != len(wireVariantPrefix)+wireVariantHexLen || s[:len(wireVariantPrefix)] != wireVariantPrefix {
+		return "", false
+	}
+	hexPart := s[len(wireVariantPrefix):]
+	if !isLowerHex(hexPart) {
+		return "", false
+	}
+	return hexPart, true
+}
+
+// WireVariantIDFromHex is WireVariantHex's inverse: it re-attaches the prefix
+// to a hex payload a backend named. It does not validate — a caller holding a
+// payload that did not come from WireVariantHex is already lost.
+func WireVariantIDFromHex(hexPart string) string { return wireVariantPrefix + hexPart }
 
 // isLowerHex reports whether s is entirely lowercase hexadecimal. Uppercase
 // is rejected rather than folded: an id is compared as a string (it is a map
