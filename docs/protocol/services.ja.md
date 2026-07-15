@@ -11,7 +11,7 @@
 | `dplaax.schema.v1.SchemaService` | L1 | schema の登録・取得・deprecation（content-hash 参照の JSON Schema） |
 | `dplaax.did.v1.DIDService` | L1 | `did:dplaax` lifecycle: owner 登録、pipeline/process 発行、解決、delegation 読み、revocation、lifecycle-log 読み |
 | `dplaax.signer.v1.SignerService` | L1 | registry 保持鍵での署名（VC / raw）— registry が生成した鍵の DID 用 |
-| `dplaax.vc.v1.VCResolverService` | L1 | content-addressed credential store: `StoreVC`、`ResolveVC`、successor 列挙 |
+| `dplaax.vc.v1.VCResolverService` | L1 | content-addressed credential store: `StoreVC`、`ResolveVC`、exact variant fetch（`ResolveVariant`、`ListVariants`）、successor 列挙 |
 | `dplaax.audit.v1.AuditService` | L1 | per-head audit verdict（`GetAuditStatus` / `ListAuditStatuses`）と consumed-source receipt（`GetConsumedSources`） |
 | `dplaax.tlog.v1.TlogService` | L1 | emission log の checkpoint と record 読み（transparency log の公開面） |
 | `dplaax.chain.v1.ChainService` | L1 | operator 側 chain 管理: subscription、allow-list |
@@ -32,6 +32,8 @@ relying party が依存してよい構造的事実 2 つ:
 
 - **DIDService / resolution route** — RPC の `ResolveDID` は L1 gate。raw-HTTP route は同じ canonical document（`application/did+json`）を提供する open-read の W3C 式面。どちらも document を保存されたまま返す — **resolution は lifecycle status を参照しない**。revocation は lifecycle log から発見する（[did/method.ja.md](../did/method.ja.md)）。
 - **VCResolverService** — content-addressed で immutable: 保存済み credential は content hash で取得できる。`ListSuccessors` はこの store が知る `previousCredential` リンクの逆引き。store は保持するものについてのみ答える — 不在はグローバルな非存在ではない。
+
+  1 つの body は複数の **variant**（同じ主張に対する別の署名形）を保持し得る。proof を再発行しても body と、そこへの `previousCredential` リンクは動かないため。variant set は append-only で、admit が他を evict することはない — 後着の proof が先着を追い出すことも、先着が後着を締め出すこともない。したがって `ResolveVC` は body で答える **provisional** な読み: その時点で保持している variant 集合に対する決定的な選択を返し、どれを返したかを名乗る（集合が増えれば別の variant が勝ち得る）。verdict を再現する必要があるものは `ResolveVariant` で厳密な bytes を取得する — 検証対象が署名であるとき、等価は同一ではない。
 - **AuditService** — verdict は *audit runner* の永続記録: linear-chain confidence と、（local receipt を持つ aggregate head には）独立の source-commitment verdict。verdict は「その locus で何が検査されたか」を名指すのであって、グローバルな真理の oracle ではない。
 - **TlogService** — producer 側 emission log の署名付き checkpoint と record を提供。consumer は sequence カバレッジを配送と突合して loss の主張を bound する。
 - **SignerService** — registry 保持鍵（発行した pipeline/process DID 用に registry が生成した鍵）でのみ署名する。owner 鍵は client 保持 — registry は決して見ない。

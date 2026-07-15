@@ -173,7 +173,17 @@ verdicts). Two operational obligations:
   evidence retention is a deployment obligation, not an optimization.
 - **Evidence grows without bound by default**; monitor disk. To bound live
   disk without deleting records, rotate the relationship-evidence log to a
-  cold archive (see below).
+  cold archive (see below). One body can accumulate several credential
+  variants — signed forms of the same claims — and the set is append-only by
+  design: nothing evicts a variant, because that is how a later invalid proof
+  is prevented from displacing an earlier valid one. Admission is L1-gated;
+  quota and quarantine land with the external-effect gate.
+
+The credential store keeps each body's variants under
+`<evidence-dir>/credentials/variants/<bodyhex>/<varianthex>.json`, alongside
+the `<bodyhex>.json` entry it has always written. That flat entry is
+maintained as the body-only projection, so **an older binary rolled back onto
+this directory still resolves every body** and never sees the subtree.
 
 In-memory by design (PoC posture): the wireauth nonce store (replay defense
 re-arms via the restart epoch barrier) and infra-operator state.

@@ -19,7 +19,7 @@ on a raw-HTTP route; **public** = deliberately unauthenticated.
 | `dplaax.schema.v1.SchemaService` | L1 | schema registration, retrieval, deprecation (content-hash-referenced JSON Schemas) |
 | `dplaax.did.v1.DIDService` | L1 | `did:dplaax` lifecycle: owner registration, pipeline/process issuance, resolution, delegation reads, revocation, lifecycle-log reads |
 | `dplaax.signer.v1.SignerService` | L1 | registry-held key signing (VC and raw) for DIDs whose keys the registry generated |
-| `dplaax.vc.v1.VCResolverService` | L1 | content-addressed credential store: `StoreVC`, `ResolveVC`, successor listing |
+| `dplaax.vc.v1.VCResolverService` | L1 | content-addressed credential store: `StoreVC`, `ResolveVC`, exact variant fetch (`ResolveVariant`, `ListVariants`), successor listing |
 | `dplaax.audit.v1.AuditService` | L1 | per-head audit verdicts (`GetAuditStatus`, `ListAuditStatuses`) and consumed-source receipts (`GetConsumedSources`) |
 | `dplaax.tlog.v1.TlogService` | L1 | emission-log checkpoints and record reads (transparency-log exposure) |
 | `dplaax.chain.v1.ChainService` | L1 | operator-side chain management: subscriptions, allow-lists |
@@ -51,6 +51,17 @@ Two structural facts a relying party may depend on:
   credential is retrievable by its content hash; `ListSuccessors` inverts
   `previousCredential` links known to this store. A store answers only
   for what it holds — absence is not global non-existence.
+
+  One body may hold several **variants** — signed forms of the same claims —
+  because re-issuing a proof leaves the body, and every `previousCredential`
+  link to it, untouched. The set is append-only: admitting a variant never
+  evicts another, so a later proof cannot displace an earlier one and an
+  earlier one cannot exclude a later one. `ResolveVC` answers by body and is
+  therefore **provisional**: it serves a deterministic choice over the
+  variants held at that moment, and names which one it served — a different
+  variant may win once the set grows. Anything that must reproduce a verdict
+  fetches the exact bytes with `ResolveVariant`; equivalence is not identity
+  when what is being checked is a signature.
 - **AuditService** — verdicts are the *audit runner's* durable records:
   linear-chain confidence plus (for aggregate heads with local receipts) a
   distinct source-commitment verdict. A verdict names what was checked at

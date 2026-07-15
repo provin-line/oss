@@ -81,7 +81,9 @@ family の存在は capability に従う: family（とその固定・ゼロ初�
 すべての永続状態は設定した data dir 以下に置かれる（`network/README.ja.md` の「状態モデル」参照）: YAML のコントロールプレーン record と、ファイルバックの evidence ディレクトリ（credential、resolution pool、audit queue、verdict）。運用上の義務は 2 つ:
 
 - **data dir をバックアップする。** audit-reachable な deployment は、発行からはるか後の source credential 遡及解決を約束している — evidence 保持は最適化ではなく deployment の義務。
-- **evidence は default で無制限に成長する**。ディスクを監視すること。record を削除せず live ディスクを抑えるには、relationship-evidence log を cold archive へ rotation する（下記）。
+- **evidence は default で無制限に成長する**。ディスクを監視すること。record を削除せず live ディスクを抑えるには、relationship-evidence log を cold archive へ rotation する（下記）。1 つの body は複数の credential variant（同じ主張に対する別の署名形）を蓄積し得る。variant set が append-only なのは設計であって漏れではない — 後着の不正 proof が先着の正当な proof を追い出せないのは、何も evict しないからこそ成立する。admission は L1 gate 越しで、quota と quarantine は external-effect gate と共に入る。
+
+credential store は各 body の variant を `<evidence-dir>/credentials/variants/<bodyhex>/<varianthex>.json` に置く。従来から書いていた `<bodyhex>.json` はそのままの位置に残り、body-only projection として維持される — したがって**このディレクトリに対して旧 binary へ rollback しても全 body が解決でき**、subtree は旧 binary から見えない。
 
 設計上インメモリ（PoC 姿勢）: wireauth nonce store（replay 防御は restart epoch barrier で再武装）と infra-operator 状態。
 

@@ -123,6 +123,85 @@ unreleased freeze declaration above rather than breaking a shipped wire.
   repository issues, not yet what it admits); after it, admission requires the
   W3C shape.
 
+### P0-1A — immutable wire-variant set (BREAKING within Unreleased)
+
+Ratified architecture decision (debate P0-1 = B2.1, 2026-07-16), slice A of
+three: identity. One body can hold several signed forms, because re-issuing a
+proof leaves the body — and therefore every successor link — untouched. The VC
+store kept **one** credential per body address and let a later write overwrite
+it, so a valid proof could be evicted by a later invalid one, and an invalid
+proof arriving first could keep the valid one out. Neither is possible now: the
+variant set is write-once and append-only.
+
+- **`WireVariantID`** (`wire:v1:jcs-rfc8785:sha256:<hex>`) names one signed form:
+  `sha256("provin-wire-variant-v1\0" ‖ RFC8785(full wire document))`. The prefix
+  pins the id version, the canonicalization profile and the hash algorithm, so
+  none is inferred and a future profile cannot reuse this id space. The digest
+  covers the canonical PROJECTION, so two peers spelling one document
+  differently admit it under one id and neither can mint a second identity for
+  one signed form by re-serializing.
+- **Storage is now a trusted façade over a dumb backend.** `vcresolver.Store`
+  and its keyed `Put(hash, cred)` are **removed**: a caller can no longer choose
+  where its bytes land (both addresses are recomputed), so misfiling is not
+  expressible, and the overwrite semantics are gone rather than deprecated.
+  `VariantStore` enforces identity, canonical validation, write-once admission,
+  winner resolution and defensive copying once, for every backend;
+  `VariantBackend` (implemented by `memstore.NewBackend` / `filestore.NewBackend`)
+  places named bytes and has no identity semantics at all. A Go interface is a
+  method set, not a capability boundary — so the properties live above the seam,
+  not in a suite the implementations promise to run.
+- **`ResolveVC` changes behaviour**: it now serves the deterministic winner over
+  the held variant set (the lexicographically smallest variant id), where it
+  previously served whatever was written last. The projection is **provisional,
+  not evidence**: it is a function of the set held right now, so it can name a
+  different variant once the set grows. It answers "some signed form of this
+  body" — enough for a chain hole and for the content-hash check every verifier
+  runs, and not enough to audit. `ResolveVCResponse` now says which variant it
+  served, so a consumer can pin it.
+- **`ResolveVariant` / `ListVariants`** (additive RPCs) are the exact-fetch
+  surface: byte-for-byte what was admitted, which is what evidence means.
+  `StoreVCResponse` gained `wire_variant_id`; `Service.StoreVC` returns
+  `StoreVCResult{BodyAddress, WireVariantID}` and `client.StoreCredential`
+  returns `StoredCredential`.
+- **Publish round-trip check strengthened**: it compared content addresses,
+  which cover the body only — so a store holding a *different signed form of the
+  same claims* passed the check that exists to catch exactly that. It now
+  compares the variant, which covers the whole document, signature included.
+- **Safe-integer gate widened to the full wire document**: it ran on the body,
+  so an unsafe integer in a proof member was silently rounded by the RFC 8785
+  re-serialization and admitted under an id naming bytes nobody sent, with the
+  signature over the original literal.
+- **Damage is never absence.** A body whose only copy is a damaged legacy entry
+  reports corruption; answering `NotFound` would launder a tampered credential
+  into "this node never held it".
+
+Migration and rollback, on-disk (`filestore`):
+
+- Layout: the legacy `<bodyhex>.json` slot stays exactly where it was, and
+  variants live under `variants/<bodyhex>/<varianthex>.json`. The pre-slice
+  reader opened that exact filename and skipped directories when listing, so the
+  subtree is invisible to it: **rolling back to an older binary still resolves
+  every body**, because the flat slot is maintained as the projection.
+- No migration pass. A body written before this slice is read as a one-element
+  variant set on demand — its bytes are exact-fetchable under their own derived
+  id — and the first write to that body adopts them into the set before adding
+  anything. Flat bytes are retained.
+- Rollback is safe in both directions: an older binary writing the flat slot
+  while a variant set exists does not lose those bytes — they are held evidence,
+  and re-upgrading enumerates and adopts them rather than overwriting.
+- Not claimed: two writers on one root. `PutIfAbsent` uses `os.Link` (fails
+  EEXIST) rather than a replacing rename, which is cheap insurance against a
+  misconfigured shared root — but cross-process fencing is P1-D's, and the
+  projection refresh is not safe under two writers.
+
+Scope: this is the identity layer (invariants 1-3, 13, 22). The audit queue and
+receipt store remain keyed on the body address, which invariants 6 and 12 rule
+out — a verdict must name the variant it evaluated. That is slice B, along with
+the evidence views that let bundle/export/audit consumers stop using the
+body-only read; until then full invariant-13 conformance is not claimed.
+Quarantine, quota and backpressure (invariants 15-18) land with the P0-5 effect
+gate. Evidence: `docs/evidence/p0-1a-variant-store-e2e-2026-07-16.md`.
+
 ### Transport security — P0-6 closure
 
 The TLS posture (F6) shipped earlier in this line; these are the conditions its

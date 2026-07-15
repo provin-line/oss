@@ -23,8 +23,17 @@ control-plane records (DID documents, keys, schemas, subscriptions, allow-lists)
 and a file-backed evidence dir for the VC store (credentials, resolution pool,
 audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`). Nonce store
 and infra-operator state are in-memory (PoC posture — restart implications are
-documented per service). Storage sits behind store interfaces; swapping files for
+documented per service). Storage sits behind a seam; swapping files for
 PostgreSQL is a Hub-side replacement, not a fork.
+
+For the VC store that seam is `vcresolver.VariantBackend`, DELIBERATELY below
+the semantics: a backend places named bytes and reports whether a name was
+taken, while identity, canonical validation, write-once admission and the
+body-only projection are enforced once in `vcresolver.VariantStore`, which every
+backend sits behind. So a new substrate implements six methods and inherits the
+rules rather than re-promising them — and cannot weaken them by getting one
+wrong. What a backend still owes is what only storage can: atomic create,
+faithful read-back, and exhaustive listing.
 
 Deployments in the audit-reachable conformance class (source commitments, see
 [pipeline/source](../pipeline/source/README.md)) additionally require a
