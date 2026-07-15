@@ -52,7 +52,8 @@ push が無い時の症状: `chain subscribe` は成功する（コントロー�
 
 **(a) ノード自前 TLS。** `provin.network.core.tls.cert-file` と `key-file` を設定（両方 or どちらも無し）。ノードが HTTP/2 over TLS（ALPN）を提供する。留意:
 
-- 証明書は **boot 時に 1 回 load** — ファイル差し替えでは hot reload されず、rotation は restart が必要。
+- **protocol floor は TLS 1.2**（library default 任せではなく明示 pin）。**cipher suite は Go 標準ライブラリの secure default に依存**する — これは意図的な選択で、TLS 1.3 の cipher は Go の API から選べず、allowlist を固定すると将来の stdlib 側のセキュリティ改善を塞ぐため。
+- 証明書 pair は **boot preflight** で検証する — store 生成や transport 接続より前なので、読めない・不正・不一致の pair は副作用のない clean な boot 失敗になる。serve に使うのは preflight で load した pair 自体で、以後ファイルを **再読込しない**。したがってファイル差し替えでは hot reload されず、**rotation は restart が必要**。
 - DID resolution は `https://{registry}` の **443** を期待する一方、listener の default は `:8443`。443 でマッピング/提供するか resolver base（`resolver-base-url` / `registry-base-urls`）を override して、relying party が TLS endpoint に到達できるようにする。
 - advertised service endpoint（`#vc-resolver`、`#audit`）・VC-store/upstream URL・auth-provider registry URL は、TLS endpoint に到達する箇所では `https://` にする。
 - 証明書の **SAN は client が使う hostname を覆う**こと。private CA は各 client / container の trust store に導入する。

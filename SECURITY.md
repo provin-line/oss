@@ -57,13 +57,27 @@ names which boundary it crosses. None of these substitutes for another.
 - **L2 — peer wire proof.** Internet-facing peer and payload surfaces carry
   a per-RPC Ed25519 proof over a canonical view, with replay defense; there
   is no auth-off mode. See [docs/protocol/auth.md](docs/protocol/auth.md).
-- **Transport confidentiality.** The node serves cleartext h2c; bearer tokens
+- **Transport confidentiality.** The node serves node-native TLS when a
+  certificate pair is configured, and cleartext h2c otherwise; bearer tokens
   and payloads are only as confidential as the transport. A boot guard
   requires **either** node-native TLS **or** an explicit cleartext
   acknowledgement before a non-loopback listener will start — the guard
   enforces that a posture is *chosen*, not that TLS is *present*: the
   acknowledgement path relies on the operator isolating the cleartext backend
-  behind a real terminator. See
+  behind a real terminator, and `allow-cleartext` claims nothing about whether
+  one exists. What the TLS posture claims is bounded, too: it protects the hop
+  to *this* listener. It says nothing about what a peer's advertised endpoints
+  point at, and a node that terminates TLS while advertising `http://` URLs is
+  reachable by nobody — the boot logs a warning for exactly that, per the
+  endpoint migration matrix.
+
+  The protocol floor is **TLS 1.2**, pinned explicitly rather than inherited
+  from the library default. **Cipher suites follow the Go standard library's
+  secure defaults** — a deliberate dependency, not an oversight: TLS 1.3 suites
+  are not selectable through Go's API, and a frozen allowlist would block the
+  stdlib's future security improvements. The certificate pair is validated in a
+  boot preflight before any side-effectful work and is not re-read afterwards,
+  so rotation requires a restart. See
   [deployment.md → TLS termination](docs/architecture/deployment.md#tls-termination).
 - **L3 — provenance.** The credential chain — Data Integrity proofs,
   content-addressed links, transparency logs, audit verdicts — is

@@ -132,6 +132,18 @@ services:
       # stack's application.conf) — publishing on all host interfaces would
       # leak it to the host's network.
       - "127.0.0.1:8443:8443"
+    # Without this, `up --wait` cannot tell a serving node from one that is
+    # crash-looping behind `restart: on-failure` — a restarting container is
+    # still "running", so the stack reported ready while the node had never
+    # booted at all (found by the P0-6 actual-boot condition). /readyz is the
+    # node's own readiness verdict, so waiting on it is waiting on the thing
+    # that matters.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8443/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     restart: on-failure
     depends_on:
       provision:

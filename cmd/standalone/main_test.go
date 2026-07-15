@@ -112,19 +112,28 @@ func TestBuildServer_TLSPath_ServesHTTPS(t *testing.T) {
 		TLS:        core.TLSConfig{CertFile: certFile, KeyFile: keyFile},
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
-	srv, listen, mode, err := buildServer(coreCfg, handler, 1<<20)
+	tlsConf, err := coreCfg.TLS.LoadServerTLS()
+	if err != nil {
+		t.Fatalf("LoadServerTLS: %v", err)
+	}
+	srv, listen, mode, err := buildServer(coreCfg, tlsConf, handler, 1<<20)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
 	if mode != "direct-tls" {
 		t.Errorf("mode = %q, want direct-tls", mode)
 	}
+	if srv.TLSConfig == nil || srv.TLSConfig.MinVersion != tls.VersionTLS12 {
+		t.Error("server is not pinned to the preflighted TLS 1.2 floor")
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = srv.ServeTLS(ln, certFile, keyFile) }()
+	// Empty paths, as production serves: the preloaded pair in TLSConfig is
+	// the material, and the files must not be re-read (P0-6 closure #3).
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() { _ = srv.Close() })
 	_ = listen // production uses ListenAndServeTLS; the test drives ServeTLS on a chosen listener
 
@@ -169,15 +178,15 @@ func TestBuildServer_TLSPath_ServesHTTPS(t *testing.T) {
 // The cleartext path selects the h2c mode label, distinguishing loopback from
 // an acknowledged non-loopback listener.
 func TestBuildServer_CleartextMode(t *testing.T) {
-	loop, _, _, err := buildServer(&core.CoreConfig{ListenAddr: "127.0.0.1:8443"}, http.NotFoundHandler(), 1<<20)
+	loop, _, _, err := buildServer(&core.CoreConfig{ListenAddr: "127.0.0.1:8443"}, nil, http.NotFoundHandler(), 1<<20)
 	if err != nil || loop == nil {
 		t.Fatalf("buildServer(loopback): %v", err)
 	}
-	_, _, mode, _ := buildServer(&core.CoreConfig{ListenAddr: "127.0.0.1:8443"}, http.NotFoundHandler(), 1<<20)
+	_, _, mode, _ := buildServer(&core.CoreConfig{ListenAddr: "127.0.0.1:8443"}, nil, http.NotFoundHandler(), 1<<20)
 	if mode != "loopback-cleartext" {
 		t.Errorf("loopback mode = %q, want loopback-cleartext", mode)
 	}
-	_, _, mode, _ = buildServer(&core.CoreConfig{ListenAddr: ":8443", TLS: core.TLSConfig{AllowCleartext: true}}, http.NotFoundHandler(), 1<<20)
+	_, _, mode, _ = buildServer(&core.CoreConfig{ListenAddr: ":8443", TLS: core.TLSConfig{AllowCleartext: true}}, nil, http.NotFoundHandler(), 1<<20)
 	if mode != "cleartext-acknowledged" {
 		t.Errorf("non-loopback mode = %q, want cleartext-acknowledged", mode)
 	}

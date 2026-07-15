@@ -88,6 +88,22 @@ func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
 // test can drive an over-cap StoreVC through the real authenticated stack.
 func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypto.Signer, []byte) {
 	t.Helper()
+	h, signer, pub := assembledHandlerWith(t, maxCredentialSize)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, signer, pub
+}
+
+// assembledHandler returns the full production mux (BuildHandler output) with
+// an owner signer, for tests that serve it over their own listener — e.g. the
+// native-TLS route integration, which must drive the REAL route surface, not a
+// stand-in handler.
+func assembledHandler(t *testing.T) (http.Handler, crypto.Signer, []byte) {
+	return assembledHandlerWith(t, 1<<20)
+}
+
+func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, crypto.Signer, []byte) {
+	t.Helper()
 	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{
@@ -116,9 +132,6 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-
 	// Owner's CLI-local signing key (held by the owner, not the registry).
 	ownerKS := filestore.New(t.TempDir())
 	ownerKP, err := (ed25519.Generator{}).Generate()
@@ -128,7 +141,7 @@ func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypt
 	if err := ownerKS.SaveKeyPair(ownerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: ownerKP}); err != nil {
 		t.Fatalf("save owner key: %v", err)
 	}
-	return srv, ownerKS, ownerKP.PublicKey
+	return h, ownerKS, ownerKP.PublicKey
 }
 
 // The standalone peer surface must record relationship evidence

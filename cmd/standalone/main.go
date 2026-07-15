@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -63,6 +64,14 @@ func main() {
 	}
 
 	coreCfg, err := core.LoadCoreConfig(cfg)
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	// TLS preflight (P0-6): validate the certificate pair before ANY
+	// side-effectful boot work — a node that cannot serve must die here, with
+	// stores untouched and transports unconnected, not after first request.
+	// The loaded pair rides in tlsConf and is what serving uses (no re-read).
+	tlsConf, err := coreCfg.TLS.LoadServerTLS()
 	if err != nil {
 		log.Fatalf("standalone: %v", err)
 	}
@@ -250,11 +259,19 @@ func main() {
 	// largest legitimate request (a stored credential or a pushed body) plus
 	// headroom; per-RPC caps stay tight below it.
 	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
-	srv, listen, mode, err := buildServer(coreCfg, handler, maxHTTPRequestBytes)
+	srv, listen, mode, err := buildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
 	log.Printf("standalone: serving mode = %s", mode)
+	// Endpoint migration matrix (P0-6 #7): a TLS listener does not rewrite what
+	// this node ADVERTISES. An http:// service endpoint or resolution override
+	// on a TLS posture means peers never reach the listener, while the node
+	// looks perfectly healthy from the inside. Advisory, not fail-closed: a
+	// migration is allowed to be partway through.
+	for _, w := range core.RequireHTTPSEndpoints(coreCfg.TLS, endpointURLs(regCfg, chainCfg)) {
+		log.Printf("standalone: transport posture: %s", w)
+	}
 	log.Printf("standalone: listening on %s (registry %q, %d data-plane loop(s))",
 		coreCfg.ListenAddr, regCfg.ID, len(pipeCfg.Loops))
 
@@ -345,7 +362,7 @@ func outerRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
 // cleartext listener was explicitly acknowledged. The outer MaxBytesHandler
 // (F0 pre-Connect bound) is the outermost handler on BOTH paths; the shared
 // http2Server timeouts apply on both.
-func buildServer(coreCfg *core.CoreConfig, handler http.Handler, maxHTTPRequestBytes int) (*http.Server, func() error, string, error) {
+func buildServer(coreCfg *core.CoreConfig, tlsConf *tls.Config, handler http.Handler, maxHTTPRequestBytes int) (*http.Server, func() error, string, error) {
 	srv := &http.Server{
 		Addr: coreCfg.ListenAddr,
 		// Slowloris defense on the HTTP/1 side. ReadTimeout/WriteTimeout are
@@ -357,12 +374,20 @@ func buildServer(coreCfg *core.CoreConfig, handler http.Handler, maxHTTPRequestB
 		IdleTimeout:       120 * time.Second,
 	}
 	if coreCfg.TLS.ServesTLS() {
+		if tlsConf == nil {
+			// The preflight is not optional on the TLS posture: reaching here
+			// without its output means a caller skipped it, and serving would
+			// silently re-read the files the preflight exists to pin.
+			return nil, nil, "", fmt.Errorf("TLS posture without a preflighted config (core.LoadServerTLS was not run)")
+		}
 		srv.Handler = http.MaxBytesHandler(handler, int64(maxHTTPRequestBytes))
+		srv.TLSConfig = tlsConf
 		if err := http2.ConfigureServer(srv, http2Server()); err != nil {
 			return nil, nil, "", fmt.Errorf("configure http/2 over TLS: %w", err)
 		}
-		cert, key := coreCfg.TLS.CertFile, coreCfg.TLS.KeyFile
-		return srv, func() error { return srv.ListenAndServeTLS(cert, key) }, "direct-tls", nil
+		// Empty paths: serve from the preflighted, preloaded pair in TLSConfig —
+		// never re-read the files (TOCTOU; P0-6 closure #3).
+		return srv, func() error { return srv.ListenAndServeTLS("", "") }, "direct-tls", nil
 	}
 	srv.Handler = http.MaxBytesHandler(h2c.NewHandler(handler, http2Server()), int64(maxHTTPRequestBytes))
 	mode := "cleartext-acknowledged"

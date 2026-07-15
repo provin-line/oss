@@ -123,6 +123,51 @@ unreleased freeze declaration above rather than breaking a shipped wire.
   repository issues, not yet what it admits); after it, admission requires the
   W3C shape.
 
+### Transport security — P0-6 closure
+
+The TLS posture (F6) shipped earlier in this line; these are the conditions its
+closure required, now met with executed evidence rather than review.
+
+- **TLS 1.2 floor, pinned explicitly.** `core.TLSConfig.LoadServerTLS` sets
+  `MinVersion` rather than inheriting Go's default — the floor is this project's
+  contract, and a contract held by a library default can change under an
+  upgrade. Cipher suites still follow the stdlib's secure defaults, deliberately
+  (TLS 1.3 suites are not selectable through Go's API, and a frozen allowlist
+  would block future stdlib improvements). A wire test drives the floor:
+  TLS 1.0/1.1 handshakes fail, 1.2/1.3 negotiate.
+- **Certificate preflight.** The pair is loaded and validated before any
+  side-effectful boot work, so an unreadable, invalid, or mismatched pair is a
+  clean boot failure with no half-initialized stores behind it. The preflighted
+  pair is what serves — the files are not re-read at listen time, closing the
+  gap between validation and use. Rotation still requires a restart.
+- **Endpoint migration matrix.** A TLS listener does not rewrite what a node
+  *advertises*: an `http://` service endpoint or resolver override on a TLS
+  posture means peers never reach it, while the node looks healthy from the
+  inside. Boot now logs a warning naming each such URL (advisory — a migration
+  may legitimately be partway through).
+- **Actual boot smokes.** The standalone binary is booted from a real config
+  with an ephemeral certificate: readiness over HTTPS, a served request,
+  graceful shutdown on SIGTERM — plus the negative, that a mismatched pair kills
+  boot before the data directory exists. The quickstart is booted on its
+  intended cleartext dev profile and its walkthrough run end to end.
+
+### Fixed
+
+- **The quickstart never booted.** `deploy/quickstart/node/config/application.conf`
+  failed to parse — for its whole history, on every machine. A `//` inside a `#`
+  comment (a URL in an explanatory comment) makes the HOCON parser's structural
+  view diverge from the document's, and it then rejects the file's final brace as
+  a stray. Nothing caught it: `docker compose config` validates the compose file,
+  not the node config inside the container. The comments are rewritten to keep
+  their information without the `//`, and `TestShippedConfigsParse` now parses
+  every `.conf` this repository ships — asserting the property (it parses)
+  rather than the rule (avoid `//`), since the parser's exact condition is not
+  fully characterized.
+- **The quickstart reported a crash-looping node as healthy.** The node service
+  had no healthcheck, so `docker compose up --wait` saw a container that
+  `restart: on-failure` kept "running" and declared the stack ready. It now
+  waits on the node's own `/readyz`.
+
 ### Added
 
 - `eddsa-rdfc-2022` cryptosuite: `canon/urdna2015` (RDF Dataset

@@ -109,8 +109,15 @@ transport posture. Choose one:
 **(a) Node-native TLS.** Set `provin.network.core.tls.cert-file` and
 `key-file` (both or neither). The node serves HTTP/2 over TLS (ALPN). Then:
 
-- The certificate is loaded **once at boot** — replacing the files does not
-  hot-reload; rotation requires a restart.
+- The **protocol floor is TLS 1.2**, pinned explicitly (not inherited from the
+  library default). **Cipher suites follow the Go standard library's secure
+  defaults** on purpose: TLS 1.3 suites are not selectable through Go's API,
+  and a frozen allowlist would block future stdlib security improvements.
+- The certificate pair is validated in a **boot preflight** — before any store
+  is created or transport dialed — so an unreadable, invalid, or mismatched
+  pair is a clean boot failure with no half-initialized state behind it. The
+  loaded pair is what serves; the files are **not re-read** afterwards, so
+  replacing them does not hot-reload and **rotation requires a restart**.
 - DID resolution expects `https://{registry}` on port **443**, while the
   listener defaults to `:8443`. Map/serve on 443, or override the resolver
   base (`resolver-base-url` / `registry-base-urls`), so relying parties reach
