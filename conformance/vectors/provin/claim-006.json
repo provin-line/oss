@@ -1,0 +1,12 @@
+{
+  "id": "claim-006",
+  "rule": "claim.filter-convert",
+  "description": "A composition is one registered label, not a join: filter-convert is closed like both halves",
+  "input": {
+    "claim": "provin:filter-convert"
+  },
+  "expect": {
+    "closure": "closed",
+    "exclusion_inference": true
+  }
+}

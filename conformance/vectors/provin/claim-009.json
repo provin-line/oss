@@ -1,0 +1,12 @@
+{
+  "id": "claim-009",
+  "rule": "claim.generate",
+  "description": "generate is open: the model's weights dominate the output's information and no chain covers them, so no exclusion inference is licensed",
+  "input": {
+    "claim": "provin:generate"
+  },
+  "expect": {
+    "closure": "open",
+    "exclusion_inference": false
+  }
+}

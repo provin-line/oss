@@ -32,10 +32,13 @@ jobs:
 
   # The conformance harness is a separate required job so a red here is
   # unambiguous — a vector regression or a newly-synced-but-undriven vector
-  # is not buried in the general test output. Runs the full conformance package
-  # (TestDplaaxAllVectors coverage guard + TestDplaaxVendoredManifest byte-exact
-  # pin + TestCheckCoverage), so if branch protection marks only this job
-  # required, the manifest and coverage-core checks still gate.
+  # is not buried in the general test output. Runs the full conformance package,
+  # which is BOTH catalogs: dPLaaX owns the wire (TestDplaaxAllVectors +
+  # TestDplaaxVendoredManifest) and the provin profile owns what a claim asserts
+  # (TestProvinProfileAllVectors + TestProvinProfileVendoredManifest), each with
+  # its own coverage guard and byte-exact pin. Plus TestCheckCoverage. So if
+  # branch protection marks only this job required, every manifest and
+  # coverage-core check still gates.
   conformance:
     runs-on: ubuntu-latest
     steps:

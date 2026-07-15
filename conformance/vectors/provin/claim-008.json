@@ -1,0 +1,12 @@
+{
+  "id": "claim-008",
+  "rule": "claim.enrich",
+  "description": "enrich is conformant-closed, NOT closed: side-fetched non-conformant data joins the output, so absence from the declared set does not mean absence from the output",
+  "input": {
+    "claim": "provin:enrich"
+  },
+  "expect": {
+    "closure": "conformant-closed",
+    "exclusion_inference": false
+  }
+}

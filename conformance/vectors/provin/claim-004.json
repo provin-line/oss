@@ -1,0 +1,12 @@
+{
+  "id": "claim-004",
+  "rule": "claim.filter",
+  "description": "filter is closed: the declared conformant inputs are the output's complete information source, so absence from the set licenses an exclusion inference",
+  "input": {
+    "claim": "provin:filter"
+  },
+  "expect": {
+    "closure": "closed",
+    "exclusion_inference": true
+  }
+}

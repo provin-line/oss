@@ -1,0 +1,12 @@
+{
+  "id": "claim-007",
+  "rule": "claim.aggregate",
+  "description": "aggregate is a closed fold over the consumed conformant source set",
+  "input": {
+    "claim": "provin:aggregate"
+  },
+  "expect": {
+    "closure": "closed",
+    "exclusion_inference": true
+  }
+}

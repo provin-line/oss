@@ -1,0 +1,12 @@
+{
+  "id": "claim-005",
+  "rule": "claim.convert",
+  "description": "convert is closed: the output re-encodes the declared inputs and its information derives entirely from them",
+  "input": {
+    "claim": "provin:convert"
+  },
+  "expect": {
+    "closure": "closed",
+    "exclusion_inference": true
+  }
+}

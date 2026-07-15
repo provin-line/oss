@@ -1,0 +1,29 @@
+{
+  "id": "claim-011",
+  "rule": "claim.sink-receipt",
+  "description": "A sink receipt's identity shape: previousCredential is the consumed credential and inputHash == outputHash == that credential's outputHash",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://dplaax.dev/vc/v1",
+        "https://provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+      "validFrom": "2026-07-01T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-acme",
+        "processId": "proc-x",
+        "transformationClaim": "provin:sink-receipt",
+        "outputHash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "previousCredential": "sha256:abababababababababababababababababababababababababababababababab",
+        "inputHash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      }
+    }
+  },
+  "expect": "accept"
+}

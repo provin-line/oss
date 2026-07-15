@@ -1,0 +1,13 @@
+{
+  "id": "claim-010",
+  "rule": "claim.generate",
+  "description": "The N:1 shape does not decide the reading: a synthesis declared as aggregate would falsely license the closed-world inference, which is why generate is a distinct label",
+  "input": {
+    "claim": "provin:generate",
+    "shape": "n-to-1-with-source-commitment"
+  },
+  "expect": {
+    "closure": "open",
+    "exclusion_inference": false
+  }
+}

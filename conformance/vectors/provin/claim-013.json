@@ -1,0 +1,55 @@
+{
+  "id": "claim-013",
+  "rule": "claim.topology-independence",
+  "description": "One label under both topologies: a claim asserts an information source, not a chain shape, so neither presence nor absence of previousCredential follows from it",
+  "input": {
+    "sequence": [
+      {
+        "op": "issue",
+        "credential": {
+          "@context": [
+            "https://www.w3.org/ns/credentials/v2",
+            "https://dplaax.dev/vc/v1",
+            "https://provin.dev/vc/v1"
+          ],
+          "type": [
+            "VerifiableCredential",
+            "PipelinePassCredential"
+          ],
+          "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+          "validFrom": "2026-07-01T00:00:00Z",
+          "credentialSubject": {
+            "pipelineId": "pl-acme",
+            "processId": "proc-x",
+            "transformationClaim": "provin:convert",
+            "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        }
+      },
+      {
+        "op": "issue",
+        "credential": {
+          "@context": [
+            "https://www.w3.org/ns/credentials/v2",
+            "https://dplaax.dev/vc/v1",
+            "https://provin.dev/vc/v1"
+          ],
+          "type": [
+            "VerifiableCredential",
+            "PipelinePassCredential"
+          ],
+          "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+          "validFrom": "2026-07-01T00:00:00Z",
+          "credentialSubject": {
+            "pipelineId": "pl-acme",
+            "processId": "proc-x",
+            "transformationClaim": "provin:convert",
+            "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "previousCredential": "sha256:abababababababababababababababababababababababababababababababab"
+          }
+        }
+      }
+    ]
+  },
+  "expect": "accept"
+}

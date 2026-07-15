@@ -1,0 +1,27 @@
+{
+  "id": "claim-001",
+  "rule": "claim.namespace",
+  "description": "A registered label carried with the profile context grounding it — the (grounding URL, label) pair the claim's identity is",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://dplaax.dev/vc/v1",
+        "https://provin.dev/vc/v1"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "PipelinePassCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p:process:x",
+      "validFrom": "2026-07-01T00:00:00Z",
+      "credentialSubject": {
+        "pipelineId": "pl-acme",
+        "processId": "proc-x",
+        "transformationClaim": "provin:filter",
+        "outputHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    }
+  },
+  "expect": "accept"
+}
