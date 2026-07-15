@@ -27,11 +27,16 @@ type Service interface {
 	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
 	ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassCredential, error)
 	ListSuccessors(ctx context.Context, hash, fromExclusive string, limit int) ([]string, bool, error)
+	ResolveVariant(ctx context.Context, bodyAddress, wireVariantID string) ([]byte, error)
+	ListVariants(ctx context.Context, bodyAddress, fromExclusive string, limit int) ([]string, bool, error)
 }
 
-// listingSuccessors binds ListSuccessors continuation tokens to this RPC
-// (see pagination.EncodeToken).
-const listingSuccessors = "dplaax.vc.v1.VCResolverService.ListSuccessors"
+// Continuation tokens are bound to their RPC (see pagination.EncodeToken), so
+// a token from one listing cannot be replayed against another.
+const (
+	listingSuccessors = "dplaax.vc.v1.VCResolverService.ListSuccessors"
+	listingVariants   = "dplaax.vc.v1.VCResolverService.ListVariants"
+)
 
 // Handler adapts a Service to the generated VCResolverServiceHandler.
 type Handler struct {
@@ -53,7 +58,10 @@ func (h *Handler) StoreVC(ctx context.Context, req *connect.Request[vcpb.StoreVC
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&vcpb.StoreVCResponse{Hash: res.BodyAddress}), nil
+	return connect.NewResponse(&vcpb.StoreVCResponse{
+		Hash:          res.BodyAddress,
+		WireVariantId: res.WireVariantID,
+	}), nil
 }
 
 func (h *Handler) ResolveVC(ctx context.Context, req *connect.Request[vcpb.ResolveVCRequest]) (*connect.Response[vcpb.ResolveVCResponse], error) {
@@ -70,7 +78,53 @@ func (h *Handler) ResolveVC(ctx context.Context, req *connect.Request[vcpb.Resol
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return connect.NewResponse(&vcpb.ResolveVCResponse{Credential: b}), nil
+	// Name the variant served. The projection is a choice over the variants
+	// held right now, so a consumer that must not have the document move under
+	// it can take this id to ResolveVariant instead of assuming a second
+	// ResolveVC returns the same bytes.
+	variant, err := cred.WireVariantID()
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return connect.NewResponse(&vcpb.ResolveVCResponse{
+		Credential:    b,
+		WireVariantId: variant,
+	}), nil
+}
+
+// ResolveVariant serves the exact bytes of one variant. They are served as the
+// store returned them — the store already proved they are the canonical
+// projection of the document that id names, and re-serializing here would
+// defeat the point of an exact fetch.
+func (h *Handler) ResolveVariant(ctx context.Context, req *connect.Request[vcpb.ResolveVariantRequest]) (*connect.Response[vcpb.ResolveVariantResponse], error) {
+	wire, err := h.svc.ResolveVariant(ctx, req.Msg.GetBodyAddress(), req.Msg.GetWireVariantId())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return connect.NewResponse(&vcpb.ResolveVariantResponse{Credential: wire}), nil
+}
+
+// ListVariants serves one page of a body's variant set. The queried body is
+// part of the token fingerprint: a continuation replayed against a different
+// body is InvalidArgument, never a silent cross-body listing.
+func (h *Handler) ListVariants(ctx context.Context, req *connect.Request[vcpb.ListVariantsRequest]) (*connect.Response[vcpb.ListVariantsResponse], error) {
+	limit, err := pagination.ClampSize(req.Msg.GetPageSize())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	cursor, err := pagination.DecodeToken(listingVariants, req.Msg.GetPageToken(), req.Msg.GetBodyAddress())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	page, more, err := h.svc.ListVariants(ctx, req.Msg.GetBodyAddress(), cursor, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	resp := &vcpb.ListVariantsResponse{WireVariantIds: page}
+	if more && len(page) > 0 {
+		resp.NextPageToken = pagination.EncodeToken(listingVariants, page[len(page)-1], req.Msg.GetBodyAddress())
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ListSuccessors serves one page of the forward index. The queried hash is

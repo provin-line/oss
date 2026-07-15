@@ -57,6 +57,12 @@ const (
 	// VCResolverServiceListSuccessorsProcedure is the fully-qualified name of the VCResolverService's
 	// ListSuccessors RPC.
 	VCResolverServiceListSuccessorsProcedure = "/dplaax.vc.v1.VCResolverService/ListSuccessors"
+	// VCResolverServiceResolveVariantProcedure is the fully-qualified name of the VCResolverService's
+	// ResolveVariant RPC.
+	VCResolverServiceResolveVariantProcedure = "/dplaax.vc.v1.VCResolverService/ResolveVariant"
+	// VCResolverServiceListVariantsProcedure is the fully-qualified name of the VCResolverService's
+	// ListVariants RPC.
+	VCResolverServiceListVariantsProcedure = "/dplaax.vc.v1.VCResolverService/ListVariants"
 )
 
 // VCResolverServiceClient is a client for the dplaax.vc.v1.VCResolverService service.
@@ -90,6 +96,34 @@ type VCResolverServiceClient interface {
 	// negative = InvalidArgument, clamp at 256; opaque versioned token;
 	// lexicographic order).
 	ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error)
+	// ResolveVariant returns the EXACT canonical wire bytes of one variant of a
+	// body: byte-for-byte what was admitted, which is what evidence means. One
+	// body can hold several signed forms — re-issuing a proof leaves the body,
+	// and every successor link to it, untouched — so ResolveVC cannot serve this
+	// purpose: it answers with SOME signed form (the projection), and which one
+	// it names can change as the set grows. An auditor, a bundle exporter, or
+	// anything reproducing a verdict needs the bytes it evaluated, not an
+	// equivalent document.
+	//
+	// NotFound for a pair this node does not hold. Damage is NOT NotFound: a
+	// credential that is not what its id claims is reported as an error, because
+	// "never held" and "held, tampered with" are different facts about
+	// provenance. Same L1 gate as ResolveVC — a variant read reveals the same
+	// class as a VC read.
+	ResolveVariant(context.Context, *connect.Request[v1.ResolveVariantRequest]) (*connect.Response[v1.ResolveVariantResponse], error)
+	// ListVariants returns the variant ids HELD BY THIS NODE for a body. An
+	// unknown body returns an empty page, not NotFound: holding no variants is a
+	// normal answer, and the listing is scoped to this node's store — holding
+	// none is not a claim that none exist.
+	//
+	// Consistency is per-call, not per-iteration: a variant admitted between two
+	// pages, sorting before the cursor, is not observed by that iteration. Every
+	// page is exact as of its own call and the set only grows (variants are
+	// append-only), so a caller needing a complete snapshot re-lists until
+	// nothing new appears. Pagination per the dplaax.audit.v1 convention
+	// (page_size 0 = default 64, negative = InvalidArgument, clamp at 256;
+	// opaque versioned token; lexicographic order). Same L1 gate as ResolveVC.
+	ListVariants(context.Context, *connect.Request[v1.ListVariantsRequest]) (*connect.Response[v1.ListVariantsResponse], error)
 }
 
 // NewVCResolverServiceClient constructs a client for the dplaax.vc.v1.VCResolverService service. By
@@ -121,6 +155,18 @@ func NewVCResolverServiceClient(httpClient connect.HTTPClient, baseURL string, o
 			connect.WithSchema(vCResolverServiceMethods.ByName("ListSuccessors")),
 			connect.WithClientOptions(opts...),
 		),
+		resolveVariant: connect.NewClient[v1.ResolveVariantRequest, v1.ResolveVariantResponse](
+			httpClient,
+			baseURL+VCResolverServiceResolveVariantProcedure,
+			connect.WithSchema(vCResolverServiceMethods.ByName("ResolveVariant")),
+			connect.WithClientOptions(opts...),
+		),
+		listVariants: connect.NewClient[v1.ListVariantsRequest, v1.ListVariantsResponse](
+			httpClient,
+			baseURL+VCResolverServiceListVariantsProcedure,
+			connect.WithSchema(vCResolverServiceMethods.ByName("ListVariants")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -129,6 +175,8 @@ type vCResolverServiceClient struct {
 	storeVC        *connect.Client[v1.StoreVCRequest, v1.StoreVCResponse]
 	resolveVC      *connect.Client[v1.ResolveVCRequest, v1.ResolveVCResponse]
 	listSuccessors *connect.Client[v1.ListSuccessorsRequest, v1.ListSuccessorsResponse]
+	resolveVariant *connect.Client[v1.ResolveVariantRequest, v1.ResolveVariantResponse]
+	listVariants   *connect.Client[v1.ListVariantsRequest, v1.ListVariantsResponse]
 }
 
 // StoreVC calls dplaax.vc.v1.VCResolverService.StoreVC.
@@ -144,6 +192,16 @@ func (c *vCResolverServiceClient) ResolveVC(ctx context.Context, req *connect.Re
 // ListSuccessors calls dplaax.vc.v1.VCResolverService.ListSuccessors.
 func (c *vCResolverServiceClient) ListSuccessors(ctx context.Context, req *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error) {
 	return c.listSuccessors.CallUnary(ctx, req)
+}
+
+// ResolveVariant calls dplaax.vc.v1.VCResolverService.ResolveVariant.
+func (c *vCResolverServiceClient) ResolveVariant(ctx context.Context, req *connect.Request[v1.ResolveVariantRequest]) (*connect.Response[v1.ResolveVariantResponse], error) {
+	return c.resolveVariant.CallUnary(ctx, req)
+}
+
+// ListVariants calls dplaax.vc.v1.VCResolverService.ListVariants.
+func (c *vCResolverServiceClient) ListVariants(ctx context.Context, req *connect.Request[v1.ListVariantsRequest]) (*connect.Response[v1.ListVariantsResponse], error) {
+	return c.listVariants.CallUnary(ctx, req)
 }
 
 // VCResolverServiceHandler is an implementation of the dplaax.vc.v1.VCResolverService service.
@@ -177,6 +235,34 @@ type VCResolverServiceHandler interface {
 	// negative = InvalidArgument, clamp at 256; opaque versioned token;
 	// lexicographic order).
 	ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error)
+	// ResolveVariant returns the EXACT canonical wire bytes of one variant of a
+	// body: byte-for-byte what was admitted, which is what evidence means. One
+	// body can hold several signed forms — re-issuing a proof leaves the body,
+	// and every successor link to it, untouched — so ResolveVC cannot serve this
+	// purpose: it answers with SOME signed form (the projection), and which one
+	// it names can change as the set grows. An auditor, a bundle exporter, or
+	// anything reproducing a verdict needs the bytes it evaluated, not an
+	// equivalent document.
+	//
+	// NotFound for a pair this node does not hold. Damage is NOT NotFound: a
+	// credential that is not what its id claims is reported as an error, because
+	// "never held" and "held, tampered with" are different facts about
+	// provenance. Same L1 gate as ResolveVC — a variant read reveals the same
+	// class as a VC read.
+	ResolveVariant(context.Context, *connect.Request[v1.ResolveVariantRequest]) (*connect.Response[v1.ResolveVariantResponse], error)
+	// ListVariants returns the variant ids HELD BY THIS NODE for a body. An
+	// unknown body returns an empty page, not NotFound: holding no variants is a
+	// normal answer, and the listing is scoped to this node's store — holding
+	// none is not a claim that none exist.
+	//
+	// Consistency is per-call, not per-iteration: a variant admitted between two
+	// pages, sorting before the cursor, is not observed by that iteration. Every
+	// page is exact as of its own call and the set only grows (variants are
+	// append-only), so a caller needing a complete snapshot re-lists until
+	// nothing new appears. Pagination per the dplaax.audit.v1 convention
+	// (page_size 0 = default 64, negative = InvalidArgument, clamp at 256;
+	// opaque versioned token; lexicographic order). Same L1 gate as ResolveVC.
+	ListVariants(context.Context, *connect.Request[v1.ListVariantsRequest]) (*connect.Response[v1.ListVariantsResponse], error)
 }
 
 // NewVCResolverServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -204,6 +290,18 @@ func NewVCResolverServiceHandler(svc VCResolverServiceHandler, opts ...connect.H
 		connect.WithSchema(vCResolverServiceMethods.ByName("ListSuccessors")),
 		connect.WithHandlerOptions(opts...),
 	)
+	vCResolverServiceResolveVariantHandler := connect.NewUnaryHandler(
+		VCResolverServiceResolveVariantProcedure,
+		svc.ResolveVariant,
+		connect.WithSchema(vCResolverServiceMethods.ByName("ResolveVariant")),
+		connect.WithHandlerOptions(opts...),
+	)
+	vCResolverServiceListVariantsHandler := connect.NewUnaryHandler(
+		VCResolverServiceListVariantsProcedure,
+		svc.ListVariants,
+		connect.WithSchema(vCResolverServiceMethods.ByName("ListVariants")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.vc.v1.VCResolverService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case VCResolverServiceStoreVCProcedure:
@@ -212,6 +310,10 @@ func NewVCResolverServiceHandler(svc VCResolverServiceHandler, opts ...connect.H
 			vCResolverServiceResolveVCHandler.ServeHTTP(w, r)
 		case VCResolverServiceListSuccessorsProcedure:
 			vCResolverServiceListSuccessorsHandler.ServeHTTP(w, r)
+		case VCResolverServiceResolveVariantProcedure:
+			vCResolverServiceResolveVariantHandler.ServeHTTP(w, r)
+		case VCResolverServiceListVariantsProcedure:
+			vCResolverServiceListVariantsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -231,4 +333,12 @@ func (UnimplementedVCResolverServiceHandler) ResolveVC(context.Context, *connect
 
 func (UnimplementedVCResolverServiceHandler) ListSuccessors(context.Context, *connect.Request[v1.ListSuccessorsRequest]) (*connect.Response[v1.ListSuccessorsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.vc.v1.VCResolverService.ListSuccessors is not implemented"))
+}
+
+func (UnimplementedVCResolverServiceHandler) ResolveVariant(context.Context, *connect.Request[v1.ResolveVariantRequest]) (*connect.Response[v1.ResolveVariantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.vc.v1.VCResolverService.ResolveVariant is not implemented"))
+}
+
+func (UnimplementedVCResolverServiceHandler) ListVariants(context.Context, *connect.Request[v1.ListVariantsRequest]) (*connect.Response[v1.ListVariantsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.vc.v1.VCResolverService.ListVariants is not implemented"))
 }

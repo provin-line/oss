@@ -19,6 +19,11 @@ func TestVCResolverService_RPCPolicies(t *testing.T) {
 		"StoreVC":        {"vc", "store"},
 		"ResolveVC":      {"vc", "read"},
 		"ListSuccessors": {"vc", "read"},
+		// Variant reads are the same exposure class as a VC read — which
+		// signed forms a body has, and their bytes, is provenance topology,
+		// not an open identity document. Same gate, deliberately.
+		"ResolveVariant": {"vc", "read"},
+		"ListVariants":   {"vc", "read"},
 	}
 	methods := vcpb.File_dplaax_vc_v1_vc_proto.Services().ByName("VCResolverService").Methods()
 	if methods.Len() != len(want) {

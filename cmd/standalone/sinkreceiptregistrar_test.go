@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -87,13 +88,14 @@ type fakeRemotePublisher struct {
 	order *[]string
 }
 
-func (f *fakeRemotePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, _ string) (string, error) {
+func (f *fakeRemotePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, _ string) (vcresolverclient.StoredCredential, error) {
 	f.calls++
 	if f.order != nil {
 		*f.order = append(*f.order, "remote")
 	}
-	h, _ := cred.Hash()
-	return h, nil
+	body, _ := cred.Hash()
+	variant, _ := cred.WireVariantID()
+	return vcresolverclient.StoredCredential{BodyAddress: body, WireVariantID: variant}, nil
 }
 
 // --- fixtures ---------------------------------------------------------------

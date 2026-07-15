@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
 )
@@ -15,17 +16,17 @@ type fullSigner interface {
 	provenance.ChainedSigner
 }
 
-// credentialPublisher publishes an issued credential to the VC store and returns its
-// server-recomputed content address. *vcresolverclient.Resolver satisfies it.
+// credentialPublisher publishes an issued credential to the VC store and returns what
+// the server assigned it. *vcresolverclient.Resolver satisfies it.
 type credentialPublisher interface {
-	StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (string, error)
+	StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (vcresolverclient.StoredCredential, error)
 }
 
 // publishingSigner decorates a producing signer so each issued credential is published
 // to the VC store (the audit substrate a downstream "full" verifier walks) right after
 // signing and BEFORE the transport loop emits it downstream over NATS. It is fail-closed:
-// a publication error — or a server hash that disagrees with the credential's own Hash()
-// (the store did not store what was signed) — fails the sign, which the source/chained
+// a publication error — or a server-assigned identity that disagrees with the credential's
+// own (the store did not store what was signed) — fails the sign, which the source/chained
 // processor maps to StatusErrored, so the transport loop drops the event before emit. The
 // chained loop passes its upstream-endpoint as the predecessor-fetch hint; a source
 // FirstDrop has no predecessor, so its hint is empty.
@@ -77,29 +78,40 @@ func (p *publishingSigner) SignAggregateFirstDrop(ctx context.Context, payload [
 	return cred, nil
 }
 
-// publish stores cred and verifies the round-trip: the server-recomputed content address
-// must equal the credential's own Hash(), else the store holds something other than what
-// was signed and a full verifier would resolve the wrong (or no) credential.
+// publish stores cred and verifies the round-trip: what the server recomputed must equal
+// what was signed, else the store holds something else and a full verifier would resolve
+// the wrong (or no) credential.
 func (p *publishingSigner) publish(ctx context.Context, cred *vc.PipelinePassCredential) error {
 	return publishIssuedCredential(ctx, p.publisher, cred, p.upstreamEndpoint)
 }
 
 // publishIssuedCredential stores cred to the remote VC store and verifies the round-trip:
-// the server-recomputed content address must equal the credential's own Hash(), else the
-// store holds something other than what was signed. Shared by publishingSigner and the
-// aggregate emissionRegistrar (slice-17o, which reorders this publish to AFTER local
-// self-audit registration — D-17o-3).
+// what the server recomputed must equal what was signed, else the store holds something
+// else. Shared by publishingSigner and the aggregate emissionRegistrar (slice-17o, which
+// reorders this publish to AFTER local self-audit registration — D-17o-3).
+//
+// The VARIANT is what settles it. The content address covers the body only, so it matches
+// just as well when the store holds a different signed form of the same claims — which is
+// the case this check exists to catch, and the one the address alone cannot see. Comparing
+// the variant compares the whole document, signature included.
 func publishIssuedCredential(ctx context.Context, publisher credentialPublisher, cred *vc.PipelinePassCredential, upstreamEndpoint string) error {
-	addr, err := publisher.StoreCredential(ctx, cred, upstreamEndpoint)
+	stored, err := publisher.StoreCredential(ctx, cred, upstreamEndpoint)
 	if err != nil {
 		return fmt.Errorf("publish issued credential to vc store: %w", err)
 	}
-	want, err := cred.Hash()
+	wantBody, err := cred.Hash()
 	if err != nil {
 		return fmt.Errorf("hash issued credential: %w", err)
 	}
-	if addr != want {
-		return fmt.Errorf("vc store returned content address %q, want %q (credential not stored as signed)", addr, want)
+	if stored.BodyAddress != wantBody {
+		return fmt.Errorf("vc store returned content address %q, want %q (credential not stored as signed)", stored.BodyAddress, wantBody)
+	}
+	wantVariant, err := cred.WireVariantID()
+	if err != nil {
+		return fmt.Errorf("derive issued credential variant: %w", err)
+	}
+	if stored.WireVariantID != wantVariant {
+		return fmt.Errorf("vc store admitted variant %q, want %q (the stored document is not the one that was signed)", stored.WireVariantID, wantVariant)
 	}
 	return nil
 }

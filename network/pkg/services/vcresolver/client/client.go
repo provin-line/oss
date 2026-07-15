@@ -55,21 +55,40 @@ func (r *Resolver) ResolveCredential(ctx context.Context, contentAddress string)
 	return &cred, nil
 }
 
+// StoredCredential is what a store assigned to a published credential: the body
+// address successors link to, and the variant naming the exact signed form it
+// admitted. Both are recomputed by the server from the bytes it received, so a
+// publisher can check them against what it signed.
+//
+// It is a client-local type rather than the service's own: this package fronts
+// a remote service and deliberately does not import the vcresolver domain (see
+// the package doc).
+type StoredCredential struct {
+	// BodyAddress is the server-recomputed content address ("sha256:<hex>").
+	BodyAddress string
+	// WireVariantID names the exact wire bytes the store admitted
+	// ("wire:v1:jcs-rfc8785:sha256:<hex>").
+	WireVariantID string
+}
+
 // StoreCredential publishes cred to the store, recording upstreamEndpoint as the
-// predecessor-fetch hint, and returns the server-recomputed content address.
-func (r *Resolver) StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (string, error) {
+// predecessor-fetch hint, and returns what the server assigned it.
+func (r *Resolver) StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (StoredCredential, error) {
 	// MarshalJSON returns the JCS-canonical bytes (as the envelope codec uses). json.Marshal
 	// would re-escape <, >, & via Go's HTML escaping, breaking canonical-byte consumers.
 	b, err := cred.MarshalJSON()
 	if err != nil {
-		return "", fmt.Errorf("vcresolver/client: encode credential: %w", err)
+		return StoredCredential{}, fmt.Errorf("vcresolver/client: encode credential: %w", err)
 	}
 	resp, err := r.client.StoreVC(ctx, connect.NewRequest(&vcpb.StoreVCRequest{
 		Credential:       b,
 		UpstreamEndpoint: upstreamEndpoint,
 	}))
 	if err != nil {
-		return "", err
+		return StoredCredential{}, err
 	}
-	return resp.Msg.GetHash(), nil
+	return StoredCredential{
+		BodyAddress:   resp.Msg.GetHash(),
+		WireVariantID: resp.Msg.GetWireVariantId(),
+	}, nil
 }

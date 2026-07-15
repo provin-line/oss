@@ -96,7 +96,13 @@ func (x *StoreVCRequest) GetUpstreamEndpoint() string {
 type StoreVCResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// hash is the recomputed content address ("sha256:<hex>") the VC is stored at.
-	Hash          string `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	Hash string `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	// wire_variant_id names the exact wire bytes this submission was admitted as
+	// ("wire:v1:jcs-rfc8785:sha256:<hex>") — the key to fetch them back with
+	// (ResolveVariant). The server recomputes it, like the hash: it is the digest
+	// of the canonical projection of what was sent, so re-serializing the same
+	// document cannot mint a second identity for it.
+	WireVariantId string `protobuf:"bytes,2,opt,name=wire_variant_id,json=wireVariantId,proto3" json:"wire_variant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -134,6 +140,13 @@ func (*StoreVCResponse) Descriptor() ([]byte, []int) {
 func (x *StoreVCResponse) GetHash() string {
 	if x != nil {
 		return x.Hash
+	}
+	return ""
+}
+
+func (x *StoreVCResponse) GetWireVariantId() string {
+	if x != nil {
+		return x.WireVariantId
 	}
 	return ""
 }
@@ -186,7 +199,14 @@ func (x *ResolveVCRequest) GetHash() string {
 type ResolveVCResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// credential is the held VC (canonical JSON).
-	Credential    []byte `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	Credential []byte `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	// wire_variant_id names WHICH variant this body-only read served. The
+	// projection is provisional: it is a deterministic choice over the variants
+	// held right now, so it can name a different one once the set grows, and it
+	// is not evaluation evidence. A consumer that needs the bytes to stay put —
+	// an auditor, an exporter — fetches this id through ResolveVariant instead of
+	// trusting that a second ResolveVC returns the same document.
+	WireVariantId string `protobuf:"bytes,2,opt,name=wire_variant_id,json=wireVariantId,proto3" json:"wire_variant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -226,6 +246,13 @@ func (x *ResolveVCResponse) GetCredential() []byte {
 		return x.Credential
 	}
 	return nil
+}
+
+func (x *ResolveVCResponse) GetWireVariantId() string {
+	if x != nil {
+		return x.WireVariantId
+	}
+	return ""
 }
 
 type ListSuccessorsRequest struct {
@@ -345,6 +372,227 @@ func (x *ListSuccessorsResponse) GetNextPageToken() string {
 	return ""
 }
 
+type ResolveVariantRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// body_address is the content address ("sha256:<hex>") of the body — the
+	// same address ResolveVC takes as `hash` and previousCredential links carry;
+	// InvalidArgument if malformed.
+	BodyAddress string `protobuf:"bytes,1,opt,name=body_address,json=bodyAddress,proto3" json:"body_address,omitempty"`
+	// wire_variant_id names which signed form of that body to serve
+	// ("wire:v1:jcs-rfc8785:sha256:<hex>"); InvalidArgument if malformed.
+	WireVariantId string `protobuf:"bytes,2,opt,name=wire_variant_id,json=wireVariantId,proto3" json:"wire_variant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveVariantRequest) Reset() {
+	*x = ResolveVariantRequest{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveVariantRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveVariantRequest) ProtoMessage() {}
+
+func (x *ResolveVariantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveVariantRequest.ProtoReflect.Descriptor instead.
+func (*ResolveVariantRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ResolveVariantRequest) GetBodyAddress() string {
+	if x != nil {
+		return x.BodyAddress
+	}
+	return ""
+}
+
+func (x *ResolveVariantRequest) GetWireVariantId() string {
+	if x != nil {
+		return x.WireVariantId
+	}
+	return ""
+}
+
+type ResolveVariantResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// credential is the exact canonical wire bytes held at that pair — served
+	// as stored, never re-serialized, because evidence is octets and not a
+	// document that happens to be equivalent.
+	Credential    []byte `protobuf:"bytes,1,opt,name=credential,proto3" json:"credential,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveVariantResponse) Reset() {
+	*x = ResolveVariantResponse{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveVariantResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveVariantResponse) ProtoMessage() {}
+
+func (x *ResolveVariantResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveVariantResponse.ProtoReflect.Descriptor instead.
+func (*ResolveVariantResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ResolveVariantResponse) GetCredential() []byte {
+	if x != nil {
+		return x.Credential
+	}
+	return nil
+}
+
+type ListVariantsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// body_address is the content address ("sha256:<hex>") whose variants to
+	// list; InvalidArgument if malformed.
+	BodyAddress   string `protobuf:"bytes,1,opt,name=body_address,json=bodyAddress,proto3" json:"body_address,omitempty"`
+	PageSize      int32  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVariantsRequest) Reset() {
+	*x = ListVariantsRequest{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVariantsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVariantsRequest) ProtoMessage() {}
+
+func (x *ListVariantsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVariantsRequest.ProtoReflect.Descriptor instead.
+func (*ListVariantsRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListVariantsRequest) GetBodyAddress() string {
+	if x != nil {
+		return x.BodyAddress
+	}
+	return ""
+}
+
+func (x *ListVariantsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListVariantsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListVariantsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// wire_variant_ids are one lexicographic page of the variant ids held for
+	// that body (see the RPC comment for scope and consistency semantics).
+	WireVariantIds []string `protobuf:"bytes,1,rep,name=wire_variant_ids,json=wireVariantIds,proto3" json:"wire_variant_ids,omitempty"`
+	// next_page_token is empty when the listing is exhausted.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVariantsResponse) Reset() {
+	*x = ListVariantsResponse{}
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVariantsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVariantsResponse) ProtoMessage() {}
+
+func (x *ListVariantsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_vc_v1_vc_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVariantsResponse.ProtoReflect.Descriptor instead.
+func (*ListVariantsResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_vc_v1_vc_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListVariantsResponse) GetWireVariantIds() []string {
+	if x != nil {
+		return x.WireVariantIds
+	}
+	return nil
+}
+
+func (x *ListVariantsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_dplaax_vc_v1_vc_proto protoreflect.FileDescriptor
 
 const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
@@ -354,15 +602,17 @@ const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
 	"\n" +
 	"credential\x18\x01 \x01(\fR\n" +
 	"credential\x12+\n" +
-	"\x11upstream_endpoint\x18\x02 \x01(\tR\x10upstreamEndpoint\"%\n" +
+	"\x11upstream_endpoint\x18\x02 \x01(\tR\x10upstreamEndpoint\"M\n" +
 	"\x0fStoreVCResponse\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\tR\x04hash\"&\n" +
+	"\x04hash\x18\x01 \x01(\tR\x04hash\x12&\n" +
+	"\x0fwire_variant_id\x18\x02 \x01(\tR\rwireVariantId\"&\n" +
 	"\x10ResolveVCRequest\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\tR\x04hash\"3\n" +
+	"\x04hash\x18\x01 \x01(\tR\x04hash\"[\n" +
 	"\x11ResolveVCResponse\x12\x1e\n" +
 	"\n" +
 	"credential\x18\x01 \x01(\fR\n" +
-	"credential\"g\n" +
+	"credential\x12&\n" +
+	"\x0fwire_variant_id\x18\x02 \x01(\tR\rwireVariantId\"g\n" +
 	"\x15ListSuccessorsRequest\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -372,7 +622,22 @@ const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
 	"\n" +
 	"successors\x18\x01 \x03(\tR\n" +
 	"successors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xb7\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"b\n" +
+	"\x15ResolveVariantRequest\x12!\n" +
+	"\fbody_address\x18\x01 \x01(\tR\vbodyAddress\x12&\n" +
+	"\x0fwire_variant_id\x18\x02 \x01(\tR\rwireVariantId\"8\n" +
+	"\x16ResolveVariantResponse\x12\x1e\n" +
+	"\n" +
+	"credential\x18\x01 \x01(\fR\n" +
+	"credential\"t\n" +
+	"\x13ListVariantsRequest\x12!\n" +
+	"\fbody_address\x18\x01 \x01(\tR\vbodyAddress\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"h\n" +
+	"\x14ListVariantsResponse\x12(\n" +
+	"\x10wire_variant_ids\x18\x01 \x03(\tR\x0ewireVariantIds\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\x8b\x04\n" +
 	"\x11VCResolverService\x12W\n" +
 	"\aStoreVC\x12\x1c.dplaax.vc.v1.StoreVCRequest\x1a\x1d.dplaax.vc.v1.StoreVCResponse\"\x0f\x82\xb5\x18\v\n" +
 	"\x02vc\x12\x05store\x12\\\n" +
@@ -380,6 +645,12 @@ const file_dplaax_vc_v1_vc_proto_rawDesc = "" +
 	"\n" +
 	"\x02vc\x12\x04read\x12k\n" +
 	"\x0eListSuccessors\x12#.dplaax.vc.v1.ListSuccessorsRequest\x1a$.dplaax.vc.v1.ListSuccessorsResponse\"\x0e\x82\xb5\x18\n" +
+	"\n" +
+	"\x02vc\x12\x04read\x12k\n" +
+	"\x0eResolveVariant\x12#.dplaax.vc.v1.ResolveVariantRequest\x1a$.dplaax.vc.v1.ResolveVariantResponse\"\x0e\x82\xb5\x18\n" +
+	"\n" +
+	"\x02vc\x12\x04read\x12e\n" +
+	"\fListVariants\x12!.dplaax.vc.v1.ListVariantsRequest\x1a\".dplaax.vc.v1.ListVariantsResponse\"\x0e\x82\xb5\x18\n" +
 	"\n" +
 	"\x02vc\x12\x04readB5Z3github.com/provin-line/oss/gen/go/dplaax/vc/v1;vcpbb\x06proto3"
 
@@ -395,7 +666,7 @@ func file_dplaax_vc_v1_vc_proto_rawDescGZIP() []byte {
 	return file_dplaax_vc_v1_vc_proto_rawDescData
 }
 
-var file_dplaax_vc_v1_vc_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_dplaax_vc_v1_vc_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_dplaax_vc_v1_vc_proto_goTypes = []any{
 	(*StoreVCRequest)(nil),         // 0: dplaax.vc.v1.StoreVCRequest
 	(*StoreVCResponse)(nil),        // 1: dplaax.vc.v1.StoreVCResponse
@@ -403,16 +674,24 @@ var file_dplaax_vc_v1_vc_proto_goTypes = []any{
 	(*ResolveVCResponse)(nil),      // 3: dplaax.vc.v1.ResolveVCResponse
 	(*ListSuccessorsRequest)(nil),  // 4: dplaax.vc.v1.ListSuccessorsRequest
 	(*ListSuccessorsResponse)(nil), // 5: dplaax.vc.v1.ListSuccessorsResponse
+	(*ResolveVariantRequest)(nil),  // 6: dplaax.vc.v1.ResolveVariantRequest
+	(*ResolveVariantResponse)(nil), // 7: dplaax.vc.v1.ResolveVariantResponse
+	(*ListVariantsRequest)(nil),    // 8: dplaax.vc.v1.ListVariantsRequest
+	(*ListVariantsResponse)(nil),   // 9: dplaax.vc.v1.ListVariantsResponse
 }
 var file_dplaax_vc_v1_vc_proto_depIdxs = []int32{
 	0, // 0: dplaax.vc.v1.VCResolverService.StoreVC:input_type -> dplaax.vc.v1.StoreVCRequest
 	2, // 1: dplaax.vc.v1.VCResolverService.ResolveVC:input_type -> dplaax.vc.v1.ResolveVCRequest
 	4, // 2: dplaax.vc.v1.VCResolverService.ListSuccessors:input_type -> dplaax.vc.v1.ListSuccessorsRequest
-	1, // 3: dplaax.vc.v1.VCResolverService.StoreVC:output_type -> dplaax.vc.v1.StoreVCResponse
-	3, // 4: dplaax.vc.v1.VCResolverService.ResolveVC:output_type -> dplaax.vc.v1.ResolveVCResponse
-	5, // 5: dplaax.vc.v1.VCResolverService.ListSuccessors:output_type -> dplaax.vc.v1.ListSuccessorsResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: dplaax.vc.v1.VCResolverService.ResolveVariant:input_type -> dplaax.vc.v1.ResolveVariantRequest
+	8, // 4: dplaax.vc.v1.VCResolverService.ListVariants:input_type -> dplaax.vc.v1.ListVariantsRequest
+	1, // 5: dplaax.vc.v1.VCResolverService.StoreVC:output_type -> dplaax.vc.v1.StoreVCResponse
+	3, // 6: dplaax.vc.v1.VCResolverService.ResolveVC:output_type -> dplaax.vc.v1.ResolveVCResponse
+	5, // 7: dplaax.vc.v1.VCResolverService.ListSuccessors:output_type -> dplaax.vc.v1.ListSuccessorsResponse
+	7, // 8: dplaax.vc.v1.VCResolverService.ResolveVariant:output_type -> dplaax.vc.v1.ResolveVariantResponse
+	9, // 9: dplaax.vc.v1.VCResolverService.ListVariants:output_type -> dplaax.vc.v1.ListVariantsResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -429,7 +708,7 @@ func file_dplaax_vc_v1_vc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_vc_v1_vc_proto_rawDesc), len(file_dplaax_vc_v1_vc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

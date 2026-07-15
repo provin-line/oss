@@ -62,6 +62,40 @@ service VCResolverService {
   rpc ListSuccessors(ListSuccessorsRequest) returns (ListSuccessorsResponse) {
     option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
   }
+
+  // ResolveVariant returns the EXACT canonical wire bytes of one variant of a
+  // body: byte-for-byte what was admitted, which is what evidence means. One
+  // body can hold several signed forms — re-issuing a proof leaves the body,
+  // and every successor link to it, untouched — so ResolveVC cannot serve this
+  // purpose: it answers with SOME signed form (the projection), and which one
+  // it names can change as the set grows. An auditor, a bundle exporter, or
+  // anything reproducing a verdict needs the bytes it evaluated, not an
+  // equivalent document.
+  //
+  // NotFound for a pair this node does not hold. Damage is NOT NotFound: a
+  // credential that is not what its id claims is reported as an error, because
+  // "never held" and "held, tampered with" are different facts about
+  // provenance. Same L1 gate as ResolveVC — a variant read reveals the same
+  // class as a VC read.
+  rpc ResolveVariant(ResolveVariantRequest) returns (ResolveVariantResponse) {
+    option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
+  }
+
+  // ListVariants returns the variant ids HELD BY THIS NODE for a body. An
+  // unknown body returns an empty page, not NotFound: holding no variants is a
+  // normal answer, and the listing is scoped to this node's store — holding
+  // none is not a claim that none exist.
+  //
+  // Consistency is per-call, not per-iteration: a variant admitted between two
+  // pages, sorting before the cursor, is not observed by that iteration. Every
+  // page is exact as of its own call and the set only grows (variants are
+  // append-only), so a caller needing a complete snapshot re-lists until
+  // nothing new appears. Pagination per the dplaax.audit.v1 convention
+  // (page_size 0 = default 64, negative = InvalidArgument, clamp at 256;
+  // opaque versioned token; lexicographic order). Same L1 gate as ResolveVC.
+  rpc ListVariants(ListVariantsRequest) returns (ListVariantsResponse) {
+    option (o3co.authz.v1.policy) = {resource: "vc", action: "read"};
+  }
 }
 
 message StoreVCRequest {
@@ -75,6 +109,12 @@ message StoreVCRequest {
 message StoreVCResponse {
   // hash is the recomputed content address ("sha256:<hex>") the VC is stored at.
   string hash = 1;
+  // wire_variant_id names the exact wire bytes this submission was admitted as
+  // ("wire:v1:jcs-rfc8785:sha256:<hex>") — the key to fetch them back with
+  // (ResolveVariant). The server recomputes it, like the hash: it is the digest
+  // of the canonical projection of what was sent, so re-serializing the same
+  // document cannot mint a second identity for it.
+  string wire_variant_id = 2;
 }
 
 message ResolveVCRequest {
@@ -84,6 +124,13 @@ message ResolveVCRequest {
 message ResolveVCResponse {
   // credential is the held VC (canonical JSON).
   bytes credential = 1;
+  // wire_variant_id names WHICH variant this body-only read served. The
+  // projection is provisional: it is a deterministic choice over the variants
+  // held right now, so it can name a different one once the set grows, and it
+  // is not evaluation evidence. A consumer that needs the bytes to stay put —
+  // an auditor, an exporter — fetches this id through ResolveVariant instead of
+  // trusting that a second ResolveVC returns the same document.
+  string wire_variant_id = 2;
 }
 
 message ListSuccessorsRequest {
@@ -97,6 +144,37 @@ message ListSuccessorsResponse {
   // successors are one lexicographic page of held successor content
   // addresses (see the RPC comment for scope semantics).
   repeated string successors = 1;
+  // next_page_token is empty when the listing is exhausted.
+  string next_page_token = 2;
+}
+
+message ResolveVariantRequest {
+  // body_address is the content address ("sha256:<hex>") of the body — the
+  // same address ResolveVC takes as `hash` and previousCredential links carry;
+  // InvalidArgument if malformed.
+  string body_address = 1;
+  // wire_variant_id names which signed form of that body to serve
+  // ("wire:v1:jcs-rfc8785:sha256:<hex>"); InvalidArgument if malformed.
+  string wire_variant_id = 2;
+}
+message ResolveVariantResponse {
+  // credential is the exact canonical wire bytes held at that pair — served
+  // as stored, never re-serialized, because evidence is octets and not a
+  // document that happens to be equivalent.
+  bytes credential = 1;
+}
+
+message ListVariantsRequest {
+  // body_address is the content address ("sha256:<hex>") whose variants to
+  // list; InvalidArgument if malformed.
+  string body_address = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+message ListVariantsResponse {
+  // wire_variant_ids are one lexicographic page of the variant ids held for
+  // that body (see the RPC comment for scope and consistency semantics).
+  repeated string wire_variant_ids = 1;
   // next_page_token is empty when the listing is exhausted.
   string next_page_token = 2;
 }

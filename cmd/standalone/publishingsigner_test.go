@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -35,23 +37,27 @@ func (f *fakeFullSigner) SignAggregateFirstDrop(_ context.Context, _ []byte, _ s
 
 // fakePublisher records StoreCredential calls and returns a configurable result.
 type fakePublisher struct {
-	calls   int
-	gotEnd  string
-	retAddr string // "" => echo the credential's own Hash()
-	retErr  error
+	calls      int
+	gotEnd     string
+	retAddr    string // "" => echo the credential's own Hash()
+	retVariant string // "" => echo the credential's own WireVariantID()
+	retErr     error
 }
 
-func (p *fakePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (string, error) {
+func (p *fakePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (vcresolverclient.StoredCredential, error) {
 	p.calls++
 	p.gotEnd = upstreamEndpoint
 	if p.retErr != nil {
-		return "", p.retErr
+		return vcresolverclient.StoredCredential{}, p.retErr
 	}
-	if p.retAddr != "" {
-		return p.retAddr, nil
+	out := vcresolverclient.StoredCredential{BodyAddress: p.retAddr, WireVariantID: p.retVariant}
+	if out.BodyAddress == "" {
+		out.BodyAddress, _ = cred.Hash()
 	}
-	h, _ := cred.Hash()
-	return h, nil
+	if out.WireVariantID == "" {
+		out.WireVariantID, _ = cred.WireVariantID()
+	}
+	return out, nil
 }
 
 func testCred(t *testing.T) *vc.PipelinePassCredential {
@@ -149,4 +155,61 @@ func TestPublishingSigner_HashMismatch_FailsClosed(t *testing.T) {
 	if _, err := ps.SignFirstDrop(context.Background(), []byte("x"), "ih", "oh"); err == nil {
 		t.Fatal("hash mismatch: want sign to fail closed, got nil")
 	}
+}
+
+// TestPublishRejectsAStoreThatKeptADifferentSignedForm is the case the content
+// address alone cannot see.
+//
+// The store returns the RIGHT body address — it holds the same claims — but a
+// different variant: a different signed form of that body. The old check
+// compared addresses and passed, so a store could hold a document other than
+// the one that was signed while reporting success, which is exactly what this
+// check exists to prevent.
+func TestPublishRejectsAStoreThatKeptADifferentSignedForm(t *testing.T) {
+	cred := publishTestCred(t)
+	pub := &fakePublisher{
+		// Body address echoed (retAddr == "" means "echo the credential's own"),
+		// variant deliberately not the credential's.
+		retVariant: vc.WireVariantIDFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	}
+	err := publishIssuedCredential(context.Background(), pub, cred, "")
+	if err == nil {
+		t.Fatal("publish accepted a store holding a different signed form of the body")
+	}
+	if !strings.Contains(err.Error(), "variant") {
+		t.Errorf("the error does not name what disagreed: %v", err)
+	}
+}
+
+// TestPublishAcceptsAFaithfulStore: the happy path still passes, so the check
+// above is not simply refusing everything.
+func TestPublishAcceptsAFaithfulStore(t *testing.T) {
+	cred := publishTestCred(t)
+	if err := publishIssuedCredential(context.Background(), &fakePublisher{}, cred, ""); err != nil {
+		t.Fatalf("publish rejected a faithful store: %v", err)
+	}
+}
+
+func publishTestCred(t *testing.T) *vc.PipelinePassCredential {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:s1",
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "s1"},
+		"proof": map[string]any{
+			"type": "DataIntegrityProof", "cryptosuite": "eddsa-jcs-2022",
+			"verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#signing",
+			"proofPurpose":       "assertionMethod", "created": "2026-07-01T00:00:01Z",
+			"proofValue": "zA",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c vc.PipelinePassCredential
+	if err := c.UnmarshalJSON(raw); err != nil {
+		t.Fatal(err)
+	}
+	return &c
 }

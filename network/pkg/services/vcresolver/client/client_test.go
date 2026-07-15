@@ -69,15 +69,22 @@ func TestStoreAndResolve_RoundTrip(t *testing.T) {
 		t.Fatalf("Hash: %v", err)
 	}
 
-	addr, err := r.StoreCredential(ctx, c, "")
+	stored, err := r.StoreCredential(ctx, c, "")
 	if err != nil {
 		t.Fatalf("StoreCredential: %v", err)
 	}
-	if addr != want {
-		t.Fatalf("StoreCredential addr = %q, want %q", addr, want)
+	if stored.BodyAddress != want {
+		t.Fatalf("StoreCredential body address = %q, want %q", stored.BodyAddress, want)
+	}
+	wantVariant, err := c.WireVariantID()
+	if err != nil {
+		t.Fatalf("WireVariantID: %v", err)
+	}
+	if stored.WireVariantID != wantVariant {
+		t.Fatalf("StoreCredential variant = %q, want %q", stored.WireVariantID, wantVariant)
 	}
 
-	got, err := r.ResolveCredential(ctx, addr)
+	got, err := r.ResolveCredential(ctx, stored.BodyAddress)
 	if err != nil {
 		t.Fatalf("ResolveCredential: %v", err)
 	}
@@ -119,11 +126,11 @@ func TestStoreAndResolve_LinkedCredential(t *testing.T) {
 	prevAddr := "sha256:" + strings.Repeat("a", 64)
 	c := cred(t, prevAddr)
 
-	addr, err := r.StoreCredential(ctx, c, "https://upstream.example/")
+	stored, err := r.StoreCredential(ctx, c, "https://upstream.example/")
 	if err != nil {
 		t.Fatalf("StoreCredential(linked): %v", err)
 	}
-	got, err := r.ResolveCredential(ctx, addr)
+	got, err := r.ResolveCredential(ctx, stored.BodyAddress)
 	if err != nil {
 		t.Fatalf("ResolveCredential(linked): %v", err)
 	}
@@ -146,6 +153,14 @@ func (c *capturingClient) ResolveVC(_ context.Context, _ *connect.Request[vcpb.R
 }
 
 func (c *capturingClient) ListSuccessors(_ context.Context, _ *connect.Request[vcpb.ListSuccessorsRequest]) (*connect.Response[vcpb.ListSuccessorsResponse], error) {
+	return nil, errors.New("not used")
+}
+
+func (c *capturingClient) ResolveVariant(_ context.Context, _ *connect.Request[vcpb.ResolveVariantRequest]) (*connect.Response[vcpb.ResolveVariantResponse], error) {
+	return nil, errors.New("not used")
+}
+
+func (c *capturingClient) ListVariants(_ context.Context, _ *connect.Request[vcpb.ListVariantsRequest]) (*connect.Response[vcpb.ListVariantsResponse], error) {
 	return nil, errors.New("not used")
 }
 
