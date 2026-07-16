@@ -285,8 +285,15 @@ func New(fields CredentialFields) (*PipelinePassCredential, error) {
 	cred := &PipelinePassCredential{body: body}
 	// Issue-path enforcement: the issuer MUST emit a present, grammar-valid,
 	// grounded claim (credential.subject.transformation-claim,
-	// credential.claim.grammar, credential.claim.grounding).
+	// credential.claim.grammar, credential.claim.grounding) — and, within the
+	// provin namespace, a REGISTERED one (profile.spec claim.registry.closed).
+	// The registry check lives only here, on issuance: the receive path stays
+	// open-world by rule, so a future label is safe to meet before it is safe
+	// to emit.
 	if err := cred.ValidateTransformationClaim(); err != nil {
+		return nil, err
+	}
+	if err := fields.Subject.TransformationClaim.enforceIssuanceRegistry(); err != nil {
 		return nil, err
 	}
 	return cred, nil

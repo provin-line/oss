@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/vc"
@@ -555,6 +557,18 @@ func TestListVariantsPagesAndReportsMore(t *testing.T) {
 	}
 	if _, _, err := svc.ListVariants(ctx, body, "", 0); !errors.Is(err, vcresolver.ErrInvalidArgument) {
 		t.Errorf("ListVariants(limit=0) = %v, want ErrInvalidArgument", err)
+	}
+	// The cap: a direct caller is told, loudly — and math.MaxInt can no longer
+	// reach the limit+1 arithmetic, where it used to overflow into the
+	// non-positive guard and read as an empty page.
+	if _, _, err := svc.ListVariants(ctx, body, "", pagination.MaxPageSize+1); !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("ListVariants(limit=cap+1) = %v, want ErrInvalidArgument", err)
+	}
+	if _, _, err := svc.ListVariants(ctx, body, "", math.MaxInt); !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("ListVariants(limit=MaxInt) = %v, want ErrInvalidArgument", err)
+	}
+	if page, _, err := svc.ListVariants(ctx, body, "", pagination.MaxPageSize); err != nil || len(page) != 3 {
+		t.Errorf("ListVariants(limit=cap) = %v (err %v), want the whole set", page, err)
 	}
 }
 

@@ -45,6 +45,47 @@ func (tc TransformationClaim) Validate() error {
 	return nil
 }
 
+// provinClaimNamespace is the namespace whose registry this implementation,
+// as a provin issuer, is bound by. Other namespaces are other profiles'.
+const provinClaimNamespace = "provin"
+
+// registeredProvinClaims is the provin profile's claim registry
+// (profile.spec claim.registry.closed): the complete set of labels this
+// implementation may EMIT under the provin namespace. Adding an entry is a
+// profile version change first and a code change second — the registry's
+// source of truth is rules/claim.yaml, and this set follows it.
+var registeredProvinClaims = map[TransformationClaim]bool{
+	ClaimFilter:        true,
+	ClaimConvert:       true,
+	ClaimFilterConvert: true,
+	ClaimAggregate:     true,
+	ClaimEnrich:        true,
+	ClaimGenerate:      true,
+	ClaimSinkReceipt:   true,
+}
+
+// enforceIssuanceRegistry rejects EMITTING an unregistered provin: label.
+//
+// Issuance-only, and the asymmetry is the profile's own: claim.registry.closed
+// binds the issuer ("closed for ISSUANCE, not for verification"), while the
+// receive path stays open-world (credential.claim.open-world-accept) so a
+// newer node's label reaches an older node safely — by default, not by
+// upgrade. Putting this check anywhere the receive path shares (such as
+// ValidateTransformationClaim) would turn every future label addition into a
+// coordinated fleet upgrade, which is the cost the open-world rule exists to
+// avoid. Other namespaces pass untouched: their registries are not ours to
+// enforce, and their grounding is already checked where all grounding is.
+func (tc TransformationClaim) enforceIssuanceRegistry() error {
+	prefix, _, _ := strings.Cut(string(tc), ":")
+	if prefix != provinClaimNamespace {
+		return nil
+	}
+	if !registeredProvinClaims[tc] {
+		return fmt.Errorf("transformationClaim %q is not a label the provin profile registers — this issuer must not emit it (claim.registry.closed)", tc)
+	}
+	return nil
+}
+
 // knownContextGroundings maps the context IRIs whose documents this
 // implementation knows byte-exactly to the claim-namespace prefixes those
 // documents ground. A prefix mapping is a simple string term whose value

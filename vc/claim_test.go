@@ -230,3 +230,83 @@ func TestValidateTransformationClaimErrorMentionsClaim(t *testing.T) {
 		t.Errorf("error should name transformationClaim, got %v", err)
 	}
 }
+
+// --- the provin claim registry, enforced where it binds: issuance ---
+//
+// profile.spec claim.registry.closed: an issuer MUST NOT emit an unregistered
+// provin: label. The check lives in New — the one gate every issuance path
+// crosses — and deliberately NOT in ValidateTransformationClaim, which the
+// receive path shares: a verifier meeting an unknown label stays open-world
+// (credential.claim.open-world-accept), which is what lets a NEWER node's
+// label reach an OLDER node without a coordinated upgrade. Enforcing the
+// registry on receive would convert every future label addition from a minor
+// change into a fleet upgrade.
+
+func registryFields(claim vc.TransformationClaim) vc.CredentialFields {
+	return vc.CredentialFields{
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:s1",
+		ValidFrom: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC),
+		Subject: vc.CredentialSubjectFields{
+			PipelineID:          "p1",
+			ProcessID:           "s1",
+			TransformationClaim: claim,
+			OutputHash:          "sha256:" + strings.Repeat("1", 64),
+		},
+	}
+}
+
+func TestNewEmitsEveryRegisteredClaim(t *testing.T) {
+	for _, claim := range []vc.TransformationClaim{
+		vc.ClaimFilter, vc.ClaimConvert, vc.ClaimFilterConvert,
+		vc.ClaimAggregate, vc.ClaimEnrich, vc.ClaimGenerate, vc.ClaimSinkReceipt,
+	} {
+		t.Run(string(claim), func(t *testing.T) {
+			if _, err := vc.New(registryFields(claim)); err != nil {
+				t.Errorf("New rejected a registered claim: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewRefusesAnUnregisteredProvinLabel(t *testing.T) {
+	_, err := vc.New(registryFields("provin:summarize"))
+	if err == nil {
+		t.Fatal("New emitted an unregistered provin: label")
+	}
+	if !strings.Contains(err.Error(), "regist") {
+		t.Errorf("the rejection does not name the registry: %v", err)
+	}
+}
+
+// TestTheRegistryGateIsProvinScoped: another namespace's claim must not hit
+// the provin registry — its rejection (today) comes from GROUNDING, because
+// New pins the issued @context set and nothing in it grounds "acme". If that
+// error ever names the registry instead, the gate has leaked across the
+// namespace boundary and is deciding things it does not own.
+func TestTheRegistryGateIsProvinScoped(t *testing.T) {
+	_, err := vc.New(registryFields("acme:custom"))
+	if err == nil {
+		t.Fatal("New emitted a claim nothing grounds")
+	}
+	if strings.Contains(err.Error(), "regist") {
+		t.Errorf("an acme: claim was rejected by the provin registry (want the grounding gate): %v", err)
+	}
+}
+
+// TestReceivePathStaysOpenWorldForUnregisteredLabels is the other half of the
+// rule, and the half that must NOT change: a wire credential carrying an
+// unregistered provin: label — a newer node's future label — is still accepted
+// by the receive-side claim check.
+func TestReceivePathStaysOpenWorldForUnregisteredLabels(t *testing.T) {
+	wire := `{"@context":["https://www.w3.org/ns/credentials/v2","https://dplaax.dev/vc/v1","https://provin.dev/vc/v1"],` +
+		`"type":["VerifiableCredential","PipelinePassCredential"],` +
+		`"issuer":"did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:s1",` +
+		`"credentialSubject":{"pipelineId":"p1","processId":"s1","transformationClaim":"provin:summarize"}}`
+	var cred vc.PipelinePassCredential
+	if err := cred.UnmarshalJSON([]byte(wire)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cred.ValidateTransformationClaim(); err != nil {
+		t.Errorf("the receive path rejected an unregistered label — open-world is broken, and every future label addition just became a fleet upgrade: %v", err)
+	}
+}

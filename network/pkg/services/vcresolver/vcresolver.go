@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -200,6 +201,14 @@ func (s *Service) ListVariants(ctx context.Context, bodyAddress, fromExclusive s
 	}
 	if limit <= 0 {
 		return nil, false, fmt.Errorf("%w: limit %d is not positive", ErrInvalidArgument, limit)
+	}
+	if limit > pagination.MaxPageSize {
+		// The cap exists for the same reason the wire clamp does — a huge
+		// request must not translate into a huge allocation — and it also
+		// keeps the limit+1 below from ever being able to overflow. The
+		// handler clamps wire input silently (a remote caller cannot know our
+		// cap); a DIRECT caller wrote the number in code, so it gets told.
+		return nil, false, fmt.Errorf("%w: limit %d exceeds the page-size cap %d", ErrInvalidArgument, limit, pagination.MaxPageSize)
 	}
 	// One extra: the store's full-page rule makes a short page mean exhausted,
 	// so asking for limit+1 answers "is there more" without a second call and

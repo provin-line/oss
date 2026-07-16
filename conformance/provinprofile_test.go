@@ -22,8 +22,9 @@
 //     implementation that builds an inference surface); this harness records
 //     that it has nothing to run them against.
 //
-// A skip here is a fact about where a norm binds, not a gap in coverage. Where
-// it IS a gap — claim-003 — the reason says so.
+// A skip here is a fact about where a norm binds, not a gap in coverage.
+// (claim-003 was ledgered as a real gap when this harness landed; the
+// issuance-side registry check closed it — ruled 2026-07-16.)
 package conformance_test
 
 import (
@@ -33,6 +34,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/provin-line/oss/vc"
 )
 
 const provinVectorDir = "vectors/provin"
@@ -52,15 +56,8 @@ func init() {
 	// Grammar and grounding: the library's half.
 	provinRunners["claim-001"] = runProfileGrounding
 	provinRunners["claim-002"] = runProfileGrounding
+	provinRunners["claim-003"] = runProfileRegistryClosed
 	provinRunners["claim-013"] = runProfileTopologyIndependence
-
-	// A real gap, not a boundary. claim.registry.closed binds the ISSUER —
-	// an unregistered provin: label may not be emitted — and vc.New accepts
-	// any grammatical claim, so nothing stops one. Closing it is an issuance
-	// change (the registry exists as constants; enforcing it would reject
-	// labels that are currently admitted), which is a decision, not a fix to
-	// make while wiring a harness.
-	provinSkips["claim-003"] = "gap: no issuer-side registry check — vc.New admits any grammatical, grounded claim, so claim.registry.closed is unenforced on the path it binds"
 
 	// Closure is a warranty, not a computation: no surface here decides it,
 	// and by design none should — the library's claim check is structural so
@@ -221,5 +218,48 @@ func runProfileTopologyIndependence(t *testing.T, v dplaaxVector) {
 	}
 	if want := expectString(t, v); want != "accept" {
 		t.Fatalf("unhandled expect %q", want)
+	}
+}
+
+// --- the registry, closed where it binds: issuance (claim-003) ---
+//
+// The rule's two directions are deliberately asymmetric, and this driver pins
+// both. EMITTING the fixture's unregistered label must fail — that is the
+// registry being closed for issuance. RECEIVING the very same credential must
+// still pass the claim check — that is the open-world rule, and it is what
+// makes adding a label a minor change instead of a fleet upgrade. A regression
+// in either direction is a different bug, so both are asserted against the
+// same fixture.
+func runProfileRegistryClosed(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential json.RawMessage `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	cred := mustCred(t, input.Credential)
+	subject, err := cred.Subject()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = vc.New(vc.CredentialFields{
+		Issuer:    cred.Issuer(),
+		ValidFrom: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC),
+		Subject: vc.CredentialSubjectFields{
+			PipelineID:          subject.PipelineID,
+			ProcessID:           subject.ProcessID,
+			TransformationClaim: subject.TransformationClaim,
+			OutputHash:          subject.OutputHash,
+		},
+	})
+	if want := expectString(t, v); (err == nil) != (want == "accept") {
+		t.Fatalf("issuing %q: err=%v, want %s", subject.TransformationClaim, err, want)
+	}
+	if err != nil && !strings.Contains(err.Error(), "regist") {
+		t.Errorf("rejected at the wrong gate (want the registry gate): %v", err)
+	}
+
+	// The same bytes, on the receive side: open-world, accepted.
+	if err := cred.ValidateTransformationClaim(); err != nil {
+		t.Errorf("the receive path rejected what issuance refused to emit — open-world is broken: %v", err)
 	}
 }

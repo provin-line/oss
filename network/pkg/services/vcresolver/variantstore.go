@@ -353,6 +353,17 @@ func (s *VariantStore) Get(hash string) (*vc.PipelinePassCredential, error) {
 // document. The answer above does not depend on it, so a read-only or failing
 // store still resolves; this is compatibility, not correctness.
 //
+// KNOWN AND ACCEPTED (ruled 2026-07-16): in-process, a concurrent PutVariant
+// can admit a smaller variant and refresh the slot between this read's winner
+// computation and the write below, which then regresses the slot to the older
+// winner until the next read or write heals it again. No evidence is lost and
+// no new-binary reader is affected — the winner is always recomputed from the
+// set, never trusted from this file. The only observer is an OLD binary
+// reading the file directly inside that window. Serializing reads against
+// writes for a compatibility artifact was judged not worth it; the
+// multi-process fencing work (P1-D) closes it as a side effect of the locking
+// it needs anyway.
+//
 // It ADOPTS what is there first, and that order is the whole point. The flat
 // slot can be the only copy of a variant: after a rollback an older binary
 // writes it without knowing variants exist, and nothing has materialized it

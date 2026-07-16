@@ -202,6 +202,29 @@ body-only read; until then full invariant-13 conformance is not claimed.
 Quarantine, quota and backpressure (invariants 15-18) land with the P0-5 effect
 gate. Evidence: `docs/evidence/p0-1a-variant-store-e2e-2026-07-16.md`.
 
+### provin claim registry — issuance closed (profile.spec)
+
+The provin wire profile's spec now exists (provin-line/profile.spec) and its
+registry is enforced where it binds: **`vc.New` refuses to emit an unregistered
+`provin:` label** (`claim.registry.closed`). Previously any grammatical,
+grounded token could be issued, so the registry existed only as constants and a
+typo like `provin:summarize` would sign and ship.
+
+The receive path is deliberately untouched: a verifier meeting an unknown label
+stays open-world (`credential.claim.open-world-accept`), so a newer node's
+label reaches an older node safely — by default, not by coordinated upgrade.
+Other namespaces pass the gate untouched; their registries are not this
+profile's to enforce.
+
+Alongside it: the profile context (`vc/contexts/provin-v1.jsonld`) is now
+VENDORED from provin-line/profile.spec rather than owned here (Model A finally
+has a profile repository to live in), pinned by sha256 like the protocol
+context; and the profile's conformance vectors run under
+`TestProvinProfileAllVectors` (grammar/grounding/registry/topology driven; the
+closure norms ledgered as issuer/consumer obligations, which no library check
+can drive). `Service.ListVariants` also gained the `pagination.MaxPageSize`
+cap, closing a theoretical `limit+1` overflow for direct callers.
+
 ### Transport security — P0-6 closure
 
 The TLS posture (F6) shipped earlier in this line; these are the conditions its
