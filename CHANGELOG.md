@@ -253,6 +253,14 @@ closure required, now met with executed evidence rather than review.
   boot before the data directory exists. The quickstart is booted on its
   intended cleartext dev profile and its walkthrough run end to end.
 
+### Security
+
+- Dependency: `golang.org/x/net` v0.51.0 → v0.55.0 — clears GO-2026-5026
+  (`idna.Lookup.ToASCII` accepting ASCII-only Punycode labels; reachable via
+  `orgverify.NormalizeFQDN`) and the x/net side of GO-2026-4918 (HTTP/2
+  `SETTINGS_MAX_FRAME_SIZE` infinite loop). `x/crypto` v0.51.0 and `x/text`
+  v0.37.0 ride along as transitive requirement bumps.
+
 ### Fixed
 
 - **Replaced the HOCON parser; three silently-deleted defaults are back.** The
