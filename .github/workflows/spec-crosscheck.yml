@@ -1,0 +1,36 @@
+# Tracks the dPLaaX spec's HEAD: sync its vectors into the harness and run
+# the coverage-guarded suite against them.
+#
+# Direction matters: this is the implementation watching the spec — never the
+# other way around. The spec repo carries no knowledge of this repo; a red run
+# here means catch-up work HERE (add drivers, update skips, re-vendor), and is
+# an early signal only — the vendored vectors in-tree remain the source the
+# regular CI pins against until a sync is deliberately committed.
+name: spec-crosscheck
+
+on:
+  schedule:
+    - cron: '17 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crosscheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: checkout dplaax/spec (public, default branch)
+        uses: actions/checkout@v4
+        with:
+          repository: dplaax/spec
+          path: dplaax-spec
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: sync spec HEAD vectors into the harness
+        run: scripts/sync-spec-vectors.sh ./dplaax-spec
+      - name: run the coverage-guarded harness
+        run: go test ./conformance/ -run TestDplaaxAllVectors -v
