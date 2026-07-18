@@ -21,6 +21,7 @@ package auditpb
 
 import (
 	_ "github.com/o3co/protobuf.interceptors/schema"
+	v1 "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -672,11 +673,117 @@ func (x *GetConsumedSourcesResponse) GetNextPageToken() string {
 	return ""
 }
 
+type RegisterEvidenceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// head_variant_address is the content address of the ADMITTED bytes' variant
+	// — the head this evidence registration is FOR.
+	HeadVariantAddress string `protobuf:"bytes,1,opt,name=head_variant_address,json=headVariantAddress,proto3" json:"head_variant_address,omitempty"`
+	// consumed_source_addresses are the content addresses of the source
+	// credentials the emitting boundary consumed to produce the head above
+	// (the emit-locus receipt this registration deposits for later audit).
+	ConsumedSourceAddresses []string `protobuf:"bytes,2,rep,name=consumed_source_addresses,json=consumedSourceAddresses,proto3" json:"consumed_source_addresses,omitempty"`
+	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+	// proof-carrying shape of dplaax.payload.v1.ResolvePayloadRequest, reusing
+	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition would
+	// be a drift source). The proven signer_did is authoritative for the
+	// registering party.
+	AuthProof     *v1.AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterEvidenceRequest) Reset() {
+	*x = RegisterEvidenceRequest{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterEvidenceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterEvidenceRequest) ProtoMessage() {}
+
+func (x *RegisterEvidenceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterEvidenceRequest.ProtoReflect.Descriptor instead.
+func (*RegisterEvidenceRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RegisterEvidenceRequest) GetHeadVariantAddress() string {
+	if x != nil {
+		return x.HeadVariantAddress
+	}
+	return ""
+}
+
+func (x *RegisterEvidenceRequest) GetConsumedSourceAddresses() []string {
+	if x != nil {
+		return x.ConsumedSourceAddresses
+	}
+	return nil
+}
+
+func (x *RegisterEvidenceRequest) GetAuthProof() *v1.AuthProof {
+	if x != nil {
+		return x.AuthProof
+	}
+	return nil
+}
+
+type RegisterEvidenceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterEvidenceResponse) Reset() {
+	*x = RegisterEvidenceResponse{}
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterEvidenceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterEvidenceResponse) ProtoMessage() {}
+
+func (x *RegisterEvidenceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_audit_v1_audit_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterEvidenceResponse.ProtoReflect.Descriptor instead.
+func (*RegisterEvidenceResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_audit_v1_audit_proto_rawDescGZIP(), []int{10}
+}
+
 var File_dplaax_audit_v1_audit_proto protoreflect.FileDescriptor
 
 const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x1bdplaax/audit/v1/audit.proto\x12\x0fdplaax.audit.v1\x1a\x1ao3co/authz/v1/policy.proto\"\xe9\x01\n" +
+	"\x1bdplaax/audit/v1/audit.proto\x12\x0fdplaax.audit.v1\x1a\x1bdplaax/chain/v1/chain.proto\x1a\x1ao3co/authz/v1/policy.proto\"\xe9\x01\n" +
 	"\vAxisVerdict\x12B\n" +
 	"\x0edata_integrity\x18\x01 \x01(\x0e2\x1b.dplaax.audit.v1.ConfidenceR\rdataIntegrity\x12L\n" +
 	"\x13signer_authenticity\x18\x02 \x01(\x0e2\x1b.dplaax.audit.v1.ConfidenceR\x12signerAuthenticity\x12H\n" +
@@ -715,20 +822,28 @@ const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"`\n" +
 	"\x1aGetConsumedSourcesResponse\x12\x1a\n" +
 	"\bconsumed\x18\x01 \x03(\tR\bconsumed\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*v\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xc2\x01\n" +
+	"\x17RegisterEvidenceRequest\x120\n" +
+	"\x14head_variant_address\x18\x01 \x01(\tR\x12headVariantAddress\x12:\n" +
+	"\x19consumed_source_addresses\x18\x02 \x03(\tR\x17consumedSourceAddresses\x129\n" +
+	"\n" +
+	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"\x1a\n" +
+	"\x18RegisterEvidenceResponse*v\n" +
 	"\n" +
 	"Confidence\x12\x1a\n" +
 	"\x16CONFIDENCE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CONFIDENCE_FAILED\x10\x01\x12\x1c\n" +
 	"\x18CONFIDENCE_INDETERMINATE\x10\x02\x12\x17\n" +
-	"\x13CONFIDENCE_VERIFIED\x10\x032\x86\x03\n" +
+	"\x13CONFIDENCE_VERIFIED\x10\x032\x86\x04\n" +
 	"\fAuditService\x12t\n" +
 	"\x0eGetAuditStatus\x12&.dplaax.audit.v1.GetAuditStatusRequest\x1a'.dplaax.audit.v1.GetAuditStatusResponse\"\x11\x82\xb5\x18\r\n" +
 	"\x05audit\x12\x04read\x12}\n" +
 	"\x11ListAuditStatuses\x12).dplaax.audit.v1.ListAuditStatusesRequest\x1a*.dplaax.audit.v1.ListAuditStatusesResponse\"\x11\x82\xb5\x18\r\n" +
 	"\x05audit\x12\x04read\x12\x80\x01\n" +
 	"\x12GetConsumedSources\x12*.dplaax.audit.v1.GetConsumedSourcesRequest\x1a+.dplaax.audit.v1.GetConsumedSourcesResponse\"\x11\x82\xb5\x18\r\n" +
-	"\x05audit\x12\x04readB;Z9github.com/provin-line/oss/gen/go/dplaax/audit/v1;auditpbb\x06proto3"
+	"\x05audit\x12\x04read\x12~\n" +
+	"\x10RegisterEvidence\x12(.dplaax.audit.v1.RegisterEvidenceRequest\x1a).dplaax.audit.v1.RegisterEvidenceResponse\"\x15\x82\xb5\x18\x11\n" +
+	"\x05audit\x12\bregisterB;Z9github.com/provin-line/oss/gen/go/dplaax/audit/v1;auditpbb\x06proto3"
 
 var (
 	file_dplaax_audit_v1_audit_proto_rawDescOnce sync.Once
@@ -743,7 +858,7 @@ func file_dplaax_audit_v1_audit_proto_rawDescGZIP() []byte {
 }
 
 var file_dplaax_audit_v1_audit_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_dplaax_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_dplaax_audit_v1_audit_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_dplaax_audit_v1_audit_proto_goTypes = []any{
 	(Confidence)(0),                    // 0: dplaax.audit.v1.Confidence
 	(*AxisVerdict)(nil),                // 1: dplaax.audit.v1.AxisVerdict
@@ -755,6 +870,9 @@ var file_dplaax_audit_v1_audit_proto_goTypes = []any{
 	(*ListAuditStatusesResponse)(nil),  // 7: dplaax.audit.v1.ListAuditStatusesResponse
 	(*GetConsumedSourcesRequest)(nil),  // 8: dplaax.audit.v1.GetConsumedSourcesRequest
 	(*GetConsumedSourcesResponse)(nil), // 9: dplaax.audit.v1.GetConsumedSourcesResponse
+	(*RegisterEvidenceRequest)(nil),    // 10: dplaax.audit.v1.RegisterEvidenceRequest
+	(*RegisterEvidenceResponse)(nil),   // 11: dplaax.audit.v1.RegisterEvidenceResponse
+	(*v1.AuthProof)(nil),               // 12: dplaax.chain.v1.AuthProof
 }
 var file_dplaax_audit_v1_audit_proto_depIdxs = []int32{
 	0,  // 0: dplaax.audit.v1.AxisVerdict.data_integrity:type_name -> dplaax.audit.v1.Confidence
@@ -766,17 +884,20 @@ var file_dplaax_audit_v1_audit_proto_depIdxs = []int32{
 	2,  // 6: dplaax.audit.v1.GetAuditStatusResponse.source_commitment:type_name -> dplaax.audit.v1.ScopeVerdict
 	4,  // 7: dplaax.audit.v1.AuditStatusEntry.status:type_name -> dplaax.audit.v1.GetAuditStatusResponse
 	6,  // 8: dplaax.audit.v1.ListAuditStatusesResponse.entries:type_name -> dplaax.audit.v1.AuditStatusEntry
-	3,  // 9: dplaax.audit.v1.AuditService.GetAuditStatus:input_type -> dplaax.audit.v1.GetAuditStatusRequest
-	5,  // 10: dplaax.audit.v1.AuditService.ListAuditStatuses:input_type -> dplaax.audit.v1.ListAuditStatusesRequest
-	8,  // 11: dplaax.audit.v1.AuditService.GetConsumedSources:input_type -> dplaax.audit.v1.GetConsumedSourcesRequest
-	4,  // 12: dplaax.audit.v1.AuditService.GetAuditStatus:output_type -> dplaax.audit.v1.GetAuditStatusResponse
-	7,  // 13: dplaax.audit.v1.AuditService.ListAuditStatuses:output_type -> dplaax.audit.v1.ListAuditStatusesResponse
-	9,  // 14: dplaax.audit.v1.AuditService.GetConsumedSources:output_type -> dplaax.audit.v1.GetConsumedSourcesResponse
-	12, // [12:15] is the sub-list for method output_type
-	9,  // [9:12] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	12, // 9: dplaax.audit.v1.RegisterEvidenceRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
+	3,  // 10: dplaax.audit.v1.AuditService.GetAuditStatus:input_type -> dplaax.audit.v1.GetAuditStatusRequest
+	5,  // 11: dplaax.audit.v1.AuditService.ListAuditStatuses:input_type -> dplaax.audit.v1.ListAuditStatusesRequest
+	8,  // 12: dplaax.audit.v1.AuditService.GetConsumedSources:input_type -> dplaax.audit.v1.GetConsumedSourcesRequest
+	10, // 13: dplaax.audit.v1.AuditService.RegisterEvidence:input_type -> dplaax.audit.v1.RegisterEvidenceRequest
+	4,  // 14: dplaax.audit.v1.AuditService.GetAuditStatus:output_type -> dplaax.audit.v1.GetAuditStatusResponse
+	7,  // 15: dplaax.audit.v1.AuditService.ListAuditStatuses:output_type -> dplaax.audit.v1.ListAuditStatusesResponse
+	9,  // 16: dplaax.audit.v1.AuditService.GetConsumedSources:output_type -> dplaax.audit.v1.GetConsumedSourcesResponse
+	11, // 17: dplaax.audit.v1.AuditService.RegisterEvidence:output_type -> dplaax.audit.v1.RegisterEvidenceResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_audit_v1_audit_proto_init() }
@@ -790,7 +911,7 @@ func file_dplaax_audit_v1_audit_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_audit_v1_audit_proto_rawDesc), len(file_dplaax_audit_v1_audit_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

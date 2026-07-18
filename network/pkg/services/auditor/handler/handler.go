@@ -41,8 +41,13 @@ const (
 	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
 )
 
-// Handler adapts a Service to the generated AuditServiceHandler.
+// Handler adapts a Service to the generated AuditServiceHandler. It embeds the
+// Unimplemented stub (mirroring network/pkg/services/chainmanager's
+// OperatorHandler) so RegisterEvidence — added to the AuditService proto ahead
+// of its handler (D7 evidence write surface) — reports CodeUnimplemented until
+// a later change wires it, rather than failing to compile.
 type Handler struct {
+	auditpbconnect.UnimplementedAuditServiceHandler
 	svc Service
 }
 

@@ -12,8 +12,10 @@
 # (checked mechanically by TestPDPSurfaceSnapshot), plus HTTP-only PEP calls
 # that carry no proto option (listed in the test's httpOnlySurface).
 audit:read
+audit:register
 chain:read
 chain:read-allowlist
+chain:report-health
 chain:subscribe
 chain:unsubscribe
 chain:update-allowlist
@@ -22,6 +24,7 @@ dids:read
 dids:register
 dids:revoke
 ingest:push
+payloads:retain
 schemas:deprecate
 schemas:read
 schemas:register

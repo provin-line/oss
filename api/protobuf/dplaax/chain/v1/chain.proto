@@ -13,6 +13,7 @@ package dplaax.chain.v1;
 
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/chain/v1;chainpb";
 
+import "google/protobuf/duration.proto";
 import "o3co/authz/v1/policy.proto";
 
 // ── L2 wire auth ────────────────────────────────────────────────────────────
@@ -77,6 +78,17 @@ service ChainService {
   // independently of subscription read ("read") and of the write grant.
   rpc GetAllowList(GetAllowListRequest) returns (GetAllowListResponse) {
     option (o3co.authz.v1.policy) = {resource: "chain", action: "read-allowlist"};
+  }
+  // ReportEmitHealth records a publisher's stripped-publish health so an
+  // operator-side consumer can read the emit-side signal without reaching the
+  // publisher directly. Trust model: L1 + in-band wireauth — the PDP gate
+  // (this policy option) decides whether the caller may report health at all;
+  // the request additionally carries a wireauth AuthProof the handler
+  // verifies in-band, and the proven DID is authoritative over publisher_did
+  // (a request whose publisher_did does not match the proven DID is
+  // rejected — a caller reports health only for itself).
+  rpc ReportEmitHealth(ReportEmitHealthRequest) returns (ReportEmitHealthResponse) {
+    option (o3co.authz.v1.policy) = {resource: "chain", action: "report-health"};
   }
 }
 
@@ -166,3 +178,33 @@ message DisconnectRequest {
   string subscription_id = 2;
 }
 message DisconnectResponse {}
+
+// ── ChainService (operator) additions: emit-health reporting ─────────────────
+//
+// ReportEmitHealth is an operator-facing RPC (L1 policy option, like the rest
+// of ChainService above) that ALSO carries an in-band wireauth proof — a
+// deliberate departure from the pure L1-vs-L2 split the file header
+// describes for the two services. The combination exists because the caller
+// here is a publisher self-reporting its own health: the L1 gate authorizes
+// "may report health at all", while the wireauth proof pins WHICH publisher,
+// so no L1-authorized caller can report health on another publisher's behalf.
+
+message ReportEmitHealthRequest {
+  // publisher_did MUST equal the wireauth-proven DID (see auth_proof below);
+  // the handler rejects a mismatch rather than trusting the field at face
+  // value.
+  string publisher_did = 1;
+  // healthy is the stripped-publish health signal, per publisher.
+  bool healthy = 2;
+  // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+  // proof-carrying shape of dplaax.payload.v1.ResolvePayloadRequest, which
+  // reuses this same AuthProof type; no redefinition is needed here since
+  // this message is already in package dplaax.chain.v1. The proven
+  // signer_did is authoritative over publisher_did.
+  AuthProof auth_proof = 3;
+}
+message ReportEmitHealthResponse {
+  // ttl is how long this health report remains valid before a consumer must
+  // treat it as stale.
+  google.protobuf.Duration ttl = 1;
+}

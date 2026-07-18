@@ -20,6 +20,7 @@ import (
 	_ "github.com/o3co/protobuf.interceptors/schema"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -1041,11 +1042,126 @@ func (*DisconnectResponse) Descriptor() ([]byte, []int) {
 	return file_dplaax_chain_v1_chain_proto_rawDescGZIP(), []int{18}
 }
 
+type ReportEmitHealthRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// publisher_did MUST equal the wireauth-proven DID (see auth_proof below);
+	// the handler rejects a mismatch rather than trusting the field at face
+	// value.
+	PublisherDid string `protobuf:"bytes,1,opt,name=publisher_did,json=publisherDid,proto3" json:"publisher_did,omitempty"`
+	// healthy is the stripped-publish health signal, per publisher.
+	Healthy bool `protobuf:"varint,2,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+	// proof-carrying shape of dplaax.payload.v1.ResolvePayloadRequest, which
+	// reuses this same AuthProof type; no redefinition is needed here since
+	// this message is already in package dplaax.chain.v1. The proven
+	// signer_did is authoritative over publisher_did.
+	AuthProof     *AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEmitHealthRequest) Reset() {
+	*x = ReportEmitHealthRequest{}
+	mi := &file_dplaax_chain_v1_chain_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEmitHealthRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEmitHealthRequest) ProtoMessage() {}
+
+func (x *ReportEmitHealthRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_chain_v1_chain_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEmitHealthRequest.ProtoReflect.Descriptor instead.
+func (*ReportEmitHealthRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_chain_v1_chain_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ReportEmitHealthRequest) GetPublisherDid() string {
+	if x != nil {
+		return x.PublisherDid
+	}
+	return ""
+}
+
+func (x *ReportEmitHealthRequest) GetHealthy() bool {
+	if x != nil {
+		return x.Healthy
+	}
+	return false
+}
+
+func (x *ReportEmitHealthRequest) GetAuthProof() *AuthProof {
+	if x != nil {
+		return x.AuthProof
+	}
+	return nil
+}
+
+type ReportEmitHealthResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// ttl is how long this health report remains valid before a consumer must
+	// treat it as stale.
+	Ttl           *durationpb.Duration `protobuf:"bytes,1,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEmitHealthResponse) Reset() {
+	*x = ReportEmitHealthResponse{}
+	mi := &file_dplaax_chain_v1_chain_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEmitHealthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEmitHealthResponse) ProtoMessage() {}
+
+func (x *ReportEmitHealthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_chain_v1_chain_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEmitHealthResponse.ProtoReflect.Descriptor instead.
+func (*ReportEmitHealthResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_chain_v1_chain_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ReportEmitHealthResponse) GetTtl() *durationpb.Duration {
+	if x != nil {
+		return x.Ttl
+	}
+	return nil
+}
+
 var File_dplaax_chain_v1_chain_proto protoreflect.FileDescriptor
 
 const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\n" +
-	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1ao3co/authz/v1/policy.proto\"{\n" +
+	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"{\n" +
 	"\tAuthProof\x12\x1d\n" +
 	"\n" +
 	"signer_did\x18\x01 \x01(\tR\tsignerDid\x12\x14\n" +
@@ -1110,7 +1226,14 @@ const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\n" +
 	"auth_proof\x18\x01 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\x12'\n" +
 	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\"\x14\n" +
-	"\x12DisconnectResponse2\xed\x04\n" +
+	"\x12DisconnectResponse\"\x93\x01\n" +
+	"\x17ReportEmitHealthRequest\x12#\n" +
+	"\rpublisher_did\x18\x01 \x01(\tR\fpublisherDid\x12\x18\n" +
+	"\ahealthy\x18\x02 \x01(\bR\ahealthy\x129\n" +
+	"\n" +
+	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"G\n" +
+	"\x18ReportEmitHealthResponse\x12+\n" +
+	"\x03ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x03ttl2\xf3\x05\n" +
 	"\fChainService\x12j\n" +
 	"\tSubscribe\x12!.dplaax.chain.v1.SubscribeRequest\x1a\".dplaax.chain.v1.SubscribeResponse\"\x16\x82\xb5\x18\x12\n" +
 	"\x05chain\x12\tsubscribe\x12r\n" +
@@ -1121,7 +1244,9 @@ const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\x0fUpdateAllowList\x12'.dplaax.chain.v1.UpdateAllowListRequest\x1a(.dplaax.chain.v1.UpdateAllowListResponse\"\x1d\x82\xb5\x18\x19\n" +
 	"\x05chain\x12\x10update-allowlist\x12x\n" +
 	"\fGetAllowList\x12$.dplaax.chain.v1.GetAllowListRequest\x1a%.dplaax.chain.v1.GetAllowListResponse\"\x1b\x82\xb5\x18\x17\n" +
-	"\x05chain\x12\x0eread-allowlist2\xc7\x02\n" +
+	"\x05chain\x12\x0eread-allowlist\x12\x83\x01\n" +
+	"\x10ReportEmitHealth\x12(.dplaax.chain.v1.ReportEmitHealthRequest\x1a).dplaax.chain.v1.ReportEmitHealthResponse\"\x1a\x82\xb5\x18\x16\n" +
+	"\x05chain\x12\rreport-health2\xc7\x02\n" +
 	"\x10ChainPeerService\x12g\n" +
 	"\x10GetPublisherInfo\x12(.dplaax.chain.v1.GetPublisherInfoRequest\x1a).dplaax.chain.v1.GetPublisherInfoResponse\x12s\n" +
 	"\x14RegisterSubscription\x12,.dplaax.chain.v1.RegisterSubscriptionRequest\x1a-.dplaax.chain.v1.RegisterSubscriptionResponse\x12U\n" +
@@ -1140,7 +1265,7 @@ func file_dplaax_chain_v1_chain_proto_rawDescGZIP() []byte {
 	return file_dplaax_chain_v1_chain_proto_rawDescData
 }
 
-var file_dplaax_chain_v1_chain_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_dplaax_chain_v1_chain_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_dplaax_chain_v1_chain_proto_goTypes = []any{
 	(*AuthProof)(nil),                    // 0: dplaax.chain.v1.AuthProof
 	(*Subscription)(nil),                 // 1: dplaax.chain.v1.Subscription
@@ -1161,39 +1286,46 @@ var file_dplaax_chain_v1_chain_proto_goTypes = []any{
 	(*RegisterSubscriptionResponse)(nil), // 16: dplaax.chain.v1.RegisterSubscriptionResponse
 	(*DisconnectRequest)(nil),            // 17: dplaax.chain.v1.DisconnectRequest
 	(*DisconnectResponse)(nil),           // 18: dplaax.chain.v1.DisconnectResponse
-	nil,                                  // 19: dplaax.chain.v1.Subscription.ConnectionInfoEntry
-	nil,                                  // 20: dplaax.chain.v1.RegisterSubscriptionResponse.ConnectionInfoEntry
+	(*ReportEmitHealthRequest)(nil),      // 19: dplaax.chain.v1.ReportEmitHealthRequest
+	(*ReportEmitHealthResponse)(nil),     // 20: dplaax.chain.v1.ReportEmitHealthResponse
+	nil,                                  // 21: dplaax.chain.v1.Subscription.ConnectionInfoEntry
+	nil,                                  // 22: dplaax.chain.v1.RegisterSubscriptionResponse.ConnectionInfoEntry
+	(*durationpb.Duration)(nil),          // 23: google.protobuf.Duration
 }
 var file_dplaax_chain_v1_chain_proto_depIdxs = []int32{
-	19, // 0: dplaax.chain.v1.Subscription.connection_info:type_name -> dplaax.chain.v1.Subscription.ConnectionInfoEntry
+	21, // 0: dplaax.chain.v1.Subscription.connection_info:type_name -> dplaax.chain.v1.Subscription.ConnectionInfoEntry
 	1,  // 1: dplaax.chain.v1.ListSubscriptionsResponse.subscriptions:type_name -> dplaax.chain.v1.Subscription
 	2,  // 2: dplaax.chain.v1.UpdateAllowListRequest.rules:type_name -> dplaax.chain.v1.AllowRule
 	2,  // 3: dplaax.chain.v1.GetAllowListResponse.rules:type_name -> dplaax.chain.v1.AllowRule
 	0,  // 4: dplaax.chain.v1.GetPublisherInfoRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
 	0,  // 5: dplaax.chain.v1.RegisterSubscriptionRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
-	20, // 6: dplaax.chain.v1.RegisterSubscriptionResponse.connection_info:type_name -> dplaax.chain.v1.RegisterSubscriptionResponse.ConnectionInfoEntry
+	22, // 6: dplaax.chain.v1.RegisterSubscriptionResponse.connection_info:type_name -> dplaax.chain.v1.RegisterSubscriptionResponse.ConnectionInfoEntry
 	0,  // 7: dplaax.chain.v1.DisconnectRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
-	3,  // 8: dplaax.chain.v1.ChainService.Subscribe:input_type -> dplaax.chain.v1.SubscribeRequest
-	5,  // 9: dplaax.chain.v1.ChainService.Unsubscribe:input_type -> dplaax.chain.v1.UnsubscribeRequest
-	7,  // 10: dplaax.chain.v1.ChainService.ListSubscriptions:input_type -> dplaax.chain.v1.ListSubscriptionsRequest
-	9,  // 11: dplaax.chain.v1.ChainService.UpdateAllowList:input_type -> dplaax.chain.v1.UpdateAllowListRequest
-	11, // 12: dplaax.chain.v1.ChainService.GetAllowList:input_type -> dplaax.chain.v1.GetAllowListRequest
-	13, // 13: dplaax.chain.v1.ChainPeerService.GetPublisherInfo:input_type -> dplaax.chain.v1.GetPublisherInfoRequest
-	15, // 14: dplaax.chain.v1.ChainPeerService.RegisterSubscription:input_type -> dplaax.chain.v1.RegisterSubscriptionRequest
-	17, // 15: dplaax.chain.v1.ChainPeerService.Disconnect:input_type -> dplaax.chain.v1.DisconnectRequest
-	4,  // 16: dplaax.chain.v1.ChainService.Subscribe:output_type -> dplaax.chain.v1.SubscribeResponse
-	6,  // 17: dplaax.chain.v1.ChainService.Unsubscribe:output_type -> dplaax.chain.v1.UnsubscribeResponse
-	8,  // 18: dplaax.chain.v1.ChainService.ListSubscriptions:output_type -> dplaax.chain.v1.ListSubscriptionsResponse
-	10, // 19: dplaax.chain.v1.ChainService.UpdateAllowList:output_type -> dplaax.chain.v1.UpdateAllowListResponse
-	12, // 20: dplaax.chain.v1.ChainService.GetAllowList:output_type -> dplaax.chain.v1.GetAllowListResponse
-	14, // 21: dplaax.chain.v1.ChainPeerService.GetPublisherInfo:output_type -> dplaax.chain.v1.GetPublisherInfoResponse
-	16, // 22: dplaax.chain.v1.ChainPeerService.RegisterSubscription:output_type -> dplaax.chain.v1.RegisterSubscriptionResponse
-	18, // 23: dplaax.chain.v1.ChainPeerService.Disconnect:output_type -> dplaax.chain.v1.DisconnectResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	0,  // 8: dplaax.chain.v1.ReportEmitHealthRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
+	23, // 9: dplaax.chain.v1.ReportEmitHealthResponse.ttl:type_name -> google.protobuf.Duration
+	3,  // 10: dplaax.chain.v1.ChainService.Subscribe:input_type -> dplaax.chain.v1.SubscribeRequest
+	5,  // 11: dplaax.chain.v1.ChainService.Unsubscribe:input_type -> dplaax.chain.v1.UnsubscribeRequest
+	7,  // 12: dplaax.chain.v1.ChainService.ListSubscriptions:input_type -> dplaax.chain.v1.ListSubscriptionsRequest
+	9,  // 13: dplaax.chain.v1.ChainService.UpdateAllowList:input_type -> dplaax.chain.v1.UpdateAllowListRequest
+	11, // 14: dplaax.chain.v1.ChainService.GetAllowList:input_type -> dplaax.chain.v1.GetAllowListRequest
+	19, // 15: dplaax.chain.v1.ChainService.ReportEmitHealth:input_type -> dplaax.chain.v1.ReportEmitHealthRequest
+	13, // 16: dplaax.chain.v1.ChainPeerService.GetPublisherInfo:input_type -> dplaax.chain.v1.GetPublisherInfoRequest
+	15, // 17: dplaax.chain.v1.ChainPeerService.RegisterSubscription:input_type -> dplaax.chain.v1.RegisterSubscriptionRequest
+	17, // 18: dplaax.chain.v1.ChainPeerService.Disconnect:input_type -> dplaax.chain.v1.DisconnectRequest
+	4,  // 19: dplaax.chain.v1.ChainService.Subscribe:output_type -> dplaax.chain.v1.SubscribeResponse
+	6,  // 20: dplaax.chain.v1.ChainService.Unsubscribe:output_type -> dplaax.chain.v1.UnsubscribeResponse
+	8,  // 21: dplaax.chain.v1.ChainService.ListSubscriptions:output_type -> dplaax.chain.v1.ListSubscriptionsResponse
+	10, // 22: dplaax.chain.v1.ChainService.UpdateAllowList:output_type -> dplaax.chain.v1.UpdateAllowListResponse
+	12, // 23: dplaax.chain.v1.ChainService.GetAllowList:output_type -> dplaax.chain.v1.GetAllowListResponse
+	20, // 24: dplaax.chain.v1.ChainService.ReportEmitHealth:output_type -> dplaax.chain.v1.ReportEmitHealthResponse
+	14, // 25: dplaax.chain.v1.ChainPeerService.GetPublisherInfo:output_type -> dplaax.chain.v1.GetPublisherInfoResponse
+	16, // 26: dplaax.chain.v1.ChainPeerService.RegisterSubscription:output_type -> dplaax.chain.v1.RegisterSubscriptionResponse
+	18, // 27: dplaax.chain.v1.ChainPeerService.Disconnect:output_type -> dplaax.chain.v1.DisconnectResponse
+	19, // [19:28] is the sub-list for method output_type
+	10, // [10:19] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_chain_v1_chain_proto_init() }
@@ -1207,7 +1339,7 @@ func file_dplaax_chain_v1_chain_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_chain_v1_chain_proto_rawDesc), len(file_dplaax_chain_v1_chain_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

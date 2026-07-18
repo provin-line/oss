@@ -55,6 +55,9 @@ const (
 	// AuditServiceGetConsumedSourcesProcedure is the fully-qualified name of the AuditService's
 	// GetConsumedSources RPC.
 	AuditServiceGetConsumedSourcesProcedure = "/dplaax.audit.v1.AuditService/GetConsumedSources"
+	// AuditServiceRegisterEvidenceProcedure is the fully-qualified name of the AuditService's
+	// RegisterEvidence RPC.
+	AuditServiceRegisterEvidenceProcedure = "/dplaax.audit.v1.AuditService/RegisterEvidence"
 )
 
 // AuditServiceClient is a client for the dplaax.audit.v1.AuditService service.
@@ -91,6 +94,14 @@ type AuditServiceClient interface {
 	// a just-emitted head has a receipt but no verdict until the audit
 	// runner's next tick.
 	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
+	// RegisterEvidence records the ADMITTED bytes' variant address and the source
+	// addresses it consumed, for a subsequent audit pass to pick up (slice-17i
+	// evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
+	// gate (this policy option) decides whether the caller may register evidence
+	// at all; the request additionally carries a wireauth AuthProof the handler
+	// verifies in-band, and the proven DID is authoritative for who is recorded
+	// as the registering party.
+	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
 }
 
 // NewAuditServiceClient constructs a client for the dplaax.audit.v1.AuditService service. By
@@ -122,6 +133,12 @@ func NewAuditServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(auditServiceMethods.ByName("GetConsumedSources")),
 			connect.WithClientOptions(opts...),
 		),
+		registerEvidence: connect.NewClient[v1.RegisterEvidenceRequest, v1.RegisterEvidenceResponse](
+			httpClient,
+			baseURL+AuditServiceRegisterEvidenceProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("RegisterEvidence")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -130,6 +147,7 @@ type auditServiceClient struct {
 	getAuditStatus     *connect.Client[v1.GetAuditStatusRequest, v1.GetAuditStatusResponse]
 	listAuditStatuses  *connect.Client[v1.ListAuditStatusesRequest, v1.ListAuditStatusesResponse]
 	getConsumedSources *connect.Client[v1.GetConsumedSourcesRequest, v1.GetConsumedSourcesResponse]
+	registerEvidence   *connect.Client[v1.RegisterEvidenceRequest, v1.RegisterEvidenceResponse]
 }
 
 // GetAuditStatus calls dplaax.audit.v1.AuditService.GetAuditStatus.
@@ -145,6 +163,11 @@ func (c *auditServiceClient) ListAuditStatuses(ctx context.Context, req *connect
 // GetConsumedSources calls dplaax.audit.v1.AuditService.GetConsumedSources.
 func (c *auditServiceClient) GetConsumedSources(ctx context.Context, req *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error) {
 	return c.getConsumedSources.CallUnary(ctx, req)
+}
+
+// RegisterEvidence calls dplaax.audit.v1.AuditService.RegisterEvidence.
+func (c *auditServiceClient) RegisterEvidence(ctx context.Context, req *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error) {
+	return c.registerEvidence.CallUnary(ctx, req)
 }
 
 // AuditServiceHandler is an implementation of the dplaax.audit.v1.AuditService service.
@@ -181,6 +204,14 @@ type AuditServiceHandler interface {
 	// a just-emitted head has a receipt but no verdict until the audit
 	// runner's next tick.
 	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
+	// RegisterEvidence records the ADMITTED bytes' variant address and the source
+	// addresses it consumed, for a subsequent audit pass to pick up (slice-17i
+	// evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
+	// gate (this policy option) decides whether the caller may register evidence
+	// at all; the request additionally carries a wireauth AuthProof the handler
+	// verifies in-band, and the proven DID is authoritative for who is recorded
+	// as the registering party.
+	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
 }
 
 // NewAuditServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -208,6 +239,12 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(auditServiceMethods.ByName("GetConsumedSources")),
 		connect.WithHandlerOptions(opts...),
 	)
+	auditServiceRegisterEvidenceHandler := connect.NewUnaryHandler(
+		AuditServiceRegisterEvidenceProcedure,
+		svc.RegisterEvidence,
+		connect.WithSchema(auditServiceMethods.ByName("RegisterEvidence")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.audit.v1.AuditService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuditServiceGetAuditStatusProcedure:
@@ -216,6 +253,8 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 			auditServiceListAuditStatusesHandler.ServeHTTP(w, r)
 		case AuditServiceGetConsumedSourcesProcedure:
 			auditServiceGetConsumedSourcesHandler.ServeHTTP(w, r)
+		case AuditServiceRegisterEvidenceProcedure:
+			auditServiceRegisterEvidenceHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -235,4 +274,8 @@ func (UnimplementedAuditServiceHandler) ListAuditStatuses(context.Context, *conn
 
 func (UnimplementedAuditServiceHandler) GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.GetConsumedSources is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.RegisterEvidence is not implemented"))
 }

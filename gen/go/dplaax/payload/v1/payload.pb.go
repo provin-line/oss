@@ -24,6 +24,7 @@
 package payloadpb
 
 import (
+	_ "github.com/o3co/protobuf.interceptors/schema"
 	v1 "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -140,19 +141,236 @@ func (x *ResolvePayloadResponse) GetChunk() []byte {
 	return nil
 }
 
+type RetainPayloadRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Frame:
+	//
+	//	*RetainPayloadRequest_Metadata
+	//	*RetainPayloadRequest_Chunk
+	Frame         isRetainPayloadRequest_Frame `protobuf_oneof:"frame"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetainPayloadRequest) Reset() {
+	*x = RetainPayloadRequest{}
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainPayloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainPayloadRequest) ProtoMessage() {}
+
+func (x *RetainPayloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainPayloadRequest.ProtoReflect.Descriptor instead.
+func (*RetainPayloadRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_payload_v1_payload_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RetainPayloadRequest) GetFrame() isRetainPayloadRequest_Frame {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+func (x *RetainPayloadRequest) GetMetadata() *RetainPayloadMetadata {
+	if x != nil {
+		if x, ok := x.Frame.(*RetainPayloadRequest_Metadata); ok {
+			return x.Metadata
+		}
+	}
+	return nil
+}
+
+func (x *RetainPayloadRequest) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Frame.(*RetainPayloadRequest_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+type isRetainPayloadRequest_Frame interface {
+	isRetainPayloadRequest_Frame()
+}
+
+type RetainPayloadRequest_Metadata struct {
+	// metadata is the first frame only — every stream must open with it.
+	Metadata *RetainPayloadMetadata `protobuf:"bytes,1,opt,name=metadata,proto3,oneof"`
+}
+
+type RetainPayloadRequest_Chunk struct {
+	// chunk is one ordered frame of the payload bytes being retained; every
+	// frame after the first carries a chunk. The client concatenates frames
+	// in order (chunk size is a client implementation detail, not
+	// wire-normative — mirrors ResolvePayloadResponse.chunk).
+	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
+}
+
+func (*RetainPayloadRequest_Metadata) isRetainPayloadRequest_Frame() {}
+
+func (*RetainPayloadRequest_Chunk) isRetainPayloadRequest_Frame() {}
+
+type RetainPayloadMetadata struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// owner_did MUST equal the wireauth-proven DID (see auth_proof below); the
+	// handler rejects a mismatch rather than trusting the field at face value.
+	OwnerDid string `protobuf:"bytes,1,opt,name=owner_did,json=ownerDid,proto3" json:"owner_did,omitempty"`
+	// declared_size is the caller-declared byte length of the payload to
+	// follow; the server verifies the assembled bytes against it (a mismatch
+	// is InvalidArgument, not a silent truncation/pad).
+	DeclaredSize uint64 `protobuf:"varint,2,opt,name=declared_size,json=declaredSize,proto3" json:"declared_size,omitempty"`
+	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+	// proof-carrying shape of ResolvePayloadRequest above, reusing
+	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
+	// would be a drift source). The proof covers owner_did and declared_size:
+	// the proven signer_did is authoritative over owner_did.
+	AuthProof     *v1.AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetainPayloadMetadata) Reset() {
+	*x = RetainPayloadMetadata{}
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainPayloadMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainPayloadMetadata) ProtoMessage() {}
+
+func (x *RetainPayloadMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainPayloadMetadata.ProtoReflect.Descriptor instead.
+func (*RetainPayloadMetadata) Descriptor() ([]byte, []int) {
+	return file_dplaax_payload_v1_payload_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RetainPayloadMetadata) GetOwnerDid() string {
+	if x != nil {
+		return x.OwnerDid
+	}
+	return ""
+}
+
+func (x *RetainPayloadMetadata) GetDeclaredSize() uint64 {
+	if x != nil {
+		return x.DeclaredSize
+	}
+	return 0
+}
+
+func (x *RetainPayloadMetadata) GetAuthProof() *v1.AuthProof {
+	if x != nil {
+		return x.AuthProof
+	}
+	return nil
+}
+
+type RetainPayloadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// content_address is the "sha256:<hex>" address the server minted for the
+	// assembled bytes — the address ResolvePayload later serves them back by.
+	ContentAddress string `protobuf:"bytes,1,opt,name=content_address,json=contentAddress,proto3" json:"content_address,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RetainPayloadResponse) Reset() {
+	*x = RetainPayloadResponse{}
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainPayloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainPayloadResponse) ProtoMessage() {}
+
+func (x *RetainPayloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_payload_v1_payload_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainPayloadResponse.ProtoReflect.Descriptor instead.
+func (*RetainPayloadResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_payload_v1_payload_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RetainPayloadResponse) GetContentAddress() string {
+	if x != nil {
+		return x.ContentAddress
+	}
+	return ""
+}
+
 var File_dplaax_payload_v1_payload_proto protoreflect.FileDescriptor
 
 const file_dplaax_payload_v1_payload_proto_rawDesc = "" +
 	"\n" +
-	"\x1fdplaax/payload/v1/payload.proto\x12\x11dplaax.payload.v1\x1a\x1bdplaax/chain/v1/chain.proto\"u\n" +
+	"\x1fdplaax/payload/v1/payload.proto\x12\x11dplaax.payload.v1\x1a\x1bdplaax/chain/v1/chain.proto\x1a\x1ao3co/authz/v1/policy.proto\"u\n" +
 	"\x15ResolvePayloadRequest\x129\n" +
 	"\n" +
 	"auth_proof\x18\x01 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\x12!\n" +
 	"\fcontent_hash\x18\x02 \x01(\tR\vcontentHash\".\n" +
 	"\x16ResolvePayloadResponse\x12\x14\n" +
-	"\x05chunk\x18\x01 \x01(\fR\x05chunk2y\n" +
+	"\x05chunk\x18\x01 \x01(\fR\x05chunk\"\x7f\n" +
+	"\x14RetainPayloadRequest\x12F\n" +
+	"\bmetadata\x18\x01 \x01(\v2(.dplaax.payload.v1.RetainPayloadMetadataH\x00R\bmetadata\x12\x16\n" +
+	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\a\n" +
+	"\x05frame\"\x94\x01\n" +
+	"\x15RetainPayloadMetadata\x12\x1b\n" +
+	"\towner_did\x18\x01 \x01(\tR\bownerDid\x12#\n" +
+	"\rdeclared_size\x18\x02 \x01(\x04R\fdeclaredSize\x129\n" +
+	"\n" +
+	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"@\n" +
+	"\x15RetainPayloadResponse\x12'\n" +
+	"\x0fcontent_address\x18\x01 \x01(\tR\x0econtentAddress2y\n" +
 	"\x0ePayloadService\x12g\n" +
-	"\x0eResolvePayload\x12(.dplaax.payload.v1.ResolvePayloadRequest\x1a).dplaax.payload.v1.ResolvePayloadResponse0\x01B?Z=github.com/provin-line/oss/gen/go/dplaax/payload/v1;payloadpbb\x06proto3"
+	"\x0eResolvePayload\x12(.dplaax.payload.v1.ResolvePayloadRequest\x1a).dplaax.payload.v1.ResolvePayloadResponse0\x012\x93\x01\n" +
+	"\x13PayloadStoreService\x12|\n" +
+	"\rRetainPayload\x12'.dplaax.payload.v1.RetainPayloadRequest\x1a(.dplaax.payload.v1.RetainPayloadResponse\"\x16\x82\xb5\x18\x12\n" +
+	"\bpayloads\x12\x06retain(\x01B?Z=github.com/provin-line/oss/gen/go/dplaax/payload/v1;payloadpbb\x06proto3"
 
 var (
 	file_dplaax_payload_v1_payload_proto_rawDescOnce sync.Once
@@ -166,21 +384,28 @@ func file_dplaax_payload_v1_payload_proto_rawDescGZIP() []byte {
 	return file_dplaax_payload_v1_payload_proto_rawDescData
 }
 
-var file_dplaax_payload_v1_payload_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_dplaax_payload_v1_payload_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_dplaax_payload_v1_payload_proto_goTypes = []any{
 	(*ResolvePayloadRequest)(nil),  // 0: dplaax.payload.v1.ResolvePayloadRequest
 	(*ResolvePayloadResponse)(nil), // 1: dplaax.payload.v1.ResolvePayloadResponse
-	(*v1.AuthProof)(nil),           // 2: dplaax.chain.v1.AuthProof
+	(*RetainPayloadRequest)(nil),   // 2: dplaax.payload.v1.RetainPayloadRequest
+	(*RetainPayloadMetadata)(nil),  // 3: dplaax.payload.v1.RetainPayloadMetadata
+	(*RetainPayloadResponse)(nil),  // 4: dplaax.payload.v1.RetainPayloadResponse
+	(*v1.AuthProof)(nil),           // 5: dplaax.chain.v1.AuthProof
 }
 var file_dplaax_payload_v1_payload_proto_depIdxs = []int32{
-	2, // 0: dplaax.payload.v1.ResolvePayloadRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
-	0, // 1: dplaax.payload.v1.PayloadService.ResolvePayload:input_type -> dplaax.payload.v1.ResolvePayloadRequest
-	1, // 2: dplaax.payload.v1.PayloadService.ResolvePayload:output_type -> dplaax.payload.v1.ResolvePayloadResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 0: dplaax.payload.v1.ResolvePayloadRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
+	3, // 1: dplaax.payload.v1.RetainPayloadRequest.metadata:type_name -> dplaax.payload.v1.RetainPayloadMetadata
+	5, // 2: dplaax.payload.v1.RetainPayloadMetadata.auth_proof:type_name -> dplaax.chain.v1.AuthProof
+	0, // 3: dplaax.payload.v1.PayloadService.ResolvePayload:input_type -> dplaax.payload.v1.ResolvePayloadRequest
+	2, // 4: dplaax.payload.v1.PayloadStoreService.RetainPayload:input_type -> dplaax.payload.v1.RetainPayloadRequest
+	1, // 5: dplaax.payload.v1.PayloadService.ResolvePayload:output_type -> dplaax.payload.v1.ResolvePayloadResponse
+	4, // 6: dplaax.payload.v1.PayloadStoreService.RetainPayload:output_type -> dplaax.payload.v1.RetainPayloadResponse
+	5, // [5:7] is the sub-list for method output_type
+	3, // [3:5] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_payload_v1_payload_proto_init() }
@@ -188,15 +413,19 @@ func file_dplaax_payload_v1_payload_proto_init() {
 	if File_dplaax_payload_v1_payload_proto != nil {
 		return
 	}
+	file_dplaax_payload_v1_payload_proto_msgTypes[2].OneofWrappers = []any{
+		(*RetainPayloadRequest_Metadata)(nil),
+		(*RetainPayloadRequest_Chunk)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_payload_v1_payload_proto_rawDesc), len(file_dplaax_payload_v1_payload_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   5,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_dplaax_payload_v1_payload_proto_goTypes,
 		DependencyIndexes: file_dplaax_payload_v1_payload_proto_depIdxs,

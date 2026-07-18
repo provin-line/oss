@@ -59,6 +59,9 @@ const (
 	// ChainServiceGetAllowListProcedure is the fully-qualified name of the ChainService's GetAllowList
 	// RPC.
 	ChainServiceGetAllowListProcedure = "/dplaax.chain.v1.ChainService/GetAllowList"
+	// ChainServiceReportEmitHealthProcedure is the fully-qualified name of the ChainService's
+	// ReportEmitHealth RPC.
+	ChainServiceReportEmitHealthProcedure = "/dplaax.chain.v1.ChainService/ReportEmitHealth"
 	// ChainPeerServiceGetPublisherInfoProcedure is the fully-qualified name of the ChainPeerService's
 	// GetPublisherInfo RPC.
 	ChainPeerServiceGetPublisherInfoProcedure = "/dplaax.chain.v1.ChainPeerService/GetPublisherInfo"
@@ -81,6 +84,15 @@ type ChainServiceClient interface {
 	// symmetric with "update-allowlist") so allow-list read is grantable
 	// independently of subscription read ("read") and of the write grant.
 	GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error)
+	// ReportEmitHealth records a publisher's stripped-publish health so an
+	// operator-side consumer can read the emit-side signal without reaching the
+	// publisher directly. Trust model: L1 + in-band wireauth — the PDP gate
+	// (this policy option) decides whether the caller may report health at all;
+	// the request additionally carries a wireauth AuthProof the handler
+	// verifies in-band, and the proven DID is authoritative over publisher_did
+	// (a request whose publisher_did does not match the proven DID is
+	// rejected — a caller reports health only for itself).
+	ReportEmitHealth(context.Context, *connect.Request[v1.ReportEmitHealthRequest]) (*connect.Response[v1.ReportEmitHealthResponse], error)
 }
 
 // NewChainServiceClient constructs a client for the dplaax.chain.v1.ChainService service. By
@@ -124,6 +136,12 @@ func NewChainServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(chainServiceMethods.ByName("GetAllowList")),
 			connect.WithClientOptions(opts...),
 		),
+		reportEmitHealth: connect.NewClient[v1.ReportEmitHealthRequest, v1.ReportEmitHealthResponse](
+			httpClient,
+			baseURL+ChainServiceReportEmitHealthProcedure,
+			connect.WithSchema(chainServiceMethods.ByName("ReportEmitHealth")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -134,6 +152,7 @@ type chainServiceClient struct {
 	listSubscriptions *connect.Client[v1.ListSubscriptionsRequest, v1.ListSubscriptionsResponse]
 	updateAllowList   *connect.Client[v1.UpdateAllowListRequest, v1.UpdateAllowListResponse]
 	getAllowList      *connect.Client[v1.GetAllowListRequest, v1.GetAllowListResponse]
+	reportEmitHealth  *connect.Client[v1.ReportEmitHealthRequest, v1.ReportEmitHealthResponse]
 }
 
 // Subscribe calls dplaax.chain.v1.ChainService.Subscribe.
@@ -161,6 +180,11 @@ func (c *chainServiceClient) GetAllowList(ctx context.Context, req *connect.Requ
 	return c.getAllowList.CallUnary(ctx, req)
 }
 
+// ReportEmitHealth calls dplaax.chain.v1.ChainService.ReportEmitHealth.
+func (c *chainServiceClient) ReportEmitHealth(ctx context.Context, req *connect.Request[v1.ReportEmitHealthRequest]) (*connect.Response[v1.ReportEmitHealthResponse], error) {
+	return c.reportEmitHealth.CallUnary(ctx, req)
+}
+
 // ChainServiceHandler is an implementation of the dplaax.chain.v1.ChainService service.
 type ChainServiceHandler interface {
 	Subscribe(context.Context, *connect.Request[v1.SubscribeRequest]) (*connect.Response[v1.SubscribeResponse], error)
@@ -172,6 +196,15 @@ type ChainServiceHandler interface {
 	// symmetric with "update-allowlist") so allow-list read is grantable
 	// independently of subscription read ("read") and of the write grant.
 	GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error)
+	// ReportEmitHealth records a publisher's stripped-publish health so an
+	// operator-side consumer can read the emit-side signal without reaching the
+	// publisher directly. Trust model: L1 + in-band wireauth — the PDP gate
+	// (this policy option) decides whether the caller may report health at all;
+	// the request additionally carries a wireauth AuthProof the handler
+	// verifies in-band, and the proven DID is authoritative over publisher_did
+	// (a request whose publisher_did does not match the proven DID is
+	// rejected — a caller reports health only for itself).
+	ReportEmitHealth(context.Context, *connect.Request[v1.ReportEmitHealthRequest]) (*connect.Response[v1.ReportEmitHealthResponse], error)
 }
 
 // NewChainServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -211,6 +244,12 @@ func NewChainServiceHandler(svc ChainServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(chainServiceMethods.ByName("GetAllowList")),
 		connect.WithHandlerOptions(opts...),
 	)
+	chainServiceReportEmitHealthHandler := connect.NewUnaryHandler(
+		ChainServiceReportEmitHealthProcedure,
+		svc.ReportEmitHealth,
+		connect.WithSchema(chainServiceMethods.ByName("ReportEmitHealth")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.chain.v1.ChainService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ChainServiceSubscribeProcedure:
@@ -223,6 +262,8 @@ func NewChainServiceHandler(svc ChainServiceHandler, opts ...connect.HandlerOpti
 			chainServiceUpdateAllowListHandler.ServeHTTP(w, r)
 		case ChainServiceGetAllowListProcedure:
 			chainServiceGetAllowListHandler.ServeHTTP(w, r)
+		case ChainServiceReportEmitHealthProcedure:
+			chainServiceReportEmitHealthHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -250,6 +291,10 @@ func (UnimplementedChainServiceHandler) UpdateAllowList(context.Context, *connec
 
 func (UnimplementedChainServiceHandler) GetAllowList(context.Context, *connect.Request[v1.GetAllowListRequest]) (*connect.Response[v1.GetAllowListResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.chain.v1.ChainService.GetAllowList is not implemented"))
+}
+
+func (UnimplementedChainServiceHandler) ReportEmitHealth(context.Context, *connect.Request[v1.ReportEmitHealthRequest]) (*connect.Response[v1.ReportEmitHealthResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.chain.v1.ChainService.ReportEmitHealth is not implemented"))
 }
 
 // ChainPeerServiceClient is a client for the dplaax.chain.v1.ChainPeerService service.

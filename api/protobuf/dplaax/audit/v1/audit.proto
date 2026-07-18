@@ -16,6 +16,7 @@ package dplaax.audit.v1;
 
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/audit/v1;auditpb";
 
+import "dplaax/chain/v1/chain.proto";
 import "o3co/authz/v1/policy.proto";
 
 // AuditService serves the per-head audit verdict the async runner records. Its
@@ -61,6 +62,16 @@ service AuditService {
   // runner's next tick.
   rpc GetConsumedSources(GetConsumedSourcesRequest) returns (GetConsumedSourcesResponse) {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
+  }
+  // RegisterEvidence records the ADMITTED bytes' variant address and the source
+  // addresses it consumed, for a subsequent audit pass to pick up (slice-17i
+  // evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
+  // gate (this policy option) decides whether the caller may register evidence
+  // at all; the request additionally carries a wireauth AuthProof the handler
+  // verifies in-band, and the proven DID is authoritative for who is recorded
+  // as the registering party.
+  rpc RegisterEvidence(RegisterEvidenceRequest) returns (RegisterEvidenceResponse) {
+    option (o3co.authz.v1.policy) = {resource: "audit", action: "register"};
   }
 }
 
@@ -183,3 +194,21 @@ message GetConsumedSourcesResponse {
   repeated string consumed = 1;
   string next_page_token = 2;
 }
+
+message RegisterEvidenceRequest {
+  // head_variant_address is the content address of the ADMITTED bytes' variant
+  // — the head this evidence registration is FOR.
+  string head_variant_address = 1;
+  // consumed_source_addresses are the content addresses of the source
+  // credentials the emitting boundary consumed to produce the head above
+  // (the emit-locus receipt this registration deposits for later audit).
+  repeated string consumed_source_addresses = 2;
+  // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+  // proof-carrying shape of dplaax.payload.v1.ResolvePayloadRequest, reusing
+  // dplaax.chain.v1.AuthProof rather than redefining it (a redefinition would
+  // be a drift source). The proven signer_did is authoritative for the
+  // registering party.
+  dplaax.chain.v1.AuthProof auth_proof = 3;
+}
+
+message RegisterEvidenceResponse {}
