@@ -37,10 +37,12 @@ const (
 )
 
 // Confidence is the wire projection of the verifier's three-state domain
-// (vc.ConfidenceState). CONFIDENCE_UNSPECIFIED is the proto3 zero and the
-// fail-closed sink: it is never emitted for a real linear-chain verdict, and a
-// consumer treats it as not-verified. The domain's own zero is Failed, so the
-// handler maps domain→proto with an explicit shift (Failed→FAILED), never a cast.
+// (vc.ConfidenceState), PLUS one auditor-domain resolution outcome
+// (CONFIDENCE_UNRESOLVABLE) that is never a vc.ConfidenceState value.
+// CONFIDENCE_UNSPECIFIED is the proto3 zero and the fail-closed sink: it is
+// never emitted for a real linear-chain verdict, and a consumer treats it as
+// not-verified. The domain's own zero is Failed, so the handler maps
+// domain→proto with an explicit shift (Failed→FAILED), never a cast.
 type Confidence int32
 
 const (
@@ -48,6 +50,16 @@ const (
 	Confidence_CONFIDENCE_FAILED        Confidence = 1
 	Confidence_CONFIDENCE_INDETERMINATE Confidence = 2
 	Confidence_CONFIDENCE_VERIFIED      Confidence = 3
+	// CONFIDENCE_UNRESOLVABLE is recorded when chain assembly cannot resolve
+	// the head's chain after max retries — a RESOLUTION outcome (the audit
+	// runner gave up trying to obtain the evidence needed to verify at all).
+	// It is distinct from CONFIDENCE_INDETERMINATE, which is a VERIFICATION
+	// outcome (the evidence was obtained and evaluated, but the verdict itself
+	// could not be concluded). Only ever emitted for linear_chain (and its
+	// axes) — a head whose own chain never resolved has nothing for
+	// source_commitment to evaluate either, so that scope stays absent, same
+	// as any other unevaluated coverage.
+	Confidence_CONFIDENCE_UNRESOLVABLE Confidence = 4
 )
 
 // Enum value maps for Confidence.
@@ -57,12 +69,14 @@ var (
 		1: "CONFIDENCE_FAILED",
 		2: "CONFIDENCE_INDETERMINATE",
 		3: "CONFIDENCE_VERIFIED",
+		4: "CONFIDENCE_UNRESOLVABLE",
 	}
 	Confidence_value = map[string]int32{
 		"CONFIDENCE_UNSPECIFIED":   0,
 		"CONFIDENCE_FAILED":        1,
 		"CONFIDENCE_INDETERMINATE": 2,
 		"CONFIDENCE_VERIFIED":      3,
+		"CONFIDENCE_UNRESOLVABLE":  4,
 	}
 )
 
@@ -828,13 +842,14 @@ const file_dplaax_audit_v1_audit_proto_rawDesc = "" +
 	"\x19consumed_source_addresses\x18\x02 \x03(\tR\x17consumedSourceAddresses\x129\n" +
 	"\n" +
 	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"\x1a\n" +
-	"\x18RegisterEvidenceResponse*v\n" +
+	"\x18RegisterEvidenceResponse*\x93\x01\n" +
 	"\n" +
 	"Confidence\x12\x1a\n" +
 	"\x16CONFIDENCE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CONFIDENCE_FAILED\x10\x01\x12\x1c\n" +
 	"\x18CONFIDENCE_INDETERMINATE\x10\x02\x12\x17\n" +
-	"\x13CONFIDENCE_VERIFIED\x10\x032\x86\x04\n" +
+	"\x13CONFIDENCE_VERIFIED\x10\x03\x12\x1b\n" +
+	"\x17CONFIDENCE_UNRESOLVABLE\x10\x042\x86\x04\n" +
 	"\fAuditService\x12t\n" +
 	"\x0eGetAuditStatus\x12&.dplaax.audit.v1.GetAuditStatusRequest\x1a'.dplaax.audit.v1.GetAuditStatusResponse\"\x11\x82\xb5\x18\r\n" +
 	"\x05audit\x12\x04read\x12}\n" +

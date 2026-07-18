@@ -263,12 +263,15 @@ func TestMarkAbandoned_ScRetryable_NotesSourceCommitmentScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.markAbandoned(headH, "source-commitment indeterminate"); err != nil {
+	if err := r.markAbandoned(headH, "source-commitment indeterminate", false); err != nil {
 		t.Fatalf("markAbandoned: %v", err)
 	}
 	got, _ := status.Get(headH)
 	if !got.Abandoned {
 		t.Error("Abandoned = false, want true")
+	}
+	if got.Unresolvable {
+		t.Error("Unresolvable = true, want false (source-commitment exhaustion is a verification outcome, not a resolution one)")
 	}
 	if !hasAbandonNote(got.SourceCommitmentNotations) {
 		t.Errorf("SourceCommitmentNotations = %v, want the abandon note here", got.SourceCommitmentNotations)

@@ -205,18 +205,26 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		if isCtxErr(err) {
 			return
 		}
-		// Only a DEFINITIVE miss (the head is not in the store) is a stale
-		// registration to drop. Any other error — a damaged/tampered evidence
-		// file, an unavailable store — must NOT be laundered into absence: the
-		// head stays queued (attempt-bounded) so damage surfaces as retries and
-		// logs instead of a silently vanished audit.
+		// A DEFINITIVE miss (the head is not in the store) is retained and
+		// attempt-bounded, same as any other retry — the head may simply not
+		// have propagated to the local store yet (e.g. a registration racing
+		// this tick). Only once retries exhaust without the head ever resolving
+		// does bumpOrDrop finalize it, with unresolvable=true: a RESOLUTION
+		// outcome, distinct from a VERIFICATION outcome — chain assembly never
+		// even obtained the evidence needed to verify.
+		// Any other error — a damaged/tampered evidence file, an unavailable
+		// store — must NOT be laundered into absence either: the head stays
+		// queued (attempt-bounded) so damage surfaces as retries and logs
+		// instead of a silently vanished audit, but finalizes with the generic
+		// unresolvable=false — damage is a different failure class from "this
+		// content was never obtained".
 		if errors.Is(err, vcresolver.ErrNotFound) {
-			r.logger.Printf("auditor: dropping %s: head not resolvable: %v", c.HeadHash, err)
-			r.remove(c.HeadHash)
+			r.logger.Printf("auditor: %s: head not resolvable, retaining: %v", c.HeadHash, err)
+			r.bumpOrDrop(c, "head not resolvable", true)
 			return
 		}
 		r.logger.Printf("auditor: %s: head unreadable (damaged evidence?), retaining: %v", c.HeadHash, err)
-		r.bumpOrDrop(c, "head unreadable")
+		r.bumpOrDrop(c, "head unreadable", false)
 		return
 	}
 
@@ -234,7 +242,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 			if err := r.recordIndeterminate(c.HeadHash, "verify error: "+err.Error()); err != nil {
 				return // keep queued, retry next tick
 			}
-			r.bumpOrDrop(c, "non-hole verify error")
+			r.bumpOrDrop(c, "non-hole verify error", false)
 		}
 		return
 	}
@@ -265,10 +273,10 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		// Linear terminal but the consumed-set verdict is a still-resolving Indeterminate
 		// (incomplete receipt) — retain and re-audit, bounded by the attempt backstop so a
 		// permanently-missing source eventually finalizes (slice-17o, Codex P2).
-		r.bumpOrDrop(c, "source-commitment indeterminate (incomplete receipt)")
+		r.bumpOrDrop(c, "source-commitment indeterminate (incomplete receipt)", false)
 	default:
 		// Assembled but linear-Indeterminate (a non-hole reason) — bound by the attempt backstop.
-		r.bumpOrDrop(c, "assembled but indeterminate")
+		r.bumpOrDrop(c, "assembled but indeterminate", false)
 	}
 }
 
@@ -399,7 +407,7 @@ func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash stri
 	// observation would wrongly drop a still-completing chain (Codex P2). So bound it by the
 	// attempt grace instead: the transient window bumps at most once (the next tick the hole
 	// is queued again → no bump), while a genuinely abandoned hole accrues toward max-attempts.
-	r.bumpOrDrop(c, "predecessor "+holeHash+" absent from store and pool")
+	r.bumpOrDrop(c, "predecessor "+holeHash+" absent from store and pool", false)
 }
 
 // recordVerdict durably writes one verdict record and, on success, counts the write by its
@@ -462,10 +470,14 @@ func (r *Runner) recordIndeterminate(headHash, notation string) error {
 // finalize — a non-hole verdict, or a hole absent from both store and pool). The drop is
 // never silent: the abandon marker must land in the status store BEFORE the head leaves
 // the queue, or the head stays queued — otherwise "gave up" would be a log line only,
-// invisible to every GetAuditStatus consumer.
-func (r *Runner) bumpOrDrop(c AuditCandidate, reason string) {
+// invisible to every GetAuditStatus consumer. unresolvable distinguishes WHY the retry
+// ran out: true when the head's own content could never be resolved from the local store
+// (a RESOLUTION outcome — chain assembly never obtained the evidence at all), false for
+// every other exhaustion reason (a VERIFICATION outcome — the evidence WAS obtained, the
+// verdict just could not be concluded, or is still resolving).
+func (r *Runner) bumpOrDrop(c AuditCandidate, reason string, unresolvable bool) {
 	if c.Attempts+1 >= r.cfg.MaxAttempts {
-		if err := r.markAbandoned(c.HeadHash, reason); err != nil {
+		if err := r.markAbandoned(c.HeadHash, reason, unresolvable); err != nil {
 			r.logger.Printf("auditor: %s: mark abandoned: %v", c.HeadHash, err)
 			return // keep queued, retry next tick (the marker must not be lost)
 		}
@@ -486,7 +498,12 @@ func (r *Runner) bumpOrDrop(c AuditCandidate, reason string) {
 // Indeterminate — a consumer must find SOME record behind an abandoned head. A
 // damaged existing record is an error (keep queued): auditOne's next tick re-audits
 // and repairs it, and the abandon lands on the repaired record.
-func (r *Runner) markAbandoned(headHash, reason string) error {
+//
+// unresolvable additionally sets AuditRecord.Unresolvable (the handler projects this
+// as the wire-distinct CONFIDENCE_UNRESOLVABLE, never folded into Overall — Overall
+// stays whatever vc.ConfidenceState value it already carried, a pure verification-
+// confidence domain that has no notion of "the runner gave up resolving").
+func (r *Runner) markAbandoned(headHash, reason string, unresolvable bool) error {
 	rec, err := r.status.Get(headHash)
 	if errors.Is(err, ErrNotFound) {
 		ind := vc.ConfidenceIndeterminate
@@ -505,6 +522,7 @@ func (r *Runner) markAbandoned(headHash, reason string) error {
 		rec.Notations = append(rec.Notations, note)
 	}
 	rec.Abandoned = true
+	rec.Unresolvable = unresolvable
 	rec.AuditedAt = r.now()
 	return r.recordVerdict(headHash, rec)
 }

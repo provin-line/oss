@@ -146,13 +146,21 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 	// a recorded audit with Scope.LinearChain true (it walks head→origin before
 	// VerifyChain), so this field is in practice always present — an empty response is
 	// structurally unreachable. Overall is, in the 17h era, exactly the linear verdict.
+	//
+	// Unresolvable overrides EVERY confidence in this scope (overall + all three axes) to
+	// CONFIDENCE_UNRESOLVABLE: chain assembly never obtained the head's own content, so
+	// none of Overall/Axes were ever a real verification outcome (they hold their
+	// synthesized Indeterminate — projecting that verbatim would misrepresent a resolution
+	// failure as an inconclusive verification). Never applies to source_commitment below:
+	// an unresolved head never reaches VerifyChain, so SourceCommitmentEvaluated is always
+	// false here and that scope stays absent regardless.
 	if rec.Scope.LinearChain {
 		resp.LinearChain = &auditpb.ScopeVerdict{
-			Confidence: confidence(rec.Overall),
+			Confidence: projectedConfidence(rec.Overall, rec.Unresolvable),
 			Axes: &auditpb.AxisVerdict{
-				DataIntegrity:      confidence(rec.Axes.DataIntegrity),
-				SignerAuthenticity: confidence(rec.Axes.SignerAuthenticity),
-				ChainConsistency:   confidence(rec.Axes.ChainConsistency),
+				DataIntegrity:      projectedConfidence(rec.Axes.DataIntegrity, rec.Unresolvable),
+				SignerAuthenticity: projectedConfidence(rec.Axes.SignerAuthenticity, rec.Unresolvable),
+				ChainConsistency:   projectedConfidence(rec.Axes.ChainConsistency, rec.Unresolvable),
 			},
 			Notations: rec.Notations,
 		}
@@ -318,4 +326,20 @@ func confidence(c vc.ConfidenceState) auditpb.Confidence {
 	default:
 		return auditpb.Confidence_CONFIDENCE_UNSPECIFIED
 	}
+}
+
+// projectedConfidence wraps confidence() with the ONE override that lives
+// outside the vc.ConfidenceState domain: when unresolvable is true (chain
+// assembly could not resolve the head's own chain after max retries — a
+// RESOLUTION outcome), it returns CONFIDENCE_UNRESOLVABLE regardless of c,
+// never the domain mapping. c is otherwise whatever synthesized
+// vc.ConfidenceState the record carries (always Indeterminate in practice —
+// a resolution failure never computes a real verification outcome), so
+// confidence(c) is deliberately NOT called in that branch: c never held a
+// meaningful verification result to project.
+func projectedConfidence(c vc.ConfidenceState, unresolvable bool) auditpb.Confidence {
+	if unresolvable {
+		return auditpb.Confidence_CONFIDENCE_UNRESOLVABLE
+	}
+	return confidence(c)
 }

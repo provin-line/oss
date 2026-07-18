@@ -177,6 +177,47 @@ func TestGetAuditStatus_AbandonedServed(t *testing.T) {
 	}
 }
 
+// TestGetAuditStatus_UnresolvableServed proves the distinct RESOLUTION-outcome
+// verdict is servable and distinguishable from a plain Indeterminate: a head
+// whose own chain could never be resolved after exhausting retries projects
+// CONFIDENCE_UNRESOLVABLE for BOTH linear_chain.confidence and every axis
+// (none were ever evaluated — the credential itself was never obtained), and
+// abandoned=true (the generic "runner gave up" lifecycle fact still holds).
+// source_commitment stays absent — nothing to evaluate behind an unresolved
+// head.
+func TestGetAuditStatus_UnresolvableServed(t *testing.T) {
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:      i,
+		Axes:         vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations:    []string{"audit abandoned: exhausted 2 attempts (head not resolvable)"},
+		Scope:        auditor.AuditScope{LinearChain: true},
+		AuditedAt:    time.Unix(0, 0).UTC(),
+		Abandoned:    true,
+		Unresolvable: true,
+	}
+	msg, err := get(t, fakeService{rec: rec})
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	if !msg.GetAbandoned() {
+		t.Error("abandoned = false, want true")
+	}
+	lc := msg.GetLinearChain()
+	if lc.GetConfidence() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("linear_chain.confidence = %v, want UNRESOLVABLE", lc.GetConfidence())
+	}
+	axes := lc.GetAxes()
+	if axes.GetDataIntegrity() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE ||
+		axes.GetSignerAuthenticity() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE ||
+		axes.GetChainConsistency() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("axes = %+v, want all UNRESOLVABLE", axes)
+	}
+	if msg.GetSourceCommitment() != nil {
+		t.Errorf("source_commitment = %+v, want nil (nothing to evaluate behind an unresolved head)", msg.GetSourceCommitment())
+	}
+}
+
 // Each domain three-state maps to its proto counterpart with the +1 shift.
 func TestGetAuditStatus_ConfidenceMapping(t *testing.T) {
 	cases := []struct {

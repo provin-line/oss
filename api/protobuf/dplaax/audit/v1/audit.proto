@@ -76,15 +76,27 @@ service AuditService {
 }
 
 // Confidence is the wire projection of the verifier's three-state domain
-// (vc.ConfidenceState). CONFIDENCE_UNSPECIFIED is the proto3 zero and the
-// fail-closed sink: it is never emitted for a real linear-chain verdict, and a
-// consumer treats it as not-verified. The domain's own zero is Failed, so the
-// handler maps domain→proto with an explicit shift (Failed→FAILED), never a cast.
+// (vc.ConfidenceState), PLUS one auditor-domain resolution outcome
+// (CONFIDENCE_UNRESOLVABLE) that is never a vc.ConfidenceState value.
+// CONFIDENCE_UNSPECIFIED is the proto3 zero and the fail-closed sink: it is
+// never emitted for a real linear-chain verdict, and a consumer treats it as
+// not-verified. The domain's own zero is Failed, so the handler maps
+// domain→proto with an explicit shift (Failed→FAILED), never a cast.
 enum Confidence {
   CONFIDENCE_UNSPECIFIED = 0;
   CONFIDENCE_FAILED = 1;
   CONFIDENCE_INDETERMINATE = 2;
   CONFIDENCE_VERIFIED = 3;
+  // CONFIDENCE_UNRESOLVABLE is recorded when chain assembly cannot resolve
+  // the head's chain after max retries — a RESOLUTION outcome (the audit
+  // runner gave up trying to obtain the evidence needed to verify at all).
+  // It is distinct from CONFIDENCE_INDETERMINATE, which is a VERIFICATION
+  // outcome (the evidence was obtained and evaluated, but the verdict itself
+  // could not be concluded). Only ever emitted for linear_chain (and its
+  // axes) — a head whose own chain never resolved has nothing for
+  // source_commitment to evaluate either, so that scope stays absent, same
+  // as any other unevaluated coverage.
+  CONFIDENCE_UNRESOLVABLE = 4;
 }
 
 // AxisVerdict carries the three normative confidence axes (mirrors vc.AxisResult).
