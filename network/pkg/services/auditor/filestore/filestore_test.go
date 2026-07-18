@@ -211,6 +211,11 @@ func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	}
 }
 
+// The canonicalizer enforces the content-address grammar per member (sha256:<64hex>) — a
+// malformed member must never pin an irreversible first-write-wins receipt that every reader
+// (GetConsumedSources, the source-commitment auditor) would then treat as damaged, and a
+// "\n"-bearing member would otherwise let two DIFFERENT consumed sets collide under the same
+// "\n"-joined signed view (the wireauth handler's deterministic join over the canonical set).
 func TestReceiptStore_PutValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -219,6 +224,8 @@ func TestReceiptStore_PutValidation(t *testing.T) {
 		{"empty set", []string{}},
 		{"nil set", nil},
 		{"empty-string member", []string{h(3), ""}},
+		{"non-address member", []string{h(3), "not-a-content-hash"}},
+		{"newline-bearing member", []string{h(3), h(4) + "\n"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

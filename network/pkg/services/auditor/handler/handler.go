@@ -55,8 +55,13 @@ const opRegisterEvidence = "dplaax.audit.v1.AuditService/RegisterEvidence"
 
 // consumedJoinSeparator deterministically joins the canonical consumed-source
 // set into the single signed field the proof covers. A newline is unambiguous
-// because every member is a "sha256:<64 lowercase hex>" content address (see
-// vc.IsContentAddress), which can never contain one.
+// because auditor.CanonicalizeConsumedSet ENFORCES that every member is a
+// well-formed "sha256:<64 lowercase hex>" content address (rejecting anything
+// else, including an embedded "\n", with an error) — not merely an assumption
+// at this join site. That fixed length and hex-only alphabet is what makes
+// the join collision-free: two different consumed sets can never join to the
+// same signed bytes, because no member can itself contain the separator or
+// vary in length.
 const consumedJoinSeparator = "\n"
 
 // EvidenceRegistrar is the consumer-side view of the evidence-registration

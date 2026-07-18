@@ -201,3 +201,35 @@ func TestEvidenceService_AdmissionCheckError_Surfaces(t *testing.T) {
 		t.Error("stores touched despite an admission check error")
 	}
 }
+
+// TestEvidenceService_MalformedConsumedMember_InvalidArgument proves the
+// content-address grammar is enforced per consumed-set member — an
+// authorized caller cannot pin an irreversible first-write-wins receipt with
+// a malformed entry (every reader downstream, GetConsumedSources and the
+// source-commitment auditor, would then treat it as damage), and a
+// "\n"-bearing member specifically cannot smuggle a fake boundary into the
+// wireauth handler's deterministic "\n"-joined signed view.
+func TestEvidenceService_MalformedConsumedMember_InvalidArgument(t *testing.T) {
+	tests := []struct {
+		name     string
+		consumed []string
+	}{
+		{"non-address member", []string{addr("a"), "not-a-content-hash"}},
+		{"newline-bearing member", []string{addr("a"), addr("b") + "\n"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receipts := &evidenceFakeReceipts{}
+			queue := &evidenceFakeQueue{}
+			svc := auditor.NewEvidenceService(receipts, queue, admitAll)
+
+			err := svc.Register(context.Background(), addr("f"), tt.consumed)
+			if !errors.Is(err, auditor.ErrInvalidArgument) {
+				t.Fatalf("Register: err = %v, want ErrInvalidArgument", err)
+			}
+			if len(receipts.calls) != 0 || len(queue.calls) != 0 {
+				t.Error("stores touched despite a malformed consumed-set member")
+			}
+		})
+	}
+}

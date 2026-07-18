@@ -53,9 +53,12 @@ func NewEvidenceService(receipts ReceiptWriter, queue Registrar, admitted func(c
 // enqueues the head for audit — STRICTLY in that order:
 //
 //  1. Validate/canonicalize: a malformed head address, or a consumed set that
-//     CanonicalizeConsumedSet rejects (empty, or containing an empty-string
-//     member), is ErrInvalidArgument. Neither store nor the admission check
-//     runs.
+//     CanonicalizeConsumedSet rejects (empty, or containing a member that is
+//     not a well-formed sha256:<hex> content address), is ErrInvalidArgument.
+//     Neither store nor the admission check runs. This is what keeps an
+//     authorized caller from pinning an irreversible first-write-wins receipt
+//     with a malformed member — every reader downstream (GetConsumedSources,
+//     the source-commitment auditor) would otherwise treat it as damage.
 //  2. Admission: headVariantAddr must already be admitted in the local VC
 //     store, else ErrHeadNotAdmitted (the arbitrary-hash amplification guard).
 //     An admission-check FAILURE (as opposed to a definitive "not admitted")
