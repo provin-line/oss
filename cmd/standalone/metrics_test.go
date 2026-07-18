@@ -75,8 +75,8 @@ func findMetric(body, family string, labels ...string) (string, bool) {
 // capability for must not appear for it.
 func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 	lms := []loopMetrics{
-		{name: "src-a", role: "source", emits: fakeEmits{ok: 3, fail: 1}, stripped: fakeStripped{n: 2}},
-		{name: "sink-b", role: "sink", verify: fakeVerify{counts: map[string]uint64{
+		{Name: "src-a", Role: "source", Emits: fakeEmits{ok: 3, fail: 1}, Stripped: fakeStripped{n: 2}},
+		{Name: "sink-b", Role: "sink", Verify: fakeVerify{counts: map[string]uint64{
 			"verified": 4, "failed": 0, "indeterminate": 1, "error": 0,
 		}}},
 	}
@@ -126,7 +126,7 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 // absent entirely — family presence is the capability contract.
 func TestMetricsHandler_NoAuditRunnerNoAuditFamily(t *testing.T) {
 	h, err := buildMetricsHandler([]loopMetrics{
-		{name: "src-a", role: "source", emits: fakeEmits{}},
+		{Name: "src-a", Role: "source", Emits: fakeEmits{}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("buildMetricsHandler: %v", err)

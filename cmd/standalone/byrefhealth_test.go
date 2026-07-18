@@ -21,8 +21,8 @@ func TestByRefHealthGate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			g := newByRefHealthGate(c.sources)
-			if got := g.healthy(); got != c.want {
-				t.Errorf("healthy() = %v, want %v", got, c.want)
+			if got := g.Healthy(); got != c.want {
+				t.Errorf("Healthy() = %v, want %v", got, c.want)
 			}
 		})
 	}

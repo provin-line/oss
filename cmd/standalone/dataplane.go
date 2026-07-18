@@ -185,42 +185,14 @@ func parseDelivery(s string) contract.PayloadDelivery {
 	return d
 }
 
-// emitCounters is the emit-outcome accessor pair every producing handle
-// (transport.Loop, aggregate.Process) exposes — the metrics bridge's poll seam.
-type emitCounters interface {
-	EmitSuccesses() uint64
-	EmitFailures() uint64
-}
-
-// strippedCounter is the stripped-publish failure accessor producing handles
-// expose; registered only for loops that actually dual-emit.
-type strippedCounter interface {
-	StrippedPublishFailures() uint64
-}
-
-// verifyCounts is the per-loop verify-outcome snapshot the metrics bridge
-// polls — satisfied by *verifycount.Verifier.
-type verifyCounts interface {
-	Snapshot() map[string]uint64
-}
-
-// loopMetrics is one loop's metrics wiring for the composition root's
-// /metrics bridge (P1-2): name becomes the series' `loop` attribute, role
-// records which capability set the wiring followed (test/bookkeeping only —
-// not a series attribute), and the non-nil accessors decide which metric
-// families the loop participates in (nil = the loop does not have that
-// capability, so no series is registered — family presence is the capability
-// contract).
-type loopMetrics struct {
-	name string
-	role string // pipelineconfig.Role* value
-	// emits is non-nil for producing loops (source/chained/aggregate).
-	emits emitCounters
-	// stripped is non-nil when the loop dual-emits (a PayloadStore is wired).
-	stripped strippedCounter
-	// verify is non-nil for consuming loops (sink/chained/aggregate).
-	verify verifyCounts
-}
+// emitCounters, strippedCounter, verifyCounts, and loopMetrics moved to
+// internal/netcompose/metrics.go (EmitCounters, StrippedCounter, VerifyCounts,
+// LoopMetrics) — they are field types of LoopMetrics, which moved there per
+// the extraction plan. dataplane.go reaches LoopMetrics via the compat alias
+// `loopMetrics` and never needs to name the three interfaces directly (it
+// only assigns concrete types — *transport.Loop, *aggregate.Process,
+// *verifycount.Verifier — into LoopMetrics's exported fields; Go's structural
+// typing resolves the rest).
 
 // dataPlane is the node's set of running pipeline loops over one shared nats
 // connection. It owns the connection's lifecycle: Run starts the loops, waits for
@@ -392,7 +364,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		// lm collects this loop's metrics wiring; appended alongside the loop
 		// handle on success. dualEmits mirrors strippedPublisherFor's gate (a
 		// PayloadStore ⇒ every producing loop dual-emits, D-6).
-		lm := loopMetrics{name: lc.Name, role: lc.Role}
+		lm := loopMetrics{Name: lc.Name, Role: lc.Role}
 		dualEmits := pw.store != nil
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
@@ -423,7 +395,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			} else if err = ensureConsumer(lc.Name); err == nil {
 				// Per-loop verify counting over the shared verifier (P1-2).
 				vcnt := verifycount.New(verifier)
-				lm.verify = vcnt
+				lm.Verify = vcnt
 				// A receipt-issuing sink (MAY production / MUST archival) registers each
 				// receipt local-first (store → tlog → audit queue) before optional remote
 				// publish — the emissionRegistrar ordering doctrine. Needs the audit
@@ -444,7 +416,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		case pipelineconfig.RoleChained:
 			if err = ensureConsumer(lc.Name); err == nil {
 				vcnt := verifycount.New(verifier)
-				lm.verify = vcnt
+				lm.Verify = vcnt
 				var schemaRef vc.SchemaRef
 				if schemaRef, err = resolveSchema(lc.Name, lc.Chained.SchemaRef); err == nil {
 					var emission tlog.Log
@@ -460,7 +432,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			var agg *aggregate.Process
 			if err = ensureConsumer(lc.Name); err == nil {
 				vcnt := verifycount.New(verifier)
-				lm.verify = vcnt
+				lm.Verify = vcnt
 				// Emit-locus self-audit (slice-17o): the aggregate registers each emitted head
 				// (local store + receipt + queue + optional remote publish) BEFORE broadcasting.
 				// Wired only when the audit substrate is present; nil leaves it broadcast-only.
@@ -486,9 +458,9 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				return nil, err
 			}
 			dp.aggregates = append(dp.aggregates, agg)
-			lm.emits = agg
+			lm.Emits = agg
 			if dualEmits {
-				lm.stripped = agg
+				lm.Stripped = agg
 			}
 			dp.metrics = append(dp.metrics, lm)
 			continue
@@ -505,9 +477,9 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		dp.loops = append(dp.loops, loop)
 		// A source/chained transport.Loop is a producer; a sink is consume-only.
 		if lc.Role != pipelineconfig.RoleSink {
-			lm.emits = loop
+			lm.Emits = loop
 			if dualEmits {
-				lm.stripped = loop
+				lm.Stripped = loop
 			}
 		}
 		dp.metrics = append(dp.metrics, lm)
@@ -760,20 +732,6 @@ func verificationStrategy(s string) (contract.VerificationStrategy, error) {
 	default:
 		return contract.VerificationUnknown, fmt.Errorf("unknown verification-strategy %q", s)
 	}
-}
-
-// bearerInterceptor sets the L1 PDP Authorization bearer on every outgoing client
-// request to the VC store. An empty token sets no header (an unauthenticated PoC node);
-// the server-side interceptor decides whether that is acceptable.
-func bearerInterceptor(token string) connect.Interceptor {
-	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			if token != "" && req.Spec().IsClient {
-				req.Header().Set("Authorization", "Bearer "+token)
-			}
-			return next(ctx, req)
-		}
-	})
 }
 
 // sinkKind maps a (config-validated) sink-kind token to its contract value.

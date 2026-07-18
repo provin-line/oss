@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/provin-line/oss/internal/netcompose"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/vc"
 )
@@ -67,7 +68,7 @@ func TestSchemaResolver_ResolveSchema(t *testing.T) {
 	getter := fakeSchemaGetter{schemas: map[string]*store.Schema{
 		"orders@2026-07-10-abcdef0123456789": {SchemaFormat: "JsonSchema", SchemaBody: body},
 	}}
-	r := schemaResolver{svc: getter}
+	r := netcompose.SchemaBridge{Svc: getter}
 
 	// Valid canonical URI resolves to body + format.
 	got, err := r.ResolveSchema(context.Background(), vc.SchemaRef{ID: "dplaax:schema/orders@2026-07-10-abcdef0123456789"})

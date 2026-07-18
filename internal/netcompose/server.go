@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"fmt"
@@ -66,6 +66,27 @@ const (
 	maxDocumentRequestBytes = 1 << 20   // 1 MiB
 )
 
+// OuterRequestCapBytes sizes the outermost raw-request-body limit so it is
+// never smaller than any legitimate request under a per-RPC read cap. It must
+// cover EVERY message class — the per-RPC read caps bound the DECODED message,
+// but a Connect JSON request base64-encodes a bytes field (~4/3 inflation), so
+// the raw body is larger than the decoded cap. It is deliberately generous —
+// the tight bounds are the per-RPC caps below it; this only closes the
+// pre-Connect (h2c-upgrade) path that no interceptor guards. Relocated here
+// (from cmd/standalone/main.go) alongside the two per-RPC constants it sizes
+// against, which stay unexported/internal to this file.
+func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
+	largest := maxCredentialSize
+	for _, v := range []int{maxPushBodySize, maxDocumentRequestBytes, maxProofRequestBytes} {
+		if v > largest {
+			largest = v
+		}
+	}
+	// 2x covers base64 (~4/3) plus JSON field-name/escaping overhead with
+	// margin; +64 KiB is framing/header headroom.
+	return largest*2 + 64<<10
+}
+
 // BuildHandler wires the services into one mux: the Connect RPC services
 // sit behind the L1 authorization interceptors (verifier injected — main builds
 // it from config, tests inject a static endpoint), while the public W3C DID
@@ -77,11 +98,11 @@ const (
 //
 // It is the testable seam: the boot e2e exercises the assembled mux over httptest
 // without binding a port; main wraps the returned handler in h2c and serves it.
-// newDIDResolution builds the SSRF guard and the cross-registry DID resolver shared by
+// NewDIDResolution builds the SSRF guard and the cross-registry DID resolver shared by
 // the control plane (BuildHandler) and the data plane (sink-loop credential
 // verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
 // e2e) override the default https://{registry} mapping (D-m6).
-func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
+func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
@@ -100,7 +121,7 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	if chainCfg.Transport == chainconfig.TransportNATS {
 		switch {
 		case len(chainCfg.NATS.RegistryBaseURLs) > 0:
-			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(registryBaseURL(chainCfg.NATS.RegistryBaseURLs, closeUnmapped)))
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(RegistryBaseURL(chainCfg.NATS.RegistryBaseURLs, closeUnmapped)))
 			scoped = true
 		case chainCfg.NATS.ResolverBaseURL != "":
 			base := chainCfg.NATS.ResolverBaseURL
@@ -117,13 +138,15 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	return guard, didresolver.New(guard, resolverOpts...), nil
 }
 
-// registryBaseURL derives a registry's resolution base URL from the configured
+// RegistryBaseURL derives a registry's resolution base URL from the configured
 // per-registry map. When closeUnmapped is false, an unmapped registry falls back
 // to the didresolver default (https://{registry}), so a partial map for
 // local/VPC peers composes with public registries. When closeUnmapped is true
 // (allow-private-networks mode, F8), an unmapped registry is REFUSED — the open
 // fallback would let an attacker-supplied registry name reach private space.
-func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
+// Exported (despite being an internal derivation helper) because
+// cmd/standalone/server_test.go exercises it directly as a unit.
+func RegistryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
 	return func(registry string) (string, error) {
 		if base, ok := urls[registry]; ok {
 			return base, nil
@@ -147,23 +170,24 @@ func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry s
 // auditStatus is the audit-verdict store the async runner writes (slice-17h) and the
 // AuditService reads (slice-17i, D-17i-7); main builds it once and shares the one instance
 // across both. A read-only surface — the API never mutates it.
-// chainOp is the chain transport operator, built by main via chainOperator BEFORE the
+// chainOp is the chain transport operator, built by main via ChainOperator BEFORE the
 // data plane (its construction publishes the node account's claims — a broker
 // side-effect the data plane's connect depends on; hiding it here would re-create the
 // fresh-boot ordering bug the extraction fixed).
-// ingest is the HTTP push surface of the data plane's push-enabled source loops
-// (zero-valued when none: no routes mounted).
-// nodeDIDOf returns the node's subscriber identity DID, or "" for the noop/dev
+// mountIngest, when non-nil, mounts the data plane's HTTP push-ingest routes
+// onto the mux (push-enabled source loops). nil mounts nothing. The callback
+// seam keeps netcompose free of any data-plane type.
+// NodeDIDOf returns the node's subscriber identity DID, or "" for the noop/dev
 // transport (no subscriber identity). Shared by the chain peer client and the
 // payload fetch client.
-func nodeDIDOf(chainCfg *chainconfig.Config) string {
+func NodeDIDOf(chainCfg *chainconfig.Config) string {
 	if chainCfg.Transport == chainconfig.TransportNATS {
 		return chainCfg.NATS.NodeDID
 	}
 	return ""
 }
 
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, ingest ingestMounts, readiness []readinessCheck, byRefHealthy func() bool) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -181,7 +205,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// The subscriber-side peer client signs as the node's DID with its keystore
 	// #auth key (composed here — the service layer stays proto-free, slice-13
 	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
-	nodeDID := nodeDIDOf(chainCfg)
+	nodeDID := NodeDIDOf(chainCfg)
 	peerCli := peerclient.New(keyStore, nodeDID, guard.HTTPClient())
 
 	chainOpts := []chainmanager.Option{
@@ -278,27 +302,21 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// /healthz stays STATIC (liveness: "restart me if this fails");
 	// /readyz is dependency-aware (readiness: "route no new work here") —
 	// the checks are assembled by main from what this node is configured with.
-	// Cached (readinessCacheTTL) so a /readyz flood cannot amplify into a
+	// Cached (ReadinessCacheTTL) so a /readyz flood cannot amplify into a
 	// per-request outbound PDP probe (adversarial-review F7).
 	mux.Handle("/did/", didhandler.NewResolutionHandler(didSvc, regCfg.ID))
 	mux.HandleFunc("/healthz", healthz)
-	mux.HandleFunc("/readyz", newCachedReadiness(readiness, readinessCacheTTL).handler())
+	mux.HandleFunc("/readyz", NewCachedReadiness(readiness, ReadinessCacheTTL).Handler())
 
 	// HTTP push ingest (apipush) for push-enabled source loops: /ingest/<loop>/push
-	// (PDP-guarded) and /ingest/<loop>/health (public). Zero bindings mount nothing.
-	if err := mountPushRoutes(mux, ingest.bindings, verifier, ingest.maxBodySize); err != nil {
-		return nil, err
+	// (PDP-guarded) and /ingest/<loop>/health (public). nil mounts nothing.
+	if mountIngest != nil {
+		if err := mountIngest(mux); err != nil {
+			return nil, err
+		}
 	}
 
 	return mux, nil
-}
-
-// ingestMounts is the HTTP push surface BuildHandler mounts for the data plane's
-// push-enabled source loops. The zero value mounts nothing; maxBodySize must be
-// positive when bindings exist (apipush.New fails closed otherwise).
-type ingestMounts struct {
-	bindings    []pushBinding
-	maxBodySize int
 }
 
 type handlerPair struct {

@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -6,11 +6,11 @@ import (
 	"github.com/provin-line/oss/network/pkg/registry"
 )
 
-// endpointURLs collects the config-supplied URL surfaces of the matrix that
+// EndpointURLs collects the config-supplied URL surfaces of the matrix that
 // this binary can see. The orchestrator-side surfaces (probes, scrape target)
 // are outside the process and are covered by the matrix documentation, not by
 // this guard — a node cannot inspect its own probe configuration.
-func endpointURLs(regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config) []core.NamedURL {
+func EndpointURLs(regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config) []core.NamedURL {
 	var out []core.NamedURL
 	for _, ep := range regCfg.Endpoints {
 		out = append(out, core.NamedURL{Name: ep.ID, URL: ep.ServiceEndpoint})

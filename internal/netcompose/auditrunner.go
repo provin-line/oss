@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -22,11 +22,11 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 	return l.svc.ResolveVC(ctx, contentAddress)
 }
 
-// buildAuditRunner constructs the async audit runner, or returns (nil, nil) when the node
+// BuildAuditRunner constructs the async audit runner, or returns (nil, nil) when the node
 // has no consuming loop (no consumed heads register, so there is nothing to audit). The
 // audit chainwalk's MaxDepth equals the batch resolver's max-depth (D-17h-4): neither
 // component rejects a chain the other accepts.
-func buildAuditRunner(
+func BuildAuditRunner(
 	queue auditor.AuditQueue,
 	status auditor.StatusStore,
 	receipts auditor.ReceiptReader,

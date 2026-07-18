@@ -1,6 +1,6 @@
 //go:build dev
 
-package main
+package netcompose
 
 import (
 	"fmt"
@@ -10,10 +10,10 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/noop"
 )
 
-// chainOperator builds the chain transport operator (dev build). nats as in
+// ChainOperator builds the chain transport operator (dev build). nats as in
 // production; noop is additionally available but only when explicitly enabled via
 // chain.dev.allow-noop-transport — a second gate inside the dev build.
-func chainOperator(c *chainconfig.Config) (infra.Operator, error) {
+func ChainOperator(c *chainconfig.Config) (infra.Operator, error) {
 	switch c.Transport {
 	case chainconfig.TransportNATS:
 		return natsOperator(c)

@@ -25,6 +25,7 @@ import (
 
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/internal/httpserve"
+	"github.com/provin-line/oss/internal/netcompose"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -42,15 +43,6 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	"github.com/provin-line/oss/pipeline/contract"
-)
-
-// buildServer, http2Server, and serveHTTP moved to internal/httpserve
-// (BuildServer, HTTP2Server, ServeHTTP) — the shared HTTP/2 serving plumbing
-// reused by the node binaries. These aliases keep the cmd/standalone test
-// suite (written against the pre-extraction names) compiling unchanged.
-var (
-	buildServer = httpserve.BuildServer
-	http2Server = httpserve.HTTP2Server
 )
 
 func main() {
@@ -161,7 +153,7 @@ func main() {
 	// boot-time schema-ref resolution (issuance), and the verifier's schema
 	// content-hash resolution (verify) — one store, no divergent handles.
 	schemaSvc := schemaregistry.New(schemayaml.New(filepath.Join(coreCfg.DataDir, "schemas")))
-	schemaBridge := schemaResolver{svc: schemaSvc} // the one registry->vc.SchemaResolver bridge, shared by both verifiers
+	schemaBridge := netcompose.SchemaBridge{Svc: schemaSvc} // the one registry->vc.SchemaResolver bridge, shared by both verifiers
 	// The by-reference payload serving boundary: producing loops retain their
 	// payload here (data-dir/payloads), and BuildHandler mounts a PayloadService
 	// serving them back by content address. One store backs both the retain
@@ -218,8 +210,15 @@ func main() {
 	}
 	byRefGate := newByRefHealthGate(byRefSources)
 
+	// mountIngest is the callback seam BuildHandler mounts the data plane's HTTP
+	// push-ingest routes through (nil would mount nothing) — it replaces the old
+	// ingestMounts{bindings, maxBodySize} value now that BuildHandler lives in
+	// internal/netcompose, which must stay free of the data-plane pushBinding type.
+	mountIngest := func(mux *http.ServeMux) error {
+		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
+	}
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, ingestMounts{bindings: dp.pushBindings, maxBodySize: pipeCfg.MaxPushBodySize}, readiness, byRefGate.healthy)
+		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, mountIngest, readiness, byRefGate.Healthy)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -335,23 +334,4 @@ func runServices(ctx context.Context, srv *http.Server, listen func() error, dp 
 		}
 	}
 	return nil
-}
-
-// outerRequestCapBytes sizes the outermost raw-request-body limit so it is
-// never smaller than any legitimate request under a per-RPC read cap. It must
-// cover EVERY message class — the per-RPC read caps bound the DECODED message,
-// but a Connect JSON request base64-encodes a bytes field (~4/3 inflation), so
-// the raw body is larger than the decoded cap. It is deliberately generous —
-// the tight bounds are the per-RPC caps below it; this only closes the
-// pre-Connect (h2c-upgrade) path that no interceptor guards.
-func outerRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
-	largest := maxCredentialSize
-	for _, v := range []int{maxPushBodySize, maxDocumentRequestBytes, maxProofRequestBytes} {
-		if v > largest {
-			largest = v
-		}
-	}
-	// 2x covers base64 (~4/3) plus JSON field-name/escaping overhead with
-	// margin; +64 KiB is framing/header headroom.
-	return largest*2 + 64<<10
 }

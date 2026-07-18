@@ -24,6 +24,22 @@ type pushBinding struct {
 	ready     <-chan struct{}
 }
 
+// ingestMounts is the HTTP push surface main mounts onto BuildHandler's mux via
+// the mountIngest closure (BuildHandler's old `ingest ingestMounts` parameter
+// was replaced by that callback seam when BuildHandler moved to
+// internal/netcompose — netcompose must stay free of this data-plane type, so
+// this stays here). The zero value mounts nothing; maxBodySize must be
+// positive when bindings exist (apipush.New fails closed otherwise).
+//
+// Currently unreferenced: main wires mountPushRoutes directly through the
+// closure rather than constructing this value. Kept per the extraction plan
+// (ingestMounts is data-plane-shaped and stays in cmd/standalone); a follow-up
+// task removing cmd/standalone entirely may delete it.
+type ingestMounts struct {
+	bindings    []pushBinding
+	maxBodySize int
+}
+
 // readySubscriber decorates a transport.Subscriber with a readiness latch that
 // closes when Subscribe returns without error — the Subscriber contract confirms
 // the subscription with the broker before returning, so the latch is exactly

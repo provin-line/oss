@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -31,17 +31,36 @@ type peerFetcher struct {
 func (f *peerFetcher) Fetch(ctx context.Context, endpoint, contentAddress string) (*vc.PipelinePassCredential, error) {
 	c := vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		f.httpClient, endpoint,
-		connect.WithInterceptors(bearerInterceptor(f.bearer)),
+		connect.WithInterceptors(BearerInterceptor(f.bearer)),
 		connect.WithReadMaxBytes(f.maxBytes),
 	))
 	return c.ResolveCredential(ctx, contentAddress)
 }
 
-// buildBatchResolver constructs the async chain-audit runner, or returns (nil, nil) when
+// BearerInterceptor sets the L1 PDP Authorization bearer on every outgoing client
+// request to the VC store. An empty token sets no header (an unauthenticated PoC node);
+// the server-side interceptor decides whether that is acceptable. Exported and
+// relocated here from cmd/standalone/dataplane.go (its other caller, the data
+// plane's VC-store client wiring, now reaches it through the compat alias) — a
+// generic connect.Interceptor helper with no data-plane-specific coupling, so
+// it lives beside its one netcompose consumer (peerFetcher.Fetch) rather than
+// being duplicated.
+func BearerInterceptor(token string) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if token != "" && req.Spec().IsClient {
+				req.Header().Set("Authorization", "Bearer "+token)
+			}
+			return next(ctx, req)
+		}
+	})
+}
+
+// BuildBatchResolver constructs the async chain-audit runner, or returns (nil, nil) when
 // the node has no consuming loop (a source-only node accumulates no holes, so there is
 // nothing to drain). pool and submitter are the shared instances main threads into the
 // VC resolver service, so the runner drains exactly the pool StoreVC feeds.
-func buildBatchResolver(
+func BuildBatchResolver(
 	pool batchresolver.Pool,
 	submitter batchresolver.Submitter,
 	guard *core.URLGuard,

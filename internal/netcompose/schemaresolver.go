@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -11,28 +11,33 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// schemaGetter is the narrow read seam the schema wiring needs from the schema
+// SchemaGetter is the narrow read seam the schema wiring needs from the schema
 // registry — *schemaregistry.Service satisfies it. Kept consumer-defined so the
-// bridge and boot-resolve depend on Get alone, not the whole service.
-type schemaGetter interface {
+// bridge and boot-resolve depend on Get alone, not the whole service. Exported
+// because cmd/standalone/dataplane.go's dataPlaneDeps declares a field of this
+// type (the data plane resolves a producing loop's schema-ref through it).
+type SchemaGetter interface {
 	Get(ctx context.Context, name, version string) (*store.Schema, error)
 }
 
-// schemaResolver bridges the local schema registry to vc.SchemaResolver on the
+// SchemaBridge bridges the local schema registry to vc.SchemaResolver on the
 // verify path: it parses a canonical schema URI back to its (name, version) and
 // serves the registered body + format. Same-process — no network hop. The
 // verifier recomputes the content hash over the body itself, so this bridge is
-// trusted only for retrieval, never for integrity.
-type schemaResolver struct {
-	svc schemaGetter
+// trusted only for retrieval, never for integrity. Named SchemaBridge (not
+// SchemaResolver) to avoid a name clash with vc.SchemaResolver, the interface
+// it implements; Svc is exported so the composition root (cmd/standalone's
+// main) can construct it directly (netcompose.SchemaBridge{Svc: schemaSvc}).
+type SchemaBridge struct {
+	Svc SchemaGetter
 }
 
-func (r schemaResolver) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (*vc.ResolvedSchema, error) {
+func (r SchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (*vc.ResolvedSchema, error) {
 	name, version, err := vc.ParseSchemaURI(ref.ID)
 	if err != nil {
 		return nil, err // ErrSchemaInvalidRef — a deterministic malformed reference (failed)
 	}
-	sc, err := r.svc.Get(ctx, name, version)
+	sc, err := r.Svc.Get(ctx, name, version)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("%w: %s@%s", vc.ErrSchemaNotFound, name, version)
@@ -42,14 +47,14 @@ func (r schemaResolver) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (*v
 	return &vc.ResolvedSchema{Format: sc.SchemaFormat, Body: sc.SchemaBody}, nil
 }
 
-// resolveSchemaRefAtBoot resolves a config schema-ref short-form
+// ResolveSchemaRefAtBoot resolves a config schema-ref short-form
 // ("<name>@<version>") to the full, signed reference a producing loop embeds in
 // every credential it issues. Fail-closed: a missing or deprecated schema is a
 // boot error (an operator must register or advance to a current version before
 // the loop runs). The content hash is computed here, once, over the registered
 // body — issuance itself does no registry I/O (schemas are immutable), and a
 // schema deprecated after boot keeps issuing until the next restart.
-func resolveSchemaRefAtBoot(ctx context.Context, svc schemaGetter, shortForm string) (vc.SchemaRef, error) {
+func ResolveSchemaRefAtBoot(ctx context.Context, svc SchemaGetter, shortForm string) (vc.SchemaRef, error) {
 	name, version, err := vc.SplitSchemaRef(shortForm)
 	if err != nil {
 		return vc.SchemaRef{}, err

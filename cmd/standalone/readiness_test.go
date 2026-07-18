@@ -47,7 +47,7 @@ func TestReadyz_AllOK(t *testing.T) {
 	h := newCachedReadiness([]readinessCheck{
 		{Name: "a", Check: func(context.Context) error { return nil }},
 		{Name: "b", Check: func(context.Context) error { return nil }},
-	}, time.Minute).handler()
+	}, time.Minute).Handler()
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -73,7 +73,7 @@ func TestReadyz_OneFailing_Degraded(t *testing.T) {
 	h := newCachedReadiness([]readinessCheck{
 		{Name: "good", Check: func(context.Context) error { return nil }},
 		{Name: "bad", Check: func(context.Context) error { return errors.New("pdp unreachable at http://10.0.0.7:3001") }},
-	}, time.Minute).handler()
+	}, time.Minute).Handler()
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -97,7 +97,7 @@ func TestReadyz_OneFailing_Degraded(t *testing.T) {
 // Zero checks (an HTTP-only node with a static PDP) is trivially ready.
 func TestReadyz_NoChecks_OK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newCachedReadiness(nil, time.Minute).handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	newCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -105,7 +105,7 @@ func TestReadyz_NoChecks_OK(t *testing.T) {
 
 func TestReadyz_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newCachedReadiness(nil, time.Minute).handler()(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
+	newCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
@@ -214,7 +214,7 @@ func TestCachedReadiness_CoalescesProbes(t *testing.T) {
 	c := newCachedReadiness([]readinessCheck{
 		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
 	}, time.Minute) // long TTL: everything in this test is one window
-	h := c.handler()
+	h := c.Handler()
 
 	for i := 0; i < 50; i++ {
 		rec := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestCachedReadiness_FirstRequestRefreshesSynchronously(t *testing.T) {
 		{Name: "bad", Check: func(context.Context) error { return errors.New("down") }},
 	}, time.Minute)
 	rec := httptest.NewRecorder()
-	c.handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("first request: status %d, want 503 (must not serve a zero snapshot as ready)", rec.Code)
 	}
@@ -248,8 +248,8 @@ func TestCachedReadiness_RefreshesAfterTTL(t *testing.T) {
 	c := newCachedReadiness([]readinessCheck{
 		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
 	}, 5*time.Second)
-	c.now = func() time.Time { return now }
-	h := c.handler()
+	c.Now = func() time.Time { return now }
+	h := c.Handler()
 
 	h(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil)) // probe 1
 	h(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil)) // cached

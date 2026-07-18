@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 // The /metrics bridge (P1-2): the ONLY place OpenTelemetry (and its
 // Prometheus exporter) enters the module. Library packages stay
@@ -30,13 +30,54 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-// buildMetricsHandler assembles the OTel meter provider over a DEDICATED
+// EmitCounters is the emit-outcome accessor pair every producing handle
+// (transport.Loop, aggregate.Process) exposes — the metrics bridge's poll
+// seam. Relocated here (from cmd/standalone/dataplane.go) alongside
+// LoopMetrics, the struct it is a field type of.
+type EmitCounters interface {
+	EmitSuccesses() uint64
+	EmitFailures() uint64
+}
+
+// StrippedCounter is the stripped-publish failure accessor producing handles
+// expose; registered only for loops that actually dual-emit.
+type StrippedCounter interface {
+	StrippedPublishFailures() uint64
+}
+
+// VerifyCounts is the per-loop verify-outcome snapshot the metrics bridge
+// polls — satisfied by *verifycount.Verifier.
+type VerifyCounts interface {
+	Snapshot() map[string]uint64
+}
+
+// LoopMetrics is one loop's metrics wiring for the composition root's
+// /metrics bridge (P1-2): Name becomes the series' `loop` attribute, Role
+// records which capability set the wiring followed (test/bookkeeping only —
+// not a series attribute), and the non-nil accessors decide which metric
+// families the loop participates in (nil = the loop does not have that
+// capability, so no series is registered — family presence is the capability
+// contract). Fields are exported: cmd/standalone/dataplane.go (the data
+// plane, which stays behind) constructs and populates these directly as it
+// builds each loop.
+type LoopMetrics struct {
+	Name string
+	Role string // pipelineconfig.Role* value
+	// Emits is non-nil for producing loops (source/chained/aggregate).
+	Emits EmitCounters
+	// Stripped is non-nil when the loop dual-emits (a PayloadStore is wired).
+	Stripped StrippedCounter
+	// Verify is non-nil for consuming loops (sink/chained/aggregate).
+	Verify VerifyCounts
+}
+
+// BuildMetricsHandler assembles the OTel meter provider over a DEDICATED
 // Prometheus registry (no default-registry collectors leak in) and registers
 // the four stable counter families over the polled sources. verdicts is the
 // audit runner's VerdictCounts, or nil when the node runs no audit runner
 // (the family is then absent). The returned handler serves the exposition;
-// the caller mounts it (see withMetrics).
-func buildMetricsHandler(loops []loopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
+// the caller mounts it (see WithMetrics).
+func BuildMetricsHandler(loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
 	registry := prometheus.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
@@ -68,19 +109,19 @@ func buildMetricsHandler(loops []loopMetrics, verdicts func() map[string]uint64)
 
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		for _, lm := range loops {
-			loopAttr := attribute.String("loop", lm.name)
-			if lm.emits != nil {
-				o.ObserveInt64(emitAttempts, int64(lm.emits.EmitSuccesses()),
+			loopAttr := attribute.String("loop", lm.Name)
+			if lm.Emits != nil {
+				o.ObserveInt64(emitAttempts, int64(lm.Emits.EmitSuccesses()),
 					metric.WithAttributes(loopAttr, attribute.String("outcome", "success")))
-				o.ObserveInt64(emitAttempts, int64(lm.emits.EmitFailures()),
+				o.ObserveInt64(emitAttempts, int64(lm.Emits.EmitFailures()),
 					metric.WithAttributes(loopAttr, attribute.String("outcome", "failure")))
 			}
-			if lm.stripped != nil {
-				o.ObserveInt64(strippedFailures, int64(lm.stripped.StrippedPublishFailures()),
+			if lm.Stripped != nil {
+				o.ObserveInt64(strippedFailures, int64(lm.Stripped.StrippedPublishFailures()),
 					metric.WithAttributes(loopAttr))
 			}
-			if lm.verify != nil {
-				for outcome, n := range lm.verify.Snapshot() {
+			if lm.Verify != nil {
+				for outcome, n := range lm.Verify.Snapshot() {
 					o.ObserveInt64(verifyResults, int64(n),
 						metric.WithAttributes(loopAttr, attribute.String("outcome", outcome)))
 				}
@@ -101,29 +142,29 @@ func buildMetricsHandler(loops []loopMetrics, verdicts func() map[string]uint64)
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), nil
 }
 
-// withMetrics mounts the metrics exposition at /metrics beside inner, which
+// WithMetrics mounts the metrics exposition at /metrics beside inner, which
 // keeps every other route — main composes this OUTSIDE BuildHandler so the
 // control-plane wiring stays metrics-agnostic and the endpoint exists only
 // when config enables it (default off; see core reference.conf).
-func withMetrics(inner, metrics http.Handler) http.Handler {
+func WithMetrics(inner, metrics http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", metrics)
 	mux.Handle("/", inner)
 	return mux
 }
 
-// maybeMountMetrics is the config gate main serves through: with metrics
+// MaybeMountMetrics is the config gate main serves through: with metrics
 // disabled (the default) it returns inner UNCHANGED — no /metrics route, no
 // exporter, no SDK — and with it enabled it composes the bridge over the
 // node's polled sources. verdicts may be nil (no audit runner). Extracted
 // from main so the default-off security ruling is testable.
-func maybeMountMetrics(enabled bool, inner http.Handler, loops []loopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
+func MaybeMountMetrics(enabled bool, inner http.Handler, loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
 	if !enabled {
 		return inner, nil
 	}
-	metricsHandler, err := buildMetricsHandler(loops, verdicts)
+	metricsHandler, err := BuildMetricsHandler(loops, verdicts)
 	if err != nil {
 		return nil, err
 	}
-	return withMetrics(inner, metricsHandler), nil
+	return WithMetrics(inner, metricsHandler), nil
 }
