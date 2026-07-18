@@ -115,10 +115,12 @@ func main() {
 		log.Fatalf("network: %v", err)
 	}
 
-	// The evidence substrate is DURABLE (spec: evidence-persistence): every
-	// store below is file-backed under data-dir/evidence/. An uncreatable
-	// evidence dir is a boot error — a node that cannot persist evidence must
-	// not pretend to.
+	// The evidence substrate is DURABLE (spec: evidence-persistence): the
+	// evidence stores (credentials, pool, audit queue, verdicts, receipts) are
+	// file-backed under data-dir/evidence/; schema and payload stores root
+	// under their own data-dir subdirs (schemas/, payloads/) below. An
+	// uncreatable evidence dir is a boot error — a node that cannot persist
+	// evidence must not pretend to.
 	evidenceDir := filepath.Join(coreCfg.DataDir, "evidence")
 
 	// The VC store backs the VCResolverService RPC. Unlike standalone, no
