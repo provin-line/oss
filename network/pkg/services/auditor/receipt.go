@@ -1,7 +1,10 @@
 package auditor
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -13,8 +16,13 @@ import (
 // yields Failed/Indeterminate (the resolved sources will not recompute the signed root),
 // never a false Verified.
 type ReceiptStore interface {
-	// Put records the consumed source content addresses for an emitted head. Idempotent
-	// (the latest write wins over immutable content).
+	// Put canonicalizes consumedHashes (sorted, deduplicated — see CanonicalizeConsumedSet;
+	// an empty set or an empty-string member is an error) and records it for an emitted
+	// head. First-write-wins: the first successful Put for a head pins its canonical
+	// consumed set. A later Put whose canonical set is identical is a no-op (idempotent —
+	// this is what makes aggregate re-emit retries safe). A later Put with a DIFFERENT
+	// canonical set returns a wrapped ErrReceiptConflict; the recorded set is never
+	// overwritten.
 	Put(headHash string, consumedHashes []string) error
 	// Get returns the consumed source content addresses for headHash. Absence is a
 	// wrapped ErrNotFound — the coverage gate: no receipt → the head is audited
@@ -23,6 +31,38 @@ type ReceiptStore interface {
 	// damaged receipt silently downgrading an aggregate audit to linear-only would
 	// present a weaker verdict class as intended coverage.
 	Get(headHash string) ([]string, error)
+}
+
+// ErrReceiptConflict is returned by ReceiptStore.Put when headHash already has a recorded
+// consumed-set receipt whose canonical content differs from the set being written. The safety
+// property this enforces: a recorded commitment set never silently changes — the first
+// successful Put for a head pins its consumed set, only a canonically-identical replay is
+// tolerated afterward (idempotent, covering aggregate re-emit retries), and anything else is
+// reported as a conflict rather than applied as a silent overwrite.
+var ErrReceiptConflict = errors.New("auditor: receipt already recorded with a different consumed set")
+
+// CanonicalizeConsumedSet sorts and deduplicates a receipt's consumed source content addresses
+// into the canonical form ReceiptStore.Put persists and compares against. It rejects a set that
+// is empty after dedup and any empty-string member. Both ReceiptStore implementations
+// (MemReceiptStore and filestore.ReceiptStore) call this so canonicalization cannot drift
+// between them.
+func CanonicalizeConsumedSet(hashes []string) ([]string, error) {
+	cp := make([]string, len(hashes))
+	copy(cp, hashes)
+	sort.Strings(cp)
+	out := make([]string, 0, len(cp))
+	for i, addr := range cp {
+		if addr == "" {
+			return nil, errors.New("auditor: consumed set contains an empty-string address")
+		}
+		if i == 0 || addr != cp[i-1] {
+			out = append(out, addr)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("auditor: consumed set is empty")
+	}
+	return out, nil
 }
 
 // MemReceiptStore is the in-memory ReceiptStore.
@@ -38,14 +78,23 @@ func NewMemReceiptStore() *MemReceiptStore {
 	return &MemReceiptStore{m: make(map[string][]string)}
 }
 
-// Put records a defensive copy of consumedHashes for headHash (the runtime may reuse the
-// backing array, so the receipt must not alias it).
+// Put canonicalizes consumedHashes and applies first-write-wins arbitration (see the
+// ReceiptStore.Put doc): the canonical form is a defensive copy, so a later mutation of the
+// caller's backing array cannot corrupt the receipt.
 func (s *MemReceiptStore) Put(headHash string, consumedHashes []string) error {
-	cp := make([]string, len(consumedHashes))
-	copy(cp, consumedHashes)
+	canonical, err := CanonicalizeConsumedSet(consumedHashes)
+	if err != nil {
+		return fmt.Errorf("auditor: put receipt for %q: %w", headHash, err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[headHash] = cp
+	if existing, ok := s.m[headHash]; ok {
+		if reflect.DeepEqual(existing, canonical) {
+			return nil // canonically-identical replay — idempotent
+		}
+		return fmt.Errorf("%w: head %q", ErrReceiptConflict, headHash)
+	}
+	s.m[headHash] = canonical
 	return nil
 }
 

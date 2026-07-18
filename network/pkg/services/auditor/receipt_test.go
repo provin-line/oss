@@ -48,3 +48,65 @@ func TestMemReceiptStore_Isolation(t *testing.T) {
 		t.Errorf("Get[0] = %q, want unchanged sha256:b (receipt must copy on Put)", got[0])
 	}
 }
+
+// The frozen contract (D1): Put canonicalizes (sort, dedup) and is first-write-wins. A
+// canonically-identical replay (including a permuted one) is an idempotent no-op — this is
+// what makes aggregate re-emit retries safe. A canonically-different Put is a conflict: the
+// recorded set is pinned by the first successful write and never silently changes.
+func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
+	s := NewMemReceiptStore()
+	head := "sha256:aaa"
+
+	// Unsorted + duplicated input canonicalizes to a sorted, deduped stored set.
+	if err := s.Put(head, []string{"sha256:c", "sha256:b", "sha256:b"}); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	want := []string{"sha256:b", "sha256:c"}
+	if got, err := s.Get(head); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after canonicalizing Put = %v (err %v), want %v", got, err, want)
+	}
+
+	// Identical replay (same canonical form) is a no-op.
+	if err := s.Put(head, []string{"sha256:b", "sha256:c"}); err != nil {
+		t.Fatalf("identical replay: want nil, got %v", err)
+	}
+	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after identical replay = %v, want unchanged %v", got, want)
+	}
+
+	// Permuted-but-equal (canonicalizes to the same set) is also a no-op.
+	if err := s.Put(head, []string{"sha256:c", "sha256:b"}); err != nil {
+		t.Fatalf("permuted-but-equal replay: want nil, got %v", err)
+	}
+	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after permuted-but-equal replay = %v, want unchanged %v", got, want)
+	}
+
+	// A different canonical set is a conflict — the recorded set is never overwritten.
+	err := s.Put(head, []string{"sha256:d"})
+	if !errors.Is(err, ErrReceiptConflict) {
+		t.Fatalf("different set: want ErrReceiptConflict, got %v", err)
+	}
+	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after rejected conflicting Put = %v, want unchanged %v", got, want)
+	}
+}
+
+func TestMemReceiptStore_PutValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+	}{
+		{"empty set", []string{}},
+		{"nil set", nil},
+		{"empty-string member", []string{"sha256:a", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewMemReceiptStore()
+			if err := s.Put("sha256:aaa", tt.in); err == nil {
+				t.Fatalf("Put(%v): want error", tt.in)
+			}
+		})
+	}
+}

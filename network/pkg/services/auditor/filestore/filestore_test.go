@@ -162,6 +162,99 @@ func TestReceiptStore_RoundTripRestartDamaged(t *testing.T) {
 	}
 }
 
+// The frozen contract (D1): Put canonicalizes (sort, dedup) and is first-write-wins. A
+// canonically-identical replay (including a permuted one) is an idempotent no-op — this is
+// what makes aggregate re-emit retries safe. A canonically-different Put is a conflict: the
+// recorded set is pinned by the first successful write and never silently changes, and the
+// pin survives a restarted store instance over the same directory.
+func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(20)
+
+	// Unsorted + duplicated input canonicalizes to a sorted, deduped stored set.
+	if err := s.Put(head, []string{h(3), h(2), h(2)}); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	want := []string{h(2), h(3)}
+	if got, err := s.Get(head); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after canonicalizing Put = %v (err %v), want %v", got, err, want)
+	}
+
+	// Identical replay (same canonical form) is a no-op.
+	if err := s.Put(head, []string{h(2), h(3)}); err != nil {
+		t.Fatalf("identical replay: want nil, got %v", err)
+	}
+
+	// Permuted-but-equal (canonicalizes to the same set) is also a no-op.
+	if err := s.Put(head, []string{h(3), h(2)}); err != nil {
+		t.Fatalf("permuted-but-equal replay: want nil, got %v", err)
+	}
+	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after replays = %v, want unchanged %v", got, want)
+	}
+
+	// A restarted store instance over the same dir still enforces the pinned set: a
+	// different canonical set is a conflict, never an overwrite.
+	s2, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Put(head, []string{h(4)}); !errors.Is(err, auditor.ErrReceiptConflict) {
+		t.Fatalf("different set after restart: want ErrReceiptConflict, got %v", err)
+	}
+	if got, _ := s2.Get(head); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get after rejected conflicting Put = %v, want unchanged %v", got, want)
+	}
+}
+
+func TestReceiptStore_PutValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+	}{
+		{"empty set", []string{}},
+		{"nil set", nil},
+		{"empty-string member", []string{h(3), ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := filestore.NewReceiptStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Put(h(9), tt.in); err == nil {
+				t.Fatalf("Put(%v): want error", tt.in)
+			}
+		})
+	}
+}
+
+// A damaged existing entry must fail closed on a later Put: it must not be silently treated as
+// "no receipt" (which would let ANY Put — matching or not — through as a first write over
+// damage) and must not be misreported as ErrReceiptConflict (which would say "content differs"
+// about an entry whose content is unknown). The damage itself must surface.
+func TestReceiptStore_PutOverDamagedEntryFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(30)
+	if err := os.WriteFile(entryPath(dir, head), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(head, []string{h(3)}); err == nil {
+		t.Fatalf("Put over a damaged entry: want error, got nil")
+	} else if errors.Is(err, auditor.ErrReceiptConflict) {
+		t.Fatalf("Put over a damaged entry: want a damage error, not ErrReceiptConflict (got %v)", err)
+	}
+}
+
 func TestQueue_DedupAttemptsOrderingRestart(t *testing.T) {
 	dir := t.TempDir()
 	q, err := filestore.NewQueue(dir)

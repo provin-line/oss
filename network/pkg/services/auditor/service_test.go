@@ -179,11 +179,15 @@ func TestStatusService_GetConsumed(t *testing.T) {
 		t.Fatalf("page2 = %v next=%q err=%v, want [c]/\"\"", page, next, err)
 	}
 
-	// A receipt entry that is not a content address is damage (internal), not data.
-	if err := receipts.Put(validHash, []string{"garbage-entry"}); err != nil {
+	// A receipt entry that is not a content address is damage (internal), not data. A
+	// fresh head is used here (not validHash): receipts are first-write-wins, so a receipt
+	// already recorded for validHash cannot be swapped for different content — the
+	// corrupt-entry fixture is instead the first (and only) write for this head.
+	garbageHead := hashOf('d')
+	if err := receipts.Put(garbageHead, []string{"garbage-entry"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.GetConsumed(context.Background(), validHash, "", 10); err == nil || errors.Is(err, auditor.ErrNotFound) || errors.Is(err, auditor.ErrInvalidArgument) {
+	if _, _, err := svc.GetConsumed(context.Background(), garbageHead, "", 10); err == nil || errors.Is(err, auditor.ErrNotFound) || errors.Is(err, auditor.ErrInvalidArgument) {
 		t.Fatalf("corrupt receipt: err=%v, want a distinct damage error", err)
 	}
 }

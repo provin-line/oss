@@ -6,12 +6,17 @@
 // content-address hex):
 //
 //	verdicts/<hex>.json   — {"v":1,...} around an auditor.AuditRecord
-//	receipts/<hex>.json   — {"v":1,"consumed":[...]}
+//	receipts/<hex>.json   — {"v":1,"consumed":[...]}, first-write-wins (see ReceiptStore.Put)
 //	auditqueue/<hex>.json — {"v":1,"seq":N,"attempts":N}
 //
 // Keys are validated as content addresses before path construction; writes
-// are atomic (temp + fsync + rename); each store carries a per-store mutex
-// (rename protects single files, not read-modify-write sequences).
+// are atomic (temp + fsync + rename); each store carries a per-store mutex.
+// Rename alone only protects single-file writes; ReceiptStore.Put is a
+// read-then-compare-then-write sequence (first-write-wins arbitration, see
+// below), and its mutex is what makes that sequence atomic. That guarantee
+// covers concurrent goroutines within ONE process only — these stores assume
+// single-process ownership of their directory (no cross-process file lock),
+// same as every other entry point here.
 //
 // Damage posture: verdicts and receipts are EVIDENCE — an unreadable or
 // invalid entry is an error distinct from the wrapped auditor.ErrNotFound,
@@ -33,6 +38,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -338,22 +344,40 @@ func NewReceiptStore(dir string) (*ReceiptStore, error) {
 	return &ReceiptStore{dir: dir}, nil
 }
 
-// Put records the consumed source content addresses for an emitted head.
+// Put canonicalizes consumedHashes and applies first-write-wins arbitration (see the
+// auditor.ReceiptStore.Put doc): the first successful Put for a head pins its canonical
+// consumed set; a canonically-identical later Put is a no-op; a canonically-different one is
+// auditor.ErrReceiptConflict. This is a read-then-compare-then-write sequence — s.mu (held for
+// the whole call, not just the final write) is what makes it atomic against concurrent
+// goroutines in this process; see the package doc for the single-process caveat.
 func (s *ReceiptStore) Put(headHash string, consumedHashes []string) error {
 	path, err := entryFile(s.dir, headHash)
 	if err != nil {
 		return err
 	}
-	cp := make([]string, len(consumedHashes))
-	copy(cp, consumedHashes)
-	// A local storage envelope, never hashed or signed over — not a signing
-	// scope (canonicalizer-hygiene-exempt).
-	raw, err := json.Marshal(receiptEnvelope{V: 1, Consumed: cp})
+	canonical, err := auditor.CanonicalizeConsumedSet(consumedHashes)
 	if err != nil {
-		return fmt.Errorf("auditor/filestore: marshal receipt %s: %w", headHash, err)
+		return fmt.Errorf("auditor/filestore: put receipt %s: %w", headHash, err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	existing, err := s.readConsumed(path, headHash)
+	switch {
+	case errors.Is(err, auditor.ErrNotFound):
+		// no recorded entry — this is the first write for this head
+	case err != nil:
+		return fmt.Errorf("auditor/filestore: put receipt %s: %w", headHash, err)
+	case reflect.DeepEqual(existing, canonical):
+		return nil // canonically-identical replay — idempotent
+	default:
+		return fmt.Errorf("auditor/filestore: %w: head %q", auditor.ErrReceiptConflict, headHash)
+	}
+	// A local storage envelope, never hashed or signed over — not a signing
+	// scope (canonicalizer-hygiene-exempt).
+	raw, err := json.Marshal(receiptEnvelope{V: 1, Consumed: canonical})
+	if err != nil {
+		return fmt.Errorf("auditor/filestore: marshal receipt %s: %w", headHash, err)
+	}
 	if err := writeAtomic(path, raw); err != nil {
 		return fmt.Errorf("auditor/filestore: write receipt %s: %w", headHash, err)
 	}
@@ -369,8 +393,16 @@ func (s *ReceiptStore) Get(headHash string) ([]string, error) {
 		return nil, err
 	}
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.readConsumed(path, headHash)
+}
+
+// readConsumed reads and validates the receipt entry at path, or returns a wrapped
+// auditor.ErrNotFound if none exists. Get and Put (the latter's conflict check) share this so
+// the absent-vs-damaged classification cannot drift between the read path and the
+// first-write-wins arbitration. Callers hold s.mu (Get: RLock, Put: Lock).
+func (s *ReceiptStore) readConsumed(path, headHash string) ([]string, error) {
 	raw, err := os.ReadFile(path)
-	s.mu.RUnlock()
 	if errors.Is(err, fs.ErrNotExist) {
 		// A vanished store root is storage damage, not "no receipt" — reading
 		// it as absence would silently downgrade aggregate audits to
