@@ -28,6 +28,13 @@ config declares any loop. A pipeline runtime that pairs with `cmd/network`
 is upcoming work; until it lands, `cmd/standalone` is the only way to run
 pipeline loops.
 
+Evidence writes land as ordinary wire RPCs (`AuditService.RegisterEvidence`,
+`PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`), so that
+future pipeline runtime reaches them the same way any other client does — no
+in-process bridge back into the control-plane binary is needed for these. The
+relationship-evidence log (`tlog`) and the archival sink's reject log stay
+in-process, pending their own design gate.
+
 ## Load-bearing configuration
 
 ### 1. `resolver-base-url` + `dev.allow-loopback` (single-host deployments)

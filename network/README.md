@@ -8,9 +8,11 @@ The dplaax network services, exposed over ConnectRPC (h2c) by the node binary
 | DIDService | `did:dplaax` lifecycle: owner registration, pipeline/process issuance, resolution |
 | SignerService | KMS-model Ed25519 signing — private keys never leave this process |
 | SchemaService | Immutable, append-only schema registry |
-| ChainService | Operator-facing pipeline chain management (subscribe / allow-list) |
+| ChainService | Operator-facing pipeline chain management (subscribe / allow-list / publisher emit-health reporting) |
 | ChainPeerService | Internet-facing cross-organization peer protocol (L2 wire-signed) |
 | VCResolverService | Provenance-chain VC storage and async cross-registry resolution |
+| AuditService | Async chain-auditor read surface (verdicts, consumed-source receipts) plus evidence registration |
+| PayloadStoreService | Write side of by-reference payload delivery — deposits payload bytes for later resolution |
 
 Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`), `GET /healthz`
 (liveness, static), and `GET /readyz` (readiness — dependency-aware: evidence
@@ -19,12 +21,15 @@ store, broker connection when a data plane runs, external PDP reachability).
 ## State model: DB-free
 
 All durable state is plain files under a configurable data dir: YAML for
-control-plane records (DID documents, keys, schemas, subscriptions, allow-lists)
-and a file-backed evidence dir for the VC store (credentials, resolution pool,
-audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`). Nonce store
-and infra-operator state are in-memory (PoC posture — restart implications are
-documented per service). Storage sits behind a seam; swapping files for
-PostgreSQL is a Hub-side replacement, not a fork.
+control-plane records (DID documents, keys, schemas, subscriptions, allow-lists),
+a file-backed evidence dir for the VC store (credentials, resolution pool,
+audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`), and a
+file-backed store for retained by-reference payload bytes
+(`payloadresolver/filestore`). Nonce store, infra-operator state, and
+per-publisher emit-health reports (`chainmanager/emithealth`, TTL-based) are
+in-memory (PoC posture — restart implications are documented per service).
+Storage sits behind a seam; swapping files for PostgreSQL is a Hub-side
+replacement, not a fork.
 
 For the VC store that seam is `vcresolver.VariantBackend`, DELIBERATELY below
 the semantics: a backend places named bytes and reports whether a name was
@@ -54,6 +59,10 @@ posture.
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
   epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no
   auth-off mode for L2.** L2 is independent of the PDP — it needs no policy-verifier.
+- **Evidence writes** (`RegisterEvidence` / `RetainPayload` / `ReportEmitHealth`):
+  L1 + in-band wireauth — the PDP gate (the L1 policy option) decides whether the
+  caller may write at all, and the request additionally carries a wireauth
+  `AuthProof` the handler verifies in-band; the proven DID is authoritative.
 
 ### PDP backends & the locus of authentication
 

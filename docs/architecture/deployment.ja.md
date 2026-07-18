@@ -15,6 +15,8 @@ provin ノードのデプロイ形態と、**load-bearing な**（間違える�
 
 現在バイナリは 2 つ存在する。`cmd/standalone` は上記の all-in-one 構成のまま利用でき続けるが、**非推奨**。`cmd/network` は同じコントロールプレーンのみを動かす — データプレーンは無く、設定に pipeline loop が 1 つでも宣言されていれば起動を拒否する。`cmd/network` と組む pipeline runtime は今後の作業で、それが実装されるまで `cmd/standalone` が pipeline loop を動かす唯一の手段。
 
+evidence の書き込みは通常の wire RPC として実装されている（`AuditService.RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`）。したがって将来の pipeline runtime は、他の client と同じ経路でこれらに到達でき、control-plane バイナリへの in-process ブリッジは不要である。relationship-evidence log（`tlog`）とアーカイバル sink の reject log は、それぞれの design gate を待つ間 in-process のまま残る。
+
 ## Load-bearing な設定
 
 ### 1. `resolver-base-url` + `dev.allow-loopback`（単一ホスト構成）
