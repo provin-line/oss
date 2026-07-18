@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -22,6 +23,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -41,21 +43,85 @@ const (
 	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
 )
 
-// Handler adapts a Service to the generated AuditServiceHandler. It embeds the
-// Unimplemented stub (mirroring network/pkg/services/chainmanager's
-// OperatorHandler) so RegisterEvidence — added to the AuditService proto ahead
-// of its handler (D7 evidence write surface) — reports CodeUnimplemented until
-// a later change wires it, rather than failing to compile.
+// opRegisterEvidence is the wireauth op name for RegisterEvidence — it MUST
+// match the client's signed view (D7: every evidence-write RPC carries an
+// L2-style wireauth proof signed by the acting pipeline/process DID). Unlike
+// the peer surface's short op names, this one carries the full RPC identity:
+// RegisterEvidence is reached through the L1-authorized AuditService mux
+// (unlike ChainPeerService/PayloadService, which are mounted with no L1
+// interceptor at all), so its op name is namespaced to avoid ever colliding
+// with another L1-authorized surface's short op name.
+const opRegisterEvidence = "dplaax.audit.v1.AuditService/RegisterEvidence"
+
+// consumedJoinSeparator deterministically joins the canonical consumed-source
+// set into the single signed field the proof covers. A newline is unambiguous
+// because every member is a "sha256:<64 lowercase hex>" content address (see
+// vc.IsContentAddress), which can never contain one.
+const consumedJoinSeparator = "\n"
+
+// EvidenceRegistrar is the consumer-side view of the evidence-registration
+// service the handler depends on (defined here to keep the dependency
+// pointing inward). *auditor.EvidenceService satisfies it.
+type EvidenceRegistrar interface {
+	Register(ctx context.Context, headVariantAddr string, consumed []string) error
+}
+
+// Verifier is the wireauth verification seam (an interface so a spy can be
+// injected in tests). *wireauth.Verifier satisfies it.
+type Verifier interface {
+	Verify(ctx context.Context, op string, fields map[string]any, proof wireauth.Proof, authorize wireauth.Authorizer) error
+}
+
+// Handler adapts a Service and an EvidenceRegistrar to the generated
+// AuditServiceHandler. Every method is implemented explicitly (no
+// Unimplemented embedding): RegisterEvidence verifies the caller's L2
+// wireauth proof in-band (mirrors payloadresolver/handler exactly) before
+// delegating to the evidence-registration service.
 type Handler struct {
-	auditpbconnect.UnimplementedAuditServiceHandler
-	svc Service
+	svc      Service
+	evidence EvidenceRegistrar
+	v        Verifier
 }
 
 var _ auditpbconnect.AuditServiceHandler = (*Handler)(nil)
 
-// New returns a Handler backed by svc.
-func New(svc Service) *Handler {
-	return &Handler{svc: svc}
+// New returns a Handler backed by svc (the read service), evidence (the
+// evidence-registration service RegisterEvidence delegates to), and v (the
+// wireauth verifier RegisterEvidence checks the caller's proof against).
+func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
+	return &Handler{svc: svc, evidence: evidence, v: v}
+}
+
+// RegisterEvidence verifies the L2 wireauth proof over the head variant
+// address plus the CANONICALIZED consumed-source set (sorted, deduplicated —
+// canonicalized BEFORE the signed view is built, so the proof covers the
+// canonical set: a caller resubmitting the same set in a different order
+// signs and verifies identically), then delegates the atomic
+// receipt+enqueue to the evidence-registration service. Canonicalization runs
+// before Verify — a malformed consumed set is a structural request defect,
+// same posture as the issued_at codec, checked before any signature work.
+func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[auditpb.RegisterEvidenceRequest]) (*connect.Response[auditpb.RegisterEvidenceResponse], error) {
+	proof, err := decodeProof(req.Msg.GetAuthProof())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	canonical, err := auditor.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	fields := map[string]any{
+		"head_variant_address":      req.Msg.GetHeadVariantAddress(),
+		"consumed_source_addresses": strings.Join(canonical, consumedJoinSeparator),
+	}
+	// No separate actor field: the proven signer_did is authoritative for who
+	// registered the evidence (the querying actor IS the signer, nil authorizer).
+	if err := h.v.Verify(ctx, opRegisterEvidence, fields, proof, nil); err != nil {
+		return nil, mapError(err)
+	}
+	if err := h.evidence.Register(ctx, req.Msg.GetHeadVariantAddress(), canonical); err != nil {
+		return nil, mapError(err)
+	}
+	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil
 }
 
 func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[auditpb.GetAuditStatusRequest]) (*connect.Response[auditpb.GetAuditStatusResponse], error) {
@@ -187,16 +253,47 @@ func parseBound(raw, field string) (time.Time, error) {
 	return ts, nil
 }
 
-// mapError translates the read service's sentinel errors to Connect codes. Unrecognized
-// errors become CodeInternal.
+// mapError translates the read service's, the evidence service's, and
+// RegisterEvidence's wireauth sentinel errors to Connect codes (errors.Is,
+// never string matching). Unrecognized errors become CodeInternal.
 func mapError(err error) error {
 	switch {
+	// Malformed request / proof shape (RegisterEvidence's codec + wireauth).
+	case errors.Is(err, errMalformedIssuedAt),
+		errors.Is(err, wireauth.ErrMissingProof),
+		errors.Is(err, wireauth.ErrMalformedProof),
+		errors.Is(err, wireauth.ErrInvalidView):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	// Inbound caller hung up mid-verification: CodeCanceled, not a server-side
+	// "unavailable". Precedes ErrResolverUnavailable, which the cancellation
+	// also wraps — order decides the mapping.
+	case errors.Is(err, context.Canceled):
+		return connect.NewError(connect.CodeCanceled, err)
+	// Transient resolver condition (timeout/capacity): retryable, NOT an
+	// identity rejection. Must precede the Unauthenticated cases — the error
+	// also wraps ErrResolverUnavailable, and order decides the mapping.
+	case errors.Is(err, wireauth.ErrResolverUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
+	// Failed to prove identity (RegisterEvidence's wireauth verification).
+	case errors.Is(err, wireauth.ErrExpired),
+		errors.Is(err, wireauth.ErrFromFuture),
+		errors.Is(err, wireauth.ErrBeforeEpoch),
+		errors.Is(err, wireauth.ErrKeyResolution),
+		errors.Is(err, wireauth.ErrSignatureInvalid),
+		errors.Is(err, wireauth.ErrReplay):
+		return connect.NewError(connect.CodeUnauthenticated, err)
+	// The head variant address is not (yet) admitted in the local VC store —
+	// the arbitrary-hash amplification guard (D1).
+	case errors.Is(err, auditor.ErrHeadNotAdmitted):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	// A recorded receipt already pins a DIFFERENT canonical consumed set for
+	// this head — the set never silently changes.
+	case errors.Is(err, auditor.ErrReceiptConflict):
+		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, auditor.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, auditor.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, context.Canceled):
-		return connect.NewError(connect.CodeCanceled, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	default:

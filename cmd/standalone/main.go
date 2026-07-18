@@ -229,7 +229,7 @@ func main() {
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
 	}
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
 		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, mountIngest, readiness, byRefGate.Healthy)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)

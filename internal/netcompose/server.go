@@ -1,6 +1,8 @@
 package netcompose
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -185,7 +187,12 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 	return ""
 }
 
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptReader, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
+// auditReceipts is typed as the full auditor.ReceiptStore (not just
+// ReceiptReader): BuildHandler reads it for the StatusService (GetAuditStatus/
+// GetConsumedSources) AND writes it for the EvidenceService (RegisterEvidence)
+// — one shared instance backs both directions, same as the runner's own share
+// of it (main.go's "shared between the ingress path and the audit runner").
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -239,6 +246,23 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 
+	// RegisterEvidence's admission gate (D1): the head variant address must
+	// already be admitted in the local VC store (StoreVC first), else the
+	// handler reports FailedPrecondition — the arbitrary-hash amplification
+	// guard. ResolveVC is the narrowest local-store read that answers
+	// presence for a single content address; the credential itself is
+	// discarded, only the miss/hit (and any non-miss error) matters here.
+	auditAdmitted := func(ctx context.Context, variantAddr string) (bool, error) {
+		if _, err := vcSvc.ResolveVC(ctx, variantAddr); err != nil {
+			if errors.Is(err, vcresolver.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	auditEvidence := auditor.NewEvidenceService(auditReceipts, auditQueue, auditAdmitted)
+
 	// Per-RPC inbound read caps: connect reads and DECOMPRESSES the request
 	// body before the auth interceptor runs, and readMaxBytes=0 (the default)
 	// is unlimited — so an unauthenticated compressed body could inflate to
@@ -260,7 +284,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		// Read-mostly / small-request control surfaces → proof class.
-		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts)), authz, proofCap)),
+		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), authz, proofCap)),
 		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz, proofCap)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc), chainhandler.WithAllowListReader(chainSvc)), authz, docCap)),
 	} {

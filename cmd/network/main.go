@@ -193,7 +193,7 @@ func main() {
 	// mountIngest and byRefHealthy are both nil: no data plane means no
 	// push-ingest routes to mount and no by-reference producer health to gate
 	// advertisement on.
-	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
+	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
 		schemaSvc, payloadSvc, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, nil, readiness, nil)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
