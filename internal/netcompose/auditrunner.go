@@ -8,9 +8,9 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 )
 
 // localChainResolver adapts the node's local *vcresolver.Service to chainwalk's

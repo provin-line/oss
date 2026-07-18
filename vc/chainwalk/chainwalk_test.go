@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/pipeline/provenance"
-	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 )
 
 // compile-time: *ChainVerifier must implement provenance.ChainVerifier.

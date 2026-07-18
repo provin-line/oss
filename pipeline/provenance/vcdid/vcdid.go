@@ -13,7 +13,7 @@
 //
 // Verification has no vcdid type: provenance.Verifier is satisfied by
 // *vc.Verifier directly (matching Verify signatures), and the chain-walking
-// provenance.ChainVerifier by pipeline/provenance/chainwalk over a vc.Verifier
+// provenance.ChainVerifier by vc/chainwalk over a vc.Verifier
 // ChainCore — wrapping either here would add indirection without responsibility.
 package vcdid
 
