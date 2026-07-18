@@ -37,7 +37,7 @@ func TestNativeTLS_RouteIntegration(t *testing.T) {
 	// The full mux, as production composes it: BuildHandler wrapped by the
 	// metrics gate (enabled here — the ledger names an enabled /metrics).
 	inner, ownerSigner, ownerPub := assembledHandler(t)
-	handler, err := MaybeMountMetrics(true, inner, nil, nil)
+	handler, err := MaybeMountMetrics("github.com/provin-line/oss/internal/netcompose/test", true, inner, nil, nil)
 	if err != nil {
 		t.Fatalf("MaybeMountMetrics: %v", err)
 	}

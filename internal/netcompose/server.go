@@ -150,7 +150,7 @@ func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry s
 			return base, nil
 		}
 		if closeUnmapped {
-			return "", fmt.Errorf("standalone: registry %q is not in the configured registry map; open fallback is disabled while allow-private-networks is set (an unmapped registry must not reach private space)", registry)
+			return "", fmt.Errorf("registry %q is not in the configured registry map; open fallback is disabled while allow-private-networks is set (an unmapped registry must not reach private space)", registry)
 		}
 		return didresolver.DefaultBaseURL(registry)
 	}

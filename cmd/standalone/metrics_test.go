@@ -83,7 +83,7 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 	verdicts := func() map[string]uint64 {
 		return map[string]uint64{"verified": 5, "failed": 0, "indeterminate": 1}
 	}
-	h, err := buildMetricsHandler(lms, verdicts)
+	h, err := buildMetricsHandler(meterScope, lms, verdicts)
 	if err != nil {
 		t.Fatalf("buildMetricsHandler: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 // Without a verdict source (no audit runner configured) the audit family is
 // absent entirely — family presence is the capability contract.
 func TestMetricsHandler_NoAuditRunnerNoAuditFamily(t *testing.T) {
-	h, err := buildMetricsHandler([]loopMetrics{
+	h, err := buildMetricsHandler(meterScope, []loopMetrics{
 		{Name: "src-a", Role: "source", Emits: fakeEmits{}},
 	}, nil)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 	inner := http.NewServeMux() // a real mux: unknown routes 404
 	inner.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	disabled, err := maybeMountMetrics(false, inner, nil, nil)
+	disabled, err := maybeMountMetrics(meterScope, false, inner, nil, nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics(disabled): %v", err)
 	}
@@ -160,7 +160,7 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 		t.Errorf("disabled: GET /metrics = %d, want 404", rec.Code)
 	}
 
-	enabled, err := maybeMountMetrics(true, inner, nil, nil)
+	enabled, err := maybeMountMetrics(meterScope, true, inner, nil, nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics(enabled): %v", err)
 	}
@@ -189,7 +189,7 @@ func TestMetrics_RealEmitReachesExposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDataPlane: %v", err)
 	}
-	h, err := maybeMountMetrics(true, http.NotFoundHandler(), dp.metrics, nil)
+	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), dp.metrics, nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestWithMetrics_RoutesMetricsAndFallsThrough(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot) // distinguishable inner marker
 	})
-	mh, err := buildMetricsHandler(nil, nil)
+	mh, err := buildMetricsHandler(meterScope, nil, nil)
 	if err != nil {
 		t.Fatalf("buildMetricsHandler: %v", err)
 	}

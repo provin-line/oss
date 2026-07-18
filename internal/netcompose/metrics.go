@@ -6,7 +6,7 @@ package netcompose
 // verifycount snapshots, auditor.Runner.VerdictCounts); this composition-root
 // bridge reads them at collect time through ObservableCounters — the OTel
 // async-instrument idiom for externally-maintained monotonic counts. A deps
-// guard test pins the boundary (deps_guard_test.go).
+// guard test pins the boundary (metrics_deps_guard_test.go).
 //
 // Family-presence contract: an instrument is observed only for loops holding
 // the capability (emit for producers, stripped for dual-emitters, verify for
@@ -73,18 +73,21 @@ type LoopMetrics struct {
 
 // BuildMetricsHandler assembles the OTel meter provider over a DEDICATED
 // Prometheus registry (no default-registry collectors leak in) and registers
-// the four stable counter families over the polled sources. verdicts is the
-// audit runner's VerdictCounts, or nil when the node runs no audit runner
-// (the family is then absent). The returned handler serves the exposition;
-// the caller mounts it (see WithMetrics).
-func BuildMetricsHandler(loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
+// the four stable counter families over the polled sources. scope is the
+// OTel instrumentation-scope name (the calling binary's own import path, e.g.
+// "github.com/provin-line/oss/cmd/network") — every node binary composing
+// this bridge self-identifies rather than borrowing another binary's name.
+// verdicts is the audit runner's VerdictCounts, or nil when the node runs no
+// audit runner (the family is then absent). The returned handler serves the
+// exposition; the caller mounts it (see WithMetrics).
+func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
 	registry := prometheus.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
 		return nil, fmt.Errorf("standalone: metrics exporter: %w", err)
 	}
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)).
-		Meter("github.com/provin-line/oss/cmd/standalone")
+		Meter(scope)
 
 	emitAttempts, err := meter.Int64ObservableCounter("provin.pipeline.emit.attempts",
 		metric.WithDescription("Emit outcomes per producing loop, keyed on the Emit call's return (success = primary form delivered)."))
@@ -156,13 +159,15 @@ func WithMetrics(inner, metrics http.Handler) http.Handler {
 // MaybeMountMetrics is the config gate main serves through: with metrics
 // disabled (the default) it returns inner UNCHANGED — no /metrics route, no
 // exporter, no SDK — and with it enabled it composes the bridge over the
-// node's polled sources. verdicts may be nil (no audit runner). Extracted
-// from main so the default-off security ruling is testable.
-func MaybeMountMetrics(enabled bool, inner http.Handler, loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
+// node's polled sources. scope is passed straight through to
+// BuildMetricsHandler — the calling binary's own import path. verdicts may
+// be nil (no audit runner). Extracted from main so the default-off security
+// ruling is testable.
+func MaybeMountMetrics(scope string, enabled bool, inner http.Handler, loops []LoopMetrics, verdicts func() map[string]uint64) (http.Handler, error) {
 	if !enabled {
 		return inner, nil
 	}
-	metricsHandler, err := BuildMetricsHandler(loops, verdicts)
+	metricsHandler, err := BuildMetricsHandler(scope, loops, verdicts)
 	if err != nil {
 		return nil, err
 	}

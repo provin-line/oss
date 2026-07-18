@@ -10,6 +10,10 @@
 // loops declared in the pipeline config (slice-17b). Both run concurrently under one
 // signal-cancelled context; on SIGINT/SIGTERM the loops drain and the HTTP server
 // shuts down gracefully before the process exits.
+//
+// Deprecated: cmd/standalone is the all-in-one composition (control plane +
+// data plane in one process). It is being replaced by cmd/network (control
+// plane) and the pipeline runtime; see docs/architecture/deployment.md.
 package main
 
 import (
@@ -44,6 +48,14 @@ import (
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	"github.com/provin-line/oss/pipeline/contract"
 )
+
+// meterScope is this binary's OTel instrumentation-scope name — the metrics
+// bridge's self-identification (P1-2 follow-up: the scope used to be
+// hardcoded inside internal/netcompose/metrics.go; each binary now supplies
+// its own import path so cmd/network doesn't report under cmd/standalone's
+// name). Unchanged from the literal metrics.go used before, so this binary's
+// exposition is byte-identical to today's.
+const meterScope = "github.com/provin-line/oss/cmd/standalone"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -245,7 +257,7 @@ func main() {
 	if auditRunner != nil {
 		verdicts = auditRunner.VerdictCounts
 	}
-	handler, err = maybeMountMetrics(coreCfg.MetricsEnabled, handler, dp.metrics, verdicts)
+	handler, err = maybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, dp.metrics, verdicts)
 	if err != nil {
 		log.Fatalf("standalone: build metrics: %v", err)
 	}

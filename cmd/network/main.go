@@ -47,6 +47,12 @@ import (
 	"github.com/provin-line/oss/tlog"
 )
 
+// meterScope is this binary's OTel instrumentation-scope name — the metrics
+// bridge's self-identification (see cmd/standalone/main.go's meterScope for
+// the shared rationale). cmd/network reports under its own import path
+// rather than borrowing cmd/standalone's.
+const meterScope = "github.com/provin-line/oss/cmd/network"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -212,7 +218,7 @@ func main() {
 	if auditRunner != nil {
 		verdicts = auditRunner.VerdictCounts
 	}
-	handler, err = netcompose.MaybeMountMetrics(coreCfg.MetricsEnabled, handler, nil, verdicts)
+	handler, err = netcompose.MaybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, nil, verdicts)
 	if err != nil {
 		log.Fatalf("network: build metrics: %v", err)
 	}
