@@ -313,6 +313,12 @@ closure required, now met with executed evidence rather than review.
 
 ### Added
 
+- `cmd/network`: the control-plane-only node binary (the control-plane half
+  of `cmd/standalone`, extracted) — the same ConnectRPC services, DID
+  resolution, and health endpoints, with no pipeline loops; it refuses to
+  boot if its config declares any. `cmd/standalone` is now **deprecated**,
+  remaining as the all-in-one composition until `cmd/network` and a
+  pipeline-loop runtime replace it.
 - `eddsa-rdfc-2022` cryptosuite: `canon/urdna2015` (RDF Dataset
   Canonicalization wrapping `piprate/json-gold` v0.8.0) behind an offline
   context allowlist — context resolution never touches the network. The RDFC

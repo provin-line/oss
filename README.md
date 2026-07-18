@@ -35,7 +35,9 @@ api/protobuf/   protocol definitions (buf; namespace dplaax.*.v1)
 gen/            generated code (committed — buf not required to build)
 network/        registry & coordination services (control-plane library + handlers)
 pipeline/       Pipeline Process peer catalog + shared mechanics
-cmd/standalone/ network node binary (registry control plane + pipeline data plane)
+cmd/network/    network node binary (registry control plane only)
+cmd/standalone/ all-in-one node binary (control plane + data plane) — deprecated;
+                being replaced by cmd/network + the pipeline runtime
 cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did

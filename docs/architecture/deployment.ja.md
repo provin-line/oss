@@ -11,7 +11,9 @@ provin ノードのデプロイ形態と、**load-bearing な**（間違える�
 | 単一組織 production | レジストリごとに 1 つの `standalone` ノード、外部 PDP、オペレーター管理の NATS trust material | 本ページ |
 | 組織間フェデレーション | 組織ごとに 1 ノード。NATS account 境界が export/import seam を運び、peer 間は ChainPeerService（L2 wireauth） | [`network/README.ja.md`](../../network/README.ja.md) |
 
-ノードは単一バイナリ（`cmd/standalone`）: HTTP コントロールプレーン（ConnectRPC サービス + 公開 DID 解決 + health エンドポイント）とデータプレーン（pipeline loop）が 1 プロセス・1 つの signal-cancelled context で動く。
+`cmd/standalone` はノードを単一バイナリとして構成する: HTTP コントロールプレーン（ConnectRPC サービス + 公開 DID 解決 + health エンドポイント）とデータプレーン（pipeline loop）が 1 プロセス・1 つの signal-cancelled context で動く。
+
+現在バイナリは 2 つ存在する。`cmd/standalone` は上記の all-in-one 構成のまま利用でき続けるが、**非推奨**。`cmd/network` は同じコントロールプレーンのみを動かす — データプレーンは無く、設定に pipeline loop が 1 つでも宣言されていれば起動を拒否する。`cmd/network` と組む pipeline runtime は今後の作業で、それが実装されるまで `cmd/standalone` が pipeline loop を動かす唯一の手段。
 
 ## Load-bearing な設定
 
