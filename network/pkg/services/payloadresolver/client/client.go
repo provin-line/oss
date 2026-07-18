@@ -340,7 +340,14 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 			AuthProof:    ap,
 		}},
 	}); err != nil {
-		return "", fmt.Errorf("payloadresolver/client: send metadata frame: %w", err)
+		// Per connect's ClientStreamForClient.Send doc: if the server already
+		// returned an error (e.g. an L1 interceptor rejecting before the first
+		// frame is even consumed), Send wraps io.EOF — CloseAndReceive below
+		// unmarshals the real error. Any OTHER send error is a genuine
+		// transport failure. Mirrors the chunk-send handling below.
+		if !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("payloadresolver/client: send metadata frame: %w", err)
+		}
 	}
 
 	buf := make([]byte, r.retainChunkSize)

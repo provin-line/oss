@@ -1,14 +1,19 @@
 package client_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -236,5 +241,94 @@ func TestResolvePayload_CallerCancelIsNotBudget(t *testing.T) {
 	}
 	if errors.Is(err, client.ErrFetchStalled) || errors.Is(err, client.ErrFetchTimeout) {
 		t.Errorf("caller cancel misreported as a budget sentinel: %v", err)
+	}
+}
+
+// --- Retain: early-rejection error path ---
+
+// rejectBeforeReceive simulates an L1 authorization interceptor rejecting a
+// streaming RPC before the handler ever calls Receive — e.g. a policy check
+// failing on the caller's credential ahead of the first application frame
+// being read. It never invokes next, so the wrapped handler body (and its
+// Receive calls) never runs.
+type rejectBeforeReceive struct{ err error }
+
+func (rejectBeforeReceive) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc { return next }
+
+func (rejectBeforeReceive) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (r rejectBeforeReceive) WrapStreamingHandler(connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(context.Context, connect.StreamingHandlerConn) error {
+		return r.err
+	}
+}
+
+// newH2CServer mounts h over cleartext HTTP/2 (h2c) with an http2.Transport
+// client dialing it. A true HTTP/2 stream is required to reproduce the
+// early-rejection race deterministically: the server can RST the stream the
+// instant the interceptor rejects it, ahead of the client ever writing a
+// frame — over HTTP/1.1 the client's Send merely hands bytes to a local pipe
+// that the Transport drains independently of what the server has read, so the
+// metadata Send never observes the rejection.
+func newH2CServer(t *testing.T, h http.Handler) (*httptest.Server, *http.Client) {
+	t.Helper()
+	srv := httptest.NewServer(h2c.NewHandler(h, &http2.Server{}))
+	t.Cleanup(srv.Close)
+	c := &http.Client{
+		Transport: &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			},
+		},
+	}
+	return srv, c
+}
+
+// TestRetain_EarlyRejection_ReturnsRealCode proves Retain surfaces the
+// server's real Connect error even when the rejection happens before the
+// metadata frame is consumed — an L1 interceptor issuing PermissionDenied (or
+// Unauthenticated) ahead of the first Receive. The metadata Send call must
+// not treat the resulting io.EOF (the server having already returned) as a
+// fatal transport error and swallow the real code, mirroring the chunk-send
+// handling below it.
+func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
+	wantErr := connect.NewError(connect.CodePermissionDenied, errors.New("rejected before any frame is read"))
+	path, h := payloadpbconnect.NewPayloadStoreServiceHandler(
+		payloadpbconnect.UnimplementedPayloadStoreServiceHandler{},
+		connect.WithInterceptors(rejectBeforeReceive{err: wantErr}),
+	)
+	mux := http.NewServeMux()
+	mux.Handle(path, h)
+	httpSrv, httpc := newH2CServer(t, mux)
+
+	ks := ksfilestore.New(t.TempDir())
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL})
+
+	// The metadata frame's owner_did is padded well past the default HTTP/2
+	// stream flow-control window (64KiB): the interceptor never reads the
+	// body (no WINDOW_UPDATE is ever sent), so the metadata Send call is
+	// forced to block on flow control until the stream is torn down — making
+	// it observe the server's RST deterministically instead of racing it.
+	hugeOwnerDID := clientDID + "?pad=" + string(bytes.Repeat([]byte("x"), 4<<20))
+	_, err = c.Retain(context.Background(), bytes.NewReader(nil), hugeOwnerDID, 0)
+	if err == nil {
+		t.Fatal("early rejection: want error, got nil")
+	}
+	var connErr *connect.Error
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Retain error = %v (%T), want a *connect.Error carrying the real server code, not a swallowed transport error", err, err)
+	}
+	if connErr.Code() != connect.CodePermissionDenied {
+		t.Errorf("code = %v, want CodePermissionDenied", connErr.Code())
 	}
 }

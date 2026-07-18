@@ -50,15 +50,21 @@ const (
 	Confidence_CONFIDENCE_FAILED        Confidence = 1
 	Confidence_CONFIDENCE_INDETERMINATE Confidence = 2
 	Confidence_CONFIDENCE_VERIFIED      Confidence = 3
-	// CONFIDENCE_UNRESOLVABLE is recorded when chain assembly cannot resolve
-	// the head's chain after max retries — a RESOLUTION outcome (the audit
-	// runner gave up trying to obtain the evidence needed to verify at all).
-	// It is distinct from CONFIDENCE_INDETERMINATE, which is a VERIFICATION
-	// outcome (the evidence was obtained and evaluated, but the verdict itself
-	// could not be concluded). Only ever emitted for linear_chain (and its
-	// axes) — a head whose own chain never resolved has nothing for
-	// source_commitment to evaluate either, so that scope stays absent, same
-	// as any other unevaluated coverage.
+	// CONFIDENCE_UNRESOLVABLE is recorded ONLY when the HEAD's OWN content
+	// (not a predecessor's) could never be resolved from the local store
+	// after max retries — a RESOLUTION outcome (the audit runner gave up
+	// trying to obtain the evidence needed to verify the head at all). It is
+	// distinct from CONFIDENCE_INDETERMINATE, which is a VERIFICATION outcome
+	// (the evidence was obtained and evaluated, but the verdict itself could
+	// not be concluded) — this includes an unresolved PREDECESSOR that is
+	// never filled: exhausting retries on a missing ancestor deliberately
+	// finalizes INDETERMINATE, never UNRESOLVABLE, because the head's own
+	// content WAS obtained even though an ancestor's was not; the runner's
+	// abandonment is still visible there via GetAuditStatusResponse.abandoned.
+	// Only ever emitted for linear_chain (and its axes) — a head whose own
+	// content never resolved has nothing for source_commitment to evaluate
+	// either, so that scope stays absent, same as any other unevaluated
+	// coverage.
 	Confidence_CONFIDENCE_UNRESOLVABLE Confidence = 4
 )
 
