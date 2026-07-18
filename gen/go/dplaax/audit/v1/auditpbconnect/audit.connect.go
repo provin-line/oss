@@ -94,13 +94,26 @@ type AuditServiceClient interface {
 	// a just-emitted head has a receipt but no verdict until the audit
 	// runner's next tick.
 	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
-	// RegisterEvidence records the ADMITTED bytes' variant address and the source
-	// addresses it consumed, for a subsequent audit pass to pick up (slice-17i
-	// evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
-	// gate (this policy option) decides whether the caller may register evidence
-	// at all; the request additionally carries a wireauth AuthProof the handler
-	// verifies in-band, and the proven DID is authoritative for who is recorded
-	// as the registering party.
+	// RegisterEvidence records the ADMITTED bytes' variant identity and the
+	// source addresses it consumed, for a subsequent audit pass to pick up
+	// (slice-17i evidence write surface, D7). Trust model: L1 + in-band
+	// wireauth — the PDP gate (this policy option) decides whether the caller
+	// may register evidence at all; the request additionally carries a
+	// wireauth AuthProof the handler verifies in-band, and the proven DID is
+	// authoritative for who is recorded as the registering party.
+	//
+	// Admission and persistence key on DIFFERENT identities of the same head
+	// (P1-A): the registry resolves the variant to prove the exact admitted
+	// bytes, then keys the audit by the head's body address. The variant
+	// proves WHICH SIGNED FORM the registering caller is vouching for actually
+	// exists on this node (see RegisterEvidenceRequest.head_variant_address);
+	// the receipt and audit queue are keyed by the body address that variant
+	// resolves to, matching every other reader of recorded evidence
+	// (GetAuditStatus, GetConsumedSources — both take a body address). The
+	// variant itself is not persisted alongside the verdict — a known,
+	// accepted gap (the verdict/variant partition trap): a verdict names the
+	// body it audited, not which of possibly several valid variants proved
+	// admission for a given registration.
 	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
 }
 
@@ -204,13 +217,26 @@ type AuditServiceHandler interface {
 	// a just-emitted head has a receipt but no verdict until the audit
 	// runner's next tick.
 	GetConsumedSources(context.Context, *connect.Request[v1.GetConsumedSourcesRequest]) (*connect.Response[v1.GetConsumedSourcesResponse], error)
-	// RegisterEvidence records the ADMITTED bytes' variant address and the source
-	// addresses it consumed, for a subsequent audit pass to pick up (slice-17i
-	// evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
-	// gate (this policy option) decides whether the caller may register evidence
-	// at all; the request additionally carries a wireauth AuthProof the handler
-	// verifies in-band, and the proven DID is authoritative for who is recorded
-	// as the registering party.
+	// RegisterEvidence records the ADMITTED bytes' variant identity and the
+	// source addresses it consumed, for a subsequent audit pass to pick up
+	// (slice-17i evidence write surface, D7). Trust model: L1 + in-band
+	// wireauth — the PDP gate (this policy option) decides whether the caller
+	// may register evidence at all; the request additionally carries a
+	// wireauth AuthProof the handler verifies in-band, and the proven DID is
+	// authoritative for who is recorded as the registering party.
+	//
+	// Admission and persistence key on DIFFERENT identities of the same head
+	// (P1-A): the registry resolves the variant to prove the exact admitted
+	// bytes, then keys the audit by the head's body address. The variant
+	// proves WHICH SIGNED FORM the registering caller is vouching for actually
+	// exists on this node (see RegisterEvidenceRequest.head_variant_address);
+	// the receipt and audit queue are keyed by the body address that variant
+	// resolves to, matching every other reader of recorded evidence
+	// (GetAuditStatus, GetConsumedSources — both take a body address). The
+	// variant itself is not persisted alongside the verdict — a known,
+	// accepted gap (the verdict/variant partition trap): a verdict names the
+	// body it audited, not which of possibly several valid variants proved
+	// admission for a given registration.
 	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
 }
 

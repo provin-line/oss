@@ -63,13 +63,26 @@ service AuditService {
   rpc GetConsumedSources(GetConsumedSourcesRequest) returns (GetConsumedSourcesResponse) {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
   }
-  // RegisterEvidence records the ADMITTED bytes' variant address and the source
-  // addresses it consumed, for a subsequent audit pass to pick up (slice-17i
-  // evidence write surface, D7). Trust model: L1 + in-band wireauth — the PDP
-  // gate (this policy option) decides whether the caller may register evidence
-  // at all; the request additionally carries a wireauth AuthProof the handler
-  // verifies in-band, and the proven DID is authoritative for who is recorded
-  // as the registering party.
+  // RegisterEvidence records the ADMITTED bytes' variant identity and the
+  // source addresses it consumed, for a subsequent audit pass to pick up
+  // (slice-17i evidence write surface, D7). Trust model: L1 + in-band
+  // wireauth — the PDP gate (this policy option) decides whether the caller
+  // may register evidence at all; the request additionally carries a
+  // wireauth AuthProof the handler verifies in-band, and the proven DID is
+  // authoritative for who is recorded as the registering party.
+  //
+  // Admission and persistence key on DIFFERENT identities of the same head
+  // (P1-A): the registry resolves the variant to prove the exact admitted
+  // bytes, then keys the audit by the head's body address. The variant
+  // proves WHICH SIGNED FORM the registering caller is vouching for actually
+  // exists on this node (see RegisterEvidenceRequest.head_variant_address);
+  // the receipt and audit queue are keyed by the body address that variant
+  // resolves to, matching every other reader of recorded evidence
+  // (GetAuditStatus, GetConsumedSources — both take a body address). The
+  // variant itself is not persisted alongside the verdict — a known,
+  // accepted gap (the verdict/variant partition trap): a verdict names the
+  // body it audited, not which of possibly several valid variants proved
+  // admission for a given registration.
   rpc RegisterEvidence(RegisterEvidenceRequest) returns (RegisterEvidenceResponse) {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "register"};
   }
@@ -214,8 +227,17 @@ message GetConsumedSourcesResponse {
 }
 
 message RegisterEvidenceRequest {
-  // head_variant_address is the content address of the ADMITTED bytes' variant
-  // — the head this evidence registration is FOR.
+  // head_variant_address is the WIRE VARIANT id of the ADMITTED bytes this
+  // evidence registration is FOR — the exact string a StoreVC call already
+  // returned as its response's wire_variant_id (dplaax.vc.v1 StoreVCResponse
+  // / vc.PipelinePassCredential.WireVariantID: "wire:v1:jcs-rfc8785:
+  // sha256:<hex>" over the canonical FULL wire document, proof included),
+  // NOT a bare sha256:<hex> body content address — a registering caller
+  // never holds a body address to pair with it, only what StoreVC handed
+  // back. The registry resolves this to prove those exact bytes are
+  // admitted, then records the evidence keyed by the head's BODY address
+  // (see RegisterEvidence's own doc for why admission and persistence key
+  // on different identities of the same head).
   string head_variant_address = 1;
   // consumed_source_addresses are the content addresses of the source
   // credentials the emitting boundary consumed to produce the head above

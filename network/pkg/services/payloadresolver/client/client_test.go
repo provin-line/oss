@@ -29,13 +29,16 @@ const clientDID = "did:dplaax:poc.dplaax.dev:org:consumer"
 // fakeServer is a minimal PayloadService that streams a fixed frame list (or a
 // fixed error). It ignores the AuthProof — this test drives the CLIENT's
 // streaming assembly and caps, not the serving-side auth (covered by the handler
-// e2e).
+// e2e). gotAuth captures whatever Authorization header the request arrived
+// with (empty if none), for the anti-leak test below.
 type fakeServer struct {
-	frames [][]byte
-	err    error
+	frames  [][]byte
+	err     error
+	gotAuth string
 }
 
-func (f *fakeServer) ResolvePayload(_ context.Context, _ *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
+func (f *fakeServer) ResolvePayload(_ context.Context, req *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
+	f.gotAuth = req.Header().Get("Authorization")
 	if f.err != nil {
 		return f.err
 	}
@@ -141,6 +144,30 @@ func TestResolvePayload_NotFound(t *testing.T) {
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("err = %v, want client.ErrNotFound", err)
+	}
+}
+
+// TestResolvePayload_NeverPresentsBearer is the P1-C anti-leak proof: even
+// when Config.Bearer is set (for Retain, whose target is THIS node's own
+// fixed StoreEndpoint), ResolvePayload — which dials whichever endpoint a
+// caller passes, an arbitrary and potentially untrusted publisher — must
+// never present it. bearerInterceptor is attached ONLY to retainClient, a
+// separate client instance built once in New and bound to StoreEndpoint;
+// ResolvePayload builds its own per-call client from the bare HTTPClient and
+// never touches retainClient, so this is a structural guarantee, not
+// incidental — this test is the empirical check for it (a regression here
+// would leak this node's L1 credential to every publisher ResolvePayload
+// ever fetches from).
+func TestResolvePayload_NeverPresentsBearer(t *testing.T) {
+	frames := [][]byte{[]byte("data")}
+	srv := &fakeServer{frames: frames}
+	c, url := newClientCfg(t, srv, client.Config{Bearer: "leak-if-broken", StoreEndpoint: "http://unused.invalid"})
+	if _, err := c.ResolvePayload(context.Background(), url, "sha256:"+
+		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"); err != nil {
+		t.Fatalf("ResolvePayload: %v", err)
+	}
+	if srv.gotAuth != "" {
+		t.Errorf("ResolvePayload leaked the Retain bearer: Authorization = %q, want empty", srv.gotAuth)
 	}
 }
 

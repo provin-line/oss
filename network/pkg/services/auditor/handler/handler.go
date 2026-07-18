@@ -44,9 +44,12 @@ const (
 
 // EvidenceRegistrar is the consumer-side view of the evidence-registration
 // service the handler depends on (defined here to keep the dependency
-// pointing inward). *auditor.EvidenceService satisfies it.
+// pointing inward). *auditor.EvidenceService satisfies it. headVariantID is
+// the wire variant id RegisterEvidenceRequest.head_variant_address carries
+// (P1-A) — auditor.EvidenceService.Register resolves it to a body address
+// internally; this handler never sees that address.
 type EvidenceRegistrar interface {
-	Register(ctx context.Context, headVariantAddr string, consumed []string) error
+	Register(ctx context.Context, headVariantID string, consumed []string) error
 }
 
 // Verifier is the wireauth verification seam (an interface so a spy can be
@@ -75,8 +78,8 @@ func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
 	return &Handler{svc: svc, evidence: evidence, v: v}
 }
 
-// RegisterEvidence verifies the L2 wireauth proof over the head variant
-// address plus the CANONICALIZED consumed-source set (sorted, deduplicated —
+// RegisterEvidence verifies the L2 wireauth proof over the head variant id
+// plus the CANONICALIZED consumed-source set (sorted, deduplicated —
 // canonicalized BEFORE the signed view is built, so the proof covers the
 // canonical set: a caller resubmitting the same set in a different order
 // signs and verifies identically), then delegates the atomic

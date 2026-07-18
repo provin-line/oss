@@ -35,6 +35,15 @@ const registerEvidenceJoinSeparator = "\n"
 // as-submitted order, so a caller resubmitting the same set in a different
 // order signs and verifies identically.
 //
+// headVariantAddr is documented (P1-A) as the WIRE VARIANT id StoreVC
+// returns, not a body content address — but the signed-view KEY stays
+// "head_variant_address": it names the proto field it signs 1:1
+// (RegisterEvidenceRequest.head_variant_address, unchanged by P1-A), and a
+// key that diverged from its field's name would read as covering a
+// DIFFERENT value than the one actually signed. Renaming the map key alone,
+// leaving the proto field name untouched, would trade one accuracy problem
+// for another.
+//
 // Both the handler (verifying) and the auditclient package (signing) call
 // this SAME builder — the one place that keeps the two derivations from
 // drifting (moved out of the handler in slice pr2-evidence-wire D1 Task 6).

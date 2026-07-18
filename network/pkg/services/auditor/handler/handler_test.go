@@ -15,6 +15,7 @@ import (
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/vc"
@@ -215,6 +216,55 @@ func TestGetAuditStatus_UnresolvableServed(t *testing.T) {
 	}
 	if msg.GetSourceCommitment() != nil {
 		t.Errorf("source_commitment = %+v, want nil (nothing to evaluate behind an unresolved head)", msg.GetSourceCommitment())
+	}
+}
+
+// TestGetAuditStatus_UnresolvableServed_FileBackedStore is
+// TestGetAuditStatus_UnresolvableServed's wire-level regression check (P1-B):
+// the test above drives the handler against fakeService, a plain in-memory
+// struct that never serializes anything, so it could never have caught the
+// verdictEnvelope bug where Unresolvable had no on-disk field and Put silently
+// dropped it. This test instead goes through the REAL
+// auditor.StatusService over a REAL filestore.StatusStore — Put, then a
+// point GetAuditStatus through the handler — so a regression of that exact
+// bug (Unresolvable surviving in memory but not on disk) fails here even
+// though runner_damage_test.go's equivalent coverage uses NewMemStatusStore
+// (auditor package, which cannot import filestore without a cycle — filestore
+// imports auditor — hence this lives in the handler package instead, the
+// first external package both auditor and auditor/filestore are visible to).
+func TestGetAuditStatus_UnresolvableServed_FileBackedStore(t *testing.T) {
+	store, err := filestore.NewStatusStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStatusStore: %v", err)
+	}
+	svc := auditor.NewStatusService(store, auditor.NewMemReceiptStore())
+
+	head := "sha256:" + strings.Repeat("7", 64)
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:      i,
+		Axes:         vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations:    []string{"audit abandoned: exhausted 2 attempts (head not resolvable)"},
+		Scope:        auditor.AuditScope{LinearChain: true},
+		AuditedAt:    time.Unix(0, 0).UTC(),
+		Abandoned:    true,
+		Unresolvable: true,
+	}
+	if err := store.Put(head, rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	h := handler.New(svc, nil, nil)
+	resp, err := h.GetAuditStatus(context.Background(), connect.NewRequest(&auditpb.GetAuditStatusRequest{HeadHash: head}))
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	lc := resp.Msg.GetLinearChain()
+	if lc.GetConfidence() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("linear_chain.confidence = %v, want UNRESOLVABLE (a file-backed store must preserve Unresolvable across the Put/Get boundary)", lc.GetConfidence())
+	}
+	if !resp.Msg.GetAbandoned() {
+		t.Error("abandoned = false, want true")
 	}
 }
 

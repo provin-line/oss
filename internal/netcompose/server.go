@@ -279,20 +279,28 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 
-	// RegisterEvidence's admission gate (D1): the head variant address must
-	// already be admitted in the local VC store (StoreVC first), else the
-	// handler reports FailedPrecondition — the arbitrary-hash amplification
-	// guard. ResolveVC is the narrowest local-store read that answers
-	// presence for a single content address; the credential itself is
-	// discarded, only the miss/hit (and any non-miss error) matters here.
-	auditAdmitted := func(ctx context.Context, variantAddr string) (bool, error) {
-		if _, err := vcSvc.ResolveVC(ctx, variantAddr); err != nil {
+	// RegisterEvidence's admission gate (D1): the head variant id (the exact
+	// wire bytes StoreVC admitted — audit.proto's head_variant_address
+	// documents the WIRE variant, not a body content address, since a
+	// registering caller only ever holds StoreVCResult.WireVariantID, never a
+	// body address to pair with it) must already be admitted in the local VC
+	// store (StoreVC first), else the handler reports FailedPrecondition —
+	// the arbitrary-hash amplification guard. ResolveVariantBody is the
+	// narrowest local-store read that both proves admission of those exact
+	// bytes AND resolves the body address EvidenceService.Register keys its
+	// receipt/queue writes by (parity with cmd/standalone's
+	// emissionRegistrar and the audit Runner, both already
+	// body-address-keyed) — see its doc for why ResolveVariant's own
+	// (bodyAddress, wireVariantID) signature cannot serve this directly.
+	auditAdmitted := func(ctx context.Context, headVariantID string) (string, bool, error) {
+		bodyAddress, err := vcSvc.ResolveVariantBody(ctx, headVariantID)
+		if err != nil {
 			if errors.Is(err, vcresolver.ErrNotFound) {
-				return false, nil
+				return "", false, nil
 			}
-			return false, err
+			return "", false, err
 		}
-		return true, nil
+		return bodyAddress, true, nil
 	}
 	auditEvidence := auditor.NewEvidenceService(auditReceipts, auditQueue, auditAdmitted)
 

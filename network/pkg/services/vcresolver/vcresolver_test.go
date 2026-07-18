@@ -515,6 +515,89 @@ func TestResolveVariantServesExactlyWhatWasAdmitted(t *testing.T) {
 	}
 }
 
+// TestResolveVariantBody_LocatesBodyFromVariantIDAlone proves the reverse
+// lookup RegisterEvidence's admission gate needs: given ONLY a wire variant
+// id (no body address alongside it — the shape a bare
+// head_variant_address wire field arrives in), the service still locates and
+// proves the body it belongs to, for a variant admitted either as the FIRST
+// write for its body or as a LATER additional proof over an already-known
+// body (the variantIndex.add path StoreVC drives on every put, not just the
+// first).
+func TestResolveVariantBody_LocatesBodyFromVariantIDAlone(t *testing.T) {
+	ctx := context.Background()
+	svc := newSvc()
+	a := signedWire(t, "zA")
+	resA, err := svc.StoreVC(ctx, a, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.ResolveVariantBody(ctx, resA.WireVariantID); err != nil || got != resA.BodyAddress {
+		t.Fatalf("ResolveVariantBody(first variant) = %q (err %v), want %q", got, err, resA.BodyAddress)
+	}
+
+	// A second proof over the SAME body — the index must resolve it too, not
+	// just whichever variant happened to be first.
+	b := signedWire(t, "zB")
+	resB, err := svc.StoreVC(ctx, b, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resA.BodyAddress != resB.BodyAddress {
+		t.Fatalf("two proofs over one body landed on different bodies")
+	}
+	if got, err := svc.ResolveVariantBody(ctx, resB.WireVariantID); err != nil || got != resB.BodyAddress {
+		t.Fatalf("ResolveVariantBody(second variant) = %q (err %v), want %q", got, err, resB.BodyAddress)
+	}
+}
+
+// TestResolveVariantBody_BuildsLazilyFromExistingStore proves the index is
+// not solely fed by StoreVC's own put path: a variant already resident in
+// the store from BEFORE this Service instance's first ResolveVariantBody
+// call (mirroring successorIndex's own "built lazily on first use" — a
+// process restart, or any caller other than StoreVC populating the same
+// backend) is still found, via the lazy full-store scan.
+func TestResolveVariantBody_BuildsLazilyFromExistingStore(t *testing.T) {
+	ctx := context.Background()
+	backend := memstore.NewBackend()
+	store := vcresolver.NewVariantStore(backend)
+	pre := signedWire(t, "zPre")
+	var cred vc.PipelinePassCredential
+	if err := cred.UnmarshalJSON(pre); err != nil {
+		t.Fatal(err)
+	}
+	bodyAddress, wireVariantID, err := store.PutVariant(&cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A FRESH Service over the SAME backend: its variantIndex has never seen
+	// this put (StoreVC never ran through this Service instance for it).
+	svc := vcresolver.New(store, memstore.NewPool())
+	if got, err := svc.ResolveVariantBody(ctx, wireVariantID); err != nil || got != bodyAddress {
+		t.Fatalf("ResolveVariantBody(pre-existing variant) = %q (err %v), want %q", got, err, bodyAddress)
+	}
+}
+
+// TestResolveVariantBody_Errors proves the two failure modes: a malformed id
+// is InvalidArgument (never reaches the store), and a well-formed id this
+// node never admitted is ErrNotFound.
+func TestResolveVariantBody_Errors(t *testing.T) {
+	ctx := context.Background()
+	svc := newSvc()
+
+	if _, err := svc.ResolveVariantBody(ctx, "sha256:"+strings.Repeat("a", 64)); !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("body-address-shaped input: err = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := svc.ResolveVariantBody(ctx, "not-a-variant-id"); !errors.Is(err, vcresolver.ErrInvalidArgument) {
+		t.Errorf("garbage input: err = %v, want ErrInvalidArgument", err)
+	}
+
+	unknown := vc.WireVariantIDFromHex(strings.Repeat("b", 64))
+	if _, err := svc.ResolveVariantBody(ctx, unknown); !errors.Is(err, vcresolver.ErrNotFound) {
+		t.Errorf("well-formed but never-admitted variant: err = %v, want ErrNotFound", err)
+	}
+}
+
 // TestListVariantsPagesAndReportsMore: the service hands back a plain cursor
 // and a more flag; opaque tokens are the handler's business (matching
 // ListSuccessors).

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -21,6 +22,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
@@ -395,5 +397,81 @@ func TestRetainPayload_PerChunkReadCap_ResourceExhausted_AbortObserved(t *testin
 	}
 	if h.store.last == nil || h.store.last.aborts != 1 {
 		t.Errorf("writer must be Aborted when a chunk frame exceeds the mount's read cap, got %+v", h.store.last)
+	}
+}
+
+// --- P1-C: RetainPayload is mounted behind L1 authz IN ADDITION to the L2
+// wireauth proof newHarness above exercises (newHarness deliberately mounts NO
+// L1 interceptor, isolating the wireauth layer). These tests add it back —
+// production's actual mounting (internal/netcompose.BuildHandler's
+// authz := connect.WithInterceptors(auth.Interceptors(verifier)...), applied
+// to PayloadStoreServiceHandler) — to prove client.Resolver's Retain can now
+// present the bearer that gate requires.
+
+// newL1Harness is newHarness's L1-gated sibling: the SAME real
+// storehandler.Handler and wireauth verifier, but ALSO mounted behind
+// auth.Interceptors(a static verifier restricted to rules) — the same
+// bearer-presence-only fake the repo's own auth/e2e tests use
+// (network/pkg/auth/auth_test.go, internal/netcompose/server_test.go).
+// bearer is threaded straight into client.Config.Bearer so a caller can
+// prove both the presented and the withheld case.
+func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *harness {
+	t.Helper()
+	sgn, pub := signer(t, nodeDID)
+	res := didResolver{nodeDID: authDoc(nodeDID, pub)}
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: res,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+		Epoch:    time.Now().Add(-time.Hour),
+		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	st := &spyStore{inner: memstore.New()}
+	h := storehandler.New(st, v, 1<<20)
+	authz := connect.WithInterceptors(auth.Interceptors(endpoint.NewStaticEndpoint(rules))...)
+	path, hh := payloadpbconnect.NewPayloadStoreServiceHandler(h, authz)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	httpc := srv.Client()
+	return &harness{
+		store:  st,
+		signer: sgn,
+		client: client.New(client.Config{
+			Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, Bearer: bearer,
+		}),
+		url:   srv.URL,
+		httpc: httpc,
+	}
+}
+
+// TestRetain_BearerPresented_L1Passes proves a client configured with
+// Config.Bearer reaches an L1-gated RetainPayload: the static verifier here
+// checks ONLY bearer presence + the (payloads, retain) rule, so this fails
+// unless Retain actually sets the Authorization header on its OWN client
+// (never on a client shared with ResolvePayload's arbitrary-endpoint path).
+func TestRetain_BearerPresented_L1Passes(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "payloads", Action: "retain"}}, "test-l1-token")
+	payload := []byte("l1-gated retain payload")
+	if _, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload))); err != nil {
+		t.Fatalf("Retain with Bearer set: %v", err)
+	}
+}
+
+// TestRetain_NoBearer_L1RejectionPassesThrough proves that WITHOUT
+// Config.Bearer, Retain presents no Authorization header and the real L1
+// rejection code (Unauthenticated) passes through unmangled.
+func TestRetain_NoBearer_L1RejectionPassesThrough(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "payloads", Action: "retain"}}, "")
+	payload := []byte("should never be retained")
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
 	}
 }

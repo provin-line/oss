@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -16,6 +17,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/reportclient"
@@ -74,6 +76,11 @@ type harness struct {
 	store  *emithealth.Store
 	client *reportclient.Client
 	url    string
+	// signer is the crypto.Signer bound to publisherDID via the harness's DID
+	// resolver — populated by newL1Harness so its callers can build their own
+	// reportclient.Client (with a Bearer under test) that still signs a
+	// wireauth proof the harness's verifier accepts.
+	signer crypto.Signer
 }
 
 func newHarness(t *testing.T) *harness {
@@ -172,5 +179,79 @@ func TestReportEmitHealth_MismatchedKey_Unauthenticated(t *testing.T) {
 	}
 	if state := h.store.State(publisherDID, time.Now()); state != emithealth.NeverReported {
 		t.Errorf("store state = %v, want NeverReported (a signature that must not verify must not land)", state)
+	}
+}
+
+// --- P1-C: ReportEmitHealth is mounted behind L1 authz IN ADDITION to the L2
+// wireauth proof newHarness above exercises (newHarness deliberately mounts NO
+// L1 interceptor, isolating the wireauth layer). These tests add it back —
+// production's actual mounting (internal/netcompose.BuildHandler's
+// authz := connect.WithInterceptors(auth.Interceptors(verifier)...), applied
+// to ChainService's OperatorHandler) — to prove reportclient can now present
+// the bearer that gate requires.
+
+// newL1Harness is newHarness's L1-gated sibling: the SAME real
+// OperatorHandler and wireauth verifier, but ALSO mounted behind
+// auth.Interceptors(a static verifier restricted to rules) — the same
+// bearer-presence-only fake the repo's own auth/e2e tests use
+// (network/pkg/auth/auth_test.go, internal/netcompose/server_test.go).
+func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
+	t.Helper()
+	sgn, pub := signer(t, publisherDID)
+	res := didResolver{publisherDID: authDoc(publisherDID, pub)}
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: res,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+		Epoch:    time.Now().Add(-time.Hour),
+		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	store := emithealth.New(ttl)
+	authz := connect.WithInterceptors(auth.Interceptors(endpoint.NewStaticEndpoint(rules))...)
+	h := handler.NewOperator(nil, handler.WithEmitHealth(store, v, ttl))
+	path, hh := chainpbconnect.NewChainServiceHandler(h, authz)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &harness{
+		store:  store,
+		client: nil, // callers build their own client with the Bearer config under test
+		url:    srv.URL,
+		signer: sgn,
+	}
+}
+
+// TestReportEmitHealth_BearerPresented_L1Passes proves a client configured
+// with Config.Bearer reaches an L1-gated ReportEmitHealth: the static
+// verifier here checks ONLY bearer presence + the (chain, report-health)
+// rule, so this fails unless the client actually sets the Authorization
+// header.
+func TestReportEmitHealth_BearerPresented_L1Passes(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
+	client := reportclient.New(reportclient.Config{
+		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient, Bearer: "test-l1-token",
+	})
+	if _, err := client.ReportEmitHealth(context.Background(), publisherDID, true); err != nil {
+		t.Fatalf("ReportEmitHealth with Bearer set: %v", err)
+	}
+}
+
+// TestReportEmitHealth_NoBearer_L1RejectionPassesThrough proves that WITHOUT
+// Config.Bearer, the client presents no Authorization header and the real L1
+// rejection code (Unauthenticated) passes through unmangled.
+func TestReportEmitHealth_NoBearer_L1RejectionPassesThrough(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
+	client := reportclient.New(reportclient.Config{
+		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient,
+	})
+	_, err := client.ReportEmitHealth(context.Background(), publisherDID, true)
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
 	}
 }

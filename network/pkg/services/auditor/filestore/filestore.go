@@ -137,6 +137,16 @@ type verdictEnvelope struct {
 	// Abandoned is the retries-exhausted lifecycle marker (AuditRecord.Abandoned).
 	// omitempty: envelopes written before the field decode as false (still live).
 	Abandoned bool `json:"abandoned,omitempty"`
+	// Unresolvable is the RESOLUTION-outcome marker (AuditRecord.Unresolvable):
+	// the head's own content could never be resolved from the local store after
+	// exhausting retries, as opposed to any other reason Abandoned was set (a
+	// VERIFICATION outcome). Same omitempty posture as Abandoned — envelopes
+	// written before this field existed decode as false (still whatever
+	// Abandoned/verdict they already carried), never a false UNRESOLVABLE.
+	// Dropping this field on Put was the P1-B evidence-loss bug (2026-07):
+	// GetAuditStatus served INDETERMINATE, never CONFIDENCE_UNRESOLVABLE, from a
+	// restarted (or any file-store-backed) node.
+	Unresolvable bool `json:"unresolvable,omitempty"`
 }
 
 func stateInRange(s vc.ConfidenceState) bool {
@@ -196,7 +206,7 @@ func (s *StatusStore) Put(headHash string, rec auditor.AuditRecord) error {
 		SourceCommitment:   rec.SourceCommitment, SourceCommitmentNotations: rec.SourceCommitmentNotations,
 		LinearChain: rec.Scope.LinearChain, SourceCommitmentEvaluated: rec.Scope.SourceCommitmentEvaluated,
 		AuditedAt: rec.AuditedAt,
-		Abandoned: rec.Abandoned,
+		Abandoned: rec.Abandoned, Unresolvable: rec.Unresolvable,
 	}
 	// A local storage envelope, never hashed or signed over — not a signing
 	// scope (canonicalizer-hygiene-exempt).
@@ -255,7 +265,7 @@ func decodeVerdict(raw []byte, headHash string) (auditor.AuditRecord, error) {
 		SourceCommitment: env.SourceCommitment, SourceCommitmentNotations: env.SourceCommitmentNotations,
 		Scope:     auditor.AuditScope{LinearChain: env.LinearChain, SourceCommitmentEvaluated: env.SourceCommitmentEvaluated},
 		AuditedAt: env.AuditedAt,
-		Abandoned: env.Abandoned,
+		Abandoned: env.Abandoned, Unresolvable: env.Unresolvable,
 	}, nil
 }
 

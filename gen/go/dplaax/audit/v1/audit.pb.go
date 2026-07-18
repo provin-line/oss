@@ -695,8 +695,17 @@ func (x *GetConsumedSourcesResponse) GetNextPageToken() string {
 
 type RegisterEvidenceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// head_variant_address is the content address of the ADMITTED bytes' variant
-	// — the head this evidence registration is FOR.
+	// head_variant_address is the WIRE VARIANT id of the ADMITTED bytes this
+	// evidence registration is FOR — the exact string a StoreVC call already
+	// returned as its response's wire_variant_id (dplaax.vc.v1 StoreVCResponse
+	// / vc.PipelinePassCredential.WireVariantID: "wire:v1:jcs-rfc8785:
+	// sha256:<hex>" over the canonical FULL wire document, proof included),
+	// NOT a bare sha256:<hex> body content address — a registering caller
+	// never holds a body address to pair with it, only what StoreVC handed
+	// back. The registry resolves this to prove those exact bytes are
+	// admitted, then records the evidence keyed by the head's BODY address
+	// (see RegisterEvidence's own doc for why admission and persistence key
+	// on different identities of the same head).
 	HeadVariantAddress string `protobuf:"bytes,1,opt,name=head_variant_address,json=headVariantAddress,proto3" json:"head_variant_address,omitempty"`
 	// consumed_source_addresses are the content addresses of the source
 	// credentials the emitting boundary consumed to produce the head above

@@ -43,6 +43,16 @@ type Config struct {
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint, e.g. core.URLGuard.HTTPClient().
 	HTTPClient connect.HTTPClient
+	// Bearer, if non-empty, is presented as the Authorization: Bearer header
+	// on every call. ReportEmitHealth is mounted behind L1 authz IN ADDITION
+	// to the L2 wireauth proof (chainmanager.OpReportEmitHealth) this client
+	// already signs — L2 proves WHO is reporting, L1 decides whether the
+	// caller may reach the RPC at all, and this client previously had no way
+	// to present anything for the latter. Empty presents no header (an
+	// unauthenticated-at-L1 PoC node) — same convention as
+	// internal/netcompose.BearerInterceptor, replicated here rather than
+	// imported (a leaf client package must not import the composition root).
+	Bearer string
 }
 
 // Client is a wireauth-signing ConnectRPC client for ChainService's
@@ -59,8 +69,27 @@ func New(cfg Config) *Client {
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
-		svc:       chainpbconnect.NewChainServiceClient(cfg.HTTPClient, cfg.BaseURL),
+		svc: chainpbconnect.NewChainServiceClient(cfg.HTTPClient, cfg.BaseURL,
+			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
+}
+
+// bearerInterceptor sets the L1 PDP Authorization bearer on every outgoing
+// call. An empty token sets no header. Mirrors
+// internal/netcompose.BearerInterceptor's exact convention (header key,
+// value shape, and the token-empty / IsClient guards) — duplicated rather
+// than imported, since this client package must stay independent of the
+// composition root (AGENTS.md layer rule; see reportclient and
+// auditor/client's own doc comments on staying import-independent siblings).
+func bearerInterceptor(token string) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if token != "" && req.Spec().IsClient {
+				req.Header().Set("Authorization", "Bearer "+token)
+			}
+			return next(ctx, req)
+		}
+	})
 }
 
 // ReportEmitHealth reports healthy for publisherDID (the handler enforces

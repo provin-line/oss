@@ -98,6 +98,49 @@ func TestStatusStore_AbandonedRoundTrip(t *testing.T) {
 	}
 }
 
+// The RESOLUTION-outcome marker (AuditRecord.Unresolvable) survives the disk
+// round-trip too — this is the P1-B fix: verdictEnvelope previously had no
+// field for it, so Put silently dropped it and every restarted (or simply
+// file-store-backed) node served CONFIDENCE_INDETERMINATE for a head the
+// runner had actually given up resolving, never CONFIDENCE_UNRESOLVABLE.
+func TestStatusStore_UnresolvableRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewStatusStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:      i,
+		Axes:         vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations:    []string{"audit abandoned: exhausted 2 attempts (head not resolvable)"},
+		Scope:        auditor.AuditScope{LinearChain: true},
+		AuditedAt:    time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC),
+		Abandoned:    true,
+		Unresolvable: true,
+	}
+	if err := s.Put(h(11), rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := s.Get(h(11))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !reflect.DeepEqual(got, rec) {
+		t.Fatalf("roundtrip mismatch:\n got = %+v\nwant = %+v", got, rec)
+	}
+
+	// Restart: a fresh instance over the same dir must still serve Unresolvable —
+	// proving it is durably on disk, not merely surviving within one process.
+	s2, err := filestore.NewStatusStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s2.Get(h(11)); err != nil || !got.Unresolvable {
+		t.Fatalf("post-restart Get = %+v (err %v), want Unresolvable=true", got, err)
+	}
+}
+
 func TestStatusStore_AbsentAndDamaged(t *testing.T) {
 	dir := t.TempDir()
 	s, err := filestore.NewStatusStore(dir)

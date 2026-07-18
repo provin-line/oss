@@ -112,11 +112,27 @@ type Config struct {
 	// max-retain-chunk-size, or every frame trips the server's per-chunk read
 	// cap (ResourceExhausted).
 	RetainChunkSize int
+	// Bearer, if non-empty, is presented as the Authorization: Bearer header
+	// on every Retain call ONLY. RetainPayload is mounted behind L1 authz IN
+	// ADDITION to the L2 wireauth proof (payloadresolver.OpRetainPayload)
+	// Retain already signs. It deliberately does NOT apply to ResolvePayload:
+	// that RPC dials arbitrary publisher-supplied endpoints (upstreamEndpoint
+	// is a per-call argument, never this node's own control plane), so
+	// presenting this node's L1 credential there would leak it to a
+	// potentially untrusted third party — see Retain's own doc for how this
+	// is enforced (a dedicated client bound to StoreEndpoint, never HTTPClient
+	// wrapped for arbitrary dialing). Empty presents no header on Retain
+	// either. Convention mirrors internal/netcompose.BearerInterceptor,
+	// replicated here rather than imported (a leaf client package must not
+	// import the composition root).
+	Bearer string
 }
 
 // Resolver is a node's handle to a PayloadService/PayloadStoreService pair:
 // one signing identity, both directions. ResolvePayload dials any serving
-// boundary passed to it; Retain dials Config.StoreEndpoint.
+// boundary passed to it, over the bare httpClient (no bearer — see
+// retainClient's doc); Retain dials Config.StoreEndpoint via retainClient,
+// its OWN pre-built client instance.
 type Resolver struct {
 	signer          crypto.Signer
 	signerDID       string
@@ -126,6 +142,17 @@ type Resolver struct {
 	idleTimeout     time.Duration
 	storeEndpoint   string
 	retainChunkSize int
+	// retainClient is Retain's OWN ConnectRPC client, built once in New and
+	// bound to storeEndpoint with the L1 bearer interceptor attached — NEVER
+	// httpClient re-wrapped, and never shared with ResolvePayload's per-call
+	// client construction. ResolvePayload dials whichever endpoint a caller
+	// passes (an arbitrary, potentially untrusted publisher); if the bearer
+	// interceptor were attached to httpClient itself, or if Retain built its
+	// client from httpClient the way ResolvePayload does, this node's L1
+	// credential would be presented to every publisher ResolvePayload ever
+	// fetches from — a bearer leak. nil when Config.StoreEndpoint is empty
+	// (Retain rejects that case before ever touching this field).
+	retainClient payloadpbconnect.PayloadStoreServiceClient
 }
 
 // New returns a Resolver from cfg, applying the Default* bounds for any
@@ -147,6 +174,11 @@ func New(cfg Config) *Resolver {
 	if retainChunkSize <= 0 {
 		retainChunkSize = DefaultRetainChunkSize
 	}
+	var retainClient payloadpbconnect.PayloadStoreServiceClient
+	if cfg.StoreEndpoint != "" {
+		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(cfg.HTTPClient, cfg.StoreEndpoint,
+			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)))
+	}
 	return &Resolver{
 		signer:          cfg.Signer,
 		signerDID:       cfg.SignerDID,
@@ -156,7 +188,55 @@ func New(cfg Config) *Resolver {
 		idleTimeout:     idleTimeout,
 		storeEndpoint:   cfg.StoreEndpoint,
 		retainChunkSize: retainChunkSize,
+		retainClient:    retainClient,
 	}
+}
+
+// bearerInterceptor sets the L1 PDP Authorization bearer on every outgoing
+// call. An empty token sets no header. The header key/value convention
+// mirrors internal/netcompose.BearerInterceptor exactly — duplicated rather
+// than imported, since this client package must stay independent of the
+// composition root (AGENTS.md layer rule) — but the mechanism cannot be a
+// plain connect.UnaryInterceptorFunc the way auditor/client's and
+// reportclient's are: RetainPayload is CLIENT-STREAMING, and
+// UnaryInterceptorFunc's WrapStreamingClient is documented as a no-op ("has
+// no effect on streaming RPCs") — attaching one here would silently never
+// set the header. retainBearerInterceptor implements the full
+// connect.Interceptor instead, setting the header on the stream's
+// RequestHeader before the caller ever sends a frame. Only ever attached to
+// retainClient (see its doc) — never to a client ResolvePayload builds.
+func bearerInterceptor(token string) connect.Interceptor {
+	return retainBearerInterceptor{token: token}
+}
+
+type retainBearerInterceptor struct{ token string }
+
+func (i retainBearerInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		if i.token != "" && req.Spec().IsClient {
+			req.Header().Set("Authorization", "Bearer "+i.token)
+		}
+		return next(ctx, req)
+	}
+}
+
+// WrapStreamingClient sets the header on the connection returned by next,
+// before returning it to the caller — i.e. before Send can ever be called,
+// so the header always reaches the server with (or ahead of) the first frame.
+func (i retainBearerInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
+		conn := next(ctx, spec)
+		if i.token != "" {
+			conn.RequestHeader().Set("Authorization", "Bearer "+i.token)
+		}
+		return conn
+	}
+}
+
+// WrapStreamingHandler is a no-op: this interceptor is only ever attached to
+// retainClient, a CLIENT, and is never mounted on a handler.
+func (i retainBearerInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return next
 }
 
 // ResolvePayload fetches and assembles the payload bytes held at contentHash on
@@ -331,8 +411,10 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	svc := payloadpbconnect.NewPayloadStoreServiceClient(r.httpClient, r.storeEndpoint)
-	stream := svc.RetainPayload(ctx)
+	// r.retainClient, never a fresh client over r.httpClient: see its doc on
+	// why Retain must not share ResolvePayload's arbitrary-endpoint dialing
+	// (bearer leak).
+	stream := r.retainClient.RetainPayload(ctx)
 	if err := stream.Send(&payloadpb.RetainPayloadRequest{
 		Frame: &payloadpb.RetainPayloadRequest_Metadata{Metadata: &payloadpb.RetainPayloadMetadata{
 			OwnerDid:     ownerDID,
