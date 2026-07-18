@@ -1,0 +1,567 @@
+package netcompose
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"connectrpc.com/connect"
+	"github.com/nats-io/nkeys"
+	"github.com/o3co/protobuf.interceptors/endpoint"
+
+	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
+	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+	chainpbconnect "github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
+	didpbconnect "github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
+	payloadpbconnect "github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	signerpb "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
+	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
+	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
+	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/delegation"
+	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/network/pkg/registry"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
+	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/vc"
+)
+
+const nodeDID = "did:dplaax:poc.dplaax.dev:org:node"
+
+// natsChainCfg builds a valid nats chain config (fresh throwaway seeds, a temp
+// resolver dir) so BuildHandler constructs + wires the real nats infra operator
+// and both chain surfaces. The boot tests exercise the mount structure, not the
+// data plane (the full Subscribe->JWT round-trip through the mount is C2b-2b).
+func natsChainCfg(t *testing.T) *chainconfig.Config {
+	t.Helper()
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	return &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS: chainconfig.NATSConfig{
+			URL:           "nats://localhost:4222",
+			AccountSeed:   string(accSeed),
+			TrustRootSeed: string(opSeed),
+			ResolverDir:   t.TempDir(),
+			NodeDID:       nodeDID,
+		},
+	}
+}
+
+const (
+	registryID  = "poc.dplaax.dev"
+	ownerDID    = "did:dplaax:poc.dplaax.dev:org:acme"
+	pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+)
+
+// assembled stands up the full mux over httptest with a static authorizer
+// granting the rules the e2e exercises, and returns it with an owner signer
+// (CLI-local key) and the owner's signing public key.
+func assembled(t *testing.T) (*httptest.Server, crypto.Signer, []byte) {
+	return assembledWith(t, 1<<20)
+}
+
+// assembledWith is assembled with an explicit per-credential size cap, so a size-cap
+// test can drive an over-cap StoreVC through the real authenticated stack.
+func assembledWith(t *testing.T, maxCredentialSize int) (*httptest.Server, crypto.Signer, []byte) {
+	t.Helper()
+	h, signer, pub := assembledHandlerWith(t, maxCredentialSize)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, signer, pub
+}
+
+// assembledHandler returns the full production mux (BuildHandler output) with
+// an owner signer, for tests that serve it over their own listener — e.g. the
+// native-TLS route integration, which must drive the REAL route surface, not a
+// stand-in handler.
+func assembledHandler(t *testing.T) (http.Handler, crypto.Signer, []byte) {
+	return assembledHandlerWith(t, 1<<20)
+}
+
+func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, crypto.Signer, []byte) {
+	t.Helper()
+	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
+	regCfg := &registry.RegistryConfig{ID: registryID}
+	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{
+		{Resource: "dids", Action: "register"},
+		{Resource: "dids", Action: "issue"},
+		{Resource: "dids", Action: "read"},
+		{Resource: "signer", Action: "sign-vc"},
+		{Resource: "vc", Action: "store"},
+		{Resource: "vc", Action: "read"},
+		{Resource: "chain", Action: "read"},
+		{Resource: "chain", Action: "update-allowlist"},
+		{Resource: "chain", Action: "read-allowlist"},
+	})
+	chainCfg := natsChainCfg(t)
+	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("NewDIDResolution: %v", derr)
+	}
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	chainOp, err := ChainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("ChainOperator: %v", err)
+	}
+	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	// Owner's CLI-local signing key (held by the owner, not the registry).
+	ownerKS := filestore.New(t.TempDir())
+	ownerKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate owner key: %v", err)
+	}
+	if err := ownerKS.SaveKeyPair(ownerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: ownerKP}); err != nil {
+		t.Fatalf("save owner key: %v", err)
+	}
+	return h, ownerKS, ownerKP.PublicKey
+}
+
+// The standalone peer surface must record relationship evidence
+// (transfer.relationship.record): BuildHandler wires a durable filelog under the
+// chain root into the peer handler. This guards that composition — without it,
+// NewPeerWithEvidence has no production caller and the behavior never runs.
+func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
+	dataDir := t.TempDir()
+	coreCfg := &core.CoreConfig{DataDir: dataDir, ListenAddr: ":0", AllowLoopback: true}
+	regCfg := &registry.RegistryConfig{ID: registryID}
+	verifier := endpoint.NewStaticEndpoint(nil)
+	chainCfg := natsChainCfg(t)
+	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("NewDIDResolution: %v", derr)
+	}
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	chainOp, err := ChainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("ChainOperator: %v", err)
+	}
+	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
+	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, nil, nil, nil); err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	// filelog.New creates the dir and the append file at open; its presence proves
+	// the evidence log was constructed under chain/relationship-evidence.
+	evPath := filepath.Join(dataDir, "chain", "relationship-evidence", "log.ndjson")
+	if _, err := os.Stat(evPath); err != nil {
+		t.Errorf("relationship-evidence log not wired at %s: %v", evPath, err)
+	}
+}
+
+func ed25519JWK(pub []byte) map[string]any {
+	return map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)}
+}
+
+func signedOwnerDocBytes(t *testing.T, signer crypto.Signer, signPub []byte) []byte {
+	t.Helper()
+	// Multikey + issued contexts: models a NEW owner; the production
+	// CreateProof emits a W3C-shaped proof, which the classifier only accepts
+	// over a Multikey method (signer.suite.eddsa-jcs-2022).
+	vm, err := did.NewMultikeyVerificationMethod(ownerDID+"#signing", ownerDID, signPub)
+	if err != nil {
+		t.Fatalf("NewMultikeyVerificationMethod: %v", err)
+	}
+	base := did.New(did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      ownerDID, Controller: ownerDID,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{ownerDID + "#signing"},
+	})
+	body := base.Body()
+	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	pb, _ := json.Marshal(proof)
+	var pm map[string]any
+	json.Unmarshal(pb, &pm)
+	body["proof"] = pm
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func bearer[T any](req *connect.Request[T]) *connect.Request[T] {
+	req.Header().Set("Authorization", "Bearer dummy")
+	return req
+}
+
+// The walking-skeleton proof: register → issue → resolve → sign across all three
+// services in one assembled process, sharing one file keystore.
+func TestBoot_RegisterIssueResolveSign(t *testing.T) {
+	ctx := context.Background()
+	srv, ownerSigner, ownerPub := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	signerClient := signerpbconnect.NewSignerServiceClient(srv.Client(), srv.URL)
+
+	// Register the owner.
+	if _, err := didClient.RegisterOwner(ctx, bearer(connect.NewRequest(&didpb.RegisterOwnerRequest{
+		DidDocument: signedOwnerDocBytes(t, ownerSigner, ownerPub),
+	}))); err != nil {
+		t.Fatalf("RegisterOwner: %v (code %v)", err, connect.CodeOf(err))
+	}
+
+	// Issue a pipeline (registry generates + stores its keys in the shared keystore).
+	dlg, err := delegation.Build(ownerSigner, ownerDID, delegation.DelegationSubject{ID: pipelineDID, DelegatedBy: ownerDID})
+	if err != nil {
+		t.Fatalf("delegation.Build: %v", err)
+	}
+	dlgBytes, _ := json.Marshal(dlg)
+	issued, err := didClient.IssuePipeline(ctx, bearer(connect.NewRequest(&didpb.IssuePipelineRequest{
+		TargetDid: pipelineDID, Delegation: dlgBytes,
+	})))
+	if err != nil {
+		t.Fatalf("IssuePipeline: %v (code %v)", err, connect.CodeOf(err))
+	}
+
+	// Resolve the pipeline over the RPC.
+	res, err := didClient.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: pipelineDID})))
+	if err != nil {
+		t.Fatalf("ResolveDID: %v", err)
+	}
+	var resolved did.DIDDocument
+	if err := json.Unmarshal(res.Msg.GetDidDocument(), &resolved); err != nil {
+		t.Fatalf("unmarshal resolved: %v", err)
+	}
+	if resolved.ID() != pipelineDID {
+		t.Errorf("resolved id = %q, want %q", resolved.ID(), pipelineDID)
+	}
+
+	// Sign with the pipeline's registry-held #signing key via the Signer service,
+	// and verify against the issued document's signing key — proving did + signer
+	// + keystore interoperate over the shared store.
+	var issuedDoc did.DIDDocument
+	if err := json.Unmarshal(issued.Msg.GetDidDocument(), &issuedDoc); err != nil {
+		t.Fatalf("unmarshal issued: %v", err)
+	}
+	signPub, err := did.ExtractPublicKey(&issuedDoc, pipelineDID+"#signing", did.RelationshipAssertionMethod)
+	if err != nil {
+		t.Fatalf("ExtractPublicKey: %v", err)
+	}
+	data := []byte("payload to sign")
+	sigResp, err := signerClient.Sign(ctx, bearer(connect.NewRequest(&signerpb.SignRequest{
+		Did: pipelineDID, KeyId: "signing", Data: data,
+	})))
+	if err != nil {
+		t.Fatalf("Signer.Sign: %v (code %v)", err, connect.CodeOf(err))
+	}
+	ok, err := (ed25519.Verifier{}).Verify(signPub, data, sigResp.Msg.GetSignature())
+	if err != nil || !ok {
+		t.Fatalf("signature verify: ok=%v err=%v", ok, err)
+	}
+}
+
+// The ChainService (L1 operator surface) is mounted in the assembled stack:
+// authorized UpdateAllowList, GetAllowList, and ListSubscriptions route through
+// the mux and the authz gate. The write-then-read round-trip also guards the
+// production WithAllowListReader wiring (server.go): were it dropped, GetAllowList
+// would degrade to Unimplemented here — the assembled-stack test that the
+// unit-level handler test cannot catch. Deeper rule-persistence correctness is
+// covered at the domain/handler level.
+func TestBoot_ChainOperator(t *testing.T) {
+	ctx := context.Background()
+	srv, _, _ := assembled(t)
+	chainClient := chainpbconnect.NewChainServiceClient(srv.Client(), srv.URL)
+
+	const pattern = "did:dplaax:*:org:acme:*"
+	if _, err := chainClient.UpdateAllowList(ctx, bearer(connect.NewRequest(&chainpb.UpdateAllowListRequest{
+		PipelineDid: pipelineDID,
+		Rules:       []*chainpb.AllowRule{{Pattern: pattern}},
+	}))); err != nil {
+		t.Fatalf("UpdateAllowList: %v (code %v)", err, connect.CodeOf(err))
+	}
+	// Read it back through the full stack: proves the read RPC is wired (not
+	// Unimplemented) and its own read-allowlist grant is enforced end-to-end.
+	got, err := chainClient.GetAllowList(ctx, bearer(connect.NewRequest(&chainpb.GetAllowListRequest{
+		PipelineDid: pipelineDID,
+	})))
+	if err != nil {
+		t.Fatalf("GetAllowList: %v (code %v)", err, connect.CodeOf(err))
+	}
+	if rules := got.Msg.GetRules(); len(rules) != 1 || rules[0].GetPattern() != pattern {
+		t.Errorf("GetAllowList = %+v, want the one written pattern %q", rules, pattern)
+	}
+	resp, err := chainClient.ListSubscriptions(ctx, bearer(connect.NewRequest(&chainpb.ListSubscriptionsRequest{})))
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v (code %v)", err, connect.CodeOf(err))
+	}
+	if len(resp.Msg.GetSubscriptions()) != 0 {
+		t.Errorf("fresh store ListSubscriptions = %d, want 0", len(resp.Msg.GetSubscriptions()))
+	}
+}
+
+func TestBoot_Healthz(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("healthz status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// An oversized request body is rejected with ResourceExhausted BEFORE the auth
+// interceptor runs — connect reads/decompresses the body first, so the per-RPC
+// read cap is the pre-auth memory bound (adversarial-review F0). AuditService
+// carries the proof-class cap (256 KiB); a >256 KiB request trips it.
+func TestBoot_RequestReadCap_RejectsOversizedBeforeAuth(t *testing.T) {
+	srv, _, _ := assembled(t)
+	client := auditpbconnect.NewAuditServiceClient(srv.Client(), srv.URL)
+	req := connect.NewRequest(&auditpb.GetAuditStatusRequest{
+		HeadHash: strings.Repeat("a", (256<<10)+1), // one byte over the proof cap
+	})
+	// No bearer set: if the cap did NOT fire first, this would fail at auth
+	// (Unauthenticated). ResourceExhausted proves the body was capped pre-auth.
+	_, err := client.GetAuditStatus(context.Background(), req)
+	if got := connect.CodeOf(err); got != connect.CodeResourceExhausted {
+		t.Fatalf("oversized request: code = %v, want ResourceExhausted (read cap must fire before auth)", got)
+	}
+}
+
+// BuildHandler must NEVER mount /metrics: the exposition is a composition-root
+// concern behind the default-off config gate (maybeMountMetrics in main), so a
+// handler built without it serves 404 there — the default posture.
+func TestBoot_NoMetricsWithoutGate(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("metrics status = %d, want 404 (BuildHandler must not mount /metrics)", resp.StatusCode)
+	}
+}
+
+// BuildHandler mounts /readyz (readiness — dependency-aware, unlike the static
+// /healthz). With zero checks configured (this HTTP-only assembly) it is
+// trivially ready.
+func TestBoot_Readyz(t *testing.T) {
+	srv, _, _ := assembled(t)
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("readyz status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("readyz content-type = %q, want application/json", ct)
+	}
+}
+
+func TestBoot_PublicResolution(t *testing.T) {
+	ctx := context.Background()
+	srv, ownerSigner, ownerPub := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	if _, err := didClient.RegisterOwner(ctx, bearer(connect.NewRequest(&didpb.RegisterOwnerRequest{
+		DidDocument: signedOwnerDocBytes(t, ownerSigner, ownerPub),
+	}))); err != nil {
+		t.Fatalf("RegisterOwner: %v", err)
+	}
+	// The resolution route is public (no auth header).
+	resp, err := http.Get(srv.URL + "/did/org/acme/did.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolution status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/did+json" {
+		t.Errorf("content-type = %q, want application/did+json", ct)
+	}
+	var doc did.DIDDocument
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.ID() != ownerDID {
+		t.Errorf("resolved id = %q, want %q", doc.ID(), ownerDID)
+	}
+}
+
+func TestBoot_RPCRequiresAuth(t *testing.T) {
+	// The connect services sit behind the interceptor: no bearer token → Unauthenticated.
+	srv, _, _ := assembled(t)
+	didClient := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+	_, err := didClient.ResolveDID(context.Background(), connect.NewRequest(&didpb.ResolveDIDRequest{Did: ownerDID}))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("no token: want Unauthenticated, got %v (%v)", connect.CodeOf(err), err)
+	}
+}
+
+// VCResolverService is mounted in the assembled stack: store a VC and resolve it
+// back at its returned content address. The unresolved-pool enqueue path is
+// unit-covered (vcresolver_test) rather than here: the pool has no wire surface
+// this slice (ListUnresolved is deferred), so it is intentionally unobservable
+// over the assembled mux.
+func TestBoot_VCStoreResolve(t *testing.T) {
+	ctx := context.Background()
+	srv, _, _ := assembled(t)
+	vcClient := vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL)
+
+	credential, _ := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            pipelineDID,
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "proc1"},
+	})
+	stored, err := vcClient.StoreVC(ctx, bearer(connect.NewRequest(&vcpb.StoreVCRequest{Credential: credential})))
+	if err != nil {
+		t.Fatalf("StoreVC: %v (code %v)", err, connect.CodeOf(err))
+	}
+	hash := stored.Msg.GetHash()
+	if hash == "" {
+		t.Fatal("empty hash")
+	}
+	got, err := vcClient.ResolveVC(ctx, bearer(connect.NewRequest(&vcpb.ResolveVCRequest{Hash: hash})))
+	if err != nil {
+		t.Fatalf("ResolveVC: %v", err)
+	}
+	var resolved vc.PipelinePassCredential
+	if err := json.Unmarshal(got.Msg.GetCredential(), &resolved); err != nil {
+		t.Fatalf("unmarshal resolved: %v", err)
+	}
+	if resolved.Issuer() != pipelineDID {
+		t.Errorf("resolved issuer = %q, want %q", resolved.Issuer(), pipelineDID)
+	}
+}
+
+// ChainPeerService (the internet-facing L2 surface) is mounted WITHOUT the L1
+// authz interceptor: a request with no bearer token reaches the handler and is
+// rejected by wireauth for the missing proof (InvalidArgument), NOT by the L1
+// interceptor (which would return Unauthenticated before the handler). This
+// proves both that the peer surface is mounted and that it carries no L1 gate.
+func TestBoot_ChainPeerServiceMountedNoL1(t *testing.T) {
+	srv, _, _ := assembled(t)
+	peerClient := chainpbconnect.NewChainPeerServiceClient(srv.Client(), srv.URL)
+	_, err := peerClient.GetPublisherInfo(context.Background(),
+		connect.NewRequest(&chainpb.GetPublisherInfoRequest{PublisherDid: pipelineDID}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("peer GetPublisherInfo without proof: got %v (%v), want InvalidArgument (mounted, no L1)",
+			connect.CodeOf(err), err)
+	}
+}
+
+// PayloadService (the internet-facing L2 by-reference serving boundary) is
+// mounted WITHOUT the L1 authz interceptor: a request with no bearer reaches the
+// handler and is rejected by wireauth for the missing proof (InvalidArgument),
+// NOT by the L1 interceptor (Unauthenticated). Proves the serving boundary is
+// mounted and carries no L1 gate, mirroring the chain peer surface.
+func TestBoot_PayloadServiceMountedNoL1(t *testing.T) {
+	srv, _, _ := assembled(t)
+	payloadClient := payloadpbconnect.NewPayloadServiceClient(srv.Client(), srv.URL)
+	stream, err := payloadClient.ResolvePayload(context.Background(),
+		connect.NewRequest(&payloadpb.ResolvePayloadRequest{ContentHash: "sha256:" + strings.Repeat("a", 64)}))
+	if err == nil {
+		// Server-streaming: the error may surface on the first Receive.
+		stream.Receive()
+		err = stream.Err()
+		stream.Close()
+	}
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("payload ResolvePayload without proof: got %v (%v), want InvalidArgument (mounted, no L1)",
+			connect.CodeOf(err), err)
+	}
+}
+
+// registryBaseURL: mapped registries resolve to their configured base; when the
+// fallback is OPEN (closeUnmapped=false) the rest fall back to the didresolver
+// default — the "partial maps compose with public registries" contract.
+func TestRegistryBaseURL_HitAndFallback(t *testing.T) {
+	f := registryBaseURL(map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}, false)
+	if got, err := f("mfg.poc.dplaax.dev"); err != nil || got != "http://mfg:8443" {
+		t.Errorf("mapped: got %q err %v", got, err)
+	}
+	if got, err := f("public.dplaax.example"); err != nil || got != "https://public.dplaax.example" {
+		t.Errorf("fallback: got %q err %v", got, err)
+	}
+}
+
+// F8: with closeUnmapped=true (allow-private-networks mode) an UNMAPPED registry
+// must NOT fall back to https://{registry} — an attacker-supplied registry name
+// that would otherwise reach private space via the open fallback must fail
+// resolution outright. Mapped registries still resolve to their configured base.
+func TestRegistryBaseURL_ClosedFallbackInPrivateMode(t *testing.T) {
+	f := registryBaseURL(map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}, true)
+	if got, err := f("mfg.poc.dplaax.dev"); err != nil || got != "http://mfg:8443" {
+		t.Errorf("mapped: got %q err %v", got, err)
+	}
+	// An unmapped registry (attacker-controlled name resolving to an RFC-1918
+	// address) must be refused, not silently resolved via the open fallback.
+	if got, err := f("10.0.0.5"); err == nil {
+		t.Errorf("unmapped in closed mode: got %q, want error (closed fallback)", got)
+	}
+	if got, err := f("evil.attacker.example"); err == nil {
+		t.Errorf("unmapped public-looking name in closed mode: got %q, want error", got)
+	}
+}
+
+// F8: NewDIDResolution fails boot when allow-private-networks is on but NO
+// registry resolution is scoped (neither a per-registry map nor a single
+// resolver-base-url) — that combination is the exact hole (open fallback +
+// blanket private allow). With scoping present, or with private off, it boots.
+func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
+	base := func() *core.CoreConfig {
+		return &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: "127.0.0.1:0"}
+	}
+	// private ON + no scoping (empty map, no resolver-base-url) → boot error.
+	cc := base()
+	cc.AllowPrivateNetworks = true
+	if _, _, err := NewDIDResolution(cc, natsChainCfg(t)); err == nil {
+		t.Error("private ON + no registry scoping: want boot error (fail-closed)")
+	}
+	// private ON + per-registry map → OK.
+	cc = base()
+	cc.AllowPrivateNetworks = true
+	ch := natsChainCfg(t)
+	ch.NATS.RegistryBaseURLs = map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}
+	if _, _, err := NewDIDResolution(cc, ch); err != nil {
+		t.Errorf("private ON + registry map: want boot OK, got %v", err)
+	}
+	// private ON + single resolver-base-url (inherently closed) → OK.
+	cc = base()
+	cc.AllowPrivateNetworks = true
+	ch = natsChainCfg(t)
+	ch.NATS.ResolverBaseURL = "http://resolver:8443"
+	if _, _, err := NewDIDResolution(cc, ch); err != nil {
+		t.Errorf("private ON + resolver-base-url: want boot OK, got %v", err)
+	}
+	// private OFF + no scoping → OK (open resolution; guard blocks all private).
+	cc = base()
+	if _, _, err := NewDIDResolution(cc, natsChainCfg(t)); err != nil {
+		t.Errorf("private OFF + no scoping: want boot OK, got %v", err)
+	}
+}

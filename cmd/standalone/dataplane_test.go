@@ -325,16 +325,16 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Fatalf("source metrics entries: got %d want 1", len(src.metrics))
 	}
 	lm := src.metrics[0]
-	if lm.name != "src" || lm.role != pipelineconfig.RoleSource {
-		t.Errorf("source entry = %q/%q, want src/source", lm.name, lm.role)
+	if lm.Name != "src" || lm.Role != pipelineconfig.RoleSource {
+		t.Errorf("source entry = %q/%q, want src/source", lm.Name, lm.Role)
 	}
-	if lm.emits == nil {
+	if lm.Emits == nil {
 		t.Error("source loop: emits accessor is nil, want registered")
 	}
-	if lm.stripped != nil {
+	if lm.Stripped != nil {
 		t.Error("source loop without a payload store: stripped accessor registered, want nil")
 	}
-	if lm.verify != nil {
+	if lm.Verify != nil {
 		t.Error("source loop: verify accessor registered, want nil (source verifies nothing)")
 	}
 
@@ -350,13 +350,13 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Fatalf("sink metrics entries: got %d want 1", len(snk.metrics))
 	}
 	lm = snk.metrics[0]
-	if lm.role != pipelineconfig.RoleSink {
-		t.Errorf("sink entry role = %q, want sink", lm.role)
+	if lm.Role != pipelineconfig.RoleSink {
+		t.Errorf("sink entry role = %q, want sink", lm.Role)
 	}
-	if lm.verify == nil {
+	if lm.Verify == nil {
 		t.Error("sink loop: verify accessor is nil, want registered")
 	}
-	if lm.emits != nil || lm.stripped != nil {
+	if lm.Emits != nil || lm.Stripped != nil {
 		t.Error("sink loop: emit/stripped accessors registered, want nil (a sink emits nothing)")
 	}
 }
@@ -379,7 +379,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	if err != nil {
 		t.Fatalf("buildDataPlane (source+store): %v", err)
 	}
-	if lm := src.metrics[0]; lm.stripped == nil {
+	if lm := src.metrics[0]; lm.Stripped == nil {
 		t.Error("source loop with a payload store: stripped accessor is nil, want registered (dual-emit)")
 	}
 
@@ -395,10 +395,10 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 		t.Fatalf("chained metrics entries: got %d want 1", len(chd.metrics))
 	}
 	lm := chd.metrics[0]
-	if lm.role != pipelineconfig.RoleChained || lm.emits == nil || lm.verify == nil {
-		t.Errorf("chained entry = role %q emits %v verify %v; want chained + both registered", lm.role, lm.emits, lm.verify)
+	if lm.Role != pipelineconfig.RoleChained || lm.Emits == nil || lm.Verify == nil {
+		t.Errorf("chained entry = role %q emits %v verify %v; want chained + both registered", lm.Role, lm.Emits, lm.Verify)
 	}
-	if lm.stripped != nil {
+	if lm.Stripped != nil {
 		t.Error("chained loop without a payload store: stripped accessor registered, want nil")
 	}
 
@@ -433,9 +433,9 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 		t.Fatalf("aggregate metrics entries: got %d want 1 (early-continue path must append exactly once)", len(agg.metrics))
 	}
 	lm = agg.metrics[0]
-	if lm.role != pipelineconfig.RoleAggregate || lm.emits == nil || lm.verify == nil || lm.stripped == nil {
+	if lm.Role != pipelineconfig.RoleAggregate || lm.Emits == nil || lm.Verify == nil || lm.Stripped == nil {
 		t.Errorf("aggregate entry = role %q emits %v verify %v stripped %v; want aggregate + all three registered",
-			lm.role, lm.emits, lm.verify, lm.stripped)
+			lm.Role, lm.Emits, lm.Verify, lm.Stripped)
 	}
 }
 

@@ -16,9 +16,17 @@ can only describe locally. For what the node *is* (planes, trust layers) see
 | Single-org production | one `standalone` node per registry, external PDP, operator-managed NATS trust material | this page |
 | Cross-org federation | one node per organization; NATS account boundaries carry the export/import seam; peers talk over ChainPeerService (L2 wireauth) | [`network/README.md`](../../network/README.md) |
 
-The node is one binary (`cmd/standalone`): HTTP control plane (ConnectRPC
-services + public DID resolution + health endpoints) and the data plane
-(pipeline loops) run in one process under one signal-cancelled context.
+`cmd/standalone` composes the node as one binary: HTTP control plane
+(ConnectRPC services + public DID resolution + health endpoints) and the
+data plane (pipeline loops) run in one process under one signal-cancelled
+context.
+
+Two binaries exist today. `cmd/standalone` is the all-in-one composition
+above and remains available, but is **deprecated**. `cmd/network` runs the
+same control plane alone — no data plane: it refuses to boot if its pipeline
+config declares any loop. A pipeline runtime that pairs with `cmd/network`
+is upcoming work; until it lands, `cmd/standalone` is the only way to run
+pipeline loops.
 
 ## Load-bearing configuration
 

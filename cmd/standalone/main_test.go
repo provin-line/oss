@@ -82,6 +82,12 @@ func TestH2CServer_HasStallTimeouts(t *testing.T) {
 // enough for the biggest real request (credential or push body), never smaller
 // (which would reject legitimate traffic).
 func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
+	// maxDocumentRequestBytes mirrors internal/netcompose/server.go's private
+	// constant of the same name/value: it stays unexported there (internal to
+	// that file, per the netcompose extraction), so this test cannot reference
+	// it directly across the package boundary and instead pins the literal its
+	// assertions depend on.
+	const maxDocumentRequestBytes = 1 << 20
 	const cred, push = 1 << 20, 4 << 20
 	got := outerRequestCapBytes(cred, push)
 	if got <= push {
