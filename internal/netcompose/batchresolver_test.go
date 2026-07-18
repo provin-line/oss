@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func brConfig(loops []pipelineconfig.LoopConfig, interval time.Duration, maxByte
 	}
 }
 
-// buildBatchResolver returns a runner only for a node with a consuming loop (the
+// BuildBatchResolver returns a runner only for a node with a consuming loop (the
 // population that accumulates holes); a source-only node returns nil.
 func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
 	guard := core.NewURLGuard()
@@ -97,9 +97,9 @@ func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := brConfig([]pipelineconfig.LoopConfig{{Role: tc.role}}, time.Second, 1<<20)
-			r, err := buildBatchResolver(pool, svc, guard, resolver, cfg)
+			r, err := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 			if err != nil {
-				t.Fatalf("buildBatchResolver: %v", err)
+				t.Fatalf("BuildBatchResolver: %v", err)
 			}
 			if (r == nil) != tc.wantNil {
 				t.Errorf("runner nil = %v, want %v", r == nil, tc.wantNil)
@@ -108,7 +108,7 @@ func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
 	}
 
 	// No loops → nil (zero-loop node).
-	if r, err := buildBatchResolver(pool, svc, guard, resolver, brConfig(nil, time.Second, 1<<20)); err != nil || r != nil {
+	if r, err := BuildBatchResolver(pool, svc, guard, resolver, brConfig(nil, time.Second, 1<<20)); err != nil || r != nil {
 		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
 }
@@ -166,9 +166,9 @@ func TestBatchResolver_Integration_DrainsFromPeer(t *testing.T) {
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	resolver := didresolver.New(guard)
 	cfg := brConfig([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}, 5*time.Millisecond, 1<<20)
-	r, err := buildBatchResolver(pool, svc, guard, resolver, cfg)
+	r, err := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 	if err != nil || r == nil {
-		t.Fatalf("buildBatchResolver: r=%v err=%v", r, err)
+		t.Fatalf("BuildBatchResolver: r=%v err=%v", r, err)
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -204,7 +204,7 @@ func TestBatchResolver_Integration_OverCapFetchRejected(t *testing.T) {
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	resolver := didresolver.New(guard)
 	cfg := brConfig([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}, 5*time.Millisecond, cap)
-	r, _ := buildBatchResolver(pool, svc, guard, resolver, cfg)
+	r, _ := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -258,9 +258,9 @@ func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	resolver := didresolver.New(guard)
 	cfg := brConfig([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}, 5*time.Millisecond, 1<<20)
 	cfg.VCStoreBearer = token
-	r, err := buildBatchResolver(pool, svc, guard, resolver, cfg)
+	r, err := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 	if err != nil || r == nil {
-		t.Fatalf("buildBatchResolver: r=%v err=%v", r, err)
+		t.Fatalf("BuildBatchResolver: r=%v err=%v", r, err)
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)

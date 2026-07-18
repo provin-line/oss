@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
@@ -19,12 +20,36 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// capProcessDoc and capOwnerDoc are duplicated from cmd/standalone/crossnode_e2e_test.go's
+// helpers of the same name: Task 4 moved this file into internal/netcompose beside the code it
+// exercises, but crossnode_e2e_test.go (whose own capstone tests still need them) stays behind,
+// and identifiers declared in a _test.go file are invisible outside that package's own test
+// binary — there is no alias (compat.go or otherwise) that reaches a _test.go symbol across a
+// package boundary. Kept byte-for-byte equivalent to the originals.
+func capProcessDoc(processDID, owner string, pub []byte) *did.DIDDocument {
+	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
+	if err != nil {
+		panic(err) // a non-Ed25519 fixture key is a test bug
+	}
+	return did.New(did.DocumentFields{
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 processDID,
+		Controller:         owner,
+		VerificationMethod: []did.VerificationMethod{vm},
+		AssertionMethod:    []string{processDID + "#signing"},
+	})
+}
+
+func capOwnerDoc(owner string) *did.DIDDocument {
+	return did.New(did.DocumentFields{ID: owner, Controller: owner})
+}
+
 // cvSourceResolver adapts a local *vcresolver.Service to auditor.SourceResolver: it maps the
 // store's authoritative ErrNotFound to auditor.ErrSourceNotFound (→ orphan), leaving other
 // errors transient (→ unavailable). The real external-set fixture's resolver (slice-17q
 // D-17q-6) — a legitimate availability seam over a real serving store; issuer-endpoint fan-out
-// is the deferred production detail. This cross-layer integration lives in cmd/standalone (the
-// composition root), not in network/, honoring the network/↔pipeline/ layer rule.
+// is the deferred production detail. This cross-layer integration lives in internal/netcompose
+// (the composition root), not in network/, honoring the network/↔pipeline/ layer rule.
 type cvSourceResolver struct{ svc *vcresolver.Service }
 
 func (r cvSourceResolver) Resolve(ctx context.Context, hash string) (*vc.PipelinePassCredential, error) {

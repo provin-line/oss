@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"os/exec"
@@ -8,9 +8,9 @@ import (
 
 // TestProdDeps_MetricsStayAtCompositionRoot: the P1-2 dependency rule — the
 // library layers expose stdlib poll accessors and NEVER import OpenTelemetry
-// or Prometheus; only cmd/standalone (this package's metrics bridge) may.
-// Guarded on the production graphs of the pipeline, vc/tlog, and network
-// service layers.
+// or Prometheus; only the composition root (internal/netcompose's metrics
+// bridge, this package, and the cmd/ binaries that wire it) may. Guarded on
+// the production graphs of the pipeline, vc/tlog, and network service layers.
 func TestProdDeps_MetricsStayAtCompositionRoot(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps",
 		"github.com/provin-line/oss/pipeline/...",

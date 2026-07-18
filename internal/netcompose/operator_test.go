@@ -3,7 +3,7 @@
 // These assertions are about the PRODUCTION (default) build: noop is refused and
 // not compiled into the binary. Under `-tags dev` the opposite holds, so the file
 // is tagged !dev to avoid a false failure in a dev build.
-package main
+package netcompose
 
 import (
 	"os/exec"
@@ -18,7 +18,7 @@ import (
 // In the default (production) build, the noop transport is refused — it is not
 // even compiled in (slice-15 D-m2).
 func TestChainOperator_ProdRefusesNoop(t *testing.T) {
-	_, err := chainOperator(&chainconfig.Config{
+	_, err := ChainOperator(&chainconfig.Config{
 		Transport: chainconfig.TransportNoop, AllowNoopTransport: true,
 	})
 	if err == nil {
@@ -31,7 +31,7 @@ func TestChainOperator_NATS(t *testing.T) {
 	accSeed, _ := acc.Seed()
 	op, _ := nkeys.CreateOperator()
 	opSeed, _ := op.Seed()
-	o, err := chainOperator(&chainconfig.Config{
+	o, err := ChainOperator(&chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS: chainconfig.NATSConfig{
 			URL: "nats://h:4222", AccountSeed: string(accSeed), TrustRootSeed: string(opSeed),
@@ -39,7 +39,7 @@ func TestChainOperator_NATS(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("chainOperator(nats): %v", err)
+		t.Fatalf("ChainOperator(nats): %v", err)
 	}
 	if o.PublishType() != "nats" {
 		t.Errorf("PublishType = %q, want nats", o.PublishType())

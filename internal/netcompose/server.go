@@ -121,7 +121,7 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	if chainCfg.Transport == chainconfig.TransportNATS {
 		switch {
 		case len(chainCfg.NATS.RegistryBaseURLs) > 0:
-			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(RegistryBaseURL(chainCfg.NATS.RegistryBaseURLs, closeUnmapped)))
+			resolverOpts = append(resolverOpts, didresolver.WithRegistryBaseURL(registryBaseURL(chainCfg.NATS.RegistryBaseURLs, closeUnmapped)))
 			scoped = true
 		case chainCfg.NATS.ResolverBaseURL != "":
 			base := chainCfg.NATS.ResolverBaseURL
@@ -138,15 +138,13 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	return guard, didresolver.New(guard, resolverOpts...), nil
 }
 
-// RegistryBaseURL derives a registry's resolution base URL from the configured
+// registryBaseURL derives a registry's resolution base URL from the configured
 // per-registry map. When closeUnmapped is false, an unmapped registry falls back
 // to the didresolver default (https://{registry}), so a partial map for
 // local/VPC peers composes with public registries. When closeUnmapped is true
 // (allow-private-networks mode, F8), an unmapped registry is REFUSED — the open
 // fallback would let an attacker-supplied registry name reach private space.
-// Exported (despite being an internal derivation helper) because
-// cmd/standalone/server_test.go exercises it directly as a unit.
-func RegistryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
+func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
 	return func(registry string) (string, error) {
 		if base, ok := urls[registry]; ok {
 			return base, nil

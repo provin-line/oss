@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -118,14 +118,14 @@ func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, cr
 		{Resource: "chain", Action: "read-allowlist"},
 	})
 	chainCfg := natsChainCfg(t)
-	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)
 	if derr != nil {
-		t.Fatalf("newDIDResolution: %v", derr)
+		t.Fatalf("NewDIDResolution: %v", derr)
 	}
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
-	chainOp, err := chainOperator(chainCfg)
+	chainOp, err := ChainOperator(chainCfg)
 	if err != nil {
-		t.Fatalf("chainOperator: %v", err)
+		t.Fatalf("ChainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
 	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, nil, nil, nil)
@@ -154,14 +154,14 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint(nil)
 	chainCfg := natsChainCfg(t)
-	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)
 	if derr != nil {
-		t.Fatalf("newDIDResolution: %v", derr)
+		t.Fatalf("NewDIDResolution: %v", derr)
 	}
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
-	chainOp, err := chainOperator(chainCfg)
+	chainOp, err := ChainOperator(chainCfg)
 	if err != nil {
-		t.Fatalf("chainOperator: %v", err)
+		t.Fatalf("ChainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
 	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, nil, nil, nil); err != nil {
@@ -529,7 +529,7 @@ func TestRegistryBaseURL_ClosedFallbackInPrivateMode(t *testing.T) {
 	}
 }
 
-// F8: newDIDResolution fails boot when allow-private-networks is on but NO
+// F8: NewDIDResolution fails boot when allow-private-networks is on but NO
 // registry resolution is scoped (neither a per-registry map nor a single
 // resolver-base-url) — that combination is the exact hole (open fallback +
 // blanket private allow). With scoping present, or with private off, it boots.
@@ -540,7 +540,7 @@ func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
 	// private ON + no scoping (empty map, no resolver-base-url) → boot error.
 	cc := base()
 	cc.AllowPrivateNetworks = true
-	if _, _, err := newDIDResolution(cc, natsChainCfg(t)); err == nil {
+	if _, _, err := NewDIDResolution(cc, natsChainCfg(t)); err == nil {
 		t.Error("private ON + no registry scoping: want boot error (fail-closed)")
 	}
 	// private ON + per-registry map → OK.
@@ -548,7 +548,7 @@ func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
 	cc.AllowPrivateNetworks = true
 	ch := natsChainCfg(t)
 	ch.NATS.RegistryBaseURLs = map[string]string{"mfg.poc.dplaax.dev": "http://mfg:8443"}
-	if _, _, err := newDIDResolution(cc, ch); err != nil {
+	if _, _, err := NewDIDResolution(cc, ch); err != nil {
 		t.Errorf("private ON + registry map: want boot OK, got %v", err)
 	}
 	// private ON + single resolver-base-url (inherently closed) → OK.
@@ -556,12 +556,12 @@ func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
 	cc.AllowPrivateNetworks = true
 	ch = natsChainCfg(t)
 	ch.NATS.ResolverBaseURL = "http://resolver:8443"
-	if _, _, err := newDIDResolution(cc, ch); err != nil {
+	if _, _, err := NewDIDResolution(cc, ch); err != nil {
 		t.Errorf("private ON + resolver-base-url: want boot OK, got %v", err)
 	}
 	// private OFF + no scoping → OK (open resolution; guard blocks all private).
 	cc = base()
-	if _, _, err := newDIDResolution(cc, natsChainCfg(t)); err != nil {
+	if _, _, err := NewDIDResolution(cc, natsChainCfg(t)); err != nil {
 		t.Errorf("private OFF + no scoping: want boot OK, got %v", err)
 	}
 }

@@ -8,7 +8,7 @@
  *     http://www.apache.org/licenses/LICENSE-2.0
  */
 
-package main
+package netcompose
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func decodeReadyz(t *testing.T, rec *httptest.ResponseRecorder) (string, map[str
 
 // All checks passing → 200 {"status":"ok"} with every check reported ok.
 func TestReadyz_AllOK(t *testing.T) {
-	h := newCachedReadiness([]readinessCheck{
+	h := NewCachedReadiness([]ReadinessCheck{
 		{Name: "a", Check: func(context.Context) error { return nil }},
 		{Name: "b", Check: func(context.Context) error { return nil }},
 	}, time.Minute).Handler()
@@ -70,7 +70,7 @@ func TestReadyz_AllOK(t *testing.T) {
 // and check errors carry internal topology (PDP URL, filesystem paths) —
 // detail goes to the server log only.
 func TestReadyz_OneFailing_Degraded(t *testing.T) {
-	h := newCachedReadiness([]readinessCheck{
+	h := NewCachedReadiness([]ReadinessCheck{
 		{Name: "good", Check: func(context.Context) error { return nil }},
 		{Name: "bad", Check: func(context.Context) error { return errors.New("pdp unreachable at http://10.0.0.7:3001") }},
 	}, time.Minute).Handler()
@@ -97,7 +97,7 @@ func TestReadyz_OneFailing_Degraded(t *testing.T) {
 // Zero checks (an HTTP-only node with a static PDP) is trivially ready.
 func TestReadyz_NoChecks_OK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	NewCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -105,7 +105,7 @@ func TestReadyz_NoChecks_OK(t *testing.T) {
 
 func TestReadyz_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
+	NewCachedReadiness(nil, time.Minute).Handler()(rec, httptest.NewRequest(http.MethodPost, "/readyz", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
@@ -113,26 +113,26 @@ func TestReadyz_MethodNotAllowed(t *testing.T) {
 
 func TestEvidenceStoreCheck(t *testing.T) {
 	dir := t.TempDir()
-	if err := evidenceStoreCheck(dir).Check(context.Background()); err != nil {
+	if err := EvidenceStoreCheck(dir).Check(context.Background()); err != nil {
 		t.Errorf("existing dir: %v", err)
 	}
-	if err := evidenceStoreCheck(filepath.Join(dir, "missing")).Check(context.Background()); err == nil {
+	if err := EvidenceStoreCheck(filepath.Join(dir, "missing")).Check(context.Background()); err == nil {
 		t.Error("missing dir passed")
 	}
 	file := filepath.Join(dir, "f")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := evidenceStoreCheck(file).Check(context.Background()); err == nil {
+	if err := EvidenceStoreCheck(file).Check(context.Background()); err == nil {
 		t.Error("plain file passed as evidence dir")
 	}
 }
 
 func TestNatsCheck(t *testing.T) {
-	if err := natsCheck(func() bool { return true }).Check(context.Background()); err != nil {
+	if err := NATSCheck(func() bool { return true }).Check(context.Background()); err != nil {
 		t.Errorf("healthy conn: %v", err)
 	}
-	if err := natsCheck(func() bool { return false }).Check(context.Background()); err == nil {
+	if err := NATSCheck(func() bool { return false }).Check(context.Background()); err == nil {
 		t.Error("unhealthy conn passed")
 	}
 }
@@ -144,7 +144,7 @@ func TestPdpCheck(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
 
-	check, ok := pdpCheck(&auth.AuthConfig{Backend: auth.BackendO3co, PolicyVerifierURL: srv.URL})
+	check, ok := PDPCheck(&auth.AuthConfig{Backend: auth.BackendO3co, PolicyVerifierURL: srv.URL})
 	if !ok {
 		t.Fatal("o3co backend produced no pdp check")
 	}
@@ -157,13 +157,13 @@ func TestPdpCheck(t *testing.T) {
 		t.Error("closed PDP counted reachable")
 	}
 
-	if _, ok := pdpCheck(&auth.AuthConfig{Backend: auth.BackendStatic}); ok {
+	if _, ok := PDPCheck(&auth.AuthConfig{Backend: auth.BackendStatic}); ok {
 		t.Error("static backend produced a pdp probe")
 	}
 
 	opaSrv := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(opaSrv.Close)
-	if check, ok := pdpCheck(&auth.AuthConfig{Backend: auth.BackendOPA, OPA: auth.OPAConfig{BaseURL: opaSrv.URL}}); !ok {
+	if check, ok := PDPCheck(&auth.AuthConfig{Backend: auth.BackendOPA, OPA: auth.OPAConfig{BaseURL: opaSrv.URL}}); !ok {
 		t.Error("opa backend produced no pdp check")
 	} else if err := check.Check(context.Background()); err != nil {
 		t.Errorf("opa probe: %v", err)
@@ -174,7 +174,7 @@ func TestPdpCheck(t *testing.T) {
 // never the path or query where a token or internal detail could ride.
 func TestPdpCheck_ErrorRedactsToHost(t *testing.T) {
 	// A closed port on loopback: the probe fails, producing the log-bound error.
-	check, ok := pdpCheck(&auth.AuthConfig{
+	check, ok := PDPCheck(&auth.AuthConfig{
 		Backend:           auth.BackendO3co,
 		PolicyVerifierURL: "http://127.0.0.1:1/secret-path?token=shhh",
 	})
@@ -200,8 +200,8 @@ func TestHostOnly(t *testing.T) {
 		"http://127.0.0.1:8181":                   "http://127.0.0.1:8181",
 		"://bogus":                                "<redacted>",
 	} {
-		if got := hostOnly(raw); got != want {
-			t.Errorf("hostOnly(%q) = %q, want %q", raw, got, want)
+		if got := HostOnly(raw); got != want {
+			t.Errorf("HostOnly(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -211,7 +211,7 @@ func TestHostOnly(t *testing.T) {
 // refreshes synchronously so a zero snapshot never reads as ready.
 func TestCachedReadiness_CoalescesProbes(t *testing.T) {
 	var probes int64
-	c := newCachedReadiness([]readinessCheck{
+	c := NewCachedReadiness([]ReadinessCheck{
 		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
 	}, time.Minute) // long TTL: everything in this test is one window
 	h := c.Handler()
@@ -231,7 +231,7 @@ func TestCachedReadiness_CoalescesProbes(t *testing.T) {
 // A fresh cache must not serve a zero snapshot as ready: the first request
 // refreshes synchronously, so a failing check yields 503 on the very first hit.
 func TestCachedReadiness_FirstRequestRefreshesSynchronously(t *testing.T) {
-	c := newCachedReadiness([]readinessCheck{
+	c := NewCachedReadiness([]ReadinessCheck{
 		{Name: "bad", Check: func(context.Context) error { return errors.New("down") }},
 	}, time.Minute)
 	rec := httptest.NewRecorder()
@@ -245,7 +245,7 @@ func TestCachedReadiness_FirstRequestRefreshesSynchronously(t *testing.T) {
 func TestCachedReadiness_RefreshesAfterTTL(t *testing.T) {
 	var probes int64
 	now := time.Unix(0, 0)
-	c := newCachedReadiness([]readinessCheck{
+	c := NewCachedReadiness([]ReadinessCheck{
 		{Name: "pdp", Check: func(context.Context) error { atomic.AddInt64(&probes, 1); return nil }},
 	}, 5*time.Second)
 	c.Now = func() time.Time { return now }

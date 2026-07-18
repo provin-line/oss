@@ -1,13 +1,19 @@
-package main
+package netcompose
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +23,7 @@ import (
 
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/network/pkg/core"
 )
 
@@ -30,9 +37,9 @@ func TestNativeTLS_RouteIntegration(t *testing.T) {
 	// The full mux, as production composes it: BuildHandler wrapped by the
 	// metrics gate (enabled here — the ledger names an enabled /metrics).
 	inner, ownerSigner, ownerPub := assembledHandler(t)
-	handler, err := maybeMountMetrics(true, inner, nil, nil)
+	handler, err := MaybeMountMetrics(true, inner, nil, nil)
 	if err != nil {
-		t.Fatalf("maybeMountMetrics: %v", err)
+		t.Fatalf("MaybeMountMetrics: %v", err)
 	}
 
 	coreCfg := &core.CoreConfig{
@@ -43,9 +50,9 @@ func TestNativeTLS_RouteIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServerTLS: %v", err)
 	}
-	srv, _, mode, err := buildServer(coreCfg, tlsConf, handler, 1<<20)
+	srv, _, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, 1<<20)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("httpserve.BuildServer: %v", err)
 	}
 	if mode != "direct-tls" {
 		t.Fatalf("mode = %q, want direct-tls", mode)
@@ -155,4 +162,51 @@ func TestNativeTLS_RouteIntegration(t *testing.T) {
 			t.Errorf("mismatch failed with %T (%v), want a certificate verification error", err, err)
 		}
 	})
+}
+
+// writeSelfSignedCert generates an ed25519 self-signed cert for 127.0.0.1 and
+// writes cert.pem / key.pem to a temp dir, returning their paths.
+//
+// Duplicated from cmd/standalone/main_test.go's helper of the same name: Task 4
+// moved this file into internal/netcompose beside the code it exercises, but
+// cmd/standalone/main_test.go and cmd/standalone/bootsmoke_test.go still need
+// their own copy too, and identifiers declared in a _test.go file are invisible
+// outside that package's own test binary — there is no alias (compat.go or
+// otherwise) that reaches a _test.go symbol across a package boundary. Kept
+// byte-for-byte equivalent to the original.
+func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "127.0.0.1"},
+		NotBefore:             time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certPath = filepath.Join(dir, "cert.pem")
+	keyPath = filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath
 }

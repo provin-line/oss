@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -7,12 +7,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/provin-line/oss/internal/netcompose"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/vc"
 )
 
-// fakeSchemaGetter is a schemaGetter backed by an in-memory map keyed by
+// fakeSchemaGetter is a SchemaGetter backed by an in-memory map keyed by
 // "name@version"; a missing key returns store.ErrNotFound.
 type fakeSchemaGetter struct {
 	schemas map[string]*store.Schema
@@ -38,9 +37,9 @@ func TestResolveSchemaRefAtBoot(t *testing.T) {
 	}}
 
 	// Registered, current: full signed reference with canonical URI + content hash.
-	ref, err := resolveSchemaRefAtBoot(context.Background(), getter, "orders@2026-07-10-abcdef0123456789")
+	ref, err := ResolveSchemaRefAtBoot(context.Background(), getter, "orders@2026-07-10-abcdef0123456789")
 	if err != nil {
-		t.Fatalf("resolveSchemaRefAtBoot: %v", err)
+		t.Fatalf("ResolveSchemaRefAtBoot: %v", err)
 	}
 	want := vc.SchemaRef{ID: "dplaax:schema/orders@2026-07-10-abcdef0123456789", Type: "JsonSchema", ContentHash: hashOf(body)}
 	if ref != want {
@@ -48,17 +47,17 @@ func TestResolveSchemaRefAtBoot(t *testing.T) {
 	}
 
 	// Not registered: boot error (fail-closed).
-	if _, err := resolveSchemaRefAtBoot(context.Background(), getter, "missing@2026-07-10-abcdef0123456789"); err == nil {
+	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "missing@2026-07-10-abcdef0123456789"); err == nil {
 		t.Error("unregistered schema-ref: want boot error, got nil")
 	}
 
 	// Deprecated: boot error (must advance to a current version).
-	if _, err := resolveSchemaRefAtBoot(context.Background(), getter, "legacy@2026-01-01-deadbeefdeadbeef"); err == nil {
+	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "legacy@2026-01-01-deadbeefdeadbeef"); err == nil {
 		t.Error("deprecated schema-ref: want boot error, got nil")
 	}
 
 	// Malformed short-form: boot error.
-	if _, err := resolveSchemaRefAtBoot(context.Background(), getter, "noversion"); err == nil {
+	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "noversion"); err == nil {
 		t.Error("malformed schema-ref: want boot error, got nil")
 	}
 }
@@ -68,7 +67,7 @@ func TestSchemaResolver_ResolveSchema(t *testing.T) {
 	getter := fakeSchemaGetter{schemas: map[string]*store.Schema{
 		"orders@2026-07-10-abcdef0123456789": {SchemaFormat: "JsonSchema", SchemaBody: body},
 	}}
-	r := netcompose.SchemaBridge{Svc: getter}
+	r := SchemaBridge{Svc: getter}
 
 	// Valid canonical URI resolves to body + format.
 	got, err := r.ResolveSchema(context.Background(), vc.SchemaRef{ID: "dplaax:schema/orders@2026-07-10-abcdef0123456789"})

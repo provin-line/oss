@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"net/url"
@@ -67,7 +67,7 @@ func TestRequireHTTPSEndpoints_FlagsCleartextURLsOnATLSPosture(t *testing.T) {
 		NATS: chainconfig.NATSConfig{ResolverBaseURL: "http://registry:8443"},
 	}
 
-	warnings := core.RequireHTTPSEndpoints(tlsPosture, endpointURLs(regCfg, chainCfg))
+	warnings := core.RequireHTTPSEndpoints(tlsPosture, EndpointURLs(regCfg, chainCfg))
 	if len(warnings) != 2 {
 		t.Fatalf("warnings = %v, want the two cleartext URLs flagged", warnings)
 	}
@@ -108,7 +108,7 @@ func TestEndpointURLs_ParseAsURLs(t *testing.T) {
 	regCfg := &registry.RegistryConfig{
 		Endpoints: []did.ServiceEndpoint{{ID: "#vc-resolver", ServiceEndpoint: "https://node:8443"}},
 	}
-	for _, nu := range endpointURLs(regCfg, &chainconfig.Config{}) {
+	for _, nu := range EndpointURLs(regCfg, &chainconfig.Config{}) {
 		if _, err := url.Parse(nu.URL); err != nil {
 			t.Errorf("%s: %v", nu.Name, err)
 		}

@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nats-io/nkeys"
+	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -15,14 +18,85 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
+	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
+
+// auditCfg, bearer, and auditServerWith are duplicated from cmd/standalone's pre-move
+// auditrunner_test.go and server_test.go (helpers of the same names): Task 4 moved those
+// files into internal/netcompose beside the code they exercise, but this capstone test
+// (and, for auditCfg, sourcecommit_audit_integration_test.go) still needs the full
+// assembled stack from this package, and identifiers declared in a _test.go file are
+// invisible outside that package's own test binary — there is no alias (compat.go or
+// otherwise) that reaches a _test.go symbol across a package boundary. Kept
+// behaviorally identical to the moved originals (registryID/natsChainCfg's values are
+// inlined here since nothing else in this package needs them as named symbols).
+func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
+	return &pipelineconfig.Config{
+		Loops:         loops,
+		BatchResolver: pipelineconfig.BatchResolverConfig{Interval: time.Second, BatchSize: 16, MaxRetries: 3, MaxDepth: 1024},
+		AuditRunner:   pipelineconfig.AuditRunnerConfig{Interval: 5 * time.Millisecond, BatchSize: 16, MaxAttempts: 5},
+	}
+}
+
+func bearer[T any](req *connect.Request[T]) *connect.Request[T] {
+	req.Header().Set("Authorization", "Bearer dummy")
+	return req
+}
+
+// auditServerWith mounts BuildHandler behind the {audit, read} authorizer over the GIVEN
+// status store, so a caller that shares the store with a live audit runner (slice-17r) can
+// read a runner-produced verdict back over the RPC. The resolver/vcSvc are BuildHandler's own
+// (GetAuditStatus reads only the status store).
+func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Server {
+	t.Helper()
+	coreCfg := &core.CoreConfig{DataDir: t.TempDir(), ListenAddr: ":0", AllowLoopback: true}
+	regCfg := &registry.RegistryConfig{ID: "poc.dplaax.dev"}
+	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "audit", Action: "read"}})
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS: chainconfig.NATSConfig{
+			URL:           "nats://localhost:4222",
+			AccountSeed:   string(accSeed),
+			TrustRootSeed: string(opSeed),
+			ResolverDir:   t.TempDir(),
+			NodeDID:       "did:dplaax:poc.dplaax.dev:org:node",
+		},
+	}
+	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	if derr != nil {
+		t.Fatalf("newDIDResolution: %v", derr)
+	}
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	chainOp, err := chainOperator(chainCfg)
+	if err != nil {
+		t.Fatalf("chainOperator: %v", err)
+	}
+	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("BuildHandler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 // TestAuditAPI_ServesSourceCommitmentVerified is the slice-17r wire capstone: a REAL emit-locus
 // self-audit (real signed sources + aggregate, the emissionRegistrar, the real audit runner)

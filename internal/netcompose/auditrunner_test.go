@@ -1,7 +1,8 @@
-package main
+package netcompose
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,42 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// ingressTestIssuer is the issuer DID used by makeIngressCred below.
+const ingressTestIssuer = "did:dplaax:reg:org:upstream:pipeline:p1:process:proc1"
+
+// makeIngressCred builds a PipelinePassCredential for this file's runner tests.
+// When prevAddr is non-empty it is set as previousCredential in credentialSubject.
+//
+// Duplicated from cmd/standalone/ingressstore_test.go's helper of the same
+// name: Task 4 moved this file into internal/netcompose beside the code it
+// exercises, but cmd/standalone/ingressstore_test.go (whose own tests still
+// need it) stays behind, and identifiers declared in a _test.go file are
+// invisible outside that package's own test binary — there is no alias
+// (compat.go or otherwise) that reaches a _test.go symbol across a package
+// boundary. Kept byte-for-byte equivalent to the original (only the issuer DID
+// constant's name changed, to avoid implying it is ingress-store-specific).
+func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
+	t.Helper()
+	subject := map[string]any{"pipelineId": "p1", "processId": "proc1"}
+	if prevAddr != nil {
+		subject["previousCredential"] = prevAddr
+	}
+	b, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            ingressTestIssuer,
+		"credentialSubject": subject,
+	})
+	if err != nil {
+		t.Fatalf("marshal cred: %v", err)
+	}
+	var c vc.PipelinePassCredential
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatalf("unmarshal cred: %v", err)
+	}
+	return &c
+}
+
 func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
 	return &pipelineconfig.Config{
 		Loops:         loops,
@@ -22,7 +59,7 @@ func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
 	}
 }
 
-// buildAuditRunner returns a runner only for a node with a consuming loop.
+// BuildAuditRunner returns a runner only for a node with a consuming loop.
 func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -36,10 +73,10 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := memstore.NewPool()
 			svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
-			r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil,
+			r, err := BuildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil,
 				auditCfg([]pipelineconfig.LoopConfig{{Role: tc.role}}))
 			if err != nil {
-				t.Fatalf("buildAuditRunner: %v", err)
+				t.Fatalf("BuildAuditRunner: %v", err)
 			}
 			if (r == nil) != tc.wantNil {
 				t.Errorf("runner nil = %v, want %v", r == nil, tc.wantNil)
@@ -49,7 +86,7 @@ func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
 	// No loops → nil.
 	pool := memstore.NewPool()
 	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
-	if r, err := buildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg(nil)); err != nil || r != nil {
+	if r, err := BuildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg(nil)); err != nil || r != nil {
 		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
 }
@@ -96,9 +133,9 @@ func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 		t.Fatalf("precondition: hole not queued in pool")
 	}
 
-	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
+	r, err := BuildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
 	if err != nil || r == nil {
-		t.Fatalf("buildAuditRunner: r=%v err=%v", r, err)
+		t.Fatalf("BuildAuditRunner: r=%v err=%v", r, err)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -155,9 +192,9 @@ func TestAuditRunner_Integration_RealVerifyTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := buildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
+	r, err := BuildAuditRunner(queue, status, auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}))
 	if err != nil || r == nil {
-		t.Fatalf("buildAuditRunner: r=%v err=%v", r, err)
+		t.Fatalf("BuildAuditRunner: r=%v err=%v", r, err)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

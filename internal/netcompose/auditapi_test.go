@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -44,14 +44,14 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	regCfg := &registry.RegistryConfig{ID: registryID}
 	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "audit", Action: "read"}})
 	chainCfg := natsChainCfg(t)
-	guard, resolver, derr := newDIDResolution(coreCfg, chainCfg)
+	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)
 	if derr != nil {
-		t.Fatalf("newDIDResolution: %v", derr)
+		t.Fatalf("NewDIDResolution: %v", derr)
 	}
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
-	chainOp, err := chainOperator(chainCfg)
+	chainOp, err := ChainOperator(chainCfg)
 	if err != nil {
-		t.Fatalf("chainOperator: %v", err)
+		t.Fatalf("ChainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
 	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, nil, nil, nil)

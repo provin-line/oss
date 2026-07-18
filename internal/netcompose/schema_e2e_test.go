@@ -1,4 +1,4 @@
-package main
+package netcompose
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto/ed25519"
-	"github.com/provin-line/oss/internal/netcompose"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/resolver/local"
@@ -19,7 +18,7 @@ import (
 // its config short-form into the signed reference the issuance path embeds, then
 // verify credentials carrying that reference through the same registry via the
 // SchemaBridge bridge. The key property is cross-side agreement — the content
-// hash resolveSchemaRefAtBoot computes at issuance equals the one the verifier
+// hash ResolveSchemaRefAtBoot computes at issuance equals the one the verifier
 // re-derives at verification (independent code paths over the same registry).
 func TestSchemaValidation_RegistryToVerification(t *testing.T) {
 	ctx := context.Background()
@@ -31,13 +30,13 @@ func TestSchemaValidation_RegistryToVerification(t *testing.T) {
 	}
 
 	// Issuance side: boot-resolve the config short-form to the signed reference.
-	ref, err := resolveSchemaRefAtBoot(ctx, svc, "readings@"+sc.Version)
+	ref, err := ResolveSchemaRefAtBoot(ctx, svc, "readings@"+sc.Version)
 	if err != nil {
-		t.Fatalf("resolveSchemaRefAtBoot: %v", err)
+		t.Fatalf("ResolveSchemaRefAtBoot: %v", err)
 	}
 
 	// Verification side: a verifier wired to the same registry through the bridge.
-	verifier := vc.NewVerifier(local.New(), ed25519.Verifier{}, vc.WithSchemaResolver(netcompose.SchemaBridge{Svc: svc}))
+	verifier := vc.NewVerifier(local.New(), ed25519.Verifier{}, vc.WithSchemaResolver(SchemaBridge{Svc: svc}))
 
 	build := func(r vc.SchemaRef) *vc.PipelinePassCredential {
 		cred, err := vc.New(vc.CredentialFields{
