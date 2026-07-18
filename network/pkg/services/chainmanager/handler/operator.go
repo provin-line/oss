@@ -13,12 +13,15 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/provin-line/oss/allowlist"
+	"github.com/provin-line/oss/did"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
 // Service is the consumer-side view of the chainmanager domain the operator
@@ -38,6 +41,14 @@ type AllowListReader interface {
 	GetAllowList(ctx context.Context, pipelineDID string) ([]store.AllowRule, error)
 }
 
+// EmitHealthReporter is the consumer-side view of the emit-health store the
+// handler depends on (defined here, not in the emithealth package, to keep
+// the dependency pointing inward — mirrors Service/AllowListReader above).
+// *emithealth.Store satisfies it structurally.
+type EmitHealthReporter interface {
+	Report(publisherDID string, healthy bool, now time.Time)
+}
+
 // OperatorHandler adapts a Service to the generated ChainServiceHandler. It
 // embeds the Unimplemented stub so the connection-flow RPCs (Subscribe /
 // Unsubscribe) return CodeUnimplemented until a SubscriberService is supplied via
@@ -47,6 +58,14 @@ type OperatorHandler struct {
 	svc   Service
 	sub   SubscriberService // nil → Subscribe/Unsubscribe report Unimplemented
 	allow AllowListReader   // nil → GetAllowList reports Unimplemented
+
+	// ReportEmitHealth wiring (WithEmitHealth). emitHealth is nil unless
+	// wired, in which case ReportEmitHealth reports Unimplemented — mirrors
+	// allow's nil posture above (production always wires it on cmd/network;
+	// cmd/standalone never does).
+	emitHealth         EmitHealthReporter
+	emitHealthVerifier Verifier
+	emitHealthTTL      time.Duration
 }
 
 var _ chainpbconnect.ChainServiceHandler = (*OperatorHandler)(nil)
@@ -68,6 +87,23 @@ func WithSubscriber(sub SubscriberService) OperatorOption {
 // Unimplemented.
 func WithAllowListReader(r AllowListReader) OperatorOption {
 	return func(h *OperatorHandler) { h.allow = r }
+}
+
+// WithEmitHealth enables the ReportEmitHealth RPC: reporter records each
+// verified report (typically an *emithealth.Store, the SAME instance the
+// composition root's chainmanager.WithPublisherHealth lookup reads back — see
+// internal/netcompose's cmd/network wiring), v verifies the caller's in-band
+// wireauth proof (ReportEmitHealth is "L1 + wireauth", per the proto's own
+// doc), and ttl is the freshness window echoed back in every response.
+// Without this option ReportEmitHealth reports Unimplemented (production
+// wires it on cmd/network; cmd/standalone never does — it has no
+// report-mode consumer for this RPC).
+func WithEmitHealth(reporter EmitHealthReporter, v Verifier, ttl time.Duration) OperatorOption {
+	return func(h *OperatorHandler) {
+		h.emitHealth = reporter
+		h.emitHealthVerifier = v
+		h.emitHealthTTL = ttl
+	}
 }
 
 // NewOperator returns an OperatorHandler backed by svc. Pass WithSubscriber to
@@ -102,6 +138,41 @@ func (h *OperatorHandler) UpdateAllowList(ctx context.Context, req *connect.Requ
 		return nil, mapError(err)
 	}
 	return connect.NewResponse(&chainpb.UpdateAllowListResponse{}), nil
+}
+
+// errPublisherMismatch is ReportEmitHealth's signer-to-actor binding failure:
+// the proof's signer is not the publisher_did the request claims to report
+// health for. Mapped to PermissionDenied — the proven DID is authoritative
+// over publisher_did (the proto's own doc: "a caller reports health only for
+// itself").
+var errPublisherMismatch = errors.New("chainmanager: signer is not the claimed publisher")
+
+// ReportEmitHealth verifies the caller's in-band wireauth proof (L1 +
+// wireauth, per ReportEmitHealthRequest's own doc), rejects a publisher_did
+// that does not equal the proven signer DID (PermissionDenied — a caller may
+// only report health for itself), then records the report and returns the
+// server's configured TTL.
+func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Request[chainpb.ReportEmitHealthRequest]) (*connect.Response[chainpb.ReportEmitHealthResponse], error) {
+	if h.emitHealth == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chainmanager: ReportEmitHealth not wired (WithEmitHealth)"))
+	}
+	proof, err := decodeProof(req.Msg.GetAuthProof())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	fields := chainmanager.ReportEmitHealthFields(req.Msg.GetPublisherDid(), req.Msg.GetHealthy())
+	// Signer-to-actor binding: the proven signer must be the claimed publisher.
+	bind := func(signerDID string, _ *did.DIDDocument, f map[string]any) error {
+		if f["publisher_did"] != signerDID {
+			return errPublisherMismatch
+		}
+		return nil
+	}
+	if err := h.emitHealthVerifier.Verify(ctx, chainmanager.OpReportEmitHealth, fields, proof, bind); err != nil {
+		return nil, mapError(err)
+	}
+	h.emitHealth.Report(req.Msg.GetPublisherDid(), req.Msg.GetHealthy(), time.Now())
+	return connect.NewResponse(&chainpb.ReportEmitHealthResponse{Ttl: durationpb.New(h.emitHealthTTL)}), nil
 }
 
 func (h *OperatorHandler) GetAllowList(ctx context.Context, req *connect.Request[chainpb.GetAllowListRequest]) (*connect.Response[chainpb.GetAllowListResponse], error) {
@@ -142,10 +213,16 @@ func formatCreated(t time.Time) string {
 	return t.UTC().Truncate(time.Second).Format(time.RFC3339)
 }
 
-// mapError translates domain sentinel errors to Connect codes (errors.Is, never
-// string matching).
+// mapError translates domain sentinel errors, and ReportEmitHealth's wireauth
+// sentinels, to Connect codes (errors.Is, never string matching).
 func mapError(err error) error {
 	switch {
+	// Malformed request / proof shape (ReportEmitHealth's codec + wireauth).
+	case errors.Is(err, errMalformedIssuedAt),
+		errors.Is(err, wireauth.ErrMissingProof),
+		errors.Is(err, wireauth.ErrMalformedProof),
+		errors.Is(err, wireauth.ErrInvalidView):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, allowlist.ErrInvalidPattern):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrInvalidPipelineDID):
@@ -173,10 +250,29 @@ func mapError(err error) error {
 			return connect.NewError(code, err)
 		}
 		return connect.NewError(connect.CodeUnavailable, err)
-	case errors.Is(err, store.ErrNotFound):
-		return connect.NewError(connect.CodeNotFound, err)
+	// Inbound caller hung up mid-verification: CodeCanceled, not a
+	// server-side "unavailable". Precedes ErrResolverUnavailable, which the
+	// cancellation also wraps — order decides the mapping.
 	case errors.Is(err, context.Canceled):
 		return connect.NewError(connect.CodeCanceled, err)
+	// Transient resolver condition (timeout/capacity): retryable, NOT an
+	// identity rejection. Must precede the Unauthenticated cases — the error
+	// also wraps ErrResolverUnavailable, and order decides the mapping.
+	case errors.Is(err, wireauth.ErrResolverUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
+	// Failed to prove identity (ReportEmitHealth's wireauth verification).
+	case errors.Is(err, wireauth.ErrExpired),
+		errors.Is(err, wireauth.ErrFromFuture),
+		errors.Is(err, wireauth.ErrBeforeEpoch),
+		errors.Is(err, wireauth.ErrKeyResolution),
+		errors.Is(err, wireauth.ErrSignatureInvalid),
+		errors.Is(err, wireauth.ErrReplay):
+		return connect.NewError(connect.CodeUnauthenticated, err)
+	// Signer-to-actor binding: the proven signer must be the claimed publisher.
+	case errors.Is(err, errPublisherMismatch):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, store.ErrNotFound):
+		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	default:

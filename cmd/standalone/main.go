@@ -229,8 +229,12 @@ func main() {
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
 	}
+	// emitHealth is nil: cmd/standalone gates by-reference advertisement with
+	// its own in-process byRefGate above (the global model), never the
+	// per-publisher report-mode gate (chainmanager.New would panic if both
+	// were wired on the same Service).
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, payloadStore, dp.tlogs, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy)
+		schemaSvc, payloadSvc, payloadStore, dp.tlogs, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}

@@ -37,6 +37,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	payloadfilestore "github.com/provin-line/oss/network/pkg/services/payloadresolver/filestore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
@@ -203,11 +204,25 @@ func main() {
 		readiness = append(readiness, check)
 	}
 
+	// ReportEmitHealth's publisher-scoped by-reference advertisement gate
+	// (Task 10 D4): this report-mode node has no in-process by-reference
+	// producer of its own — unlike cmd/standalone's byRefGate — so
+	// advertisement is instead gated per publisher by what that publisher has
+	// itself reported here. The store backs BOTH the ReportEmitHealth RPC
+	// (mounted via emitHealth below) and chainmanager.WithPublisherHealth's
+	// lookup (wired inside BuildHandler).
+	emitHealthStore := emithealth.New(chainCfg.EmitHealth.TTL)
+	emitHealth := &netcompose.EmitHealthWiring{
+		Store:                   emitHealthStore,
+		AdvertiseWithoutReports: chainCfg.EmitHealth.AdvertiseWithoutReports,
+	}
+
 	// mountIngest and byRefHealthy are both nil: no data plane means no
-	// push-ingest routes to mount and no by-reference producer health to gate
-	// advertisement on.
+	// push-ingest routes to mount and no in-process by-reference producer
+	// health to gate advertisement on (emitHealth above replaces it for this
+	// report-mode binary).
 	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil)
+		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil, emitHealth)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
 	}

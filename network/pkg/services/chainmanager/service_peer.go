@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/allowlist"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
@@ -69,21 +70,47 @@ var (
 // operator, where the derivation and the enforcement agree.
 const exportSeamAppliesDeliveryMode = true
 
-// offeredPayloadModes derives the payload-delivery modes this CM advertises.
-// "inline" is always offered. "by-reference" additionally requires BOTH this
-// node serving payloads AND the export seam applying the mode
-// (exportSeamAppliesDeliveryMode, now structurally true — see its doc).
-func (s *Service) offeredPayloadModes() []string {
+// offeredPayloadModes derives the payload-delivery modes this CM advertises
+// for publisherDID. "inline" is always offered. "by-reference" additionally
+// requires BOTH this node serving payloads AND the export seam applying the
+// mode (exportSeamAppliesDeliveryMode, now structurally true — see its doc)
+// AND the applicable health gate — see byReferenceHealthy.
+func (s *Service) offeredPayloadModes(publisherDID string) []string {
 	modes := []string{"inline"}
-	// The runtime health gate (byRefHealthy), when configured, additionally
-	// suppresses by-reference while this node's stripped-publish emission is
-	// failing — so a node stops advertising a mode it can no longer honestly
-	// serve. Evaluated once; nil means health monitoring is not configured.
-	healthy := s.byRefHealthy == nil || s.byRefHealthy()
-	if s.payloadServing && exportSeamAppliesDeliveryMode && healthy {
+	if s.payloadServing && exportSeamAppliesDeliveryMode && s.byReferenceHealthy(publisherDID) {
 		modes = append(modes, "by-reference")
 	}
 	return modes
+}
+
+// byReferenceHealthy resolves the by-reference health gate for publisherDID
+// under whichever model this Service was constructed with (WithPublisherHealth
+// and WithByReferenceHealth are mutually exclusive — enforced in New):
+//
+//   - publisherHealthLookup set (report-mode, WithPublisherHealth): a
+//     PER-PUBLISHER decision — HealthyReported advertises, UnhealthyReported
+//     and Expired both degrade, and NeverReported follows
+//     advertiseWithoutReports.
+//   - byRefHealthy set (in-process, WithByReferenceHealth): the node-global
+//     decision — unchanged behavior from before offeredPayloadModes took a
+//     publisherDID argument.
+//   - neither set: unconditionally healthy (the pre-degradation behavior).
+func (s *Service) byReferenceHealthy(publisherDID string) bool {
+	switch {
+	case s.publisherHealthLookup != nil:
+		switch s.publisherHealthLookup(publisherDID) {
+		case emithealth.HealthyReported:
+			return true
+		case emithealth.NeverReported:
+			return s.advertiseWithoutReports
+		default: // emithealth.UnhealthyReported, emithealth.Expired
+			return false
+		}
+	case s.byRefHealthy != nil:
+		return s.byRefHealthy()
+	default:
+		return true
+	}
 }
 
 // PublisherInfo returns the publisher's transport type and offered
@@ -99,7 +126,7 @@ func (s *Service) PublisherInfo(ctx context.Context, publisherDID, callerDID str
 	if err := s.admit(publisherDID, callerDID); err != nil {
 		return "", nil, err
 	}
-	return s.infra.PublishType(), s.offeredPayloadModes(), nil
+	return s.infra.PublishType(), s.offeredPayloadModes(publisherDID), nil
 }
 
 // RegisterSubscription admits the subscriber, negotiates the payload mode,
@@ -123,7 +150,7 @@ func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publi
 	if err := s.admit(publisherDID, subscriberDID); err != nil {
 		return nil, err
 	}
-	mode, err := negotiatePayloadMode(requestedMode, s.offeredPayloadModes())
+	mode, err := negotiatePayloadMode(requestedMode, s.offeredPayloadModes(publisherDID))
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	chainhandler "github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
@@ -209,7 +211,7 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // []byte, not a stream — see payloadresolver.Store.StoreWriter's doc).
 // maxRetainChunkSize/maxRetainPayloadSize are the max-retain-chunk-size /
 // max-retain-payload-size config quotas (pipelineconfig).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool, emitHealth *EmitHealthWiring) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -244,6 +246,20 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// advertising is governed solely by WithPayloadServing.
 	if byRefHealthy != nil {
 		chainOpts = append(chainOpts, chainmanager.WithByReferenceHealth(byRefHealthy))
+	}
+	// A report-mode network node (cmd/network) has no in-process by-reference
+	// producer of its own, so instead of the global byRefHealthy gate above it
+	// gates advertisement PER PUBLISHER by what that publisher has itself
+	// reported via ReportEmitHealth (Task 10 D4). The two are mutually
+	// exclusive — chainmanager.New panics if both are wired — so a caller must
+	// never pass both a non-nil byRefHealthy AND a non-nil emitHealth.
+	if emitHealth != nil {
+		chainOpts = append(chainOpts, chainmanager.WithPublisherHealth(
+			func(publisherDID string) emithealth.HealthState {
+				return emitHealth.Store.State(publisherDID, time.Now())
+			},
+			emitHealth.AdvertiseWithoutReports,
+		))
 	}
 	chainSvc := chainmanager.New(
 		chainyaml.NewSubscriptionStore(chainRoot), chainyaml.NewAllowListStore(chainRoot),
@@ -289,6 +305,19 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// h2c-upgrade path on top of these.
 	proofCap := connect.WithReadMaxBytes(maxProofRequestBytes)
 	docCap := connect.WithReadMaxBytes(maxDocumentRequestBytes)
+	// ReportEmitHealth is mounted on the operator surface only when emitHealth
+	// is wired (cmd/network); cmd/standalone's OperatorHandler leaves it
+	// Unimplemented — it has no report-mode consumer for this RPC. peerVerifier
+	// (built above for the L2 surfaces) is reused: ReportEmitHealth is "L1 +
+	// wireauth", so it needs the SAME DID-resolution + nonce-store
+	// infrastructure.
+	chainOperatorOpts := []chainhandler.OperatorOption{
+		chainhandler.WithSubscriber(chainSvc),
+		chainhandler.WithAllowListReader(chainSvc),
+	}
+	if emitHealth != nil {
+		chainOperatorOpts = append(chainOperatorOpts, chainhandler.WithEmitHealth(emitHealth.Store, peerVerifier, chainCfg.EmitHealth.TTL))
+	}
 	// retainChunkCap is PayloadStoreService's per-RPC class: sized to the
 	// configured max-retain-chunk-size (not a fixed constant like proof/doc,
 	// since a retained chunk's legitimate size is an operator-tunable quota,
@@ -308,7 +337,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		// Read-mostly / small-request control surfaces → proof class.
 		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), authz, proofCap)),
 		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz, proofCap)),
-		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc), chainhandler.WithAllowListReader(chainSvc)), authz, docCap)),
+		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainOperatorOpts...), authz, docCap)),
 		// PayloadStoreService (RetainPayload) is the L1-gated write side of
 		// by-reference payload delivery (unlike PayloadService below, mounted
 		// with NO L1 interceptor): the authz interceptor decides whether the
