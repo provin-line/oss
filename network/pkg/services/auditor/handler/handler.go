@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -42,27 +41,6 @@ const (
 	listingAuditStatuses   = "dplaax.audit.v1.AuditService.ListAuditStatuses"
 	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
 )
-
-// opRegisterEvidence is the wireauth op name for RegisterEvidence — it MUST
-// match the client's signed view (D7: every evidence-write RPC carries an
-// L2-style wireauth proof signed by the acting pipeline/process DID). Unlike
-// the peer surface's short op names, this one carries the full RPC identity:
-// RegisterEvidence is reached through the L1-authorized AuditService mux
-// (unlike ChainPeerService/PayloadService, which are mounted with no L1
-// interceptor at all), so its op name is namespaced to avoid ever colliding
-// with another L1-authorized surface's short op name.
-const opRegisterEvidence = "dplaax.audit.v1.AuditService/RegisterEvidence"
-
-// consumedJoinSeparator deterministically joins the canonical consumed-source
-// set into the single signed field the proof covers. A newline is unambiguous
-// because auditor.CanonicalizeConsumedSet ENFORCES that every member is a
-// well-formed "sha256:<64 lowercase hex>" content address (rejecting anything
-// else, including an embedded "\n", with an error) — not merely an assumption
-// at this join site. That fixed length and hex-only alphabet is what makes
-// the join collision-free: two different consumed sets can never join to the
-// same signed bytes, because no member can itself contain the separator or
-// vary in length.
-const consumedJoinSeparator = "\n"
 
 // EvidenceRegistrar is the consumer-side view of the evidence-registration
 // service the handler depends on (defined here to keep the dependency
@@ -114,13 +92,10 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	fields := map[string]any{
-		"head_variant_address":      req.Msg.GetHeadVariantAddress(),
-		"consumed_source_addresses": strings.Join(canonical, consumedJoinSeparator),
-	}
+	fields := auditor.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
 	// No separate actor field: the proven signer_did is authoritative for who
 	// registered the evidence (the querying actor IS the signer, nil authorizer).
-	if err := h.v.Verify(ctx, opRegisterEvidence, fields, proof, nil); err != nil {
+	if err := h.v.Verify(ctx, auditor.OpRegisterEvidence, fields, proof, nil); err != nil {
 		return nil, mapError(err)
 	}
 	if err := h.evidence.Register(ctx, req.Msg.GetHeadVariantAddress(), canonical); err != nil {
