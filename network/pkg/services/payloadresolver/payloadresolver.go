@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/provin-line/oss/vc"
 )
@@ -35,6 +36,12 @@ var ErrInvalidArgument = errors.New("payloadresolver: invalid argument")
 // ErrNotFound is a well-formed content address the store does not hold.
 var ErrNotFound = errors.New("payloadresolver: payload not found")
 
+// ErrWriterFinalized is returned by Write after Commit or Abort, and by a
+// second call to Commit or Abort: a PayloadWriter is single-use past its first
+// finalization. Both store backends return this exact sentinel so a caller
+// (e.g. a client-streaming handler) can branch on it regardless of backend.
+var ErrWriterFinalized = errors.New("payloadresolver: payload writer already committed or aborted")
+
 // Store persists by-reference payloads by content address, together with the
 // set of pipeline DIDs that emitted each payload.
 type Store interface {
@@ -43,6 +50,12 @@ type Store interface {
 	// (content-addressed) and a repeat owner; a new owner is appended to the
 	// address's owner set. Returns the recomputed content address.
 	Put(payload []byte, ownerDID string) (string, error)
+	// StoreWriter returns a streaming retain handle for ownerDID: the caller
+	// writes payload bytes incrementally (io.Copy-compatible) instead of
+	// buffering the whole payload before calling Put, then finalizes with
+	// Commit or Abort. The content address is derived incrementally as bytes
+	// are written, byte-identical to what Put would derive for the same bytes.
+	StoreWriter(ctx context.Context, ownerDID string) (PayloadWriter, error)
 	// Owners returns the owner set recorded at hash WITHOUT reading (or hashing)
 	// the payload bytes — the cheap authorization basis the serving boundary
 	// consults before it commits to serving (see ServingBoundary.Serve). Returns
@@ -54,6 +67,22 @@ type Store interface {
 	// ErrNotFound. A stored payload whose bytes no longer hash to the key is a
 	// damaged entry (a distinct error), never a silent miss.
 	Get(hash string) (payload []byte, owners []string, err error)
+}
+
+// PayloadWriter is a streaming retain handle returned by Store.StoreWriter.
+// Callers write payload bytes incrementally, then finalize with EXACTLY ONE
+// of Commit or Abort — a PayloadWriter is single-use.
+type PayloadWriter interface {
+	io.Writer
+	// Commit finalizes the write, deriving the content address from the bytes
+	// written so far and persisting the payload durably under it (recording
+	// ownerDID as an emitter, exactly as Put would). Returns ErrWriterFinalized
+	// if the writer was already Committed or Aborted.
+	Commit() (contentAddr string, err error)
+	// Abort discards the writer's buffered/temp state: nothing written to it is
+	// persisted. Returns ErrWriterFinalized if the writer was already Committed
+	// or Aborted.
+	Abort() error
 }
 
 // Service retains and serves by-reference payloads over a Store.
