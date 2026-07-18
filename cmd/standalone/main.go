@@ -235,19 +235,20 @@ func main() {
 		log.Fatalf("standalone: build server: %v", err)
 	}
 
-	// The async chain-audit resolver drains the pool the consuming loops populate. It is
-	// nil for a source-only node (no consuming loop → no holes to drain).
+	// The async chain-audit resolver drains the pool the consuming loops populate, and the
+	// audit runner verifies assembled chains and records per-head verdicts. Both builders
+	// now build unconditionally from their args (Task 9); gateConsumingLoopRunners below
+	// reproduces their old internal gate at this call site, so a source-only node still
+	// gets nil for both (no holes to drain, no consumed heads register) exactly as before.
 	batchRunner, err := buildBatchResolver(pool, vcSvc, guard, resolver, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build batch resolver: %v", err)
 	}
-
-	// The async audit runner verifies the assembled chains and records per-head verdicts.
-	// Also nil for a source-only node (no consumed heads register).
 	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditReceipts, vcSvc, pool, resolver, schemaBridge, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build audit runner: %v", err)
 	}
+	batchRunner, auditRunner = gateConsumingLoopRunners(pipeCfg, batchRunner, auditRunner)
 
 	// The /metrics bridge composes OUTSIDE BuildHandler, after the audit
 	// runner exists (its VerdictCounts is one of the polled sources). Config
@@ -295,6 +296,19 @@ func main() {
 		os.Exit(1)
 	}
 	log.Printf("standalone: shutdown complete")
+}
+
+// gateConsumingLoopRunners nils batchRunner/auditRunner when pipeCfg has no consuming
+// loop, reproducing BuildBatchResolver/BuildAuditRunner's former internal gate at this
+// call site (Task 9: the builders now build unconditionally from their args — see their
+// doc comments in internal/netcompose). A source-only or zero-loop node accumulates no
+// holes and registers no consumed heads, so it still runs neither background runner;
+// otherwise the two runners the builders returned pass through unchanged.
+func gateConsumingLoopRunners(pipeCfg *pipelineconfig.Config, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) (*batchresolver.Runner, *auditor.Runner) {
+	if !pipeCfg.HasConsumingLoop() {
+		return nil, nil
+	}
+	return batchRunner, auditRunner
 }
 
 // runServices runs the HTTP server, the data plane, and the two async background runners

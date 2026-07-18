@@ -59,35 +59,33 @@ func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
 	}
 }
 
-// BuildAuditRunner returns a runner only for a node with a consuming loop.
-func TestBuildAuditRunner_GatedOnConsumingLoop(t *testing.T) {
+// BuildAuditRunner builds unconditionally from its args now (Task 9): the "does this node
+// have a consuming loop" gate moved to the composition roots (cmd/standalone gates at its
+// call site; cmd/network always builds, since it never has a local loop to gate on). A
+// source-only or zero-loop config therefore returns a non-nil runner just like a
+// sink/chained config — the builder itself no longer inspects pipeCfg.HasConsumingLoop().
+func TestBuildAuditRunner_BuildsUnconditionally(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		role    string
-		wantNil bool
+		name  string
+		loops []pipelineconfig.LoopConfig
 	}{
-		{"source-only", pipelineconfig.RoleSource, true},
-		{"sink", pipelineconfig.RoleSink, false},
-		{"chained", pipelineconfig.RoleChained, false},
+		{"source-only", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSource}}},
+		{"sink", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}},
+		{"chained", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleChained}}},
+		{"no-loops", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := memstore.NewPool()
 			svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 			r, err := BuildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil,
-				auditCfg([]pipelineconfig.LoopConfig{{Role: tc.role}}))
+				auditCfg(tc.loops))
 			if err != nil {
 				t.Fatalf("BuildAuditRunner: %v", err)
 			}
-			if (r == nil) != tc.wantNil {
-				t.Errorf("runner nil = %v, want %v", r == nil, tc.wantNil)
+			if r == nil {
+				t.Error("runner is nil, want non-nil (the builder builds unconditionally now)")
 			}
 		})
-	}
-	// No loops → nil.
-	pool := memstore.NewPool()
-	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
-	if r, err := BuildAuditRunner(auditor.NewMemQueue(), auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), svc, pool, local.New(), nil, auditCfg(nil)); err != nil || r != nil {
-		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
 }
 

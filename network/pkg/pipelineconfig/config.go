@@ -53,10 +53,17 @@ const (
 const StrategyAdjacent = "adjacent"
 
 const (
-	pipelineKey             = "provin.network.pipeline"
-	loopsKey                = pipelineKey + ".loops"
-	vcStoreEndpointKey      = pipelineKey + ".vc-store-endpoint"
-	vcStoreBearerKey        = pipelineKey + ".vc-store-bearer"
+	pipelineKey        = "provin.network.pipeline"
+	loopsKey           = pipelineKey + ".loops"
+	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
+	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
+	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
+	// requirement — cmd/network boot-validates it unconditionally (Task 9),
+	// since its batch resolver always runs a peer-fetching client regardless of
+	// pipeCfg.HasConsumingLoop(), which is always false for that binary — can
+	// name the exact key in its own fatal message without duplicating the
+	// literal (this package already uses it below for the same reason).
+	VCStoreBearerKey        = pipelineKey + ".vc-store-bearer"
 	maxCredentialSizeKey    = pipelineKey + ".max-credential-size"
 	maxPushBodySizeKey      = pipelineKey + ".max-push-body-size"
 	maxRetainChunkSizeKey   = pipelineKey + ".max-retain-chunk-size"
@@ -384,22 +391,22 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Has(vcStoreBearerKey) {
-		if out.VCStoreBearer, err = cfg.String(vcStoreBearerKey); err != nil {
-			return nil, fmt.Errorf("pipeline: config %s: %w", vcStoreBearerKey, err)
+	if cfg.Has(VCStoreBearerKey) {
+		if out.VCStoreBearer, err = cfg.String(VCStoreBearerKey); err != nil {
+			return nil, fmt.Errorf("pipeline: config %s: %w", VCStoreBearerKey, err)
 		}
 	}
 	// The VC store sits behind L1 auth, so a configured endpoint needs a bearer — a
 	// tokenless publish/resolve would be rejected at runtime. Fail closed at boot.
 	if out.VCStoreEndpoint != "" && out.VCStoreBearer == "" {
-		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, vcStoreBearerKey)
+		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, VCStoreBearerKey)
 	}
 	// A consuming loop drives the async chain audit, whose peer predecessor fetches
 	// present this bearer against L1-protected peers. An empty bearer would not fail
 	// until the first cross-node hole silently starves an audit at runtime, so it
 	// fails closed at boot instead.
 	if out.VCStoreBearer == "" && out.HasConsumingLoop() {
-		return nil, fmt.Errorf("pipeline: a consuming loop (sink/chained/aggregate) requires %s — the async audit's peer fetches are L1-authenticated", vcStoreBearerKey)
+		return nil, fmt.Errorf("pipeline: a consuming loop (sink/chained/aggregate) requires %s — the async audit's peer fetches are L1-authenticated", VCStoreBearerKey)
 	}
 	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
 		return nil, err

@@ -65,6 +65,52 @@ func TestNetwork_BootRejectsConfiguredPipelineLoop(t *testing.T) {
 	}
 }
 
+// This binary always runs the peer-fetching batch resolver (Task 9): builders build
+// unconditionally now, and unlike cmd/standalone this binary can never gate the runner on
+// pipeCfg.HasConsumingLoop() (the guard above enforces zero loops here, so that predicate
+// is always false). The resolver's peer fetches present provin.network.pipeline.vc-store-
+// bearer against L1-protected peers regardless of local loops, so an empty bearer must
+// fail boot rather than silently starve every fetch at runtime.
+func TestNetwork_BootRejectsEmptyVCStoreBearer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary")
+	}
+	bin := buildNetworkBinary(t)
+	dir := t.TempDir()
+	certFile, keyFile := writeSelfSignedCert(t)
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+
+	writeBootConfig(t, dir, bootConfig{
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:    filepath.Join(dir, "data"),
+		CertFile:   certFile,
+		KeyFile:    keyFile,
+		// Unreachable on purpose: the bearer guard must die BEFORE any chain-operator
+		// broker dial, so this URL is never actually contacted.
+		NATSURL:    "nats://127.0.0.1:1",
+		AccSeed:    accSeedFile,
+		TrustSeed:  trustSeedFile,
+		ResolveDir: filepath.Join(dir, "resolver"),
+		// VCStoreBearer intentionally left empty (the default/absent case).
+	})
+
+	cmd := exec.Command(bin)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("network booted with an empty vc-store-bearer; want a non-zero exit\noutput:\n%s", out)
+	}
+	const wantKey = "provin.network.pipeline.vc-store-bearer"
+	if !strings.Contains(string(out), wantKey) {
+		t.Errorf("boot failure does not name the config key (want %q):\n%s", wantKey, out)
+	}
+	// The guard must fire before any store is created — a data directory here would
+	// mean the node did side-effectful boot work past the point it decided to refuse.
+	if _, statErr := os.Stat(filepath.Join(dir, "data")); statErr == nil {
+		t.Errorf("data dir was created despite the vc-store-bearer guard rejecting boot")
+	}
+}
+
 // validSourceLoopConf is a single, fully valid "source" loop (mirrors
 // network/pkg/pipelineconfig's validSourceLoop fixture) — LoadPipelineConfig
 // must succeed so the guard (which runs AFTER it) is what rejects the boot,
@@ -90,6 +136,10 @@ const validSourceLoopConf = `
 // tests write. PipelineLoops, when non-empty, is embedded verbatim as the body
 // of provin.network.pipeline.loops (the raw HOCON block for one or more
 // loops); empty means no pipeline block at all (zero loops, the valid default).
+// VCStoreBearer, when non-empty, sets provin.network.pipeline.vc-store-bearer;
+// empty means the key is omitted (this binary's boot-validation guard requires
+// it non-empty regardless of PipelineLoops — Task 9 — since it always runs the
+// peer-fetching batch resolver).
 type bootConfig struct {
 	ListenAddr    string
 	DataDir       string
@@ -100,6 +150,7 @@ type bootConfig struct {
 	TrustSeed     string
 	ResolveDir    string
 	PipelineLoops string
+	VCStoreBearer string
 }
 
 // writeBootConfig writes dir/config/application.conf for the actual binary to
@@ -148,14 +199,17 @@ provin.network.chain {
   }
 }
 `, c.ListenAddr, c.DataDir, c.CertFile, c.KeyFile, c.NATSURL, c.AccSeed, c.TrustSeed, c.ResolveDir)
-	if c.PipelineLoops != "" {
-		conf += fmt.Sprintf(`
-provin.network.pipeline {
-  loops {
-%s
-  }
-}
-`, c.PipelineLoops)
+	if c.PipelineLoops != "" || c.VCStoreBearer != "" {
+		var pipelineBlock strings.Builder
+		pipelineBlock.WriteString("\nprovin.network.pipeline {\n")
+		if c.VCStoreBearer != "" {
+			fmt.Fprintf(&pipelineBlock, "  vc-store-bearer = %q\n", c.VCStoreBearer)
+		}
+		if c.PipelineLoops != "" {
+			fmt.Fprintf(&pipelineBlock, "  loops {\n%s\n  }\n", c.PipelineLoops)
+		}
+		pipelineBlock.WriteString("}\n")
+		conf += pipelineBlock.String()
 	}
 	if err := os.WriteFile(filepath.Join(confDir, "application.conf"), []byte(conf), 0o600); err != nil {
 		t.Fatal(err)

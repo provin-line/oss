@@ -78,38 +78,36 @@ func brConfig(loops []pipelineconfig.LoopConfig, interval time.Duration, maxByte
 	}
 }
 
-// BuildBatchResolver returns a runner only for a node with a consuming loop (the
-// population that accumulates holes); a source-only node returns nil.
-func TestBuildBatchResolver_GatedOnConsumingLoop(t *testing.T) {
+// BuildBatchResolver builds unconditionally from its args now (Task 9): the "does this
+// node have a consuming loop" gate moved to the composition roots (cmd/standalone gates at
+// its call site; cmd/network always builds, since it never has a local loop to gate on).
+// A source-only or zero-loop config therefore returns a non-nil runner just like a
+// sink/chained config — the builder itself no longer inspects pipeCfg.HasConsumingLoop().
+func TestBuildBatchResolver_BuildsUnconditionally(t *testing.T) {
 	guard := core.NewURLGuard()
 	pool := memstore.NewPool()
 	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
 	resolver := didresolver.New(guard)
 
 	for _, tc := range []struct {
-		name    string
-		role    string
-		wantNil bool
+		name  string
+		loops []pipelineconfig.LoopConfig
 	}{
-		{"source-only", pipelineconfig.RoleSource, true},
-		{"sink", pipelineconfig.RoleSink, false},
-		{"chained", pipelineconfig.RoleChained, false},
+		{"source-only", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSource}}},
+		{"sink", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}},
+		{"chained", []pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleChained}}},
+		{"no-loops", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := brConfig([]pipelineconfig.LoopConfig{{Role: tc.role}}, time.Second, 1<<20)
+			cfg := brConfig(tc.loops, time.Second, 1<<20)
 			r, err := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 			if err != nil {
 				t.Fatalf("BuildBatchResolver: %v", err)
 			}
-			if (r == nil) != tc.wantNil {
-				t.Errorf("runner nil = %v, want %v", r == nil, tc.wantNil)
+			if r == nil {
+				t.Error("runner is nil, want non-nil (the builder builds unconditionally now)")
 			}
 		})
-	}
-
-	// No loops → nil (zero-loop node).
-	if r, err := BuildBatchResolver(pool, svc, guard, resolver, brConfig(nil, time.Second, 1<<20)); err != nil || r != nil {
-		t.Errorf("no loops: got (%v, %v), want (nil, nil)", r, err)
 	}
 }
 

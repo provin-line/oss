@@ -22,10 +22,14 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 	return l.svc.ResolveVC(ctx, contentAddress)
 }
 
-// BuildAuditRunner constructs the async audit runner, or returns (nil, nil) when the node
-// has no consuming loop (no consumed heads register, so there is nothing to audit). The
-// audit chainwalk's MaxDepth equals the batch resolver's max-depth (D-17h-4): neither
-// component rejects a chain the other accepts.
+// BuildAuditRunner constructs the async audit runner unconditionally from its args.
+// Whether this node needs the runner at all — "does it have a consuming loop" — is a
+// composition-root concern, not this builder's (Task 9): cmd/standalone gates at its call
+// site with pipelineconfig.Config.HasConsumingLoop() (a source-only node nils the runner
+// it gets back, preserving its old zero-loop behavior exactly); cmd/network has no local
+// loops to gate on at all (pipeCfg.HasConsumingLoop() is always false there) and instead
+// always runs this runner. The audit chainwalk's MaxDepth equals the batch resolver's
+// max-depth (D-17h-4): neither component rejects a chain the other accepts.
 func BuildAuditRunner(
 	queue auditor.AuditQueue,
 	status auditor.StatusStore,
@@ -36,9 +40,6 @@ func BuildAuditRunner(
 	schemaRes vc.SchemaResolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*auditor.Runner, error) {
-	if !pipeCfg.HasConsumingLoop() {
-		return nil, nil
-	}
 	// The async re-verification applies the same schema content-hash discipline
 	// as the ingress verifier, so a chain that was verified on the consume path
 	// re-verifies identically out of band.

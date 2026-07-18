@@ -47,6 +47,9 @@ func TestNetwork_ActualBootOverTLS(t *testing.T) {
 		ResolveDir: filepath.Join(dir, "resolver"),
 		// No PipelineLoops: this binary runs no data plane, so zero loops is
 		// the only config that boots (the guard rejects any other).
+		// VCStoreBearer: this binary always runs the peer-fetching batch
+		// resolver (Task 9), so boot fails closed without one.
+		VCStoreBearer: "network-boot-smoke-bearer",
 	})
 
 	cmd := exec.Command(bin)
