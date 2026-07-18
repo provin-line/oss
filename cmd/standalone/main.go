@@ -14,8 +14,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,12 +22,9 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
-
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -49,8 +44,14 @@ import (
 	"github.com/provin-line/oss/pipeline/contract"
 )
 
-// httpShutdownTimeout bounds the graceful HTTP drain on shutdown.
-const httpShutdownTimeout = 15 * time.Second
+// buildServer, http2Server, and serveHTTP moved to internal/httpserve
+// (BuildServer, HTTP2Server, ServeHTTP) — the shared HTTP/2 serving plumbing
+// reused by the node binaries. These aliases keep the cmd/standalone test
+// suite (written against the pre-extraction names) compiling unchanged.
+var (
+	buildServer = httpserve.BuildServer
+	http2Server = httpserve.HTTP2Server
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -259,7 +260,7 @@ func main() {
 	// largest legitimate request (a stored credential or a pushed body) plus
 	// headroom; per-RPC caps stay tight below it.
 	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
-	srv, listen, mode, err := buildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
+	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -304,7 +305,7 @@ func runServices(ctx context.Context, srv *http.Server, listen func() error, dp 
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		if err := serveHTTP(runCtx, srv, listen); err != nil {
+		if err := httpserve.ServeHTTP(runCtx, srv, listen); err != nil {
 			errs <- fmt.Errorf("http server: %w", err)
 		}
 	}()
@@ -353,86 +354,4 @@ func outerRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
 	// 2x covers base64 (~4/3) plus JSON field-name/escaping overhead with
 	// margin; +64 KiB is framing/header headroom.
 	return largest*2 + 64<<10
-}
-
-// buildServer assembles the HTTP server, its listen function, and a serving-mode
-// label from the transport posture (F6). It serves TLS directly when
-// cert-file/key-file are configured (h2 over TLS via ALPN), else cleartext h2c.
-// The boot guard (core.LoadCoreConfig) has already ensured any non-loopback
-// cleartext listener was explicitly acknowledged. The outer MaxBytesHandler
-// (F0 pre-Connect bound) is the outermost handler on BOTH paths; the shared
-// http2Server timeouts apply on both.
-func buildServer(coreCfg *core.CoreConfig, tlsConf *tls.Config, handler http.Handler, maxHTTPRequestBytes int) (*http.Server, func() error, string, error) {
-	srv := &http.Server{
-		Addr: coreCfg.ListenAddr,
-		// Slowloris defense on the HTTP/1 side. ReadTimeout/WriteTimeout are
-		// deliberately unset: a legitimate ResolvePayload streams a large body,
-		// and an absolute read/write deadline would abort it. IdleTimeout bounds
-		// kept-alive-but-idle connections; HTTP/2 stalls are bounded by
-		// http2Server's own timeouts.
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-	if coreCfg.TLS.ServesTLS() {
-		if tlsConf == nil {
-			// The preflight is not optional on the TLS posture: reaching here
-			// without its output means a caller skipped it, and serving would
-			// silently re-read the files the preflight exists to pin.
-			return nil, nil, "", fmt.Errorf("TLS posture without a preflighted config (core.LoadServerTLS was not run)")
-		}
-		srv.Handler = http.MaxBytesHandler(handler, int64(maxHTTPRequestBytes))
-		srv.TLSConfig = tlsConf
-		if err := http2.ConfigureServer(srv, http2Server()); err != nil {
-			return nil, nil, "", fmt.Errorf("configure http/2 over TLS: %w", err)
-		}
-		// Empty paths: serve from the preflighted, preloaded pair in TLSConfig —
-		// never re-read the files (TOCTOU; P0-6 closure #3).
-		return srv, func() error { return srv.ListenAndServeTLS("", "") }, "direct-tls", nil
-	}
-	srv.Handler = http.MaxBytesHandler(h2c.NewHandler(handler, http2Server()), int64(maxHTTPRequestBytes))
-	mode := "cleartext-acknowledged"
-	if core.ListenerIsLoopback(coreCfg.ListenAddr) {
-		mode = "loopback-cleartext"
-	}
-	return srv, srv.ListenAndServe, mode, nil
-}
-
-// http2Server builds the HTTP/2 server used by both transport paths — h2c
-// hijacks connections into it, and http2.ConfigureServer attaches it to the
-// TLS server. http.Server's timeouts do not reach these streams, so the stall
-// defenses are set here: IdleTimeout bounds an idle connection, and
-// ReadIdleTimeout + PingTimeout make the server probe a silent peer and drop
-// it if unanswered. WriteByteTimeout bounds per-write stalls WITHOUT imposing
-// an absolute stream duration, so a legitimate large ResolvePayload stream is
-// unaffected.
-func http2Server() *http2.Server {
-	return &http2.Server{
-		IdleTimeout:      120 * time.Second,
-		ReadIdleTimeout:  30 * time.Second,
-		PingTimeout:      15 * time.Second,
-		WriteByteTimeout: 30 * time.Second,
-	}
-}
-
-// serveHTTP runs listen (srv.ListenAndServe or ListenAndServeTLS) and shuts it down gracefully when ctx is
-// cancelled, using a fresh bounded context (the cancelled ctx must not abort the
-// drain). http.ErrServerClosed is the graceful path, not an error.
-func serveHTTP(ctx context.Context, srv *http.Server, listen func() error) error {
-	errCh := make(chan error, 1)
-	go func() {
-		err := listen()
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
-		errCh <- err
-	}()
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
-		defer cancel()
-		return srv.Shutdown(shutCtx)
-	case err := <-errCh:
-		// ListenAndServe failed before any shutdown was requested (e.g. bind error).
-		return err
-	}
 }
