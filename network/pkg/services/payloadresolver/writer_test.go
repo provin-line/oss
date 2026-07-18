@@ -12,6 +12,12 @@ import (
 // the legacy byte-slice Put derive the SAME content address for identical
 // bytes, across both store backends — a client-streaming retain (Task 8) must
 // be indistinguishable, address-wise, from a whole-buffer retain.
+//
+// Note: post-refactor, Put is itself a thin wrapper over StoreWriter (both
+// backends — see Store.Put's doc), so the legacyHash == streamHash comparison
+// below exercises the SAME code path twice and is not an independent check by
+// itself. The real oracle is the second assertion, streamHash == addr(payload)
+// — addr recomputes sha256 directly, independent of either Store method.
 func TestStoreWriter_CommitMatchesLegacyAddress(t *testing.T) {
 	for _, f := range factories() {
 		t.Run(f.name, func(t *testing.T) {

@@ -17,6 +17,13 @@
 // ANY owner's allow-list admits it (payloadresolver/handler): a caller that may
 // receive the bytes via one owner learns nothing extra from a bit-identical
 // copy owned by another.
+//
+// # Ownership
+//
+// Store implementations (filestore, memstore) assume single-process ownership
+// of their directory/state (no cross-process file lock) — same posture as the
+// auditor's filestore. A PayloadWriter additionally assumes a single-goroutine
+// caller: see PayloadWriter's doc.
 package payloadresolver
 
 import (
@@ -55,6 +62,14 @@ type Store interface {
 	// buffering the whole payload before calling Put, then finalizes with
 	// Commit or Abort. The content address is derived incrementally as bytes
 	// are written, byte-identical to what Put would derive for the same bytes.
+	//
+	// ctx gates CREATION ONLY: it is checked once, here, and rejects a call
+	// made with an already-cancelled/expired ctx. It is NOT retained or
+	// consulted again afterward — the returned PayloadWriter outlives ctx and
+	// is never itself cancelled by it. A caller that must abandon an
+	// in-progress write on cancellation (or any other mid-stream failure,
+	// e.g. a client-streaming handler whose caller hangs up) is responsible
+	// for detecting that itself and calling Abort.
 	StoreWriter(ctx context.Context, ownerDID string) (PayloadWriter, error)
 	// Owners returns the owner set recorded at hash WITHOUT reading (or hashing)
 	// the payload bytes — the cheap authorization basis the serving boundary
@@ -72,6 +87,14 @@ type Store interface {
 // PayloadWriter is a streaming retain handle returned by Store.StoreWriter.
 // Callers write payload bytes incrementally, then finalize with EXACTLY ONE
 // of Commit or Abort — a PayloadWriter is single-use.
+//
+// Like io.Writer generally, a PayloadWriter has a single-goroutine caller
+// contract: Write/Commit/Abort are not safe to call concurrently on the same
+// instance (neither implementation synchronizes its own internal state
+// against concurrent use — only the underlying Store's cross-writer state is
+// mutex-guarded). A client-streaming handler drives one PayloadWriter
+// sequentially from its own receive loop, never fanning calls out across
+// goroutines.
 type PayloadWriter interface {
 	io.Writer
 	// Commit finalizes the write, deriving the content address from the bytes

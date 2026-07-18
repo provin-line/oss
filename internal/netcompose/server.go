@@ -36,6 +36,7 @@ import (
 	didyaml "github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	payloadhandler "github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/storehandler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemahandler "github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
 	"github.com/provin-line/oss/network/pkg/services/signer"
@@ -77,9 +78,17 @@ const (
 // pre-Connect (h2c-upgrade) path that no interceptor guards. Relocated here
 // (from cmd/standalone/main.go) alongside the two per-RPC constants it sizes
 // against, which stay unexported/internal to this file.
-func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize int) int {
+//
+// maxRetainPayloadSize is RetainPayload's cumulative bound, not a per-frame
+// one: http.MaxBytesHandler counts TOTAL bytes read across the whole HTTP
+// request, and a client-streaming RPC's frames all share ONE request for the
+// life of the call — so the outer cap must admit a full-size legitimate
+// retain (up to maxRetainPayloadSize), not just its largest single chunk
+// (that per-chunk bound is maxRetainChunkSize, enforced separately by the
+// per-RPC connect.WithReadMaxBytes mount option).
+func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize, maxRetainPayloadSize int) int {
 	largest := maxCredentialSize
-	for _, v := range []int{maxPushBodySize, maxDocumentRequestBytes, maxProofRequestBytes} {
+	for _, v := range []int{maxPushBodySize, maxRetainPayloadSize, maxDocumentRequestBytes, maxProofRequestBytes} {
 		if v > largest {
 			largest = v
 		}
@@ -192,7 +201,15 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // GetConsumedSources) AND writes it for the EvidenceService (RegisterEvidence)
 // — one shared instance backs both directions, same as the runner's own share
 // of it (main.go's "shared between the ingress path and the audit runner").
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, tlogs map[string]tlog.Log, maxCredentialSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
+//
+// payloadStore backs PayloadStoreService's RetainPayload (storehandler) — the
+// raw Store, alongside payloadSvc (the Service wrapping the SAME store for
+// PayloadService's read side): RetainPayload streams directly to
+// Store.StoreWriter, bypassing Service (whose Store method takes a whole
+// []byte, not a stream — see payloadresolver.Store.StoreWriter's doc).
+// maxRetainChunkSize/maxRetainPayloadSize are the max-retain-chunk-size /
+// max-retain-payload-size config quotas (pipelineconfig).
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -272,6 +289,11 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// h2c-upgrade path on top of these.
 	proofCap := connect.WithReadMaxBytes(maxProofRequestBytes)
 	docCap := connect.WithReadMaxBytes(maxDocumentRequestBytes)
+	// retainChunkCap is PayloadStoreService's per-RPC class: sized to the
+	// configured max-retain-chunk-size (not a fixed constant like proof/doc,
+	// since a retained chunk's legitimate size is an operator-tunable quota,
+	// same posture as the credential class above).
+	retainChunkCap := connect.WithReadMaxBytes(maxRetainChunkSize)
 	mux := http.NewServeMux()
 	for _, p := range []handlerPair{
 		// schema bodies, DID docs/delegations, and full-replacement allowlists
@@ -287,6 +309,15 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), authz, proofCap)),
 		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz, proofCap)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainhandler.WithSubscriber(chainSvc), chainhandler.WithAllowListReader(chainSvc)), authz, docCap)),
+		// PayloadStoreService (RetainPayload) is the L1-gated write side of
+		// by-reference payload delivery (unlike PayloadService below, mounted
+		// with NO L1 interceptor): the authz interceptor decides whether the
+		// caller may retain payloads at all, and storehandler additionally
+		// verifies the in-band wireauth proof carried in the first frame,
+		// requiring owner_did to equal the proven signer DID. peerVerifier is
+		// reused (same DID-resolution + nonce-store infra as the L2-only
+		// surfaces below).
+		newPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, peerVerifier, uint64(maxRetainPayloadSize)), authz, retainChunkCap)),
 	} {
 		mux.Handle(p.path, p.h)
 	}

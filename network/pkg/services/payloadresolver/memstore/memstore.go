@@ -55,6 +55,11 @@ func (s *Store) Put(payload []byte, ownerDID string) (string, error) {
 // StoreWriter returns a streaming retain handle: it buffers written bytes
 // in memory and hashes them incrementally, so Commit derives the SAME content
 // address Put would derive for the same bytes.
+//
+// ctx gates creation only (checked once, above) — it is not retained, so
+// cancellation after this call returns has no effect on the returned writer.
+// A caller that must abandon an in-progress write on cancellation is
+// responsible for calling Abort itself (see payloadresolver.Store.StoreWriter).
 func (s *Store) StoreWriter(ctx context.Context, ownerDID string) (payloadresolver.PayloadWriter, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

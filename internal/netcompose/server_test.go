@@ -128,7 +128,8 @@ func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, cr
 		t.Fatalf("ChainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, maxCredentialSize, nil, nil, nil)
+	payloadStore := payloadmemstore.New()
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadStore), payloadStore, nil, maxCredentialSize, 1<<20, 64<<20, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
@@ -164,7 +165,8 @@ func TestBuildHandler_WiresRelationshipEvidenceLog(t *testing.T) {
 		t.Fatalf("ChainOperator: %v", err)
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
-	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadmemstore.New()), nil, 1<<20, nil, nil, nil); err != nil {
+	payloadStore := payloadmemstore.New()
+	if _, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditor.NewMemStatusStore(), auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadStore), payloadStore, nil, 1<<20, 1<<20, 64<<20, nil, nil, nil); err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}
 	// filelog.New creates the dir and the append file at open; its presence proves
@@ -419,6 +421,26 @@ func TestBoot_RPCRequiresAuth(t *testing.T) {
 	_, err := didClient.ResolveDID(context.Background(), connect.NewRequest(&didpb.ResolveDIDRequest{Did: ownerDID}))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("no token: want Unauthenticated, got %v (%v)", connect.CodeOf(err), err)
+	}
+}
+
+// PayloadStoreService (RetainPayload) is mounted BEHIND the L1 authz
+// interceptor — unlike PayloadService/ChainPeerService above (mounted with no
+// L1 gate at all). It is this mux's first CLIENT-STREAMING RPC under that
+// interceptor chain, so this pins (not merely assumes) that the o3co
+// interceptors' WrapStreamingHandler enforces the policy check BEFORE the
+// storehandler ever runs: a caller with no bearer token at all is rejected
+// Unauthenticated without ever reaching the handler (which would otherwise
+// reject a missing-metadata-frame stream with InvalidArgument instead —
+// TestBoot_ChainPeerServiceMountedNoL1 / TestBoot_PayloadServiceMountedNoL1
+// show what an L2-only (no L1) surface looks like by contrast).
+func TestBoot_RetainPayloadMountedBehindL1(t *testing.T) {
+	srv, _, _ := assembled(t)
+	payloadStoreClient := payloadpbconnect.NewPayloadStoreServiceClient(srv.Client(), srv.URL)
+	stream := payloadStoreClient.RetainPayload(context.Background())
+	_, err := stream.CloseAndReceive()
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("RetainPayload without a bearer: got %v (%v), want Unauthenticated (L1 gate)", connect.CodeOf(err), err)
 	}
 }
 

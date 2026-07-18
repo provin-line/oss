@@ -24,6 +24,12 @@ func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
 	if cfg.MaxCredentialSize != 1<<20 {
 		t.Errorf("max-credential-size = %d, want %d", cfg.MaxCredentialSize, 1<<20)
 	}
+	if cfg.MaxRetainChunkSize != 1<<20 {
+		t.Errorf("max-retain-chunk-size = %d, want %d", cfg.MaxRetainChunkSize, 1<<20)
+	}
+	if cfg.MaxRetainPayloadSize != 64<<20 {
+		t.Errorf("max-retain-payload-size = %d, want %d", cfg.MaxRetainPayloadSize, 64<<20)
+	}
 }
 
 func TestLoad_AuditRunnerDefaults(t *testing.T) {
@@ -44,6 +50,8 @@ func TestLoad_NonPositiveBatchOrSize_Fails(t *testing.T) {
 		"provin.network.pipeline.batch-resolver.max-retries = -1",
 		"provin.network.pipeline.batch-resolver.max-depth = 0",
 		"provin.network.pipeline.max-credential-size = 0",
+		"provin.network.pipeline.max-retain-chunk-size = 0",
+		"provin.network.pipeline.max-retain-payload-size = -1",
 		"provin.network.pipeline.audit-runner.interval = 0",
 		"provin.network.pipeline.audit-runner.batch-size = 0",
 		"provin.network.pipeline.audit-runner.max-attempts = -1",

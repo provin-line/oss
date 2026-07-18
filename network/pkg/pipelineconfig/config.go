@@ -53,21 +53,23 @@ const (
 const StrategyAdjacent = "adjacent"
 
 const (
-	pipelineKey          = "provin.network.pipeline"
-	loopsKey             = pipelineKey + ".loops"
-	vcStoreEndpointKey   = pipelineKey + ".vc-store-endpoint"
-	vcStoreBearerKey     = pipelineKey + ".vc-store-bearer"
-	maxCredentialSizeKey = pipelineKey + ".max-credential-size"
-	maxPushBodySizeKey   = pipelineKey + ".max-push-body-size"
-	batchResolverKey     = pipelineKey + ".batch-resolver"
-	brIntervalKey        = batchResolverKey + ".interval"
-	brBatchSizeKey       = batchResolverKey + ".batch-size"
-	brMaxRetriesKey      = batchResolverKey + ".max-retries"
-	brMaxDepthKey        = batchResolverKey + ".max-depth"
-	auditRunnerKey       = pipelineKey + ".audit-runner"
-	arIntervalKey        = auditRunnerKey + ".interval"
-	arBatchSizeKey       = auditRunnerKey + ".batch-size"
-	arMaxAttemptsKey     = auditRunnerKey + ".max-attempts"
+	pipelineKey             = "provin.network.pipeline"
+	loopsKey                = pipelineKey + ".loops"
+	vcStoreEndpointKey      = pipelineKey + ".vc-store-endpoint"
+	vcStoreBearerKey        = pipelineKey + ".vc-store-bearer"
+	maxCredentialSizeKey    = pipelineKey + ".max-credential-size"
+	maxPushBodySizeKey      = pipelineKey + ".max-push-body-size"
+	maxRetainChunkSizeKey   = pipelineKey + ".max-retain-chunk-size"
+	maxRetainPayloadSizeKey = pipelineKey + ".max-retain-payload-size"
+	batchResolverKey        = pipelineKey + ".batch-resolver"
+	brIntervalKey           = batchResolverKey + ".interval"
+	brBatchSizeKey          = batchResolverKey + ".batch-size"
+	brMaxRetriesKey         = batchResolverKey + ".max-retries"
+	brMaxDepthKey           = batchResolverKey + ".max-depth"
+	auditRunnerKey          = pipelineKey + ".audit-runner"
+	arIntervalKey           = auditRunnerKey + ".interval"
+	arBatchSizeKey          = auditRunnerKey + ".batch-size"
+	arMaxAttemptsKey        = auditRunnerKey + ".max-attempts"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -106,6 +108,15 @@ type Config struct {
 	// one bounds a raw ingest payload. Sourced from reference.conf (no Go default); a
 	// non-positive value fails startup.
 	MaxPushBodySize int
+	// MaxRetainChunkSize bounds one RetainPayload chunk frame (PayloadStoreService —
+	// mounted as the per-RPC connect read cap in netcompose). Sourced from
+	// reference.conf (no Go default); a non-positive value fails startup.
+	MaxRetainChunkSize int
+	// MaxRetainPayloadSize bounds the declared_size a RetainPayload caller may commit
+	// to for one retained payload (PayloadStoreService) — the cumulative quota, distinct
+	// from MaxRetainChunkSize (a single frame). Sourced from reference.conf (no Go
+	// default); a non-positive value fails startup.
+	MaxRetainPayloadSize int
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
@@ -394,6 +405,12 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		return nil, err
 	}
 	if out.MaxPushBodySize, err = loadPositiveInt(cfg, maxPushBodySizeKey); err != nil {
+		return nil, err
+	}
+	if out.MaxRetainChunkSize, err = loadPositiveInt(cfg, maxRetainChunkSizeKey); err != nil {
+		return nil, err
+	}
+	if out.MaxRetainPayloadSize, err = loadPositiveInt(cfg, maxRetainPayloadSizeKey); err != nil {
 		return nil, err
 	}
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {

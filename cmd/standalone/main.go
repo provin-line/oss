@@ -230,7 +230,7 @@ func main() {
 		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
 	}
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, mountIngest, readiness, byRefGate.Healthy)
+		schemaSvc, payloadSvc, payloadStore, dp.tlogs, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -268,9 +268,9 @@ func main() {
 	// Outer raw-body cap: h2c.NewHandler reads an HTTP/1 upgrade request's body
 	// in full before the inner Connect handler (and its per-RPC read cap) runs,
 	// so a single generous outer bound closes that pre-auth path. Sized to the
-	// largest legitimate request (a stored credential or a pushed body) plus
-	// headroom; per-RPC caps stay tight below it.
-	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
+	// largest legitimate request (a stored credential, a pushed body, or a full
+	// RetainPayload stream) plus headroom; per-RPC caps stay tight below it.
+	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize, pipeCfg.MaxRetainPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)

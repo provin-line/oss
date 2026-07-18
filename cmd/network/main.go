@@ -194,7 +194,7 @@ func main() {
 	// push-ingest routes to mount and no by-reference producer health to gate
 	// advertisement on.
 	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, nil, readiness, nil)
+		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
 	}
@@ -230,7 +230,7 @@ func main() {
 
 	// Outer raw-body cap: no push-body class on this binary (it mounts no
 	// push-ingest routes), so the second argument is 0.
-	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0)
+	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0, pipeCfg.MaxRetainPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
