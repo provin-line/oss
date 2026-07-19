@@ -714,8 +714,10 @@ type RegisterEvidenceRequest struct {
 	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
 	// proof-carrying shape of dplaax.payload.v1.ResolvePayloadRequest, reusing
 	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition would
-	// be a drift source). The proven signer_did is authoritative for the
-	// registering party.
+	// be a drift source). No separate actor field exists because the proven
+	// signer_did IS who gets recorded with the receipt as the registering
+	// party (an audit-trail fact — see RegisterEvidence's own doc for what
+	// that recording does and does not guarantee).
 	AuthProof     *v1.AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

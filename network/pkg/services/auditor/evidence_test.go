@@ -22,19 +22,21 @@ func variantAddr(hexDigit string) string {
 	return vc.WireVariantIDFromHex(strings.Repeat(hexDigit, 64))
 }
 
-// evidenceFakeReceipts is a spy ReceiptWriter: it records every Put call (head +
-// a defensive copy of the consumed set, in call order via orderLog) and can be
-// configured to return a preset error (e.g. auditor.ErrReceiptConflict).
+// evidenceFakeReceipts is a spy ReceiptWriter: it records every Put call (head, the
+// registrantDID, and a defensive copy of the consumed set, in call order via orderLog) and
+// can be configured to return a preset error (e.g. auditor.ErrReceiptConflict).
 type evidenceFakeReceipts struct {
-	err      error
-	calls    []string   // heads Put was called with, in order
-	consumed [][]string // the consumed set for each call, same index as calls
-	orderLog *[]string  // shared with evidenceFakeQueue to observe call order
+	err        error
+	calls      []string   // heads Put was called with, in order
+	consumed   [][]string // the consumed set for each call, same index as calls
+	registrant []string   // the registrantDID for each call, same index as calls
+	orderLog   *[]string  // shared with evidenceFakeQueue to observe call order
 }
 
-func (f *evidenceFakeReceipts) Put(headHash string, consumed []string) error {
+func (f *evidenceFakeReceipts) Put(headHash string, registrantDID string, consumed []string) error {
 	f.calls = append(f.calls, headHash)
 	f.consumed = append(f.consumed, append([]string(nil), consumed...))
+	f.registrant = append(f.registrant, registrantDID)
 	if f.orderLog != nil {
 		*f.orderLog = append(*f.orderLog, "put")
 	}
@@ -80,7 +82,7 @@ func TestEvidenceService_UnknownHead_NotAdmitted(t *testing.T) {
 	queue := &evidenceFakeQueue{}
 	svc := auditor.NewEvidenceService(receipts, queue, admitNone)
 
-	err := svc.Register(context.Background(), variantAddr("a"), []string{addr("b")})
+	err := svc.Register(context.Background(), variantAddr("a"), []string{addr("b")}, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, auditor.ErrHeadNotAdmitted) {
 		t.Fatalf("Register: err = %v, want ErrHeadNotAdmitted", err)
 	}
@@ -99,7 +101,8 @@ func TestEvidenceService_UnknownHead_NotAdmitted(t *testing.T) {
 // keying fix: receipts.Put and queue.Add are keyed by the RESOLVED BODY
 // address the admission gate returns, never by the variant id the caller
 // supplied — the two are deliberately different strings here so a
-// regression back to keying-by-variant fails loudly.
+// regression back to keying-by-variant fails loudly. And it proves the
+// wireauth-proven registrantDID reaches receipts.Put verbatim.
 func TestEvidenceService_KnownHead_ReceiptWrittenAndQueued_OrderObservable(t *testing.T) {
 	var order []string
 	receipts := &evidenceFakeReceipts{orderLog: &order}
@@ -109,7 +112,8 @@ func TestEvidenceService_KnownHead_ReceiptWrittenAndQueued_OrderObservable(t *te
 	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
 
 	consumed := []string{addr("c"), addr("b")} // deliberately unsorted
-	if err := svc.Register(context.Background(), head, consumed); err != nil {
+	registrant := "did:dplaax:reg:org:pipeline"
+	if err := svc.Register(context.Background(), head, consumed, registrant); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if len(receipts.calls) != 1 || receipts.calls[0] != body {
@@ -128,6 +132,9 @@ func TestEvidenceService_KnownHead_ReceiptWrittenAndQueued_OrderObservable(t *te
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("consumed set passed to Put = %v, want canonical %v", got, want)
 	}
+	if len(receipts.registrant) != 1 || receipts.registrant[0] != registrant {
+		t.Errorf("registrantDID passed to Put = %v, want [%q]", receipts.registrant, registrant)
+	}
 }
 
 // TestEvidenceService_ReceiptConflict_QueueNotTouched proves a receipt
@@ -139,7 +146,7 @@ func TestEvidenceService_ReceiptConflict_QueueNotTouched(t *testing.T) {
 	head, body := variantAddr("a"), addr("h")
 	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
 
-	err := svc.Register(context.Background(), head, []string{addr("b")})
+	err := svc.Register(context.Background(), head, []string{addr("b")}, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, auditor.ErrReceiptConflict) {
 		t.Fatalf("Register: err = %v, want ErrReceiptConflict", err)
 	}
@@ -158,10 +165,10 @@ func TestEvidenceService_IdenticalReplay_QueueReAddAllowed(t *testing.T) {
 	head, body := variantAddr("a"), addr("h")
 	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
 
-	if err := svc.Register(context.Background(), head, []string{addr("b")}); err != nil {
+	if err := svc.Register(context.Background(), head, []string{addr("b")}, "did:dplaax:reg:org:first"); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	if err := svc.Register(context.Background(), head, []string{addr("b")}); err != nil {
+	if err := svc.Register(context.Background(), head, []string{addr("b")}, "did:dplaax:reg:org:second"); err != nil {
 		t.Fatalf("replay Register: %v", err)
 	}
 	if len(queue.calls) != 2 {
@@ -178,7 +185,7 @@ func TestEvidenceService_InvalidHeadFormat_InvalidArgument(t *testing.T) {
 	admitted := func(context.Context, string) (string, bool, error) { admitCalled = true; return "", true, nil }
 	svc := auditor.NewEvidenceService(receipts, queue, admitted)
 
-	err := svc.Register(context.Background(), "not-a-content-address", []string{addr("b")})
+	err := svc.Register(context.Background(), "not-a-content-address", []string{addr("b")}, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, auditor.ErrInvalidArgument) {
 		t.Fatalf("Register: err = %v, want ErrInvalidArgument", err)
 	}
@@ -203,7 +210,7 @@ func TestEvidenceService_BareBodyAddress_InvalidArgument(t *testing.T) {
 	admitted := func(context.Context, string) (string, bool, error) { admitCalled = true; return "", true, nil }
 	svc := auditor.NewEvidenceService(receipts, queue, admitted)
 
-	err := svc.Register(context.Background(), addr("a"), []string{addr("b")})
+	err := svc.Register(context.Background(), addr("a"), []string{addr("b")}, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, auditor.ErrInvalidArgument) {
 		t.Fatalf("Register(body address): err = %v, want ErrInvalidArgument", err)
 	}
@@ -224,7 +231,7 @@ func TestEvidenceService_EmptyConsumedSet_InvalidArgument(t *testing.T) {
 	head, body := variantAddr("a"), addr("h")
 	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
 
-	err := svc.Register(context.Background(), head, nil)
+	err := svc.Register(context.Background(), head, nil, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, auditor.ErrInvalidArgument) {
 		t.Fatalf("Register: err = %v, want ErrInvalidArgument", err)
 	}
@@ -243,7 +250,7 @@ func TestEvidenceService_AdmissionCheckError_Surfaces(t *testing.T) {
 	admitted := func(context.Context, string) (string, bool, error) { return "", false, boom }
 	svc := auditor.NewEvidenceService(receipts, queue, admitted)
 
-	err := svc.Register(context.Background(), variantAddr("a"), []string{addr("b")})
+	err := svc.Register(context.Background(), variantAddr("a"), []string{addr("b")}, "did:dplaax:reg:org:pipeline")
 	if !errors.Is(err, boom) {
 		t.Fatalf("Register: err = %v, want it to wrap %v", err, boom)
 	}
@@ -277,7 +284,7 @@ func TestEvidenceService_MalformedConsumedMember_InvalidArgument(t *testing.T) {
 			queue := &evidenceFakeQueue{}
 			svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
 
-			err := svc.Register(context.Background(), head, tt.consumed)
+			err := svc.Register(context.Background(), head, tt.consumed, "did:dplaax:reg:org:pipeline")
 			if !errors.Is(err, auditor.ErrInvalidArgument) {
 				t.Fatalf("Register: err = %v, want ErrInvalidArgument", err)
 			}

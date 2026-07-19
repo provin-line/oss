@@ -21,7 +21,7 @@ func TestMemReceiptStore_RoundTrip(t *testing.T) {
 	s := NewMemReceiptStore()
 	head := "sha256:aaa"
 	consumed := []string{addr("b"), addr("c")}
-	if err := s.Put(head, consumed); err != nil {
+	if err := s.Put(head, "", consumed); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, err := s.Get(head)
@@ -45,7 +45,7 @@ func TestMemReceiptStore_AbsentMiss(t *testing.T) {
 func TestMemReceiptStore_Isolation(t *testing.T) {
 	s := NewMemReceiptStore()
 	consumed := []string{addr("b"), addr("c")}
-	if err := s.Put("sha256:aaa", consumed); err != nil {
+	if err := s.Put("sha256:aaa", "", consumed); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	consumed[0] = "sha256:MUTATED"
@@ -64,7 +64,7 @@ func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	head := "sha256:aaa"
 
 	// Unsorted + duplicated input canonicalizes to a sorted, deduped stored set.
-	if err := s.Put(head, []string{addr("c"), addr("b"), addr("b")}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{addr("c"), addr("b"), addr("b")}); err != nil {
 		t.Fatalf("first Put: %v", err)
 	}
 	want := []string{addr("b"), addr("c")}
@@ -73,7 +73,7 @@ func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	}
 
 	// Identical replay (same canonical form) is a no-op.
-	if err := s.Put(head, []string{addr("b"), addr("c")}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{addr("b"), addr("c")}); err != nil {
 		t.Fatalf("identical replay: want nil, got %v", err)
 	}
 	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
@@ -81,7 +81,7 @@ func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	}
 
 	// Permuted-but-equal (canonicalizes to the same set) is also a no-op.
-	if err := s.Put(head, []string{addr("c"), addr("b")}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{addr("c"), addr("b")}); err != nil {
 		t.Fatalf("permuted-but-equal replay: want nil, got %v", err)
 	}
 	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
@@ -89,12 +89,53 @@ func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	}
 
 	// A different canonical set is a conflict — the recorded set is never overwritten.
-	err := s.Put(head, []string{addr("d")})
+	err := s.Put(head, "did:dplaax:reg:org:first", []string{addr("d")})
 	if !errors.Is(err, ErrReceiptConflict) {
 		t.Fatalf("different set: want ErrReceiptConflict, got %v", err)
 	}
 	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Get after rejected conflicting Put = %v, want unchanged %v", got, want)
+	}
+}
+
+// The registrant DID recorded with a receipt is pinned by the first successful write, same
+// as the consumed set itself, but the conflict rule stays content-only: a canonically-
+// identical replay with a DIFFERENT registrantDID is still the idempotent no-op path (nil
+// error), and it must NOT overwrite the registrant recorded on first write. registrantDID has
+// no public reader (the file envelope is the audit record — see ReceiptStore.Put's doc), so
+// this test uses the package's own unexported accessor.
+func TestMemReceiptStore_RegistrantFirstWriteWins(t *testing.T) {
+	s := NewMemReceiptStore()
+	head := "sha256:aaa"
+	consumed := []string{addr("b"), addr("c")}
+
+	if err := s.Put(head, "did:dplaax:reg:org:first", consumed); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	if got, ok := s.registrantDID(head); !ok || got != "did:dplaax:reg:org:first" {
+		t.Fatalf("registrantDID after first write = %q (ok=%v), want %q", got, ok, "did:dplaax:reg:org:first")
+	}
+
+	// Canonically-identical replay with a DIFFERENT registrant: idempotent no-op, and the
+	// ORIGINAL registrant must survive untouched.
+	if err := s.Put(head, "did:dplaax:reg:org:second", []string{addr("c"), addr("b")}); err != nil {
+		t.Fatalf("identical-content replay with a different registrant: want nil, got %v", err)
+	}
+	if got, ok := s.registrantDID(head); !ok || got != "did:dplaax:reg:org:first" {
+		t.Fatalf("registrantDID after replay = %q (ok=%v), want unchanged %q", got, ok, "did:dplaax:reg:org:first")
+	}
+}
+
+// Empty registrantDID is allowed — the in-process (non-wireauth) emission path has no
+// wire-authenticated caller DID to record.
+func TestMemReceiptStore_EmptyRegistrantAllowed(t *testing.T) {
+	s := NewMemReceiptStore()
+	head := "sha256:aaa"
+	if err := s.Put(head, "", []string{addr("b")}); err != nil {
+		t.Fatalf("Put with empty registrantDID: want nil, got %v", err)
+	}
+	if got, ok := s.registrantDID(head); !ok || got != "" {
+		t.Fatalf("registrantDID = %q (ok=%v), want \"\"", got, ok)
 	}
 }
 
@@ -119,7 +160,7 @@ func TestMemReceiptStore_PutValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewMemReceiptStore()
-			if err := s.Put("sha256:aaa", tt.in); err == nil {
+			if err := s.Put("sha256:aaa", "", tt.in); err == nil {
 				t.Fatalf("Put(%v): want error", tt.in)
 			}
 		})

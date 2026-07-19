@@ -336,6 +336,12 @@ func (s *StatusStore) List(fromExclusive string, limit int) ([]auditor.HeadStatu
 type receiptEnvelope struct {
 	V        int      `json:"v"`
 	Consumed []string `json:"consumed"`
+	// RegistrantDID is the wireauth-proven DID of the caller that registered this evidence,
+	// recorded at FIRST write only (see auditor.ReceiptStore.Put's doc) — an audit-trail
+	// fact, not an ownership check. omitempty: envelopes written before this field existed
+	// (and the in-process emission path, which has no wire-authenticated caller) decode as
+	// "" — never distinguishable, by design, from a since-recorded empty registrant.
+	RegistrantDID string `json:"registrant_did,omitempty"`
 }
 
 // ReceiptStore is the file-backed auditor.ReceiptStore.
@@ -356,11 +362,14 @@ func NewReceiptStore(dir string) (*ReceiptStore, error) {
 
 // Put canonicalizes consumedHashes and applies first-write-wins arbitration (see the
 // auditor.ReceiptStore.Put doc): the first successful Put for a head pins its canonical
-// consumed set; a canonically-identical later Put is a no-op; a canonically-different one is
-// auditor.ErrReceiptConflict. This is a read-then-compare-then-write sequence — s.mu (held for
+// consumed set AND registrantDID together; a canonically-identical later Put is a no-op — it
+// never writes, so it can never overwrite the registrantDID recorded on first write either,
+// even when this call's registrantDID differs; a canonically-different one is
+// auditor.ErrReceiptConflict (content-only — registrantDID never participates in the
+// conflict comparison). This is a read-then-compare-then-write sequence — s.mu (held for
 // the whole call, not just the final write) is what makes it atomic against concurrent
 // goroutines in this process; see the package doc for the single-process caveat.
-func (s *ReceiptStore) Put(headHash string, consumedHashes []string) error {
+func (s *ReceiptStore) Put(headHash string, registrantDID string, consumedHashes []string) error {
 	path, err := entryFile(s.dir, headHash)
 	if err != nil {
 		return err
@@ -378,13 +387,13 @@ func (s *ReceiptStore) Put(headHash string, consumedHashes []string) error {
 	case err != nil:
 		return fmt.Errorf("auditor/filestore: put receipt %s: %w", headHash, err)
 	case reflect.DeepEqual(existing, canonical):
-		return nil // canonically-identical replay — idempotent
+		return nil // canonically-identical replay — idempotent, registrant untouched
 	default:
 		return fmt.Errorf("auditor/filestore: %w: head %q", auditor.ErrReceiptConflict, headHash)
 	}
 	// A local storage envelope, never hashed or signed over — not a signing
 	// scope (canonicalizer-hygiene-exempt).
-	raw, err := json.Marshal(receiptEnvelope{V: 1, Consumed: canonical})
+	raw, err := json.Marshal(receiptEnvelope{V: 1, Consumed: canonical, RegistrantDID: registrantDID})
 	if err != nil {
 		return fmt.Errorf("auditor/filestore: marshal receipt %s: %w", headHash, err)
 	}

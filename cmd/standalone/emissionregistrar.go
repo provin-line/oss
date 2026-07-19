@@ -9,10 +9,12 @@ import (
 )
 
 // receiptWriter records the emit-time consumed-set receipt for an aggregate head (slice-17o):
-// head content address → the consumed source content addresses. cmd/standalone owns this
-// local interface (capability, not concrete); *auditor.MemReceiptStore satisfies it.
+// head content address → the consumed source content addresses, plus the registrant DID
+// recorded alongside them (an audit-trail fact — see auditor.ReceiptStore.Put's doc).
+// cmd/standalone owns this local interface (capability, not concrete);
+// *auditor.MemReceiptStore satisfies it.
 type receiptWriter interface {
-	Put(headHash string, consumedHashes []string) error
+	Put(headHash string, registrantDID string, consumedHashes []string) error
 }
 
 // emissionRegistrar is the composition-root aggregate.EmissionRegistrar (slice-17o D-17o-3/4):
@@ -50,7 +52,12 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 	if err != nil {
 		return fmt.Errorf("emissionRegistrar: local store emitted head: %w", err)
 	}
-	if err := r.receipts.Put(res.BodyAddress, consumedHashes); err != nil {
+	// cred.Issuer() is the Process DID this aggregate signs emitted heads under — the
+	// identity this in-process path already holds, standing in for a wireauth-proven DID
+	// (there is no wire caller here to prove one). Recorded as the receipt's registrant, an
+	// audit-trail fact only (see auditor.ReceiptStore.Put's doc): this is NOT an ownership
+	// check, and RegisterEmission never validates it against anything else.
+	if err := r.receipts.Put(res.BodyAddress, cred.Issuer(), consumedHashes); err != nil {
 		return fmt.Errorf("emissionRegistrar: write consumed-set receipt: %w", err)
 	}
 	if err := r.audit.Add(res.BodyAddress); err != nil {

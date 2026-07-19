@@ -9,10 +9,11 @@ import (
 )
 
 // ReceiptWriter is the receipt-store seam EvidenceService.Register needs:
-// recording the consumed-set receipt for a head (first-write-wins — see
-// ReceiptStore.Put's contract). Any ReceiptStore satisfies it.
+// recording the consumed-set receipt (and the registering caller's DID) for
+// a head (first-write-wins — see ReceiptStore.Put's contract). Any
+// ReceiptStore satisfies it.
 type ReceiptWriter interface {
-	Put(headHash string, consumedHashes []string) error
+	Put(headHash string, registrantDID string, consumedHashes []string) error
 }
 
 // Registrar is the audit-queue seam EvidenceService.Register needs:
@@ -93,16 +94,23 @@ func NewEvidenceService(receipts ReceiptWriter, queue Registrar, admitted func(c
 //     id (see the type doc's note on the variant/verdict partition trap). An
 //     admission-check FAILURE (as opposed to a definitive "not admitted")
 //     surfaces as its own error, never laundered into ErrHeadNotAdmitted.
-//  3. receipts.Put: first-write-wins (see ReceiptStore.Put). A conflict
-//     (ErrReceiptConflict) is terminal — the queue is NOT touched. An
-//     identical replay is an idempotent no-op (nil error) and falls through
-//     to step 4, same as a first-time write.
+//  3. receipts.Put: first-write-wins (see ReceiptStore.Put), recording
+//     registrantDID — the wireauth-proven DID of the caller registering this
+//     evidence — alongside the consumed set as an AUDIT-TRAIL fact. A
+//     conflict (ErrReceiptConflict) is terminal — the queue is NOT touched.
+//     An identical replay is an idempotent no-op (nil error, registrantDID
+//     NOT overwritten even if this call's differs from what was first
+//     recorded) and falls through to step 4, same as a first-time write.
+//     Register never validates registrantDID against anything about the
+//     head itself (e.g. the credential's own issuer) — recording it is not
+//     an ownership check; binding it to head ownership is a later contract
+//     stage.
 //  4. queue.Add: reached only once the receipt is durably recorded (or an
 //     identical replay confirmed it already was), so a queued head always has
 //     SOME receipt behind it. AuditQueue.Add is itself idempotent (a re-add
 //     preserves the existing attempt count), so re-registering an
 //     already-queued head on replay is safe.
-func (s *EvidenceService) Register(ctx context.Context, headVariantID string, consumed []string) error {
+func (s *EvidenceService) Register(ctx context.Context, headVariantID string, consumed []string, registrantDID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -120,7 +128,7 @@ func (s *EvidenceService) Register(ctx context.Context, headVariantID string, co
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrHeadNotAdmitted, headVariantID)
 	}
-	if err := s.receipts.Put(bodyAddress, canonical); err != nil {
+	if err := s.receipts.Put(bodyAddress, registrantDID, canonical); err != nil {
 		return fmt.Errorf("auditor: register evidence for %q: %w", bodyAddress, err)
 	}
 	if err := s.queue.Add(bodyAddress); err != nil {

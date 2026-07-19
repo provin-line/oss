@@ -1,6 +1,7 @@
 package filestore_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -182,7 +183,7 @@ func TestReceiptStore_RoundTripRestartDamaged(t *testing.T) {
 		t.Fatalf("absent: want ErrNotFound, got %v", err)
 	}
 	consumed := []string{h(4), h(5)}
-	if err := s.Put(h(3), consumed); err != nil {
+	if err := s.Put(h(3), "", consumed); err != nil {
 		t.Fatal(err)
 	}
 	// The stored copy must not alias the caller's slice.
@@ -219,7 +220,7 @@ func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	head := h(20)
 
 	// Unsorted + duplicated input canonicalizes to a sorted, deduped stored set.
-	if err := s.Put(head, []string{h(3), h(2), h(2)}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{h(3), h(2), h(2)}); err != nil {
 		t.Fatalf("first Put: %v", err)
 	}
 	want := []string{h(2), h(3)}
@@ -228,12 +229,12 @@ func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	}
 
 	// Identical replay (same canonical form) is a no-op.
-	if err := s.Put(head, []string{h(2), h(3)}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{h(2), h(3)}); err != nil {
 		t.Fatalf("identical replay: want nil, got %v", err)
 	}
 
 	// Permuted-but-equal (canonicalizes to the same set) is also a no-op.
-	if err := s.Put(head, []string{h(3), h(2)}); err != nil {
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{h(3), h(2)}); err != nil {
 		t.Fatalf("permuted-but-equal replay: want nil, got %v", err)
 	}
 	if got, _ := s.Get(head); !reflect.DeepEqual(got, want) {
@@ -246,11 +247,121 @@ func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s2.Put(head, []string{h(4)}); !errors.Is(err, auditor.ErrReceiptConflict) {
+	if err := s2.Put(head, "did:dplaax:reg:org:first", []string{h(4)}); !errors.Is(err, auditor.ErrReceiptConflict) {
 		t.Fatalf("different set after restart: want ErrReceiptConflict, got %v", err)
 	}
 	if got, _ := s2.Get(head); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Get after rejected conflicting Put = %v, want unchanged %v", got, want)
+	}
+}
+
+// receiptWire mirrors the on-disk JSON shape filestore.ReceiptStore.Put writes
+// (network/pkg/services/auditor/filestore/filestore.go's unexported receiptEnvelope) — a
+// TEST-ONLY local copy of the wire contract, not a dependency on the unexported type. This is
+// how these tests observe the registrant: registrantDID has no public Go reader (see
+// auditor.ReceiptStore.Put's doc) — the file envelope IS the audit record, so verifying it
+// means reading the raw bytes on disk, exactly what a real out-of-band audit inspection would
+// do.
+type receiptWire struct {
+	V             int      `json:"v"`
+	Consumed      []string `json:"consumed"`
+	RegistrantDID string   `json:"registrant_did"`
+}
+
+func readReceiptWire(t *testing.T, dir, head string) receiptWire {
+	t.Helper()
+	raw, err := os.ReadFile(entryPath(dir, head))
+	if err != nil {
+		t.Fatalf("read receipt envelope: %v", err)
+	}
+	var w receiptWire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		t.Fatalf("unmarshal receipt envelope: %v", err)
+	}
+	return w
+}
+
+// The registrant DID recorded with a receipt is persisted in the on-disk envelope at first
+// write.
+func TestReceiptStore_RegistrantPersistedOnFirstWrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(21)
+	if err := s.Put(head, "did:dplaax:reg:org:pipeline", []string{h(3)}); err != nil {
+		t.Fatal(err)
+	}
+	w := readReceiptWire(t, dir, head)
+	if w.RegistrantDID != "did:dplaax:reg:org:pipeline" {
+		t.Errorf("registrant_did = %q, want %q", w.RegistrantDID, "did:dplaax:reg:org:pipeline")
+	}
+}
+
+// Empty registrantDID is allowed and persists as such — the in-process (non-wireauth)
+// emission path has no wire-authenticated caller DID to record.
+func TestReceiptStore_EmptyRegistrantAllowed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(22)
+	if err := s.Put(head, "", []string{h(3)}); err != nil {
+		t.Fatalf("Put with empty registrantDID: want nil, got %v", err)
+	}
+	w := readReceiptWire(t, dir, head)
+	if w.RegistrantDID != "" {
+		t.Errorf("registrant_did = %q, want \"\"", w.RegistrantDID)
+	}
+}
+
+// A canonically-identical replay does NOT overwrite the registrant recorded on first write,
+// even when the replay's registrantDID differs — the conflict rule stays content-only, and
+// first-write-wins applies to the registrant too.
+func TestReceiptStore_RegistrantReplayKeepsFirst(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(23)
+	if err := s.Put(head, "did:dplaax:reg:org:first", []string{h(3), h(4)}); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	// Canonically-identical (same set, different order) replay with a DIFFERENT registrant.
+	if err := s.Put(head, "did:dplaax:reg:org:second", []string{h(4), h(3)}); err != nil {
+		t.Fatalf("identical-content replay with a different registrant: want nil, got %v", err)
+	}
+	w := readReceiptWire(t, dir, head)
+	if w.RegistrantDID != "did:dplaax:reg:org:first" {
+		t.Errorf("registrant_did after replay = %q, want unchanged %q", w.RegistrantDID, "did:dplaax:reg:org:first")
+	}
+}
+
+// An envelope written before RegistrantDID existed (no registrant_did key at all — the exact
+// shape a pre-migration on-disk receipt has) decodes with an empty registrant, never an
+// error and never a damaged-entry classification — the same backward-compat posture
+// Unresolvable established for verdictEnvelope.
+func TestReceiptStore_OldEnvelopeDecodesEmptyRegistrant(t *testing.T) {
+	dir := t.TempDir()
+	s, err := filestore.NewReceiptStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := h(24)
+	old := []byte(`{"v":1,"consumed":["` + h(3) + `"]}`) // no registrant_did key at all
+	if err := os.WriteFile(entryPath(dir, head), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(head)
+	if err != nil || len(got) != 1 || got[0] != h(3) {
+		t.Fatalf("Get(old envelope) = %v (err %v), want [%s]", got, err, h(3))
+	}
+	w := readReceiptWire(t, dir, head)
+	if w.RegistrantDID != "" {
+		t.Errorf("registrant_did decoded from a pre-migration envelope = %q, want \"\"", w.RegistrantDID)
 	}
 }
 
@@ -277,7 +388,7 @@ func TestReceiptStore_PutValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Put(h(9), tt.in); err == nil {
+			if err := s.Put(h(9), "", tt.in); err == nil {
 				t.Fatalf("Put(%v): want error", tt.in)
 			}
 		})
@@ -298,7 +409,7 @@ func TestReceiptStore_PutOverDamagedEntryFailsClosed(t *testing.T) {
 	if err := os.WriteFile(entryPath(dir, head), []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(head, []string{h(3)}); err == nil {
+	if err := s.Put(head, "", []string{h(3)}); err == nil {
 		t.Fatalf("Put over a damaged entry: want error, got nil")
 	} else if errors.Is(err, auditor.ErrReceiptConflict) {
 		t.Fatalf("Put over a damaged entry: want a damage error, not ErrReceiptConflict (got %v)", err)

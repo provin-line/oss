@@ -47,9 +47,11 @@ const (
 // pointing inward). *auditor.EvidenceService satisfies it. headVariantID is
 // the wire variant id RegisterEvidenceRequest.head_variant_address carries
 // (P1-A) — auditor.EvidenceService.Register resolves it to a body address
-// internally; this handler never sees that address.
+// internally; this handler never sees that address. registrantDID is the
+// wireauth-proven caller DID (the proof's SignerDID, verified by h.v before
+// Register is ever called) that gets recorded with the receipt.
 type EvidenceRegistrar interface {
-	Register(ctx context.Context, headVariantID string, consumed []string) error
+	Register(ctx context.Context, headVariantID string, consumed []string, registrantDID string) error
 }
 
 // Verifier is the wireauth verification seam (an interface so a spy can be
@@ -96,12 +98,12 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	fields := auditor.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
-	// No separate actor field: the proven signer_did is authoritative for who
-	// registered the evidence (the querying actor IS the signer, nil authorizer).
+	// No separate actor field: the proven signer_did is who gets recorded as
+	// the registering party (the querying actor IS the signer, nil authorizer).
 	if err := h.v.Verify(ctx, auditor.OpRegisterEvidence, fields, proof, nil); err != nil {
 		return nil, mapError(err)
 	}
-	if err := h.evidence.Register(ctx, req.Msg.GetHeadVariantAddress(), canonical); err != nil {
+	if err := h.evidence.Register(ctx, req.Msg.GetHeadVariantAddress(), canonical, proof.SignerDID); err != nil {
 		return nil, mapError(err)
 	}
 	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil

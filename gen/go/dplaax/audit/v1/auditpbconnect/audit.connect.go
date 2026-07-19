@@ -99,8 +99,15 @@ type AuditServiceClient interface {
 	// (slice-17i evidence write surface, D7). Trust model: L1 + in-band
 	// wireauth — the PDP gate (this policy option) decides whether the caller
 	// may register evidence at all; the request additionally carries a
-	// wireauth AuthProof the handler verifies in-band, and the proven DID is
-	// authoritative for who is recorded as the registering party.
+	// wireauth AuthProof the handler verifies in-band, and the proven DID IS
+	// RECORDED alongside the receipt as the registering party — an AUDIT-TRAIL
+	// fact, always available to a later inspection of who registered this
+	// evidence. This recording is NOT an ownership check: RegisterEvidence
+	// does not verify any relationship between the proven DID and the
+	// credential's own issuer/process DID, so it does not reject a proof from
+	// a signer who never emitted the head. Binding the recorded registrant to
+	// head OWNERSHIP is a later contract stage, once the process/pipeline DID
+	// relationship this would need to check is itself designed.
 	//
 	// Admission and persistence key on DIFFERENT identities of the same head
 	// (P1-A): the registry resolves the variant to prove the exact admitted
@@ -222,8 +229,15 @@ type AuditServiceHandler interface {
 	// (slice-17i evidence write surface, D7). Trust model: L1 + in-band
 	// wireauth — the PDP gate (this policy option) decides whether the caller
 	// may register evidence at all; the request additionally carries a
-	// wireauth AuthProof the handler verifies in-band, and the proven DID is
-	// authoritative for who is recorded as the registering party.
+	// wireauth AuthProof the handler verifies in-band, and the proven DID IS
+	// RECORDED alongside the receipt as the registering party — an AUDIT-TRAIL
+	// fact, always available to a later inspection of who registered this
+	// evidence. This recording is NOT an ownership check: RegisterEvidence
+	// does not verify any relationship between the proven DID and the
+	// credential's own issuer/process DID, so it does not reject a proof from
+	// a signer who never emitted the head. Binding the recorded registrant to
+	// head OWNERSHIP is a later contract stage, once the process/pipeline DID
+	// relationship this would need to check is itself designed.
 	//
 	// Admission and persistence key on DIFFERENT identities of the same head
 	// (P1-A): the registry resolves the variant to prove the exact admitted

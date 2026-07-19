@@ -410,18 +410,20 @@ func TestGetConsumedSources_PageAndErrors(t *testing.T) {
 // --- RegisterEvidence ---
 
 // fakeEvidence is a spy handler.EvidenceRegistrar: it records the (headVariantAddr,
-// consumed) Register was called with and returns a preset error.
+// consumed, registrantDID) Register was called with and returns a preset error.
 type fakeEvidence struct {
-	called  bool
-	gotHead string
-	gotCons []string
-	err     error
+	called        bool
+	gotHead       string
+	gotCons       []string
+	gotRegistrant string
+	err           error
 }
 
-func (f *fakeEvidence) Register(_ context.Context, headVariantAddr string, consumed []string) error {
+func (f *fakeEvidence) Register(_ context.Context, headVariantAddr string, consumed []string, registrantDID string) error {
 	f.called = true
 	f.gotHead = headVariantAddr
 	f.gotCons = append([]string(nil), consumed...)
+	f.gotRegistrant = registrantDID
 	return f.err
 }
 
@@ -494,6 +496,11 @@ func TestRegisterEvidence_VerifyContract(t *testing.T) {
 	wantCons := []string{headAddr("b"), headAddr("c")}
 	if len(ev.gotCons) != 2 || ev.gotCons[0] != wantCons[0] || ev.gotCons[1] != wantCons[1] {
 		t.Errorf("evidence.Register consumed = %v, want canonical %v", ev.gotCons, wantCons)
+	}
+	// The wireauth-proven signer_did (verified by v.Verify above) is threaded straight
+	// through to evidence.Register as the registrant to record with the receipt.
+	if ev.gotRegistrant != "did:dplaax:reg:org:pipeline" {
+		t.Errorf("evidence.Register registrantDID = %q, want the proof's signer_did %q", ev.gotRegistrant, "did:dplaax:reg:org:pipeline")
 	}
 }
 

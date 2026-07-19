@@ -168,7 +168,7 @@ func TestStatusService_GetConsumed(t *testing.T) {
 	}
 
 	consumed := []string{hashOf('c'), hashOf('a'), hashOf('b')} // unsorted on purpose
-	if err := receipts.Put(validHash, consumed); err != nil {
+	if err := receipts.Put(validHash, "", consumed); err != nil {
 		t.Fatal(err)
 	}
 	page, next, err := svc.GetConsumed(context.Background(), validHash, "", 2)

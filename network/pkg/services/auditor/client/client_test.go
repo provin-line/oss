@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditclient "github.com/provin-line/oss/network/pkg/services/auditor/client"
+	"github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
@@ -95,19 +98,22 @@ func (c *countingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return c.inner.Do(req)
 }
 
-// harness wires a real AuditService — a real EvidenceService over in-memory
-// receipt/queue stores, gated by a real vcresolver.Service's
-// ResolveVariantBody (the SAME admission wiring
-// internal/netcompose.BuildHandler uses, not a stub) — behind a real
-// wireauth.Verifier, served over httptest, with the real streaming-free
-// unary auditclient.Client signing every call as nodeDID.
+// harness wires a real AuditService — a real EvidenceService over a REAL
+// filestore.ReceiptStore (rooted at receiptDir, so tests can inspect the raw on-disk
+// envelope — the registrant DID has no public Go reader; the file envelope IS the audit
+// record, see auditor.ReceiptStore.Put's doc) and an in-memory queue, gated by a real
+// vcresolver.Service's ResolveVariantBody (the SAME admission wiring
+// internal/netcompose.BuildHandler uses, not a stub) — behind a real wireauth.Verifier,
+// served over httptest, with the real streaming-free unary auditclient.Client signing
+// every call as nodeDID.
 type harness struct {
-	receipts *auditor.MemReceiptStore
-	queue    *auditor.MemQueue
-	vcSvc    *vcresolver.Service
-	client   *auditclient.Client
-	url      string
-	httpc    *countingHTTPClient
+	receipts   auditor.ReceiptStore
+	receiptDir string
+	queue      *auditor.MemQueue
+	vcSvc      *vcresolver.Service
+	client     *auditclient.Client
+	url        string
+	httpc      *countingHTTPClient
 	// signer is the crypto.Signer bound to nodeDID via the harness's DID
 	// resolver — populated by newL1Harness so its callers can build their own
 	// auditclient.Client (with a Bearer under test) that still signs a
@@ -132,7 +138,11 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	receipts := auditor.NewMemReceiptStore()
+	receiptDir := t.TempDir()
+	receipts, err := filestore.NewReceiptStore(receiptDir)
+	if err != nil {
+		t.Fatalf("NewReceiptStore: %v", err)
+	}
 	queue := auditor.NewMemQueue()
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
 	// admitted mirrors internal/netcompose.BuildHandler's auditAdmitted
@@ -159,13 +169,14 @@ func newHarness(t *testing.T) *harness {
 
 	httpc := &countingHTTPClient{inner: srv.Client()}
 	return &harness{
-		receipts: receipts,
-		queue:    queue,
-		vcSvc:    vcSvc,
-		client:   auditclient.New(auditclient.Config{Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
-		url:      srv.URL,
-		httpc:    httpc,
-		signer:   sgn,
+		receipts:   receipts,
+		receiptDir: receiptDir,
+		queue:      queue,
+		vcSvc:      vcSvc,
+		client:     auditclient.New(auditclient.Config{Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
+		url:        srv.URL,
+		httpc:      httpc,
+		signer:     sgn,
 	}
 }
 
@@ -205,7 +216,10 @@ func storeCred(t *testing.T, vcSvc *vcresolver.Service, proofValue string) vcres
 // actually accepts on the wire): a deliberately unsorted + duplicated
 // consumed set still registers, and the receipt/queue land keyed by the
 // resolved BODY address (never the variant id), in their CANONICAL (sorted,
-// deduplicated) form.
+// deduplicated) form. It also proves the wireauth-proven signer_did (nodeDID,
+// what h.client signs every call as) is what lands as the receipt's recorded
+// registrant — read from the raw on-disk envelope, since registrantDID has no
+// public Go reader (the file envelope IS the audit record).
 func TestRegisterEvidence_RoundTrip(t *testing.T) {
 	h := newHarness(t)
 	stored := storeCred(t, h.vcSvc, "roundtrip-proof")
@@ -225,6 +239,20 @@ func TestRegisterEvidence_RoundTrip(t *testing.T) {
 	want := []string{addr("b"), addr("c")}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("receipt = %v, want canonical %v", got, want)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(h.receiptDir, strings.TrimPrefix(stored.BodyAddress, "sha256:")+".json"))
+	if err != nil {
+		t.Fatalf("read receipt envelope: %v", err)
+	}
+	var envelope struct {
+		RegistrantDID string `json:"registrant_did"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("unmarshal receipt envelope: %v", err)
+	}
+	if envelope.RegistrantDID != nodeDID {
+		t.Errorf("receipt registrant_did = %q, want the proof's signer_did %q", envelope.RegistrantDID, nodeDID)
 	}
 
 	cands, err := h.queue.ListNewest(10)
