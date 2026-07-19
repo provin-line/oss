@@ -30,9 +30,10 @@ type ReceiptStore interface {
 	// The conflict rule stays content-only: registrantDID never participates in the
 	// conflict comparison, only the consumed set does.
 	//
-	// registrantDID is the wireauth-proven DID of the caller registering this evidence (an
-	// AUDIT-TRAIL fact recorded alongside the receipt) — empty is allowed for the
-	// in-process (non-RPC) emission path, which has no wire-authenticated caller to record.
+	// registrantDID is the DID registering this evidence (an AUDIT-TRAIL fact recorded
+	// alongside the receipt): the wireauth-proven caller DID on the RPC path, the emitting
+	// credential's own issuer (Process) DID on the in-process emission path. Empty is
+	// allowed — a caller with no identity in scope records "" rather than fabricating one.
 	// Recording registrantDID is NOT an ownership check: Put never rejects a Put whose
 	// registrantDID differs from anything about the head itself (e.g. the credential's own
 	// issuer). Binding the recorded registrant to head ownership is a later contract stage.

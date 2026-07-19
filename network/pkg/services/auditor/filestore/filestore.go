@@ -338,9 +338,9 @@ type receiptEnvelope struct {
 	Consumed []string `json:"consumed"`
 	// RegistrantDID is the wireauth-proven DID of the caller that registered this evidence,
 	// recorded at FIRST write only (see auditor.ReceiptStore.Put's doc) — an audit-trail
-	// fact, not an ownership check. omitempty: envelopes written before this field existed
-	// (and the in-process emission path, which has no wire-authenticated caller) decode as
-	// "" — never distinguishable, by design, from a since-recorded empty registrant.
+	// fact, not an ownership check (the in-process emission path records the emitting
+	// credential's issuer DID here). omitempty: envelopes written before this field existed
+	// decode as "" — never distinguishable, by design, from a recorded-empty registrant.
 	RegistrantDID string `json:"registrant_did,omitempty"`
 }
 
