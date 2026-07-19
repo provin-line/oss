@@ -23,6 +23,7 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/sink"
@@ -30,6 +31,7 @@ import (
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
+	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -650,5 +652,108 @@ func TestDataPlane_DurableEmissionLog(t *testing.T) {
 	}
 	if len(dp.tlogClosers) != 1 {
 		t.Fatalf("tlogClosers = %d, want 1 (teardown must release the handle)", len(dp.tlogClosers))
+	}
+}
+
+const dpArchiveReceiptIssr = "did:dplaax:reg:org:acme:pipeline:archive:process:a1"
+
+// dpArchivalSinkCfg is an archival sink loop: Kind = archival, which config
+// validation (config.go) already REQUIRES to carry a receipt issuer
+// (sink.receipt.issuer) — the same signer identity this task arms the
+// reject log's checkpoint with (D-T3).
+func dpArchivalSinkCfg() *pipelineconfig.Config {
+	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name:           "archive",
+		Role:           pipelineconfig.RoleSink,
+		IngressSubject: dpPipelineDID,
+		Sink: pipelineconfig.SinkConfig{
+			Kind:                 pipelineconfig.SinkArchival,
+			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
+			AllowIssuers:         []string{"did:dplaax:reg:org:acme:*"},
+			Receipt: pipelineconfig.SinkReceiptConfig{
+				Issue: true,
+				Issuer: pipelineconfig.IssuerConfig{
+					DID:                dpArchiveReceiptIssr,
+					KeyID:              string(keystore.KeyIDSigning),
+					VerificationMethod: dpArchiveReceiptIssr + "#signing",
+				},
+				PipelineID: "archive",
+				ProcessID:  "a1",
+			},
+		},
+	}}}
+}
+
+// TestDataPlane_ArchivalSinkRejectLog_SignedIdentity is the D-T3 sink-reject
+// capstone: an archival sink's reject log is armed with the SAME signer as
+// its (mandatory) sink-receipt issuer, so its checkpoint carries the stable
+// custody identity `sink-reject:<receipt-issuer-process-DID>` — while the
+// on-disk directory stays keyed by the loop NAME, not sha256(log id) (unlike
+// newEmission): re-keying by hash would orphan every existing local reject
+// archive on upgrade, and nothing external reconciles against a reject log's
+// directory today (D-T5: never registered into dp.tlogs, never served via
+// TlogService reads) — only the SIGNED identity is new here, not the layout.
+func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	ks := filestore.New(t.TempDir())
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	if err := ks.SaveKeyPair(dpArchiveReceiptIssr, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatalf("save key: %v", err)
+	}
+
+	rejectDir := t.TempDir()
+	dp, err := buildDataPlane(context.Background(), chainCfg, dpArchivalSinkCfg(), ks, dataPlaneDeps{
+		Resolver:     stubResolver{},
+		SinkWriter:   console.New(io.Discard),
+		VCStore:      dpVCStore(),
+		AuditQueue:   auditor.NewMemQueue(),
+		RejectLogDir: rejectDir,
+	})
+	if err != nil {
+		t.Fatalf("buildDataPlane (archival sink): %v", err)
+	}
+	t.Cleanup(func() { _ = dp.conn.Close() })
+
+	// Directory keying is UNCHANGED: the loop NAME, not sha256(log id).
+	if _, err := os.Stat(filepath.Join(rejectDir, "archive", "log.ndjson")); err != nil {
+		t.Fatalf("reject log at the loop-name-keyed path: %v", err)
+	}
+
+	// D-T5: the reject log must never be registered into dp.tlogs (custody-only,
+	// never served via TlogService reads).
+	wantRejectLogID := "sink-reject:" + dpArchiveReceiptIssr
+	if _, ok := dp.tlogs[wantRejectLogID]; ok {
+		t.Fatalf("reject log registered into dp.tlogs under %q — must stay unregistered (D-T5)", wantRejectLogID)
+	}
+
+	// TlogDir is unset here, so the sibling sink-receipt log stays memlog-backed
+	// (no closer) — the reject log is the ONLY durable log this loop opens, so
+	// it is the only tlogClosers entry. Assert directly on the constructed
+	// instance's own Checkpoint (not a reopened/reconstructed one).
+	if len(dp.tlogClosers) != 1 {
+		t.Fatalf("tlogClosers = %d, want 1 (only the durable reject log)", len(dp.tlogClosers))
+	}
+	l, ok := dp.tlogClosers[0].(tlog.Log)
+	if !ok {
+		t.Fatalf("tlogClosers[0] = %T, want a tlog.Log (the reject log)", dp.tlogClosers[0])
+	}
+	cp, err := l.Checkpoint(context.Background())
+	if err != nil {
+		t.Fatalf("Checkpoint on the armed reject log: %v", err)
+	}
+	if cp.Origin != wantRejectLogID {
+		t.Errorf("reject log checkpoint Origin = %q, want %q", cp.Origin, wantRejectLogID)
+	}
+	wantSignedBy := dpArchiveReceiptIssr + "#signing"
+	if cp.SignedBy != wantSignedBy {
+		t.Errorf("reject log checkpoint SignedBy = %q, want %q", cp.SignedBy, wantSignedBy)
 	}
 }

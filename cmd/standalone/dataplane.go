@@ -276,23 +276,45 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	}
 	// newRejectLog builds one archival sink loop's durable reject log under
 	// RejectLogDir/<loop> (data-dir/evidence/sink-rejects/<loop>). In-memory when
-	// RejectLogDir is empty (unit-test seam). No checkpoint signer: the reject log
-	// needs durable, hash-chained append, not signed tree heads. The directory is
-	// keyed by the raw loop NAME, not a hash — unlike newEmission (whose log id is
-	// a DID reconciled against by external consumers, so it hashes to survive a
-	// rename): a reject log is operator-facing local evidence that nothing external
-	// reconciles against, so a human-readable per-loop directory is the better
-	// trade, and a rename simply starts a fresh log.
-	newRejectLog := func(loopName string) (sink.RejectLog, error) {
+	// RejectLogDir is empty (unit-test seam; memlog cannot sign — Checkpoint stays
+	// ErrUnsignedLog there, unchanged).
+	//
+	// Identity (D-T3, DECIDED): archival sinks are already REQUIRED to carry a
+	// receipt issuer (config.go's Kind==archival && !Receipt.Issue boot error), so
+	// the reject log is armed with that SAME signer — the sink's mandatory receipt
+	// issuer — giving its checkpoint the stable custody identity
+	// `sink-reject:<receipt-issuer-process-DID>` (the logident predicate's
+	// KindSinkReject shape, one line below KindSinkReceipt's own
+	// `sink-receipt:<DID>`).
+	//
+	// Directory keying is UNCHANGED (asymmetric with the identity change above):
+	// still the raw loop NAME, not sha256(log id) — unlike newEmission, whose log
+	// id is a DID reconciled against by external consumers, so it hashes to
+	// survive a rename. A reject log is custody-only (never registered into
+	// dp.tlogs, D-T5 — never served via TlogService reads; a future shipper reads
+	// the live handle directly), so nothing external reconciles against its
+	// directory today; re-keying by hash here would only orphan every existing
+	// local reject archive on upgrade for no corresponding benefit. Only the
+	// SIGNED identity (the checkpoint's Origin/SignedBy) is new — the on-disk
+	// layout is not.
+	newRejectLog := func(loopName string, issuer pipelineconfig.IssuerConfig) (sink.RejectLog, error) {
 		if deps.RejectLogDir == "" {
 			return &sinkRejectLog{log: memlog.New()}, nil
 		}
-		fl, ferr := filelog.New(filepath.Join(deps.RejectLogDir, loopName))
+		dir := filepath.Join(deps.RejectLogDir, loopName)
+		logID := "sink-reject:" + issuer.DID
+		fl, ferr := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+			Signer:             keyStore,
+			SignerDID:          issuer.DID,
+			KeyID:              issuer.KeyID,
+			VerificationMethod: issuer.VerificationMethod,
+			LogID:              logID,
+		}))
 		if ferr != nil {
 			return nil, fmt.Errorf("standalone: loop %q: reject log: %w", loopName, ferr)
 		}
 		dp.tlogClosers = append(dp.tlogClosers, fl)
-		slog.Info("standalone: sink reject log opened", "loop", loopName, "dir", filepath.Join(deps.RejectLogDir, loopName))
+		slog.Info("standalone: sink reject log opened", "loop", loopName, "dir", dir, "log_id", logID)
 		return &sinkRejectLog{log: fl}, nil
 	}
 	// When a vc-store-endpoint is configured, build the network VC-store client once:
@@ -404,10 +426,13 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				if lc.Sink.Receipt.Issue {
 					receipts, err = buildSinkReceiptRegistrar(builder, deps.VCStore, deps.AuditQueue, publisher, newEmission, lc)
 				}
-				// Archival's reject-with-audit-log obligation: a durable reject log.
+				// Archival's reject-with-audit-log obligation: a durable reject log,
+				// armed with the SAME receipt issuer identity (D-T3) — archival's
+				// config validation already guarantees lc.Sink.Receipt.Issuer is
+				// populated (Issue == true) whenever Kind == archival.
 				var rejectLog sink.RejectLog
 				if err == nil && lc.Sink.Kind == pipelineconfig.SinkArchival {
-					rejectLog, err = newRejectLog(lc.Name)
+					rejectLog, err = newRejectLog(lc.Name, lc.Sink.Receipt.Issuer)
 				}
 				if err == nil {
 					loop, err = buildSinkLoop(conn, vcnt, ingressStore, w, receipts, rejectLog, pw, lc)
