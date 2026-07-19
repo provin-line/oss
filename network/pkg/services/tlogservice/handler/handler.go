@@ -28,8 +28,14 @@ type Service interface {
 	Records(ctx context.Context, logID string, start uint64, count int) ([]*tlog.Record, error)
 }
 
-// Handler adapts a Service to the generated TlogServiceHandler.
+// Handler adapts a Service to the generated TlogServiceHandler. It embeds
+// the Unimplemented stub so MirrorLogSegment / GetMirrorState (D-T2's
+// mirror-custody surface) report CodeUnimplemented until the registry-side
+// mirror store and identity predicate land (mirrors OperatorHandler's use
+// of chainpbconnect.UnimplementedChainServiceHandler for the same reason:
+// proto surface staged ahead of its domain wiring).
 type Handler struct {
+	tlogpbconnect.UnimplementedTlogServiceHandler
 	svc Service
 }
 

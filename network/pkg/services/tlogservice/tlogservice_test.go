@@ -70,6 +70,8 @@ func TestTlogService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
 		"GetLogCheckpoint": {"tlog", "read"},
 		"ListLogRecords":   {"tlog", "read"},
+		"MirrorLogSegment": {"tlog", "mirror"},
+		"GetMirrorState":   {"tlog", "read"},
 	}
 	methods := tlogpb.File_dplaax_tlog_v1_tlog_proto.Services().ByName("TlogService").Methods()
 	if methods.Len() != len(want) {

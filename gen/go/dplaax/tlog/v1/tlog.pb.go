@@ -25,6 +25,7 @@ package tlogpb
 
 import (
 	_ "github.com/o3co/protobuf.interceptors/schema"
+	v1 "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -348,11 +349,251 @@ func (x *ListLogRecordsResponse) GetRecords() []*LogRecord {
 	return nil
 }
 
+type MirrorLogSegmentRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// log_id is the emission log's identity — the same log_id as
+	// GetLogCheckpointRequest.log_id (see D-T3 for the registry-side signer
+	// binding this call additionally enforces at the handler).
+	LogId string `protobuf:"bytes,1,opt,name=log_id,json=logId,proto3" json:"log_id,omitempty"`
+	// from_index is the segment's starting index. MUST equal the log's
+	// current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
+	// the exact-extend, gap, overlap, and replay rules this enforces.
+	FromIndex uint64 `protobuf:"varint,2,opt,name=from_index,json=fromIndex,proto3" json:"from_index,omitempty"`
+	// record_payloads are the ordered record payload bytes for
+	// [from_index, from_index + len(record_payloads)) — the same payload
+	// bytes the local log already hash-chained. The registry recomputes the
+	// chain hash from its stored tail through these payloads and requires
+	// the result to equal checkpoint.head.
+	RecordPayloads [][]byte `protobuf:"bytes,3,rep,name=record_payloads,json=recordPayloads,proto3" json:"record_payloads,omitempty"`
+	// checkpoint is the loop-signed head covering EXACTLY this segment's end
+	// (checkpoint.size == from_index + len(record_payloads); see
+	// MirrorLogSegment's own doc for the alignment and monotonicity rules).
+	// Wire-shaped identically to GetLogCheckpointResponse so a shipper can
+	// forward what GetLogCheckpoint already returned.
+	Checkpoint *GetLogCheckpointResponse `protobuf:"bytes,4,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
+	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+	// proof-carrying shape of dplaax.audit.v1.RegisterEvidenceRequest, reusing
+	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
+	// would be a drift source). Its signed view is described on
+	// MirrorLogSegment's own doc (trust model paragraph).
+	AuthProof     *v1.AuthProof `protobuf:"bytes,5,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MirrorLogSegmentRequest) Reset() {
+	*x = MirrorLogSegmentRequest{}
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MirrorLogSegmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MirrorLogSegmentRequest) ProtoMessage() {}
+
+func (x *MirrorLogSegmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MirrorLogSegmentRequest.ProtoReflect.Descriptor instead.
+func (*MirrorLogSegmentRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_tlog_v1_tlog_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *MirrorLogSegmentRequest) GetLogId() string {
+	if x != nil {
+		return x.LogId
+	}
+	return ""
+}
+
+func (x *MirrorLogSegmentRequest) GetFromIndex() uint64 {
+	if x != nil {
+		return x.FromIndex
+	}
+	return 0
+}
+
+func (x *MirrorLogSegmentRequest) GetRecordPayloads() [][]byte {
+	if x != nil {
+		return x.RecordPayloads
+	}
+	return nil
+}
+
+func (x *MirrorLogSegmentRequest) GetCheckpoint() *GetLogCheckpointResponse {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return nil
+}
+
+func (x *MirrorLogSegmentRequest) GetAuthProof() *v1.AuthProof {
+	if x != nil {
+		return x.AuthProof
+	}
+	return nil
+}
+
+type MirrorLogSegmentResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// acked_size is the registry's durable mirror size after this call —
+	// equal to from_index + len(record_payloads) on success, or unchanged on
+	// a byte-identical replay no-op (see MirrorLogSegment's own doc). Callers
+	// may treat this the same as a subsequent GetMirrorState.acked_size read.
+	AckedSize     uint64 `protobuf:"varint,1,opt,name=acked_size,json=ackedSize,proto3" json:"acked_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MirrorLogSegmentResponse) Reset() {
+	*x = MirrorLogSegmentResponse{}
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MirrorLogSegmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MirrorLogSegmentResponse) ProtoMessage() {}
+
+func (x *MirrorLogSegmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MirrorLogSegmentResponse.ProtoReflect.Descriptor instead.
+func (*MirrorLogSegmentResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_tlog_v1_tlog_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *MirrorLogSegmentResponse) GetAckedSize() uint64 {
+	if x != nil {
+		return x.AckedSize
+	}
+	return 0
+}
+
+type GetMirrorStateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// log_id is the emission log's identity, same as
+	// MirrorLogSegmentRequest.log_id / GetLogCheckpointRequest.log_id.
+	LogId         string `protobuf:"bytes,1,opt,name=log_id,json=logId,proto3" json:"log_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMirrorStateRequest) Reset() {
+	*x = GetMirrorStateRequest{}
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMirrorStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMirrorStateRequest) ProtoMessage() {}
+
+func (x *GetMirrorStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMirrorStateRequest.ProtoReflect.Descriptor instead.
+func (*GetMirrorStateRequest) Descriptor() ([]byte, []int) {
+	return file_dplaax_tlog_v1_tlog_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetMirrorStateRequest) GetLogId() string {
+	if x != nil {
+		return x.LogId
+	}
+	return ""
+}
+
+type GetMirrorStateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// acked_size is the AUTHORITATIVE durable mirror size for this log: the
+	// count of records the registry has verified and stored via
+	// MirrorLogSegment. This is the shipper's resume cursor — see
+	// GetMirrorState's own doc for why GetLogCheckpoint.size must never be
+	// used as one.
+	AckedSize     uint64 `protobuf:"varint,1,opt,name=acked_size,json=ackedSize,proto3" json:"acked_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMirrorStateResponse) Reset() {
+	*x = GetMirrorStateResponse{}
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMirrorStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMirrorStateResponse) ProtoMessage() {}
+
+func (x *GetMirrorStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_tlog_v1_tlog_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMirrorStateResponse.ProtoReflect.Descriptor instead.
+func (*GetMirrorStateResponse) Descriptor() ([]byte, []int) {
+	return file_dplaax_tlog_v1_tlog_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetMirrorStateResponse) GetAckedSize() uint64 {
+	if x != nil {
+		return x.AckedSize
+	}
+	return 0
+}
+
 var File_dplaax_tlog_v1_tlog_proto protoreflect.FileDescriptor
 
 const file_dplaax_tlog_v1_tlog_proto_rawDesc = "" +
 	"\n" +
-	"\x19dplaax/tlog/v1/tlog.proto\x12\x0edplaax.tlog.v1\x1a\x1ao3co/authz/v1/policy.proto\"0\n" +
+	"\x19dplaax/tlog/v1/tlog.proto\x12\x0edplaax.tlog.v1\x1a\x1bdplaax/chain/v1/chain.proto\x1a\x1ao3co/authz/v1/policy.proto\"0\n" +
 	"\x17GetLogCheckpointRequest\x12\x15\n" +
 	"\x06log_id\x18\x01 \x01(\tR\x05logId\"\xb2\x01\n" +
 	"\x18GetLogCheckpointResponse\x12\x15\n" +
@@ -372,11 +613,33 @@ const file_dplaax_tlog_v1_tlog_proto_rawDesc = "" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x12\n" +
 	"\x04hash\x18\x03 \x01(\tR\x04hash\"M\n" +
 	"\x16ListLogRecordsResponse\x123\n" +
-	"\arecords\x18\x01 \x03(\v2\x19.dplaax.tlog.v1.LogRecordR\arecords2\xf9\x01\n" +
+	"\arecords\x18\x01 \x03(\v2\x19.dplaax.tlog.v1.LogRecordR\arecords\"\xfd\x01\n" +
+	"\x17MirrorLogSegmentRequest\x12\x15\n" +
+	"\x06log_id\x18\x01 \x01(\tR\x05logId\x12\x1d\n" +
+	"\n" +
+	"from_index\x18\x02 \x01(\x04R\tfromIndex\x12'\n" +
+	"\x0frecord_payloads\x18\x03 \x03(\fR\x0erecordPayloads\x12H\n" +
+	"\n" +
+	"checkpoint\x18\x04 \x01(\v2(.dplaax.tlog.v1.GetLogCheckpointResponseR\n" +
+	"checkpoint\x129\n" +
+	"\n" +
+	"auth_proof\x18\x05 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"9\n" +
+	"\x18MirrorLogSegmentResponse\x12\x1d\n" +
+	"\n" +
+	"acked_size\x18\x01 \x01(\x04R\tackedSize\".\n" +
+	"\x15GetMirrorStateRequest\x12\x15\n" +
+	"\x06log_id\x18\x01 \x01(\tR\x05logId\"7\n" +
+	"\x16GetMirrorStateResponse\x12\x1d\n" +
+	"\n" +
+	"acked_size\x18\x01 \x01(\x04R\tackedSize2\xe7\x03\n" +
 	"\vTlogService\x12w\n" +
 	"\x10GetLogCheckpoint\x12'.dplaax.tlog.v1.GetLogCheckpointRequest\x1a(.dplaax.tlog.v1.GetLogCheckpointResponse\"\x10\x82\xb5\x18\f\n" +
 	"\x04tlog\x12\x04read\x12q\n" +
 	"\x0eListLogRecords\x12%.dplaax.tlog.v1.ListLogRecordsRequest\x1a&.dplaax.tlog.v1.ListLogRecordsResponse\"\x10\x82\xb5\x18\f\n" +
+	"\x04tlog\x12\x04read\x12y\n" +
+	"\x10MirrorLogSegment\x12'.dplaax.tlog.v1.MirrorLogSegmentRequest\x1a(.dplaax.tlog.v1.MirrorLogSegmentResponse\"\x12\x82\xb5\x18\x0e\n" +
+	"\x04tlog\x12\x06mirror\x12q\n" +
+	"\x0eGetMirrorState\x12%.dplaax.tlog.v1.GetMirrorStateRequest\x1a&.dplaax.tlog.v1.GetMirrorStateResponse\"\x10\x82\xb5\x18\f\n" +
 	"\x04tlog\x12\x04readB9Z7github.com/provin-line/oss/gen/go/dplaax/tlog/v1;tlogpbb\x06proto3"
 
 var (
@@ -391,25 +654,36 @@ func file_dplaax_tlog_v1_tlog_proto_rawDescGZIP() []byte {
 	return file_dplaax_tlog_v1_tlog_proto_rawDescData
 }
 
-var file_dplaax_tlog_v1_tlog_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_dplaax_tlog_v1_tlog_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_dplaax_tlog_v1_tlog_proto_goTypes = []any{
 	(*GetLogCheckpointRequest)(nil),  // 0: dplaax.tlog.v1.GetLogCheckpointRequest
 	(*GetLogCheckpointResponse)(nil), // 1: dplaax.tlog.v1.GetLogCheckpointResponse
 	(*ListLogRecordsRequest)(nil),    // 2: dplaax.tlog.v1.ListLogRecordsRequest
 	(*LogRecord)(nil),                // 3: dplaax.tlog.v1.LogRecord
 	(*ListLogRecordsResponse)(nil),   // 4: dplaax.tlog.v1.ListLogRecordsResponse
+	(*MirrorLogSegmentRequest)(nil),  // 5: dplaax.tlog.v1.MirrorLogSegmentRequest
+	(*MirrorLogSegmentResponse)(nil), // 6: dplaax.tlog.v1.MirrorLogSegmentResponse
+	(*GetMirrorStateRequest)(nil),    // 7: dplaax.tlog.v1.GetMirrorStateRequest
+	(*GetMirrorStateResponse)(nil),   // 8: dplaax.tlog.v1.GetMirrorStateResponse
+	(*v1.AuthProof)(nil),             // 9: dplaax.chain.v1.AuthProof
 }
 var file_dplaax_tlog_v1_tlog_proto_depIdxs = []int32{
 	3, // 0: dplaax.tlog.v1.ListLogRecordsResponse.records:type_name -> dplaax.tlog.v1.LogRecord
-	0, // 1: dplaax.tlog.v1.TlogService.GetLogCheckpoint:input_type -> dplaax.tlog.v1.GetLogCheckpointRequest
-	2, // 2: dplaax.tlog.v1.TlogService.ListLogRecords:input_type -> dplaax.tlog.v1.ListLogRecordsRequest
-	1, // 3: dplaax.tlog.v1.TlogService.GetLogCheckpoint:output_type -> dplaax.tlog.v1.GetLogCheckpointResponse
-	4, // 4: dplaax.tlog.v1.TlogService.ListLogRecords:output_type -> dplaax.tlog.v1.ListLogRecordsResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 1: dplaax.tlog.v1.MirrorLogSegmentRequest.checkpoint:type_name -> dplaax.tlog.v1.GetLogCheckpointResponse
+	9, // 2: dplaax.tlog.v1.MirrorLogSegmentRequest.auth_proof:type_name -> dplaax.chain.v1.AuthProof
+	0, // 3: dplaax.tlog.v1.TlogService.GetLogCheckpoint:input_type -> dplaax.tlog.v1.GetLogCheckpointRequest
+	2, // 4: dplaax.tlog.v1.TlogService.ListLogRecords:input_type -> dplaax.tlog.v1.ListLogRecordsRequest
+	5, // 5: dplaax.tlog.v1.TlogService.MirrorLogSegment:input_type -> dplaax.tlog.v1.MirrorLogSegmentRequest
+	7, // 6: dplaax.tlog.v1.TlogService.GetMirrorState:input_type -> dplaax.tlog.v1.GetMirrorStateRequest
+	1, // 7: dplaax.tlog.v1.TlogService.GetLogCheckpoint:output_type -> dplaax.tlog.v1.GetLogCheckpointResponse
+	4, // 8: dplaax.tlog.v1.TlogService.ListLogRecords:output_type -> dplaax.tlog.v1.ListLogRecordsResponse
+	6, // 9: dplaax.tlog.v1.TlogService.MirrorLogSegment:output_type -> dplaax.tlog.v1.MirrorLogSegmentResponse
+	8, // 10: dplaax.tlog.v1.TlogService.GetMirrorState:output_type -> dplaax.tlog.v1.GetMirrorStateResponse
+	7, // [7:11] is the sub-list for method output_type
+	3, // [3:7] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_tlog_v1_tlog_proto_init() }
@@ -423,7 +697,7 @@ func file_dplaax_tlog_v1_tlog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_tlog_v1_tlog_proto_rawDesc), len(file_dplaax_tlog_v1_tlog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
