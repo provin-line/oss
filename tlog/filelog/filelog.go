@@ -456,11 +456,46 @@ func (l *Log) Size(_ context.Context) (uint64, error) {
 	return uint64(len(l.records)), nil
 }
 
-// Checkpoint produces the signed head commitment, or ErrUnsignedLog when
-// the log was opened without a CheckpointSigner.
-func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
+// Checkpoint produces the signed head commitment at the log's CURRENT
+// size, or ErrUnsignedLog when the log was opened without a
+// CheckpointSigner. It is CheckpointAt at the current size — see
+// CheckpointAt's doc for why there is exactly one signing path.
+func (l *Log) Checkpoint(ctx context.Context) (*tlog.Checkpoint, error) {
 	l.mu.Lock()
 	size := uint64(len(l.records))
+	l.mu.Unlock()
+	return l.CheckpointAt(ctx, size)
+}
+
+// CheckpointAt produces a signed checkpoint over records[0..size) — an
+// ARBITRARY earlier prefix, not just the log's current head (Checkpoint's
+// own, narrower capability) — or ErrUnsignedLog when the log was opened
+// without a CheckpointSigner. size > the log's current committed length
+// is a clear error, never a silently truncated or zero-valued checkpoint.
+//
+// This is the tlog-custody mirror shipper's own capability (task-6
+// controller decision): the shipper ships cap-bounded batches, each
+// needing a checkpoint covering EXACTLY that batch's end (D-T2 acceptance
+// rule 1) — a boundary that is, in general, strictly before the log's
+// current head. It is deliberately NOT part of the tlog.Log contract:
+// memlog never signs at all, and the tlog-custody spec's v0 scope
+// excludes merklelog (per-segment identity is a named post-v0
+// limitation there), so requiring every implementation to provide it
+// would force a stub on implementations that structurally cannot honor
+// it. Callers detect the capability structurally (mirrors
+// pipeline/transport's own intentLog precedent: a package-local interface
+// asserted against, never added to tlog.Log itself).
+//
+// Checkpoint(ctx) is CheckpointAt(ctx, <current size>) — the ONE signing
+// path both share, so the two can never diverge on what a checkpoint's
+// (size, head) pair means.
+func (l *Log) CheckpointAt(_ context.Context, size uint64) (*tlog.Checkpoint, error) {
+	l.mu.Lock()
+	total := uint64(len(l.records))
+	if size > total {
+		l.mu.Unlock()
+		return nil, fmt.Errorf("filelog: checkpoint at %d: out of range (size %d)", size, total)
+	}
 	head := ""
 	if size > 0 {
 		head = l.records[size-1].Hash

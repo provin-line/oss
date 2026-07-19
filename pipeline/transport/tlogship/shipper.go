@@ -19,29 +19,19 @@
 // wires the concrete client in. This package itself imports only tlog/ (a
 // pure domain library, AGENTS.md rule 1) and the standard library.
 //
-// Checkpoint-covering-batch constraint (D-T2 acceptance rule 1): every
-// MirrorLogSegment call's checkpoint must cover EXACTLY that call's end
-// (checkpoint.Size == fromIndex+len(payloads)). tlog.Log's only checkpoint
-// operation is Checkpoint(ctx), which always signs the CURRENT head — there
-// is no CheckpointAt(size) capability anywhere in the tlog contract or its
-// implementations (verified: filelog.Log.Checkpoint signs
-// len(l.records) at call time; memlog never signs at all; merklelog is out
-// of v0's scope). A live log's size can only grow between the moment the
-// shipper reads GetMirrorState and the moment it reads Checkpoint(), never
-// shrink to an earlier boundary on demand — so the ONLY checkpoint a
-// shipper can ever obtain that covers a prefix boundary strictly SMALLER
-// than the log's current size does not exist. Consequently this shipper
-// ships AT MOST ONE segment per flush attempt, spanning [acked, current
-// head): the batch caps (MaxBatchRecords/MaxBatchBytes) are enforced as an
-// ADMISSION GATE on that one segment (ship it only if it already fits;
-// never split it, since no smaller covering checkpoint is obtainable to
-// ship a split earlier piece under). A backlog that exceeds the configured
-// caps in a single attempt is NOT shipped (ErrBacklogExceedsCaps, logged
-// and retried next tick, exactly like any other transient failure) — this
-// is an accepted, disclosed limitation of the current tlog.Log surface, not
-// a bug in this package: see task-6-report.md's "checkpoint-covering-batch
-// resolution" for the full analysis and the (not taken) alternative of
-// amending tlog.Log with a CheckpointAt capability.
+// Cap-bounded batching (D-T2 acceptance rule 1, task-6 controller decision):
+// every MirrorLogSegment call's checkpoint must cover EXACTLY that call's
+// end (checkpoint.Size == fromIndex+len(payloads)). tlog.Log's own
+// Checkpoint(ctx) only ever signs the CURRENT head, which cannot bound a
+// batch smaller than the whole outstanding backlog — so this package
+// requires its log to ALSO provide the filelog-only CheckpointAt(ctx, size)
+// capability (tlog/filelog), detected structurally via the unexported
+// checkpointAtLog interface below (mirrors pipeline/transport's own
+// intentLog precedent: a capability kept OUT of the tlog.Log contract
+// itself, since memlog cannot sign at all and the tlog-custody spec's v0
+// scope excludes merklelog). With CheckpointAt available, a backlog of any
+// size drains in successive, exactly-covering, cap-sized segments — there
+// is no "backlog exceeds the caps and can never be shipped" condition.
 package tlogship
 
 import (
@@ -72,41 +62,56 @@ type MirrorClient interface {
 	GetMirrorState(ctx context.Context, logID string) (ackedSize uint64, err error)
 }
 
+// checkpointAtLog is the optional filelog-only capability (see the package
+// doc) a Shipper's log must provide: a signed checkpoint over an ARBITRARY
+// earlier prefix, not just the current head. *filelog.Log satisfies it
+// structurally; kept unexported (like transport's own intentLog) so
+// tlog.Log's contract stays free of this shipper-specific coupling — the
+// methods are still exported names because cross-package structural
+// satisfaction requires it.
+type checkpointAtLog interface {
+	CheckpointAt(ctx context.Context, size uint64) (*tlog.Checkpoint, error)
+}
+
 // Construction errors.
 var (
 	ErrMissingLog    = errors.New("tlogship: Log is required")
 	ErrMissingLogID  = errors.New("tlogship: LogID is required")
 	ErrMissingClient = errors.New("tlogship: Client is required")
 	ErrBadConfig     = errors.New("tlogship: MaxBatchRecords and MaxBatchBytes must be positive")
+	// ErrLogLacksCheckpointAt is New's error when log does not provide the
+	// CheckpointAt capability (see checkpointAtLog) — the tlog-custody
+	// spec's v0 mirror scope is filelog-only, so a log that structurally
+	// cannot produce an arbitrary-prefix checkpoint (memlog, merklelog)
+	// cannot be mirrored by this shipper. Fails at construction, not on
+	// the first tick.
+	ErrLogLacksCheckpointAt = errors.New("tlogship: Log does not provide the CheckpointAt capability (tlog-custody v0 mirror scope is filelog-only)")
 )
 
-// ErrBacklogExceedsCaps is tick's error when the pending backlog (the local
-// log's current size minus the registry's acked size) exceeds the
-// configured MaxBatchRecords or MaxBatchBytes: see the package doc's
-// "checkpoint-covering-batch constraint". It is not a bug — the segment is
-// never sent (the registry's own caps would reject it anyway) — but it IS a
-// stuck condition this shipper cannot self-resolve by retrying alone: a
-// growing local log only makes the backlog larger, never smaller, until an
-// operator raises tlog-mirror.max-batch-records/max-batch-bytes (or a
-// future tlog.Log capability allows genuine sub-head chunking). Run logs it
-// like any other tick error and keeps ticking (never blocks emission).
-var ErrBacklogExceedsCaps = errors.New("tlogship: pending backlog exceeds the configured batch caps; no smaller checkpoint-covering segment is obtainable from tlog.Log")
+// ErrRecordExceedsMaxBatchBytes is tick's error when a SINGLE unmirrored
+// record's payload alone is larger than the configured MaxBatchBytes: no
+// batch containing it — even a batch of exactly one record — can ever fit
+// under that cap, so retrying cannot resolve this on its own (unlike an
+// ordinary registry-down failure). It stops the current tick's drain loop;
+// Run logs it like any other tick error and keeps ticking. Resolving it
+// requires raising MaxBatchBytes/tlog-mirror.max-batch-bytes.
+var ErrRecordExceedsMaxBatchBytes = errors.New("tlogship: a single record's payload exceeds the configured max-batch-bytes; no batch containing it can ever be shipped")
 
 // Config configures a Shipper. MaxBatchRecords and MaxBatchBytes are
 // required (positive); FlushInterval defaults to DefaultFlushInterval;
 // Logger defaults to slog.Default().
 type Config struct {
-	// MaxBatchRecords / MaxBatchBytes bound the ONE segment shipped per
-	// flush attempt (D-T2 rule 5; must match — or be no larger than — the
-	// registry's own tlog-mirror.max-batch-records/max-batch-bytes, or the
-	// registry rejects what this admission gate let through).
+	// MaxBatchRecords / MaxBatchBytes bound EACH segment shipped (D-T2 rule
+	// 5; must match — or be no larger than — the registry's own
+	// tlog-mirror.max-batch-records/max-batch-bytes, or the registry
+	// rejects a batch this shipper thought was admissible).
 	MaxBatchRecords int
 	MaxBatchBytes   int
 	// FlushInterval is the ticking cadence (tlog-mirror.flush-interval). <=
 	// 0 defaults to DefaultFlushInterval.
 	FlushInterval time.Duration
-	// Logger receives operational output (registry-down retries, the
-	// backlog-exceeds-caps condition). Nil defaults to slog.Default().
+	// Logger receives operational output (registry-down retries, an
+	// oversized single record). Nil defaults to slog.Default().
 	Logger *slog.Logger
 }
 
@@ -118,9 +123,10 @@ type Config struct {
 // closer runs (D-T6 shutdown ordering: loops drain → shipper drains → log
 // closers run).
 type Shipper struct {
-	log    tlog.Log
-	logID  string
-	client MirrorClient
+	log        tlog.Log
+	checkpoint checkpointAtLog
+	logID      string
+	client     MirrorClient
 
 	maxRecords int
 	maxBytes   int
@@ -131,7 +137,10 @@ type Shipper struct {
 // New validates cfg and returns a ready Shipper over log (the LIVE tlog.Log
 // handle shared with the emitting loop — this package never opens the log
 // itself; the flock forbids a second opener) under logID, shipping through
-// client.
+// client. log must additionally provide the CheckpointAt capability (see
+// checkpointAtLog); *filelog.Log does. A log that does not (e.g. memlog,
+// merklelog) is rejected here, at construction, rather than failing on the
+// first tick.
 func New(log tlog.Log, logID string, mc MirrorClient, cfg Config) (*Shipper, error) {
 	if log == nil {
 		return nil, ErrMissingLog
@@ -145,6 +154,10 @@ func New(log tlog.Log, logID string, mc MirrorClient, cfg Config) (*Shipper, err
 	if cfg.MaxBatchRecords <= 0 || cfg.MaxBatchBytes <= 0 {
 		return nil, fmt.Errorf("%w: got MaxBatchRecords=%d MaxBatchBytes=%d", ErrBadConfig, cfg.MaxBatchRecords, cfg.MaxBatchBytes)
 	}
+	capLog, ok := log.(checkpointAtLog)
+	if !ok {
+		return nil, fmt.Errorf("%w: got %T", ErrLogLacksCheckpointAt, log)
+	}
 	interval := cfg.FlushInterval
 	if interval <= 0 {
 		interval = DefaultFlushInterval
@@ -154,17 +167,18 @@ func New(log tlog.Log, logID string, mc MirrorClient, cfg Config) (*Shipper, err
 		logger = slog.Default()
 	}
 	return &Shipper{
-		log: log, logID: logID, client: mc,
+		log: log, checkpoint: capLog, logID: logID, client: mc,
 		maxRecords: cfg.MaxBatchRecords, maxBytes: cfg.MaxBatchBytes,
 		interval: interval, logger: logger,
 	}, nil
 }
 
 // Run flushes on the configured interval until ctx is cancelled, returning
-// nil on clean cancellation. A flush-tick error (registry unavailable, a
-// backlog over caps, a local log error) is logged and the loop continues —
-// Run NEVER returns early on a tick failure and never blocks the caller's
-// emission path, which is why it is meant to run on its own goroutine.
+// nil on clean cancellation. A flush-tick error (registry unavailable, an
+// oversized single record, a local log error) is logged and the loop
+// continues — Run NEVER returns early on a tick failure and never blocks
+// the caller's emission path, which is why it is meant to run on its own
+// goroutine.
 func (s *Shipper) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -188,7 +202,9 @@ func (s *Shipper) Run(ctx context.Context) error {
 // done — the D-T6 graceful-shutdown flush: call it AFTER the producing
 // loop has stopped appending and drained, BEFORE closing the log. Callers
 // bound how long Drain may retry by ctx's deadline; on ctx expiry it
-// returns ctx.Err() wrapping the last flush error observed.
+// returns ctx.Err() wrapping the last flush error observed. A single tick
+// may itself ship several segments (see tick's doc) — a large backlog
+// commonly drains fully within Drain's very first attempt.
 func (s *Shipper) Drain(ctx context.Context) error {
 	var lastErr error
 	for {
@@ -208,58 +224,84 @@ func (s *Shipper) Drain(ctx context.Context) error {
 // tick performs ONE flush attempt: read the registry's resume cursor
 // (GetMirrorState — the shipper's cursor is ALWAYS the registry's own
 // acked size, never locally cached, so a shipper restart or a registry
-// that fell behind/got ahead is always detected fresh), take the local
-// log's current checkpoint (checkpoint-then-Get order: Checkpoint() fixes
-// (size, head) atomically; every index below that size is already durably
-// committed — see the package doc), and — if there is a nonzero,
-// cap-admissible backlog — ship it as one segment.
+// that fell behind/got ahead is always detected fresh), then drain the
+// backlog [acked, head) in successive cap-sized segments — as many as it
+// takes to reach the local log's CURRENT size as observed at the top of
+// this tick (a fixed target for the duration of this one tick; new
+// records appended DURING the drain are picked up by the NEXT tick, not
+// chased within this one). Each segment's checkpoint is obtained via
+// CheckpointAt(ctx, batchEnd) — exactly covering that segment's own end,
+// never the log's current head — so every call satisfies D-T2 rule 1
+// regardless of how large the outstanding backlog is.
+//
+// A registry-down (or any other) failure partway through a multi-segment
+// drain stops THIS tick's loop immediately, having durably shipped
+// whatever succeeded so far; it never retries within the same tick. The
+// NEXT tick's fresh GetMirrorState call resumes exactly where the
+// registry actually landed — never blocking or erroring the emission path
+// this shipper shares a log handle with.
 func (s *Shipper) tick(ctx context.Context) error {
 	acked, err := s.client.GetMirrorState(ctx, s.logID)
 	if err != nil {
 		return fmt.Errorf("tlogship: get mirror state: %w", err)
 	}
-	cp, err := s.log.Checkpoint(ctx)
+	head, err := s.log.Size(ctx)
 	if err != nil {
-		return fmt.Errorf("tlogship: local checkpoint: %w", err)
+		return fmt.Errorf("tlogship: local log size: %w", err)
 	}
-	switch {
-	case cp.Size == acked:
-		return nil // caught up
-	case cp.Size < acked:
+	if head < acked {
 		// The registry claims MORE durable records than this log currently
 		// has. Under the log-identity model (D-T1/D-T3) this should never
 		// happen — the registry only ever accepts segments THIS log's
 		// signer shipped — so this is a serious inconsistency, not a
 		// transient condition. Fail loudly rather than silently doing
 		// nothing (fail-closed, AGENTS.md wire-integrity posture).
-		return fmt.Errorf("tlogship: local log size %d is behind the registry's acked size %d for %q — refusing to ship", cp.Size, acked, s.logID)
+		return fmt.Errorf("tlogship: local log size %d is behind the registry's acked size %d for %q — refusing to ship", head, acked, s.logID)
 	}
 
-	pending := cp.Size - acked
-	if pending > uint64(s.maxRecords) {
-		s.logger.Warn("tlogship: backlog exceeds max-batch-records; cannot ship without an exactly-covering checkpoint at a smaller size",
-			"log_id", s.logID, "pending_records", pending, "max_batch_records", s.maxRecords)
-		return ErrBacklogExceedsCaps
-	}
-
-	payloads := make([][]byte, 0, pending)
-	totalBytes := 0
-	for i := acked; i < cp.Size; i++ {
-		rec, err := s.log.Get(ctx, i)
-		if err != nil {
-			return fmt.Errorf("tlogship: get record %d: %w", i, err)
+	for acked < head {
+		remaining := head - acked
+		batchLen := remaining
+		if batchLen > uint64(s.maxRecords) {
+			batchLen = uint64(s.maxRecords)
 		}
-		payloads = append(payloads, rec.Payload)
-		totalBytes += len(rec.Payload)
-	}
-	if totalBytes > s.maxBytes {
-		s.logger.Warn("tlogship: backlog exceeds max-batch-bytes; cannot ship without an exactly-covering checkpoint at a smaller size",
-			"log_id", s.logID, "pending_bytes", totalBytes, "max_batch_bytes", s.maxBytes)
-		return ErrBacklogExceedsCaps
-	}
 
-	if _, err := s.client.MirrorLogSegment(ctx, s.logID, acked, payloads, cp); err != nil {
-		return fmt.Errorf("tlogship: mirror segment [%d,%d) for %q: %w", acked, cp.Size, s.logID, err)
+		payloads := make([][]byte, 0, batchLen)
+		totalBytes := 0
+		var n uint64
+		for n = 0; n < batchLen; n++ {
+			rec, err := s.log.Get(ctx, acked+n)
+			if err != nil {
+				return fmt.Errorf("tlogship: get record %d: %w", acked+n, err)
+			}
+			if totalBytes+len(rec.Payload) > s.maxBytes {
+				if n == 0 {
+					// Even a batch of exactly this ONE record exceeds the
+					// byte cap — no smaller batch containing it can ever
+					// fit either. Distinct from an ordinary transient
+					// failure: retrying (this tick or the next) cannot
+					// resolve it without a config change.
+					s.logger.Error("tlogship: single record exceeds max-batch-bytes; cannot ship",
+						"log_id", s.logID, "index", acked+n, "record_bytes", len(rec.Payload), "max_batch_bytes", s.maxBytes)
+					return fmt.Errorf("%w: record %d is %d bytes, max-batch-bytes is %d", ErrRecordExceedsMaxBatchBytes, acked+n, len(rec.Payload), s.maxBytes)
+				}
+				break // ship what fits; the rest waits for the next batch
+			}
+			payloads = append(payloads, rec.Payload)
+			totalBytes += len(rec.Payload)
+		}
+		batchLen = uint64(len(payloads))
+		end := acked + batchLen
+
+		cp, err := s.checkpoint.CheckpointAt(ctx, end)
+		if err != nil {
+			return fmt.Errorf("tlogship: checkpoint at %d: %w", end, err)
+		}
+		newAcked, err := s.client.MirrorLogSegment(ctx, s.logID, acked, payloads, cp)
+		if err != nil {
+			return fmt.Errorf("tlogship: mirror segment [%d,%d) for %q: %w", acked, end, s.logID, err)
+		}
+		acked = newAcked
 	}
 	return nil
 }

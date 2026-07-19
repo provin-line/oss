@@ -444,6 +444,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.TlogMirror, err = loadTlogMirror(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateTlogMirrorCap(out.TlogMirror, out.MaxCredentialSize); err != nil {
+		return nil, err
+	}
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
@@ -499,6 +502,29 @@ func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
 		return TlogMirrorConfig{}, err
 	}
 	return tm, nil
+}
+
+// validateTlogMirrorCap enforces a boot-time cross-key coherence invariant
+// between tlog-mirror.max-batch-bytes and max-credential-size: a single
+// mirrored record can be as large as max-credential-size (a sink-receipt
+// log entry carries a full credential — see the tlog-custody spec's D-T2
+// rule 5 doc), so a batch cap SMALLER than that could never ship such a
+// record, not even alone. Left unchecked, this would not surface as a
+// live-config drift but as a wedge on the very first boot that ever tries
+// to mirror a record near max-credential-size in size — the tlogship
+// shipper's own runtime safety net
+// (pipeline/transport/tlogship.ErrRecordExceedsMaxBatchBytes) exists for
+// an operator raising max-batch-bytes AFTER a working deployment, not for
+// a configuration that was never coherent to begin with. Called from
+// LoadPipelineConfig once both values are loaded (loadTlogMirror itself
+// only sees the raw *hoconconfig.Config, not the sibling MaxCredentialSize
+// value — this check needs both).
+func validateTlogMirrorCap(tm TlogMirrorConfig, maxCredentialSize int) error {
+	if tm.MaxBatchBytes < maxCredentialSize {
+		return fmt.Errorf("pipeline: config %s (%d) must be >= %s (%d) — a single mirrored record can be up to max-credential-size bytes, and a batch cap below that could never ship it",
+			tlogMirrorMaxBytesKey, tm.MaxBatchBytes, maxCredentialSizeKey, maxCredentialSize)
+	}
+	return nil
 }
 
 // loadMaxCredentialSize reads the node-level per-credential byte cap from the (layered)

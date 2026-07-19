@@ -2,8 +2,9 @@ package tlogship_test
 
 // Unit tests for Shipper against a fake MirrorClient and a REAL filelog.Log
 // (task-6 brief: the shipper receives the live tlog.Log handle — a fake log
-// would not exercise the real "Checkpoint() always signs the CURRENT head"
-// constraint the checkpoint-covering-batch resolution depends on).
+// would not exercise the real CheckpointAt-backed cap-bounded batching this
+// package now depends on, nor filelog's real "CheckpointAt only ever
+// covers records it actually holds" behavior).
 
 import (
 	"context"
@@ -21,6 +22,7 @@ import (
 	"github.com/provin-line/oss/pipeline/transport/tlogship"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/tlog/filelog"
+	"github.com/provin-line/oss/tlog/memlog"
 )
 
 // memKS is a minimal in-memory keystore.Signer for arming a filelog
@@ -51,10 +53,9 @@ const (
 )
 
 // newSignedLog returns a real filelog.Log in a fresh temp dir, armed with a
-// CheckpointSigner — the "live tlog.Log handle" a shipper consumes. Its
-// Checkpoint() always signs the CURRENT size (filelog's real behavior,
-// never an arbitrary earlier one), which is exactly the constraint the
-// cap-honoring tests below exercise.
+// CheckpointSigner — the "live tlog.Log handle" a shipper consumes, and the
+// only tlog.Log implementation that also provides CheckpointAt (memlog
+// never signs; merklelog is out of the tlog-custody v0 mirror scope).
 func newSignedLog(t *testing.T) tlog.Log {
 	t.Helper()
 	ks := newMemKS()
@@ -96,7 +97,8 @@ type fakeClient struct {
 
 	segments []shippedSegment
 
-	failMirror    int // remaining MirrorLogSegment calls to fail
+	failMirror    int // remaining MirrorLogSegment calls to fail, starting from the very next call
+	failAtCall    int // absolute 1-indexed MirrorLogSegment call number to fail EXACTLY once (0 = disabled); for a mid-drain failure partway through a multi-segment tick
 	failState     int // remaining GetMirrorState calls to fail
 	mirrorCalls   int
 	stateCalls    int
@@ -132,6 +134,10 @@ func (f *fakeClient) MirrorLogSegment(_ context.Context, logID string, fromIndex
 	f.mirrorCalls++
 	if f.failMirror > 0 {
 		f.failMirror--
+		return 0, errFakeRegistryDown
+	}
+	if f.failAtCall != 0 && f.mirrorCalls == f.failAtCall {
+		f.failAtCall = 0 // one-time: subsequent calls (including a retry of this same segment) succeed
 		return 0, errFakeRegistryDown
 	}
 	f.segments = append(f.segments, shippedSegment{logID: logID, fromIndex: fromIndex, payloads: payloads, cp: cp})
@@ -183,6 +189,17 @@ func TestNew_BadConfig(t *testing.T) {
 	cfg.MaxBatchRecords = 0
 	if _, err := tlogship.New(l, testLogID, &fakeClient{}, cfg); !errors.Is(err, tlogship.ErrBadConfig) {
 		t.Fatalf("err = %v, want ErrBadConfig", err)
+	}
+}
+
+// TestNew_LogLacksCheckpointAt proves a log that does not provide the
+// CheckpointAt capability (memlog: it never signs at all) is rejected at
+// CONSTRUCTION, not on the first tick — the tlog-custody v0 mirror scope
+// is filelog-only.
+func TestNew_LogLacksCheckpointAt(t *testing.T) {
+	l := memlog.New()
+	if _, err := tlogship.New(l, testLogID, &fakeClient{}, testConfig(time.Second)); !errors.Is(err, tlogship.ErrLogLacksCheckpointAt) {
+		t.Fatalf("err = %v, want ErrLogLacksCheckpointAt", err)
 	}
 }
 
@@ -293,58 +310,134 @@ func TestDrain_CapHonoring_WithinCaps_ShipsOneBoundedSegment(t *testing.T) {
 	}
 }
 
-// TestDrain_CapExceeded_RecordsCap_NeverSendsOversizedSegment proves the
-// documented limitation precisely: when the backlog EXCEEDS
-// MaxBatchRecords in a single flush attempt, the shipper NEVER calls
-// MirrorLogSegment with an over-cap request (it would just be rejected by
-// the real registry's own cap enforcement) — Drain instead reports
-// ErrBacklogExceedsCaps once ctx expires, having made zero MirrorLogSegment
-// calls the whole time.
-func TestDrain_CapExceeded_RecordsCap_NeverSendsOversizedSegment(t *testing.T) {
+// TestDrain_BacklogLargerThanCaps_DrainsFullyInBoundedSegments proves the
+// controller-decided fix for the old admission-gate wedge: a backlog of
+// 5×MaxBatchRecords drains FULLY within one Drain call, split into
+// successive segments each bounded by MaxBatchRecords, each shipped with a
+// checkpoint that EXACTLY covers that segment's own end (CheckpointAt, not
+// the log's current head) — never a single oversized call, and never
+// stuck.
+func TestDrain_BacklogLargerThanCaps_DrainsFullyInBoundedSegments(t *testing.T) {
 	l := newSignedLog(t)
-	appendN(t, l, "r0", "r1", "r2") // backlog of 3
+	const maxRecords = 3
+	total := maxRecords*5 + 1 // deliberately not an exact multiple: last batch is a remainder
+	payloads := make([]string, total)
+	for i := range payloads {
+		payloads[i] = fmt.Sprintf("r%d", i)
+	}
+	appendN(t, l, payloads...)
+
 	fc := &fakeClient{}
-	cfg := testConfig(20 * time.Millisecond) // fast retry cadence for the test
-	cfg.MaxBatchRecords = 2                  // < backlog
+	cfg := testConfig(10 * time.Millisecond)
+	cfg.MaxBatchRecords = maxRecords
 	sh, err := tlogship.New(l, testLogID, fc, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err = sh.Drain(ctx)
-	if err == nil {
-		t.Fatal("Drain: want an error (backlog exceeds caps, can never be shipped), got nil")
+	if err := sh.Drain(ctx); err != nil {
+		t.Fatalf("Drain: %v", err)
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Drain err = %v, want it to wrap context.DeadlineExceeded", err)
+
+	acked, segments, mirrorCalls, _ := fc.snapshot()
+	if acked != uint64(total) {
+		t.Fatalf("acked = %d, want %d (fully drained)", acked, total)
 	}
-	_, _, mirrorCalls, _ := fc.snapshot()
-	if mirrorCalls != 0 {
-		t.Fatalf("mirrorCalls = %d, want 0 — an over-cap segment must never be sent", mirrorCalls)
+	wantSegments := (total + maxRecords - 1) / maxRecords // ceil(total/maxRecords)
+	if mirrorCalls != wantSegments {
+		t.Fatalf("mirrorCalls = %d, want %d bounded segments", mirrorCalls, wantSegments)
+	}
+	var from uint64
+	for i, seg := range segments {
+		if len(seg.payloads) > maxRecords {
+			t.Fatalf("segment %d has %d records, want <= %d (MaxBatchRecords)", i, len(seg.payloads), maxRecords)
+		}
+		if seg.fromIndex != from {
+			t.Fatalf("segment %d fromIndex = %d, want %d (contiguous, no gaps/overlaps)", i, seg.fromIndex, from)
+		}
+		end := seg.fromIndex + uint64(len(seg.payloads))
+		if seg.cp == nil || seg.cp.Size != end {
+			t.Fatalf("segment %d checkpoint = %+v, want Size=%d (exactly covering THIS segment's own end, via CheckpointAt)", i, seg.cp, end)
+		}
+		from = end
+	}
+	if from != uint64(total) {
+		t.Fatalf("segments cover up to %d, want the full backlog %d", from, total)
 	}
 }
 
-// TestDrain_CapExceeded_BytesCap_NeverSendsOversizedSegment is the byte-cap
-// sibling of the records-cap test above.
-func TestDrain_CapExceeded_BytesCap_NeverSendsOversizedSegment(t *testing.T) {
+// TestDrain_SingleRecordExceedsMaxBytes_ErrorsWithoutStalling proves the
+// one genuinely unshippable case remaining after cap-bounded batching: a
+// SINGLE record's payload alone larger than MaxBatchBytes can never fit
+// even a batch of one — tick reports ErrRecordExceedsMaxBatchBytes rather
+// than silently skipping it or looping forever, and ships nothing for it.
+func TestDrain_SingleRecordExceedsMaxBytes_ErrorsWithoutStalling(t *testing.T) {
 	l := newSignedLog(t)
-	appendN(t, l, "0123456789") // 10 bytes
+	appendN(t, l, "0123456789") // 10 bytes — the poison record
 	fc := &fakeClient{}
 	cfg := testConfig(20 * time.Millisecond)
-	cfg.MaxBatchBytes = 5 // < 10 bytes
+	cfg.MaxBatchBytes = 5 // < 10 bytes: no batch containing this record can ever fit
 	sh, err := tlogship.New(l, testLogID, fc, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := sh.Drain(ctx); err == nil {
+	err = sh.Drain(ctx)
+	if err == nil {
 		t.Fatal("Drain: want an error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Drain err = %v, want it to wrap context.DeadlineExceeded (never resolves by retrying)", err)
 	}
 	_, _, mirrorCalls, _ := fc.snapshot()
 	if mirrorCalls != 0 {
-		t.Fatalf("mirrorCalls = %d, want 0 — an over-cap segment must never be sent", mirrorCalls)
+		t.Fatalf("mirrorCalls = %d, want 0 — the oversized record must never be sent", mirrorCalls)
+	}
+}
+
+// TestDrain_MidDrainRegistryDown_ResumesNextTick proves the "never blocks,
+// resumes from the fresh cursor" contract for a MULTI-segment drain
+// specifically: a backlog needing 3 segments where the SECOND
+// MirrorLogSegment call fails (registry blips mid-drain) stops that tick's
+// loop immediately (the first segment's shipment stands; the third is not
+// attempted yet) — Drain's own retry, one interval later, re-reads
+// GetMirrorState fresh and finishes the remaining segments.
+func TestDrain_MidDrainRegistryDown_ResumesNextTick(t *testing.T) {
+	l := newSignedLog(t)
+	const maxRecords = 2
+	appendN(t, l, "r0", "r1", "r2", "r3", "r4", "r5") // 3 segments of 2
+	fc := &fakeClient{failAtCall: 2}                  // the SECOND MirrorLogSegment call fails, once
+	cfg := testConfig(10 * time.Millisecond)
+	cfg.MaxBatchRecords = maxRecords
+	sh, err := tlogship.New(l, testLogID, fc, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := sh.Drain(ctx); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	acked, segments, mirrorCalls, stateCalls := fc.snapshot()
+	if acked != 6 {
+		t.Fatalf("acked = %d, want 6 (fully drained despite the mid-drain blip)", acked)
+	}
+	if len(segments) != 3 {
+		t.Fatalf("segments shipped = %d, want 3 (the failed attempt shipped nothing)", len(segments))
+	}
+	if mirrorCalls != 4 { // 2 successful + 1 failed + 1 successful retry of the same segment
+		t.Fatalf("mirrorCalls = %d, want 4 (2 ok, 1 failed, 1 retried ok)", mirrorCalls)
+	}
+	if stateCalls < 2 {
+		t.Fatalf("GetMirrorState calls = %d, want >= 2 (the retry re-reads the cursor fresh)", stateCalls)
+	}
+	// The registry's cursor after the blip (acked=2, only the first segment
+	// landed) must be exactly what the SECOND Drain attempt resumes from —
+	// segment[1] (the successful retry) must start at 2, not re-ship [0,2).
+	if segments[1].fromIndex != 2 {
+		t.Fatalf("segment[1].fromIndex = %d, want 2 (resumed from the fresh cursor, not from a stale local cache)", segments[1].fromIndex)
 	}
 }
 
