@@ -89,22 +89,32 @@ func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
 	// assertions depend on.
 	const maxDocumentRequestBytes = 1 << 20
 	const cred, push = 1 << 20, 4 << 20
-	got := outerRequestCapBytes(cred, push)
+	got := outerRequestCapBytes(cred, push, 0)
 	if got <= push {
 		t.Errorf("cap %d not above the largest legit request %d", got, push)
 	}
-	if outerRequestCapBytes(push, cred) != got {
+	if outerRequestCapBytes(push, cred, 0) != got {
 		t.Error("cap must not depend on argument order (it takes the max)")
 	}
 	// Even with credential/push configured BELOW the document-class per-RPC cap,
 	// the outer bound must still exceed a document-class request plus its JSON
 	// base64 inflation — otherwise a legit doc request is rejected pre-auth.
-	small := outerRequestCapBytes(4<<10, 4<<10)
+	small := outerRequestCapBytes(4<<10, 4<<10, 4<<10)
 	if small <= maxDocumentRequestBytes {
 		t.Errorf("outer cap %d does not cover the document class %d when cred/push are tiny", small, maxDocumentRequestBytes)
 	}
 	if small <= maxDocumentRequestBytes*4/3 {
 		t.Errorf("outer cap %d does not cover base64-inflated document request (~4/3 of %d)", small, maxDocumentRequestBytes)
+	}
+	// A full-size RetainPayload stream shares ONE http.Request for its whole
+	// (client-streaming) lifetime, so the outer cap must admit the CUMULATIVE
+	// max-retain-payload-size, not just its largest single chunk — otherwise a
+	// legitimate large retain is truncated mid-stream by the outer
+	// http.MaxBytesHandler, never reaching the per-RPC (per-chunk) read cap.
+	const retain = 64 << 20
+	gotRetain := outerRequestCapBytes(4<<10, 4<<10, retain)
+	if gotRetain <= retain {
+		t.Errorf("cap %d not above max-retain-payload-size %d", gotRetain, retain)
 	}
 }
 

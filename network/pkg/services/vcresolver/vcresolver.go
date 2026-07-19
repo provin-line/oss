@@ -25,9 +25,10 @@ var ErrInvalidArgument = errors.New("vcresolver: invalid argument")
 // Storage choice is made at the backend seam (vcresolver.VariantBackend),
 // which is below all of that.
 type Service struct {
-	store *VariantStore
-	pool  Pool
-	index successorIndex
+	store      *VariantStore
+	pool       Pool
+	index      successorIndex
+	variantIdx variantIndex
 }
 
 // New returns a Service over store and pool.
@@ -114,6 +115,10 @@ func (s *Service) StoreVC(ctx context.Context, credential []byte, upstreamEndpoi
 	if hasPrev {
 		s.index.add(prev, hash)
 	}
+	// Maintain the variant reverse index too, same ordering rationale: a
+	// crash between the put and this loses only the in-memory entry, which
+	// ResolveVariantBody's lazy build re-derives from the store.
+	s.variantIdx.add(variant, hash)
 	// Ordering is crash-safe for DURABLE stores: the next hole is queued
 	// BEFORE the resolved hole is removed. A crash between the two leaves the
 	// resolved hole queued — the batch resolver re-fetches it and the

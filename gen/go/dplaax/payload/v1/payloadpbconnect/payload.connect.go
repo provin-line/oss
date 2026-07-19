@@ -40,6 +40,8 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// PayloadServiceName is the fully-qualified name of the PayloadService service.
 	PayloadServiceName = "dplaax.payload.v1.PayloadService"
+	// PayloadStoreServiceName is the fully-qualified name of the PayloadStoreService service.
+	PayloadStoreServiceName = "dplaax.payload.v1.PayloadStoreService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -53,6 +55,9 @@ const (
 	// PayloadServiceResolvePayloadProcedure is the fully-qualified name of the PayloadService's
 	// ResolvePayload RPC.
 	PayloadServiceResolvePayloadProcedure = "/dplaax.payload.v1.PayloadService/ResolvePayload"
+	// PayloadStoreServiceRetainPayloadProcedure is the fully-qualified name of the
+	// PayloadStoreService's RetainPayload RPC.
+	PayloadStoreServiceRetainPayloadProcedure = "/dplaax.payload.v1.PayloadStoreService/RetainPayload"
 )
 
 // PayloadServiceClient is a client for the dplaax.payload.v1.PayloadService service.
@@ -147,4 +152,103 @@ type UnimplementedPayloadServiceHandler struct{}
 
 func (UnimplementedPayloadServiceHandler) ResolvePayload(context.Context, *connect.Request[v1.ResolvePayloadRequest], *connect.ServerStream[v1.ResolvePayloadResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.payload.v1.PayloadService.ResolvePayload is not implemented"))
+}
+
+// PayloadStoreServiceClient is a client for the dplaax.payload.v1.PayloadStoreService service.
+type PayloadStoreServiceClient interface {
+	// RetainPayload deposits payload bytes for later by-reference resolution.
+	//
+	// Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
+	// rationale in reverse: retained payloads can be large, so the wire must not
+	// impose a unary message-size ceiling on the way in either. The first frame
+	// MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
+	// subsequent frame carries a chunk. The server assembles the chunks and mints
+	// the content address itself — a caller-supplied address is never trusted.
+	//
+	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+	// decides whether the caller may retain payloads at all; the metadata frame
+	// additionally carries a wireauth AuthProof the handler verifies in-band, and
+	// the proven DID is authoritative over owner_did (a metadata frame whose
+	// owner_did does not match the proven DID is rejected).
+	RetainPayload(context.Context) *connect.ClientStreamForClient[v1.RetainPayloadRequest, v1.RetainPayloadResponse]
+}
+
+// NewPayloadStoreServiceClient constructs a client for the dplaax.payload.v1.PayloadStoreService
+// service. By default, it uses the Connect protocol with the binary Protobuf Codec, asks for
+// gzipped responses, and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply
+// the connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewPayloadStoreServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) PayloadStoreServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	payloadStoreServiceMethods := v1.File_dplaax_payload_v1_payload_proto.Services().ByName("PayloadStoreService").Methods()
+	return &payloadStoreServiceClient{
+		retainPayload: connect.NewClient[v1.RetainPayloadRequest, v1.RetainPayloadResponse](
+			httpClient,
+			baseURL+PayloadStoreServiceRetainPayloadProcedure,
+			connect.WithSchema(payloadStoreServiceMethods.ByName("RetainPayload")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// payloadStoreServiceClient implements PayloadStoreServiceClient.
+type payloadStoreServiceClient struct {
+	retainPayload *connect.Client[v1.RetainPayloadRequest, v1.RetainPayloadResponse]
+}
+
+// RetainPayload calls dplaax.payload.v1.PayloadStoreService.RetainPayload.
+func (c *payloadStoreServiceClient) RetainPayload(ctx context.Context) *connect.ClientStreamForClient[v1.RetainPayloadRequest, v1.RetainPayloadResponse] {
+	return c.retainPayload.CallClientStream(ctx)
+}
+
+// PayloadStoreServiceHandler is an implementation of the dplaax.payload.v1.PayloadStoreService
+// service.
+type PayloadStoreServiceHandler interface {
+	// RetainPayload deposits payload bytes for later by-reference resolution.
+	//
+	// Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
+	// rationale in reverse: retained payloads can be large, so the wire must not
+	// impose a unary message-size ceiling on the way in either. The first frame
+	// MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
+	// subsequent frame carries a chunk. The server assembles the chunks and mints
+	// the content address itself — a caller-supplied address is never trusted.
+	//
+	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+	// decides whether the caller may retain payloads at all; the metadata frame
+	// additionally carries a wireauth AuthProof the handler verifies in-band, and
+	// the proven DID is authoritative over owner_did (a metadata frame whose
+	// owner_did does not match the proven DID is rejected).
+	RetainPayload(context.Context, *connect.ClientStream[v1.RetainPayloadRequest]) (*connect.Response[v1.RetainPayloadResponse], error)
+}
+
+// NewPayloadStoreServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewPayloadStoreServiceHandler(svc PayloadStoreServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	payloadStoreServiceMethods := v1.File_dplaax_payload_v1_payload_proto.Services().ByName("PayloadStoreService").Methods()
+	payloadStoreServiceRetainPayloadHandler := connect.NewClientStreamHandler(
+		PayloadStoreServiceRetainPayloadProcedure,
+		svc.RetainPayload,
+		connect.WithSchema(payloadStoreServiceMethods.ByName("RetainPayload")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/dplaax.payload.v1.PayloadStoreService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case PayloadStoreServiceRetainPayloadProcedure:
+			payloadStoreServiceRetainPayloadHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedPayloadStoreServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedPayloadStoreServiceHandler struct{}
+
+func (UnimplementedPayloadStoreServiceHandler) RetainPayload(context.Context, *connect.ClientStream[v1.RetainPayloadRequest]) (*connect.Response[v1.RetainPayloadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.payload.v1.PayloadStoreService.RetainPayload is not implemented"))
 }

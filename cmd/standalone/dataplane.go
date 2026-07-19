@@ -28,7 +28,6 @@ import (
 	jsonatafilter "github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
-	"github.com/provin-line/oss/pipeline/provenance/chainwalk"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/provenance/verifycount"
 	"github.com/provin-line/oss/pipeline/sink"
@@ -44,6 +43,7 @@ import (
 	"github.com/provin-line/oss/tlog/filelog"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 )
 
 // The vcresolver client is the network credential resolver a full-chain verifier walks.

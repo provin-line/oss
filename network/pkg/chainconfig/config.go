@@ -50,6 +50,9 @@ const (
 	keySysUserJWTFile    = "provin.network.chain.nats.sys-user-jwt-file"
 	keySysUserSeedFile   = "provin.network.chain.nats.sys-user-seed-file"
 	keyAllowNoop         = "provin.network.chain.dev.allow-noop-transport"
+
+	keyEmitHealthTTL                = "provin.network.chain.emit-health.ttl"
+	keyEmitHealthAdvertiseNoReports = "provin.network.chain.emit-health.advertise-without-reports"
 )
 
 // Config is the typed chain transport config.
@@ -61,6 +64,29 @@ type Config struct {
 	AllowNoopTransport bool
 	// NATS is populated when Transport == TransportNATS.
 	NATS NATSConfig
+	// EmitHealth configures the ReportEmitHealth publisher-scoped by-reference
+	// advertisement gate (Task 10 D4). Loaded unconditionally (it applies
+	// regardless of Transport): cmd/network's emithealth.Store and
+	// chainmanager.WithPublisherHealth read it; cmd/standalone loads it too but
+	// does not consume it (it continues to gate advertisement with its own
+	// in-process WithByReferenceHealth).
+	EmitHealth EmitHealthConfig
+}
+
+// EmitHealthConfig is the ReportEmitHealth TTL-store / advertisement-policy
+// knobs (provin.network.chain.emit-health).
+type EmitHealthConfig struct {
+	// TTL is how long a ReportEmitHealth report stays fresh before
+	// emithealth.Store.State reports it Expired — also the value echoed back
+	// as ReportEmitHealthResponse.ttl, so a reporting publisher knows when to
+	// re-report. Must be positive.
+	TTL time.Duration
+	// AdvertiseWithoutReports is whether by-reference is advertised for a
+	// publisher this node has NEVER received a report for
+	// (emithealth.NeverReported). false (default) is fail-degraded: a
+	// report-mode node requires at least one healthy report before
+	// advertising by-reference for that publisher.
+	AdvertiseWithoutReports bool
 }
 
 // NATSConfig holds the nats decentralized-auth parameters.
@@ -118,7 +144,28 @@ func LoadChainConfig(cfg *hoconconfig.Config) (*Config, error) {
 			return nil, err
 		}
 	}
+	if out.EmitHealth, err = loadEmitHealth(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadEmitHealth reads the emit-health block — applicable regardless of
+// Transport, so it is loaded unconditionally rather than nested under the
+// nats-only branch above.
+func loadEmitHealth(cfg *hoconconfig.Config) (EmitHealthConfig, error) {
+	ttl, err := cfg.Duration(keyEmitHealthTTL)
+	if err != nil {
+		return EmitHealthConfig{}, fmt.Errorf("chain: config %s: %w", keyEmitHealthTTL, err)
+	}
+	if ttl <= 0 {
+		return EmitHealthConfig{}, fmt.Errorf("chain: config %s: must be positive", keyEmitHealthTTL)
+	}
+	advertiseWithoutReports, err := cfg.Bool(keyEmitHealthAdvertiseNoReports)
+	if err != nil {
+		return EmitHealthConfig{}, fmt.Errorf("chain: config %s: %w", keyEmitHealthAdvertiseNoReports, err)
+	}
+	return EmitHealthConfig{TTL: ttl, AdvertiseWithoutReports: advertiseWithoutReports}, nil
 }
 
 func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {

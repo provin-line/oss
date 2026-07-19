@@ -362,6 +362,29 @@ closure required, now met with executed evidence rather than review.
   `did:dplaax` method spec.
 - `SECURITY.md`: the vulnerability-reporting channel and supported-versions
   policy.
+- The evidence write surface (D7): `AuditService.RegisterEvidence`,
+  `PayloadStoreService.RetainPayload` (new service, client-streaming), and
+  `ChainService.ReportEmitHealth`. Each is **L1 + in-band wireauth**: the PDP
+  gate (the L1 policy option) decides whether the caller may write at all,
+  and the request additionally carries a wireauth `AuthProof` the handler
+  verifies in-band — the proven DID is authoritative over the registering
+  party / payload owner / reporting publisher. New config keys:
+  `provin.network.pipeline.max-retain-chunk-size` /
+  `max-retain-payload-size` (RetainPayload's per-frame and cumulative-size
+  quotas) and `provin.network.chain.emit-health.ttl` /
+  `advertise-without-reports` (ReportEmitHealth's report freshness window and
+  fail-degraded policy).
+- Auditor receipts are first-write-wins: `RegisterEvidence`'s consumed-set
+  receipt is pinned on the first successful write, and a later write carrying
+  a canonically different set returns `auditor.ErrReceiptConflict` instead of
+  silently overwriting it. Consumed-set members are enforced against the full
+  content-address grammar (`sha256:<64 lowercase hex>`), closing a path where
+  a malformed member could be recorded into an otherwise-immutable receipt.
+- `CONFIDENCE_UNRESOLVABLE`: a new audit verdict recorded when chain assembly
+  cannot resolve a head after max retries — a resolution outcome (the runner
+  never obtained the evidence needed to verify at all), distinct from
+  `CONFIDENCE_INDETERMINATE` (a verification outcome: the evidence was
+  obtained and evaluated, but the verdict itself could not be concluded).
 
 ### Changed
 
@@ -406,6 +429,24 @@ closure required, now met with executed evidence rather than review.
 - Cross-registry and receipt-routing derivations (batch resolver, bundle
   export) now match on exact content address / registry id — no suffix or
   substring matching.
+- **BREAKING (import path)** `chainwalk` moves from
+  `pipeline/provenance/chainwalk` to `vc/chainwalk`: it is vc-domain
+  verification, not a pipeline concern. No behavior change — update the
+  import path.
+- `cmd/network`'s registry now always drains its wire-fed pool: the batch
+  resolver and audit runner no longer gate on `HasConsumingLoop()` (a
+  predicate that is meaningless for a binary that runs zero pipeline loops by
+  construction) — they boot-validate a non-empty VC-store bearer before
+  constructing themselves, rather than silently starving every peer fetch at
+  runtime. `cmd/standalone` reproduces the old gate at its own call site, so
+  its zero-loop/source-only behavior is unchanged.
+- `cmd/network` by-reference advertisement is now publisher-scoped and
+  fail-degraded: a publisher self-reports its stripped-publish health via
+  `ReportEmitHealth`, and `NeverReported` / `Expired` / unhealthy reports
+  degrade advertisement for that publisher unless
+  `chain.emit-health.advertise-without-reports` is set (default `false`).
+  `cmd/standalone`'s existing node-global `WithByReferenceHealth` gate is
+  unchanged.
 
 ### Removed
 

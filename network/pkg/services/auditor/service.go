@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"time"
-
-	"github.com/provin-line/oss/vc"
 )
 
 // Read-service sentinel errors. The AuditService handler maps these to Connect codes
@@ -128,8 +126,3 @@ func (s *StatusService) GetConsumed(ctx context.Context, headHash, fromExclusive
 	}
 	return sorted, "", nil
 }
-
-// isContentAddress delegates to the exported grammar predicate
-// (vc.IsContentAddress) — the convergence point slice-7 §4 and the API
-// responsibility review predicted for the per-service copies.
-func isContentAddress(s string) bool { return vc.IsContentAddress(s) }

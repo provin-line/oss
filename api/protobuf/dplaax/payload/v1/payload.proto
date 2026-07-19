@@ -21,6 +21,7 @@ package dplaax.payload.v1;
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/payload/v1;payloadpb";
 
 import "dplaax/chain/v1/chain.proto";
+import "o3co/authz/v1/policy.proto";
 
 // PayloadService serves by-reference payload bytes by content address.
 service PayloadService {
@@ -51,4 +52,65 @@ message ResolvePayloadResponse {
   // chunk is one ordered frame of the payload bytes; the client concatenates
   // frames. Chunk size is a server implementation detail, not wire-normative.
   bytes chunk = 1;
+}
+
+// PayloadStoreService serves the write side of by-reference payload delivery:
+// a producing process deposits the bytes it emitted so PayloadService can
+// later serve them back by content address. Distinct service from
+// PayloadService (not an added RPC on it) because the write path is L1-gated
+// (an o3co.authz.v1 policy option) while the read path is L2-only wireauth —
+// the same charter split this file's header already draws between "read" and
+// "write" surfaces.
+service PayloadStoreService {
+  // RetainPayload deposits payload bytes for later by-reference resolution.
+  //
+  // Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
+  // rationale in reverse: retained payloads can be large, so the wire must not
+  // impose a unary message-size ceiling on the way in either. The first frame
+  // MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
+  // subsequent frame carries a chunk. The server assembles the chunks and mints
+  // the content address itself — a caller-supplied address is never trusted.
+  //
+  // Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+  // decides whether the caller may retain payloads at all; the metadata frame
+  // additionally carries a wireauth AuthProof the handler verifies in-band, and
+  // the proven DID is authoritative over owner_did (a metadata frame whose
+  // owner_did does not match the proven DID is rejected).
+  rpc RetainPayload(stream RetainPayloadRequest) returns (RetainPayloadResponse) {
+    option (o3co.authz.v1.policy) = {resource: "payloads", action: "retain"};
+  }
+}
+
+message RetainPayloadRequest {
+  oneof frame {
+    // metadata is the first frame only — every stream must open with it.
+    RetainPayloadMetadata metadata = 1;
+    // chunk is one ordered frame of the payload bytes being retained; every
+    // frame after the first carries a chunk. The client concatenates frames
+    // in order (chunk size is a client implementation detail, not
+    // wire-normative — mirrors ResolvePayloadResponse.chunk).
+    bytes chunk = 2;
+  }
+}
+
+message RetainPayloadMetadata {
+  // owner_did MUST equal the wireauth-proven DID (see auth_proof below); the
+  // handler rejects a mismatch rather than trusting the field at face value.
+  string owner_did = 1;
+  // declared_size is the caller-declared byte length of the payload to
+  // follow; the server verifies the assembled bytes against it (a mismatch
+  // is InvalidArgument, not a silent truncation/pad).
+  uint64 declared_size = 2;
+  // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+  // proof-carrying shape of ResolvePayloadRequest above, reusing
+  // dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
+  // would be a drift source). The proof covers owner_did and declared_size:
+  // the proven signer_did is authoritative over owner_did.
+  dplaax.chain.v1.AuthProof auth_proof = 3;
+}
+
+message RetainPayloadResponse {
+  // content_address is the "sha256:<hex>" address the server minted for the
+  // assembled bytes — the address ResolvePayload later serves them back by.
+  string content_address = 1;
 }

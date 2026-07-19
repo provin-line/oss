@@ -53,21 +53,30 @@ const (
 const StrategyAdjacent = "adjacent"
 
 const (
-	pipelineKey          = "provin.network.pipeline"
-	loopsKey             = pipelineKey + ".loops"
-	vcStoreEndpointKey   = pipelineKey + ".vc-store-endpoint"
-	vcStoreBearerKey     = pipelineKey + ".vc-store-bearer"
-	maxCredentialSizeKey = pipelineKey + ".max-credential-size"
-	maxPushBodySizeKey   = pipelineKey + ".max-push-body-size"
-	batchResolverKey     = pipelineKey + ".batch-resolver"
-	brIntervalKey        = batchResolverKey + ".interval"
-	brBatchSizeKey       = batchResolverKey + ".batch-size"
-	brMaxRetriesKey      = batchResolverKey + ".max-retries"
-	brMaxDepthKey        = batchResolverKey + ".max-depth"
-	auditRunnerKey       = pipelineKey + ".audit-runner"
-	arIntervalKey        = auditRunnerKey + ".interval"
-	arBatchSizeKey       = auditRunnerKey + ".batch-size"
-	arMaxAttemptsKey     = auditRunnerKey + ".max-attempts"
+	pipelineKey        = "provin.network.pipeline"
+	loopsKey           = pipelineKey + ".loops"
+	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
+	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
+	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
+	// requirement — cmd/network boot-validates it unconditionally (Task 9),
+	// since its batch resolver always runs a peer-fetching client regardless of
+	// pipeCfg.HasConsumingLoop(), which is always false for that binary — can
+	// name the exact key in its own fatal message without duplicating the
+	// literal (this package already uses it below for the same reason).
+	VCStoreBearerKey        = pipelineKey + ".vc-store-bearer"
+	maxCredentialSizeKey    = pipelineKey + ".max-credential-size"
+	maxPushBodySizeKey      = pipelineKey + ".max-push-body-size"
+	maxRetainChunkSizeKey   = pipelineKey + ".max-retain-chunk-size"
+	maxRetainPayloadSizeKey = pipelineKey + ".max-retain-payload-size"
+	batchResolverKey        = pipelineKey + ".batch-resolver"
+	brIntervalKey           = batchResolverKey + ".interval"
+	brBatchSizeKey          = batchResolverKey + ".batch-size"
+	brMaxRetriesKey         = batchResolverKey + ".max-retries"
+	brMaxDepthKey           = batchResolverKey + ".max-depth"
+	auditRunnerKey          = pipelineKey + ".audit-runner"
+	arIntervalKey           = auditRunnerKey + ".interval"
+	arBatchSizeKey          = auditRunnerKey + ".batch-size"
+	arMaxAttemptsKey        = auditRunnerKey + ".max-attempts"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -106,6 +115,15 @@ type Config struct {
 	// one bounds a raw ingest payload. Sourced from reference.conf (no Go default); a
 	// non-positive value fails startup.
 	MaxPushBodySize int
+	// MaxRetainChunkSize bounds one RetainPayload chunk frame (PayloadStoreService —
+	// mounted as the per-RPC connect read cap in netcompose). Sourced from
+	// reference.conf (no Go default); a non-positive value fails startup.
+	MaxRetainChunkSize int
+	// MaxRetainPayloadSize bounds the declared_size a RetainPayload caller may commit
+	// to for one retained payload (PayloadStoreService) — the cumulative quota, distinct
+	// from MaxRetainChunkSize (a single frame). Sourced from reference.conf (no Go
+	// default); a non-positive value fails startup.
+	MaxRetainPayloadSize int
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
@@ -373,27 +391,33 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Has(vcStoreBearerKey) {
-		if out.VCStoreBearer, err = cfg.String(vcStoreBearerKey); err != nil {
-			return nil, fmt.Errorf("pipeline: config %s: %w", vcStoreBearerKey, err)
+	if cfg.Has(VCStoreBearerKey) {
+		if out.VCStoreBearer, err = cfg.String(VCStoreBearerKey); err != nil {
+			return nil, fmt.Errorf("pipeline: config %s: %w", VCStoreBearerKey, err)
 		}
 	}
 	// The VC store sits behind L1 auth, so a configured endpoint needs a bearer — a
 	// tokenless publish/resolve would be rejected at runtime. Fail closed at boot.
 	if out.VCStoreEndpoint != "" && out.VCStoreBearer == "" {
-		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, vcStoreBearerKey)
+		return nil, fmt.Errorf("pipeline: config %s requires %s (the VC store is L1-protected)", vcStoreEndpointKey, VCStoreBearerKey)
 	}
 	// A consuming loop drives the async chain audit, whose peer predecessor fetches
 	// present this bearer against L1-protected peers. An empty bearer would not fail
 	// until the first cross-node hole silently starves an audit at runtime, so it
 	// fails closed at boot instead.
 	if out.VCStoreBearer == "" && out.HasConsumingLoop() {
-		return nil, fmt.Errorf("pipeline: a consuming loop (sink/chained/aggregate) requires %s — the async audit's peer fetches are L1-authenticated", vcStoreBearerKey)
+		return nil, fmt.Errorf("pipeline: a consuming loop (sink/chained/aggregate) requires %s — the async audit's peer fetches are L1-authenticated", VCStoreBearerKey)
 	}
 	if out.MaxCredentialSize, err = loadMaxCredentialSize(cfg); err != nil {
 		return nil, err
 	}
 	if out.MaxPushBodySize, err = loadPositiveInt(cfg, maxPushBodySizeKey); err != nil {
+		return nil, err
+	}
+	if out.MaxRetainChunkSize, err = loadPositiveInt(cfg, maxRetainChunkSizeKey); err != nil {
+		return nil, err
+	}
+	if out.MaxRetainPayloadSize, err = loadPositiveInt(cfg, maxRetainPayloadSizeKey); err != nil {
 		return nil, err
 	}
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {

@@ -19,6 +19,7 @@ func TestAuditService_RPCPolicies(t *testing.T) {
 		"GetAuditStatus":     {"audit", "read"},
 		"ListAuditStatuses":  {"audit", "read"},
 		"GetConsumedSources": {"audit", "read"},
+		"RegisterEvidence":   {"audit", "register"},
 	}
 	methods := auditpb.File_dplaax_audit_v1_audit_proto.Services().ByName("AuditService").Methods()
 	if methods.Len() != len(want) {

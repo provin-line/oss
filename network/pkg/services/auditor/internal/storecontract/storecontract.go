@@ -135,7 +135,12 @@ func ReceiptStore(t *testing.T, newStore func(t *testing.T) auditor.ReceiptStore
 		t.Fatalf("absent: want ErrNotFound, got %v", err)
 	}
 	consumed := []string{Hash(3), Hash(4)}
-	if err := s.Put(h, consumed); err != nil {
+	// registrantDID is passed as "" here deliberately: an empty registrant is the
+	// allowed in-process (non-wireauth) case (see auditor.ReceiptStore.Put's doc), and
+	// this shared contract does not pin registrant-recording semantics — each
+	// implementation's own tests do (registrantDID has no public reader; see the same
+	// doc for why).
+	if err := s.Put(h, "", consumed); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	consumed[0] = "clobbered" // the stored copy must not alias the caller's slice

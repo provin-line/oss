@@ -37,6 +37,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	payloadfilestore "github.com/provin-line/oss/network/pkg/services/payloadresolver/filestore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
@@ -99,6 +100,19 @@ func main() {
 	// die loudly rather than silently ignore the config.
 	if len(pipeCfg.Loops) > 0 {
 		log.Fatalf("network: %d pipeline loop(s) configured, but this binary runs no data plane — run loops with the pipeline runtime (cmd/standalone until it lands)", len(pipeCfg.Loops))
+	}
+	// This binary always runs the peer-fetching batch resolver below (Task 9:
+	// BuildBatchResolver builds unconditionally from its args now). Unlike
+	// cmd/standalone, this binary can never gate that runner on
+	// pipeCfg.HasConsumingLoop() — the guard above enforces zero loops here, so
+	// that predicate is always false — yet the resolver still runs, draining
+	// whatever a peer's StoreVC/RegisterConsumed call registers over the wire.
+	// Its peer fetches present this bearer against L1-protected peers
+	// regardless of local loops, so an empty bearer would silently starve
+	// every fetch at runtime. Fail closed at boot instead, before any
+	// evidence-store side effects below.
+	if pipeCfg.VCStoreBearer == "" {
+		log.Fatalf("network: config %s is required — this binary's batch resolver always runs a peer-fetching client against L1-protected peers", pipelineconfig.VCStoreBearerKey)
 	}
 
 	verifier, err := auth.NewVerifier(authCfg)
@@ -190,19 +204,38 @@ func main() {
 		readiness = append(readiness, check)
 	}
 
+	// ReportEmitHealth's publisher-scoped by-reference advertisement gate
+	// (Task 10 D4): this report-mode node has no in-process by-reference
+	// producer of its own — unlike cmd/standalone's byRefGate — so
+	// advertisement is instead gated per publisher by what that publisher has
+	// itself reported here. The store backs BOTH the ReportEmitHealth RPC
+	// (mounted via emitHealth below) and chainmanager.WithPublisherHealth's
+	// lookup (wired inside BuildHandler).
+	emitHealthStore := emithealth.New(chainCfg.EmitHealth.TTL)
+	emitHealth := &netcompose.EmitHealthWiring{
+		Store:                   emitHealthStore,
+		AdvertiseWithoutReports: chainCfg.EmitHealth.AdvertiseWithoutReports,
+	}
+
 	// mountIngest and byRefHealthy are both nil: no data plane means no
-	// push-ingest routes to mount and no by-reference producer health to gate
-	// advertisement on.
-	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, payloadSvc, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, nil, readiness, nil)
+	// push-ingest routes to mount and no in-process by-reference producer
+	// health to gate advertisement on (emitHealth above replaces it for this
+	// report-mode binary).
+	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
+		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil, emitHealth)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
 	}
 
 	// The async chain-audit resolver drains the pool a peer's StoreVC
 	// populates, and the audit runner verifies assembled chains and records
-	// verdicts. Both are nil here: this node's static config has no
-	// consuming loop (HasConsumingLoop is false — it configures none).
+	// verdicts. Both builders build unconditionally now (Task 9), and both
+	// ALWAYS run on this binary: it has no local consuming loop to gate on
+	// (HasConsumingLoop is always false — it configures none), but a peer's
+	// StoreVC/RegisterConsumed call can populate this node's pool/audit-queue
+	// over the wire regardless, so both runners must actually run to drain
+	// them. The bearer guard above ensures the resolver's peer fetches carry
+	// a credential.
 	batchRunner, err := netcompose.BuildBatchResolver(pool, vcSvc, guard, resolver, pipeCfg)
 	if err != nil {
 		log.Fatalf("network: build batch resolver: %v", err)
@@ -230,7 +263,7 @@ func main() {
 
 	// Outer raw-body cap: no push-body class on this binary (it mounts no
 	// push-ingest routes), so the second argument is 0.
-	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0)
+	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0, pipeCfg.MaxRetainPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
@@ -262,8 +295,10 @@ func main() {
 // runners drain — there is no data plane whose failure could independently
 // need to bring the node down). Both background runners stay
 // degraded-tolerant (log-and-continue, D-17g-9 / D-17h-8): they never cancel
-// their siblings and return nil on shutdown; each is nil when pipeCfg has no
-// consuming loop (which, for this binary, is always — it configures none).
+// their siblings and return nil on shutdown. Both are always non-nil for this
+// binary (Task 9: main's bearer guard makes BuildBatchResolver/BuildAuditRunner
+// always succeed non-nil here); the nil checks below stay defensive so this
+// function's contract does not depend on that caller invariant.
 func runNetwork(ctx context.Context, srv *http.Server, listen func() error, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

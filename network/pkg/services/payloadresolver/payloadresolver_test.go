@@ -256,6 +256,9 @@ type spyStore struct {
 }
 
 func (s *spyStore) Put(payload []byte, owner string) (string, error) { return addr(payload), nil }
+func (s *spyStore) StoreWriter(ctx context.Context, owner string) (payloadresolver.PayloadWriter, error) {
+	return nil, errors.New("spyStore: StoreWriter not implemented (unused by these authorize-before-read tests)")
+}
 func (s *spyStore) Owners(hash string) ([]string, error) {
 	s.ownersCalls++
 	if s.ownersErr != nil {

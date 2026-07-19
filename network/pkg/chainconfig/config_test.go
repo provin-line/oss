@@ -195,6 +195,68 @@ func TestLoad_NATS_ConnectWait(t *testing.T) {
 	}
 }
 
+func TestLoad_EmitHealth_Defaults(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	base := natsConf("nats", "nats://h:4222",
+		seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID)
+
+	c, err := chainconfig.LoadChainConfig(loadWith(t, base))
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if c.EmitHealth.TTL != 90*time.Second {
+		t.Errorf("default EmitHealth.TTL = %s, want 90s", c.EmitHealth.TTL)
+	}
+	if c.EmitHealth.AdvertiseWithoutReports {
+		t.Error("default EmitHealth.AdvertiseWithoutReports = true, want false")
+	}
+}
+
+func TestLoad_EmitHealth_Overrides(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	base := natsConf("nats", "nats://h:4222",
+		seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID)
+
+	c, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.emit-health {
+  ttl = 45s
+  advertise-without-reports = true
+}`))
+	if err != nil {
+		t.Fatalf("LoadChainConfig: %v", err)
+	}
+	if c.EmitHealth.TTL != 45*time.Second {
+		t.Errorf("EmitHealth.TTL = %s, want 45s", c.EmitHealth.TTL)
+	}
+	if !c.EmitHealth.AdvertiseWithoutReports {
+		t.Error("EmitHealth.AdvertiseWithoutReports = false, want true")
+	}
+}
+
+// A zero or negative TTL is meaningless (State's boundary is >= ttl — a
+// non-positive ttl would report every fresh report Expired immediately) and
+// fails boot rather than silently degrading every publisher.
+func TestLoad_EmitHealth_NonPositiveTTL_BootError(t *testing.T) {
+	acc, _ := nkeys.CreateAccount()
+	accSeed, _ := acc.Seed()
+	op, _ := nkeys.CreateOperator()
+	opSeed, _ := op.Seed()
+	base := natsConf("nats", "nats://h:4222",
+		seedFile(t, accSeed), seedFile(t, opSeed), "/var/chain/jwts", nodeDID)
+
+	for _, ttl := range []string{"0s", "-1s"} {
+		if _, err := chainconfig.LoadChainConfig(loadWith(t, base+"\nprovin.network.chain.emit-health.ttl = "+ttl)); err == nil {
+			t.Errorf("emit-health.ttl = %q: want boot error", ttl)
+		}
+	}
+}
+
 func TestLoad_NATS_RegistryBaseURLs(t *testing.T) {
 	acc, _ := nkeys.CreateAccount()
 	accSeed, _ := acc.Seed()

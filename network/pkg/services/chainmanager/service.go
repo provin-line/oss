@@ -9,6 +9,7 @@ import (
 	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
@@ -63,7 +64,26 @@ type Service struct {
 	// the producing loops' stripped-publish health. nil means "health monitoring
 	// not configured" — the static payloadServing decision stands, preserving the
 	// pre-degradation behavior and every existing constructor/test.
+	//
+	// Mutually exclusive with publisherHealthLookup below (enforced in New):
+	// this is the node-global, in-process model (cmd/standalone); that is the
+	// per-publisher, report-mode model (cmd/network).
 	byRefHealthy func() bool
+
+	// publisherHealthLookup, when non-nil, resolves a PER-PUBLISHER by-reference
+	// advertisement decision — the report-mode counterpart to byRefHealthy's
+	// node-global one. Supplied via WithPublisherHealth, typically backed by an
+	// emithealth.Store's State method (the composition root's read of the
+	// ReportEmitHealth reports a report-mode node like cmd/network has
+	// received). nil means this model is not configured.
+	publisherHealthLookup func(publisherDID string) emithealth.HealthState
+
+	// advertiseWithoutReports mirrors the advertise-without-reports config
+	// (provin.network.chain.emit-health.advertise-without-reports): whether a
+	// publisher this node has NEVER received a report for (NeverReported) may
+	// still be advertised for by-reference. Meaningful only alongside
+	// publisherHealthLookup.
+	advertiseWithoutReports bool
 }
 
 // Option configures a Service at construction.
@@ -91,16 +111,55 @@ func WithByReferenceHealth(fn func() bool) Option {
 	return func(s *Service) { s.byRefHealthy = fn }
 }
 
+// WithPublisherHealth supplies a PER-PUBLISHER by-reference advertisement gate
+// — the report-mode counterpart to WithByReferenceHealth's node-global gate.
+// lookup resolves a publisher's current emithealth.HealthState (typically an
+// emithealth.Store's State method); offeredPayloadModes then decides per
+// publisherDID:
+//
+//   - HealthyReported: advertise by-reference.
+//   - UnhealthyReported / Expired: degrade (do not advertise) — the same
+//     "under-advertise rather than over-promise" posture WithByReferenceHealth
+//     applies node-globally, now scoped to the one publisher whose report is
+//     stale or negative.
+//   - NeverReported: advertise only if advertiseWithoutReports is true
+//     (fail-degraded by default — a publisher must report at least once
+//     before this node advertises by-reference for it).
+//
+// WithPublisherHealth and WithByReferenceHealth are mutually exclusive
+// composition models — New panics if both are supplied on the same Service,
+// since silently combining them would leave it ambiguous which one governs
+// advertisement. lookup must be non-nil; a nil lookup panics when New applies
+// this option.
+func WithPublisherHealth(lookup func(publisherDID string) emithealth.HealthState, advertiseWithoutReports bool) Option {
+	return func(s *Service) {
+		if lookup == nil {
+			panic("chainmanager: WithPublisherHealth requires a non-nil lookup")
+		}
+		s.publisherHealthLookup = lookup
+		s.advertiseWithoutReports = advertiseWithoutReports
+	}
+}
+
 // New returns a Service backed by the given stores. Pass WithInfraOperator to
 // enable the peer operations and the subscriber options (WithDIDResolver +
 // WithPeerClient + WithEndpointGuard) to enable Subscribe/Unsubscribe. The
 // service layer depends only on the PeerClient interface — assembling a concrete
 // client (e.g. from a signer) is the composition layer's job, since the client
 // pulls in the wire/proto transport (AGENTS.md layer rule 3).
+//
+// It panics if BOTH WithByReferenceHealth and WithPublisherHealth are
+// supplied: the two are mutually exclusive by-reference advertisement models
+// (node-global/in-process vs. per-publisher/report-mode), and combining them
+// silently would leave it ambiguous which one governs advertisement — a
+// composition-root wiring error, not a runtime condition.
 func New(subs store.SubscriptionStore, allows store.AllowListStore, opts ...Option) *Service {
 	s := &Service{subs: subs, allows: allows}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.byRefHealthy != nil && s.publisherHealthLookup != nil {
+		panic("chainmanager: WithByReferenceHealth and WithPublisherHealth must not both be configured on the same Service")
 	}
 	return s
 }

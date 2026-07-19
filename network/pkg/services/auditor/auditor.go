@@ -59,6 +59,20 @@ type AuditRecord struct {
 	// it a status reader cannot distinguish "still being retried" from "gave
 	// up" (queue membership is not served).
 	Abandoned bool
+	// Unresolvable marks a specific abandon reason: chain assembly could never
+	// resolve THIS head's own content from the local store after exhausting
+	// retries (a RESOLUTION outcome), as opposed to any other reason retries
+	// ran out (a VERIFICATION outcome — Overall stays whatever
+	// vc.ConfidenceState value it already was, always Indeterminate in
+	// practice, since a resolution failure never computes a real verdict).
+	// Always accompanies Abandoned=true; never set alongside a fresh verdict
+	// write, so a later successful re-audit (a re-registration whose content
+	// has since arrived) clears it for free (a fresh AuditRecord's zero value
+	// is false). The handler projects it as the wire-distinct
+	// CONFIDENCE_UNRESOLVABLE — deliberately NOT folded into Overall/
+	// vc.ConfidenceState, which is a pure verification-confidence domain used
+	// by verifiers with no notion of "the runner gave up resolving."
+	Unresolvable bool
 }
 
 // StatusStore records the latest audit verdict per head.

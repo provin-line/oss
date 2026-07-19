@@ -21,11 +21,13 @@
 package filestore
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -55,6 +57,10 @@ type ownersEnvelope struct {
 // NewStore opens (creating if needed) the payload store rooted at dir. An
 // uncreatable or unwritable root is an error — a node that cannot persist the
 // payloads it agreed to serve must not pretend to (boot fails closed).
+//
+// It also sweeps orphaned ".tmp-" files left behind by a crash — including a
+// StoreWriter whose Commit/Abort never ran (e.g. the process died mid-stream)
+// — so a restart never accumulates unreachable temp files.
 func NewStore(dir string) (*Store, error) {
 	if err := openDir(dir); err != nil {
 		return nil, fmt.Errorf("filestore: open payload store %s: %w", dir, err)
@@ -79,38 +85,143 @@ func (s *Store) paths(hash string) (binPath, ownersPath string, err error) {
 // Put writes the payload bytes (content-addressed, write-once) then appends
 // ownerDID to the owner sidecar. A repeat owner is a no-op; the bytes are
 // idempotent.
+//
+// Put is a thin wrapper over StoreWriter: the whole payload is written to the
+// streaming writer in one call and immediately committed, so there is exactly
+// ONE code path for hashing and owner-sidecar bookkeeping between the
+// whole-buffer and streaming retain APIs.
 func (s *Store) Put(payload []byte, ownerDID string) (string, error) {
-	hash := hashPayload(payload)
-	binPath, ownersPath, err := s.paths(hash)
+	w, err := s.StoreWriter(context.Background(), ownerDID)
 	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Bytes first: content-addressed and immutable, so overwriting is harmless.
-	if err := writeAtomic(binPath, payload); err != nil {
-		return "", fmt.Errorf("filestore: write payload %s: %w", hash, err)
+	if _, err := w.Write(payload); err != nil {
+		_ = w.Abort()
+		return "", err
 	}
+	return w.Commit()
+}
+
+// StoreWriter returns a streaming retain handle: it opens a temp file in the
+// store directory (swept by NewStore if left behind by a crash) and hashes
+// bytes incrementally as they are written, so Commit derives the SAME content
+// address Put would derive for the same bytes without ever buffering the
+// whole payload in memory.
+//
+// ctx gates creation only (checked once, above) — it is not retained, so
+// cancellation after this call returns has no effect on the returned writer.
+// A caller that must abandon an in-progress write on cancellation is
+// responsible for calling Abort itself (see payloadresolver.Store.StoreWriter).
+func (s *Store) StoreWriter(ctx context.Context, ownerDID string) (payloadresolver.PayloadWriter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(s.dir, ".tmp-*")
+	if err != nil {
+		return nil, fmt.Errorf("filestore: create temp payload file: %w", err)
+	}
+	return &fileWriter{
+		store:    s,
+		ownerDID: ownerDID,
+		tmp:      tmp,
+		tmpPath:  tmp.Name(),
+		hasher:   sha256.New(),
+	}, nil
+}
+
+// fileWriter is the filestore PayloadWriter: a temp file plus an incremental
+// SHA-256 hasher fed the same bytes as they are written to disk.
+type fileWriter struct {
+	store    *Store
+	ownerDID string
+	tmp      *os.File
+	tmpPath  string
+	hasher   hash.Hash
+	done     bool
+}
+
+// Write appends p to the temp file and feeds it to the incremental hasher.
+func (w *fileWriter) Write(p []byte) (int, error) {
+	if w.done {
+		return 0, payloadresolver.ErrWriterFinalized
+	}
+	n, err := w.tmp.Write(p)
+	if n > 0 {
+		w.hasher.Write(p[:n])
+	}
+	return n, err
+}
+
+// Commit derives the content address from the bytes written so far, fsyncs
+// and atomically renames the temp file to its content-addressed final name,
+// then appends ownerDID to the owner sidecar — the same bookkeeping Put
+// performs, applied to a file already on disk instead of an in-memory slice.
+func (w *fileWriter) Commit() (string, error) {
+	if w.done {
+		return "", payloadresolver.ErrWriterFinalized
+	}
+	w.done = true
+	sum := w.hasher.Sum(nil)
+	contentAddr := "sha256:" + hex.EncodeToString(sum)
+
+	if err := w.tmp.Sync(); err != nil {
+		w.tmp.Close()
+		os.Remove(w.tmpPath)
+		return "", fmt.Errorf("filestore: sync payload %s: %w", contentAddr, err)
+	}
+	if err := w.tmp.Close(); err != nil {
+		os.Remove(w.tmpPath)
+		return "", fmt.Errorf("filestore: close payload %s: %w", contentAddr, err)
+	}
+
+	binPath, ownersPath, err := w.store.paths(contentAddr)
+	if err != nil {
+		os.Remove(w.tmpPath)
+		return "", err
+	}
+
+	w.store.mu.Lock()
+	defer w.store.mu.Unlock()
+	// Content-addressed and immutable, so renaming over an existing bin (two
+	// concurrent retains of the same bytes) is harmless.
+	if err := os.Rename(w.tmpPath, binPath); err != nil {
+		os.Remove(w.tmpPath)
+		return "", fmt.Errorf("filestore: rename payload %s: %w", contentAddr, err)
+	}
+	if err := fsyncDir(w.store.dir); err != nil {
+		return "", fmt.Errorf("filestore: fsync payload dir: %w", err)
+	}
+
 	owners, err := readOwners(ownersPath)
 	if err != nil {
-		return "", fmt.Errorf("filestore: read owners %s: %w", hash, err)
+		return "", fmt.Errorf("filestore: read owners %s: %w", contentAddr, err)
 	}
 	for _, o := range owners {
-		if o == ownerDID {
-			return hash, nil // already an owner
+		if o == w.ownerDID {
+			return contentAddr, nil // already an owner
 		}
 	}
-	owners = append(owners, ownerDID)
+	owners = append(owners, w.ownerDID)
 	// The content address is sha256 of the payload bytes, never of this sidecar,
 	// so the owner-set bytes are not a signing scope (canonicalizer-hygiene-exempt).
 	raw, err := json.Marshal(ownersEnvelope{V: 1, Owners: owners})
 	if err != nil {
-		return "", fmt.Errorf("filestore: marshal owners %s: %w", hash, err)
+		return "", fmt.Errorf("filestore: marshal owners %s: %w", contentAddr, err)
 	}
 	if err := writeAtomic(ownersPath, raw); err != nil {
-		return "", fmt.Errorf("filestore: write owners %s: %w", hash, err)
+		return "", fmt.Errorf("filestore: write owners %s: %w", contentAddr, err)
 	}
-	return hash, nil
+	return contentAddr, nil
+}
+
+// Abort discards the temp file: nothing written to it is persisted.
+func (w *fileWriter) Abort() error {
+	if w.done {
+		return payloadresolver.ErrWriterFinalized
+	}
+	w.done = true
+	w.tmp.Close()
+	return os.Remove(w.tmpPath)
 }
 
 // Owners returns the owner set at hash WITHOUT reading (or hashing) the payload

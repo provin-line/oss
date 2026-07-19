@@ -34,6 +34,9 @@ import (
 	_ "github.com/provin-line/oss/gen/go/dplaax/signer/v1"
 	_ "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	_ "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
+	// dplaax/payload/v1 above registers both PayloadService (L2, exempt) and
+	// PayloadStoreService (L1-gated, D7 evidence write surface) from the same
+	// file — no separate blank import needed.
 )
 
 // l2Exempt lists the fully-qualified services that legitimately carry NO L1
@@ -53,15 +56,16 @@ var l2Exempt = map[protoreflect.FullName]bool{
 // service must be added to BOTH the imports and this set — so the guard cannot
 // silently miss a surface.
 var wantServices = map[protoreflect.FullName]bool{
-	"dplaax.schema.v1.SchemaService":   true,
-	"dplaax.did.v1.DIDService":         true,
-	"dplaax.signer.v1.SignerService":   true,
-	"dplaax.vc.v1.VCResolverService":   true,
-	"dplaax.audit.v1.AuditService":     true,
-	"dplaax.tlog.v1.TlogService":       true,
-	"dplaax.chain.v1.ChainService":     true,
-	"dplaax.chain.v1.ChainPeerService": true,
-	"dplaax.payload.v1.PayloadService": true,
+	"dplaax.schema.v1.SchemaService":        true,
+	"dplaax.did.v1.DIDService":              true,
+	"dplaax.signer.v1.SignerService":        true,
+	"dplaax.vc.v1.VCResolverService":        true,
+	"dplaax.audit.v1.AuditService":          true,
+	"dplaax.tlog.v1.TlogService":            true,
+	"dplaax.chain.v1.ChainService":          true,
+	"dplaax.chain.v1.ChainPeerService":      true,
+	"dplaax.payload.v1.PayloadService":      true,
+	"dplaax.payload.v1.PayloadStoreService": true,
 }
 
 // TestEveryRPCIsGuarded walks the ACTUAL registered service descriptors — not a

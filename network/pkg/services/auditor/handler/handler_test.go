@@ -10,10 +10,14 @@ import (
 
 	"connectrpc.com/connect"
 
+	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -50,7 +54,7 @@ func (f fakeService) GetConsumed(context.Context, string, string, int) ([]string
 
 func get(t *testing.T, svc handler.Service) (*auditpb.GetAuditStatusResponse, error) {
 	t.Helper()
-	h := handler.New(svc)
+	h := handler.New(svc, nil, nil)
 	resp, err := h.GetAuditStatus(context.Background(), connect.NewRequest(&auditpb.GetAuditStatusRequest{HeadHash: "sha256:whatever"}))
 	if err != nil {
 		return nil, err
@@ -174,6 +178,96 @@ func TestGetAuditStatus_AbandonedServed(t *testing.T) {
 	}
 }
 
+// TestGetAuditStatus_UnresolvableServed proves the distinct RESOLUTION-outcome
+// verdict is servable and distinguishable from a plain Indeterminate: a head
+// whose own chain could never be resolved after exhausting retries projects
+// CONFIDENCE_UNRESOLVABLE for BOTH linear_chain.confidence and every axis
+// (none were ever evaluated — the credential itself was never obtained), and
+// abandoned=true (the generic "runner gave up" lifecycle fact still holds).
+// source_commitment stays absent — nothing to evaluate behind an unresolved
+// head.
+func TestGetAuditStatus_UnresolvableServed(t *testing.T) {
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:      i,
+		Axes:         vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations:    []string{"audit abandoned: exhausted 2 attempts (head not resolvable)"},
+		Scope:        auditor.AuditScope{LinearChain: true},
+		AuditedAt:    time.Unix(0, 0).UTC(),
+		Abandoned:    true,
+		Unresolvable: true,
+	}
+	msg, err := get(t, fakeService{rec: rec})
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	if !msg.GetAbandoned() {
+		t.Error("abandoned = false, want true")
+	}
+	lc := msg.GetLinearChain()
+	if lc.GetConfidence() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("linear_chain.confidence = %v, want UNRESOLVABLE", lc.GetConfidence())
+	}
+	axes := lc.GetAxes()
+	if axes.GetDataIntegrity() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE ||
+		axes.GetSignerAuthenticity() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE ||
+		axes.GetChainConsistency() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("axes = %+v, want all UNRESOLVABLE", axes)
+	}
+	if msg.GetSourceCommitment() != nil {
+		t.Errorf("source_commitment = %+v, want nil (nothing to evaluate behind an unresolved head)", msg.GetSourceCommitment())
+	}
+}
+
+// TestGetAuditStatus_UnresolvableServed_FileBackedStore is
+// TestGetAuditStatus_UnresolvableServed's wire-level regression check (P1-B):
+// the test above drives the handler against fakeService, a plain in-memory
+// struct that never serializes anything, so it could never have caught the
+// verdictEnvelope bug where Unresolvable had no on-disk field and Put silently
+// dropped it. This test instead goes through the REAL
+// auditor.StatusService over a REAL filestore.StatusStore — Put, then a
+// point GetAuditStatus through the handler — so a regression of that exact
+// bug (Unresolvable surviving in memory but not on disk) fails here even
+// though runner_damage_test.go's equivalent coverage uses NewMemStatusStore
+// (auditor package, which cannot import filestore without a cycle — filestore
+// imports auditor — hence this lives in the handler package instead, the
+// first external package both auditor and auditor/filestore are visible to).
+func TestGetAuditStatus_UnresolvableServed_FileBackedStore(t *testing.T) {
+	store, err := filestore.NewStatusStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStatusStore: %v", err)
+	}
+	svc := auditor.NewStatusService(store, auditor.NewMemReceiptStore())
+
+	head := "sha256:" + strings.Repeat("7", 64)
+	i := vc.ConfidenceIndeterminate
+	rec := auditor.AuditRecord{
+		Overall:      i,
+		Axes:         vc.AxisResult{DataIntegrity: i, SignerAuthenticity: i, ChainConsistency: i},
+		Notations:    []string{"audit abandoned: exhausted 2 attempts (head not resolvable)"},
+		Scope:        auditor.AuditScope{LinearChain: true},
+		AuditedAt:    time.Unix(0, 0).UTC(),
+		Abandoned:    true,
+		Unresolvable: true,
+	}
+	if err := store.Put(head, rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	h := handler.New(svc, nil, nil)
+	resp, err := h.GetAuditStatus(context.Background(), connect.NewRequest(&auditpb.GetAuditStatusRequest{HeadHash: head}))
+	if err != nil {
+		t.Fatalf("GetAuditStatus: %v", err)
+	}
+	lc := resp.Msg.GetLinearChain()
+	if lc.GetConfidence() != auditpb.Confidence_CONFIDENCE_UNRESOLVABLE {
+		t.Errorf("linear_chain.confidence = %v, want UNRESOLVABLE (a file-backed store must preserve Unresolvable across the Put/Get boundary)", lc.GetConfidence())
+	}
+	if !resp.Msg.GetAbandoned() {
+		t.Error("abandoned = false, want true")
+	}
+}
+
 // Each domain three-state maps to its proto counterpart with the +1 shift.
 func TestGetAuditStatus_ConfidenceMapping(t *testing.T) {
 	cases := []struct {
@@ -234,7 +328,7 @@ func TestListAuditStatuses_ProjectionAndToken(t *testing.T) {
 		},
 		lastScanned: "sha256:" + strings.Repeat("bb", 32),
 		more:        true,
-	})
+	}, nil, nil)
 	resp, err := h.ListAuditStatuses(context.Background(), connect.NewRequest(&auditpb.ListAuditStatusesRequest{}))
 	if err != nil {
 		t.Fatalf("ListAuditStatuses: %v", err)
@@ -263,7 +357,7 @@ func TestListAuditStatuses_ProjectionAndToken(t *testing.T) {
 }
 
 func TestListAuditStatuses_InvalidInputs(t *testing.T) {
-	h := handler.New(fakeService{})
+	h := handler.New(fakeService{}, nil, nil)
 	cases := []*auditpb.ListAuditStatusesRequest{
 		{PageSize: -1},
 		{PageToken: "garbage!!!"},
@@ -281,7 +375,7 @@ func TestListAuditStatuses_InvalidInputs(t *testing.T) {
 func TestGetConsumedSources_PageAndErrors(t *testing.T) {
 	head := "sha256:" + strings.Repeat("cc", 32)
 	consumed := []string{"sha256:" + strings.Repeat("11", 32), "sha256:" + strings.Repeat("22", 32)}
-	h := handler.New(fakeService{consumed: consumed, next: consumed[1]})
+	h := handler.New(fakeService{consumed: consumed, next: consumed[1]}, nil, nil)
 	resp, err := h.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head}))
 	if err != nil {
 		t.Fatalf("GetConsumedSources: %v", err)
@@ -303,12 +397,221 @@ func TestGetConsumedSources_PageAndErrors(t *testing.T) {
 	}
 
 	// Sentinel mapping flows through the shared mapError.
-	notFound := handler.New(fakeService{err: fmt.Errorf("wrap: %w", auditor.ErrNotFound)})
+	notFound := handler.New(fakeService{err: fmt.Errorf("wrap: %w", auditor.ErrNotFound)}, nil, nil)
 	if _, err := notFound.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head})); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Errorf("no receipt: code = %v, want NotFound", connect.CodeOf(err))
 	}
-	damaged := handler.New(fakeService{err: errors.New("damaged receipt")})
+	damaged := handler.New(fakeService{err: errors.New("damaged receipt")}, nil, nil)
 	if _, err := damaged.GetConsumedSources(context.Background(), connect.NewRequest(&auditpb.GetConsumedSourcesRequest{HeadHash: head})); connect.CodeOf(err) != connect.CodeInternal {
 		t.Errorf("damaged receipt: code = %v, want Internal", connect.CodeOf(err))
+	}
+}
+
+// --- RegisterEvidence ---
+
+// fakeEvidence is a spy handler.EvidenceRegistrar: it records the (headVariantAddr,
+// consumed, registrantDID) Register was called with and returns a preset error.
+type fakeEvidence struct {
+	called        bool
+	gotHead       string
+	gotCons       []string
+	gotRegistrant string
+	err           error
+}
+
+func (f *fakeEvidence) Register(_ context.Context, headVariantAddr string, consumed []string, registrantDID string) error {
+	f.called = true
+	f.gotHead = headVariantAddr
+	f.gotCons = append([]string(nil), consumed...)
+	f.gotRegistrant = registrantDID
+	return f.err
+}
+
+// spyVerifier records the (op, fields, proof) RegisterEvidence passes and
+// returns a preset error (simulating a wireauth failure) — mirrors
+// chainmanager/handler's own spyVerifier (peer_test.go).
+type spyVerifier struct {
+	called    bool
+	gotOp     string
+	gotFields map[string]any
+	gotProof  wireauth.Proof
+	err       error
+}
+
+func (s *spyVerifier) Verify(_ context.Context, op string, fields map[string]any, proof wireauth.Proof, _ wireauth.Authorizer) error {
+	s.called = true
+	s.gotOp, s.gotFields, s.gotProof = op, fields, proof
+	return s.err
+}
+
+const evidenceIssuedAt = "2026-07-19T00:00:00Z"
+
+func evidenceProof(signer string) *chainpb.AuthProof {
+	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: evidenceIssuedAt, Signature: []byte("sig")}
+}
+
+func headAddr(hexDigit string) string { return "sha256:" + strings.Repeat(hexDigit, 64) }
+
+// TestRegisterEvidence_VerifyContract pins the wireauth view: the op name is
+// the RPC's full namespaced name, the signed fields are head_variant_address
+// plus a DETERMINISTIC JOIN of the CANONICALIZED (sorted, deduplicated)
+// consumed set — never the as-submitted order — and the domain call only
+// happens after Verify succeeds, with the SAME canonical set.
+func TestRegisterEvidence_VerifyContract(t *testing.T) {
+	v := &spyVerifier{}
+	ev := &fakeEvidence{}
+	h := handler.New(nil, ev, v)
+
+	head := headAddr("a")
+	// Deliberately unsorted + duplicated: the signed view and the domain call
+	// must both see the canonical (sorted, deduped) form regardless.
+	req := &auditpb.RegisterEvidenceRequest{
+		HeadVariantAddress:      head,
+		ConsumedSourceAddresses: []string{headAddr("c"), headAddr("b"), headAddr("b")},
+		AuthProof:               evidenceProof("did:dplaax:reg:org:pipeline"),
+	}
+	_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+	if err != nil {
+		t.Fatalf("RegisterEvidence: %v", err)
+	}
+	if !v.called || v.gotOp != "dplaax.audit.v1.AuditService/RegisterEvidence" {
+		t.Errorf("verify op = %q, called=%v", v.gotOp, v.called)
+	}
+	if v.gotFields["head_variant_address"] != head {
+		t.Errorf("fields[head_variant_address] = %v, want %q", v.gotFields["head_variant_address"], head)
+	}
+	wantJoined := headAddr("b") + "\n" + headAddr("c")
+	if v.gotFields["consumed_source_addresses"] != wantJoined {
+		t.Errorf("fields[consumed_source_addresses] = %v, want canonical join %q", v.gotFields["consumed_source_addresses"], wantJoined)
+	}
+	if len(v.gotFields) != 2 {
+		t.Errorf("fields = %+v, want exactly 2 keys", v.gotFields)
+	}
+	if v.gotProof.SignerDID != "did:dplaax:reg:org:pipeline" || v.gotProof.Nonce != "n1" {
+		t.Errorf("proof = %+v", v.gotProof)
+	}
+	if !ev.called || ev.gotHead != head {
+		t.Errorf("evidence.Register called=%v head=%q, want called with %q", ev.called, ev.gotHead, head)
+	}
+	wantCons := []string{headAddr("b"), headAddr("c")}
+	if len(ev.gotCons) != 2 || ev.gotCons[0] != wantCons[0] || ev.gotCons[1] != wantCons[1] {
+		t.Errorf("evidence.Register consumed = %v, want canonical %v", ev.gotCons, wantCons)
+	}
+	// The wireauth-proven signer_did (verified by v.Verify above) is threaded straight
+	// through to evidence.Register as the registrant to record with the receipt.
+	if ev.gotRegistrant != "did:dplaax:reg:org:pipeline" {
+		t.Errorf("evidence.Register registrantDID = %q, want the proof's signer_did %q", ev.gotRegistrant, "did:dplaax:reg:org:pipeline")
+	}
+}
+
+// TestRegisterEvidence_MissingAuthProof rejects a request with no auth_proof
+// as InvalidArgument, before Verify (and the domain) are ever called.
+func TestRegisterEvidence_MissingAuthProof(t *testing.T) {
+	v := &spyVerifier{}
+	ev := &fakeEvidence{}
+	h := handler.New(nil, ev, v)
+	req := &auditpb.RegisterEvidenceRequest{
+		HeadVariantAddress:      headAddr("a"),
+		ConsumedSourceAddresses: []string{headAddr("b")},
+	}
+	_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", connect.CodeOf(err))
+	}
+	if v.called {
+		t.Error("Verify called with no auth_proof")
+	}
+	if ev.called {
+		t.Error("evidence.Register called despite missing auth_proof")
+	}
+}
+
+// TestRegisterEvidence_InvalidConsumedSet rejects an empty consumed set as
+// InvalidArgument before Verify runs — canonicalization is a structural
+// request check, same posture as the issued_at codec (checked before Verify).
+func TestRegisterEvidence_InvalidConsumedSet(t *testing.T) {
+	v := &spyVerifier{}
+	ev := &fakeEvidence{}
+	h := handler.New(nil, ev, v)
+	req := &auditpb.RegisterEvidenceRequest{
+		HeadVariantAddress: headAddr("a"),
+		AuthProof:          evidenceProof("did:dplaax:reg:org:pipeline"),
+	}
+	_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", connect.CodeOf(err))
+	}
+	if v.called {
+		t.Error("Verify called with an empty consumed set")
+	}
+}
+
+// TestRegisterEvidence_VerifyFailure_Mapped mirrors
+// TestPeerHandler_VerifyFailure_Mapped: a wireauth failure maps to its Connect
+// code and the domain (evidence.Register) is never reached.
+func TestRegisterEvidence_VerifyFailure_Mapped(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want connect.Code
+	}{
+		{"signature invalid", wireauth.ErrSignatureInvalid, connect.CodeUnauthenticated},
+		{"replay", wireauth.ErrReplay, connect.CodeUnauthenticated},
+		{"key resolution", wireauth.ErrKeyResolution, connect.CodeUnauthenticated},
+		{"expired", wireauth.ErrExpired, connect.CodeUnauthenticated},
+		{"resolver unavailable", wireauth.ErrResolverUnavailable, connect.CodeUnavailable},
+		{"malformed proof", wireauth.ErrMalformedProof, connect.CodeInvalidArgument},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := &spyVerifier{err: c.err}
+			ev := &fakeEvidence{}
+			h := handler.New(nil, ev, v)
+			req := &auditpb.RegisterEvidenceRequest{
+				HeadVariantAddress:      headAddr("a"),
+				ConsumedSourceAddresses: []string{headAddr("b")},
+				AuthProof:               evidenceProof("did:dplaax:reg:org:pipeline"),
+			}
+			_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+			if connect.CodeOf(err) != c.want {
+				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
+			}
+			if ev.called {
+				t.Error("evidence.Register called despite a Verify failure")
+			}
+		})
+	}
+}
+
+// TestRegisterEvidence_DomainErrorMapping proves the service's sentinel
+// errors map to the RPC's frozen contract: unknown head → FailedPrecondition,
+// a receipt conflict → AlreadyExists, invalid argument → InvalidArgument, and
+// an unrecognized error → Internal.
+func TestRegisterEvidence_DomainErrorMapping(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want connect.Code
+	}{
+		{"unknown head", fmt.Errorf("wrap: %w", auditor.ErrHeadNotAdmitted), connect.CodeFailedPrecondition},
+		{"receipt conflict", fmt.Errorf("wrap: %w", auditor.ErrReceiptConflict), connect.CodeAlreadyExists},
+		{"invalid argument", fmt.Errorf("wrap: %w", auditor.ErrInvalidArgument), connect.CodeInvalidArgument},
+		{"unknown", errors.New("boom"), connect.CodeInternal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := &spyVerifier{}
+			ev := &fakeEvidence{err: c.err}
+			h := handler.New(nil, ev, v)
+			req := &auditpb.RegisterEvidenceRequest{
+				HeadVariantAddress:      headAddr("a"),
+				ConsumedSourceAddresses: []string{headAddr("b")},
+				AuthProof:               evidenceProof("did:dplaax:reg:org:pipeline"),
+			}
+			_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+			if connect.CodeOf(err) != c.want {
+				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
+			}
+		})
 	}
 }

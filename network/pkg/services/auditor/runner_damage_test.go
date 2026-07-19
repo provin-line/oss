@@ -104,9 +104,14 @@ func (missingHeads) ResolveVC(context.Context, string) (*vc.PipelinePassCredenti
 	return nil, fmt.Errorf("%w: gone", vcresolver.ErrNotFound)
 }
 
-// An unreadable head is retained (attempt-bounded), never silently dequeued;
-// a definitive miss is dropped as a stale registration — the split the
-// durable store makes meaningful.
+// An unreadable head is retained (attempt-bounded), never silently dequeued.
+// A definitive miss is ALSO retained (attempt-bounded) rather than dropped on
+// the first observation — the head may not have propagated to the local
+// store yet — and once retries exhaust without the head ever resolving, the
+// runner finalizes it as UNRESOLVABLE: a RESOLUTION outcome (chain assembly
+// never even obtained the evidence), distinct from a VERIFICATION outcome
+// (Indeterminate/Failed/Verified). Before this, a definitive miss was dropped
+// silently with no verdict at all — indistinguishable from never-registered.
 func TestAuditOne_HeadUnreadableRetained_MissDropped(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) {
 		t.Fatal("VerifyChain must not be called without a resolvable head")
@@ -133,15 +138,34 @@ func TestAuditOne_HeadUnreadableRetained_MissDropped(t *testing.T) {
 
 	q2 := NewMemQueue()
 	_ = q2.Add(headH)
-	r2, err := New(q2, missingHeads{}, cv, status, fakePool{}, okCfg())
+	status2 := NewMemStatusStore()
+	cfg := okCfg()
+	cfg.MaxAttempts = 2
+	r2, err := New(q2, missingHeads{}, cv, status2, fakePool{}, cfg, WithClock(func() time.Time { return time.Unix(0, 0) }))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := r2.drainOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if q2.Len() != 1 {
+		t.Fatalf("missing head after tick 1: queue len = %d, want 1 (retried, not dropped immediately)", q2.Len())
+	}
+	if _, err := status2.Get(headH); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing head after tick 1: status = %v, want ErrNotFound (no interim verdict, mirrors the unreadable-head path)", err)
+	}
+	if err := r2.drainOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if q2.Len() != 0 {
-		t.Fatalf("missing head: queue len = %d, want 0 (stale registration dropped)", q2.Len())
+		t.Fatalf("missing head after exhausting attempts: queue len = %d, want 0 (finalized)", q2.Len())
+	}
+	rec, err := status2.Get(headH)
+	if err != nil {
+		t.Fatalf("missing head after exhausting attempts: status = %v, want a recorded UNRESOLVABLE verdict", err)
+	}
+	if rec.Overall != vc.ConfidenceIndeterminate || !rec.Abandoned || !rec.Unresolvable {
+		t.Errorf("missing head verdict = %+v, want {Overall:Indeterminate Abandoned:true Unresolvable:true}", rec)
 	}
 }
 

@@ -56,10 +56,15 @@ func BearerInterceptor(token string) connect.Interceptor {
 	})
 }
 
-// BuildBatchResolver constructs the async chain-audit runner, or returns (nil, nil) when
-// the node has no consuming loop (a source-only node accumulates no holes, so there is
-// nothing to drain). pool and submitter are the shared instances main threads into the
-// VC resolver service, so the runner drains exactly the pool StoreVC feeds.
+// BuildBatchResolver constructs the async chain-audit runner unconditionally from its
+// args. Whether this node needs the runner at all — "does it have a consuming loop" — is
+// a composition-root concern, not this builder's (Task 9): cmd/standalone gates at its
+// call site with pipelineconfig.Config.HasConsumingLoop() (a source-only node nils the
+// runner it gets back, preserving its old zero-loop behavior exactly); cmd/network has no
+// local loops to gate on at all (pipeCfg.HasConsumingLoop() is always false there) and
+// instead always runs this runner, boot-validating pipeCfg.VCStoreBearer directly. pool
+// and submitter are the shared instances main threads into the VC resolver service, so
+// the runner drains exactly the pool StoreVC feeds.
 func BuildBatchResolver(
 	pool batchresolver.Pool,
 	submitter batchresolver.Submitter,
@@ -67,9 +72,6 @@ func BuildBatchResolver(
 	didResolver batchresolver.DIDResolver,
 	pipeCfg *pipelineconfig.Config,
 ) (*batchresolver.Runner, error) {
-	if !pipeCfg.HasConsumingLoop() {
-		return nil, nil
-	}
 	fetcher := &peerFetcher{httpClient: guard.HTTPClient(), bearer: pipeCfg.VCStoreBearer, maxBytes: pipeCfg.MaxCredentialSize}
 	return batchresolver.New(pool, submitter, fetcher, didResolver, guard, batchresolver.Config{
 		Interval:   pipeCfg.BatchResolver.Interval,

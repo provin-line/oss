@@ -3,6 +3,7 @@ package auditor_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -167,7 +168,7 @@ func TestStatusService_GetConsumed(t *testing.T) {
 	}
 
 	consumed := []string{hashOf('c'), hashOf('a'), hashOf('b')} // unsorted on purpose
-	if err := receipts.Put(validHash, consumed); err != nil {
+	if err := receipts.Put(validHash, "", consumed); err != nil {
 		t.Fatal(err)
 	}
 	page, next, err := svc.GetConsumed(context.Background(), validHash, "", 2)
@@ -180,10 +181,31 @@ func TestStatusService_GetConsumed(t *testing.T) {
 	}
 
 	// A receipt entry that is not a content address is damage (internal), not data.
-	if err := receipts.Put(validHash, []string{"garbage-entry"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := svc.GetConsumed(context.Background(), validHash, "", 10); err == nil || errors.Is(err, auditor.ErrNotFound) || errors.Is(err, auditor.ErrInvalidArgument) {
+	// ReceiptStore.Put now ENFORCES the content-address grammar per member
+	// (CanonicalizeConsumedSet), so a corrupt entry can no longer arrive through Put at
+	// all — it can only arrive out-of-band (e.g. a tampered file read back by a durable
+	// store). Simulate that with a stub reader returning an already-malformed entry
+	// list directly from Get, bypassing Put's validation entirely; GetConsumed's own
+	// per-entry validation must still catch it.
+	garbageHead := hashOf('d')
+	corruptSvc := auditor.NewStatusService(auditor.NewMemStatusStore(), corruptReceiptStub{head: garbageHead, entries: []string{"garbage-entry"}})
+	if _, _, err := corruptSvc.GetConsumed(context.Background(), garbageHead, "", 10); err == nil || errors.Is(err, auditor.ErrNotFound) || errors.Is(err, auditor.ErrInvalidArgument) {
 		t.Fatalf("corrupt receipt: err=%v, want a distinct damage error", err)
 	}
+}
+
+// corruptReceiptStub is a minimal ReceiptReader returning a FIXED entry list for one head,
+// bypassing ReceiptStore.Put's content-address grammar enforcement entirely — the seam for
+// simulating an out-of-band corrupted receipt (e.g. a tampered file) that a durable store's
+// Get would read back as-is.
+type corruptReceiptStub struct {
+	head    string
+	entries []string
+}
+
+func (c corruptReceiptStub) Get(h string) ([]string, error) {
+	if h != c.head {
+		return nil, fmt.Errorf("%w: no receipt for %q", auditor.ErrNotFound, h)
+	}
+	return c.entries, nil
 }

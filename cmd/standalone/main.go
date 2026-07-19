@@ -229,25 +229,30 @@ func main() {
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
 	}
-	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts,
-		schemaSvc, payloadSvc, dp.tlogs, pipeCfg.MaxCredentialSize, mountIngest, readiness, byRefGate.Healthy)
+	// emitHealth is nil: cmd/standalone gates by-reference advertisement with
+	// its own in-process byRefGate above (the global model), never the
+	// per-publisher report-mode gate (chainmanager.New would panic if both
+	// were wired on the same Service).
+	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
+		schemaSvc, payloadSvc, payloadStore, dp.tlogs, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
 
-	// The async chain-audit resolver drains the pool the consuming loops populate. It is
-	// nil for a source-only node (no consuming loop → no holes to drain).
+	// The async chain-audit resolver drains the pool the consuming loops populate, and the
+	// audit runner verifies assembled chains and records per-head verdicts. Both builders
+	// now build unconditionally from their args (Task 9); gateConsumingLoopRunners below
+	// reproduces their old internal gate at this call site, so a source-only node still
+	// gets nil for both (no holes to drain, no consumed heads register) exactly as before.
 	batchRunner, err := buildBatchResolver(pool, vcSvc, guard, resolver, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build batch resolver: %v", err)
 	}
-
-	// The async audit runner verifies the assembled chains and records per-head verdicts.
-	// Also nil for a source-only node (no consumed heads register).
 	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditReceipts, vcSvc, pool, resolver, schemaBridge, pipeCfg)
 	if err != nil {
 		log.Fatalf("standalone: build audit runner: %v", err)
 	}
+	batchRunner, auditRunner = gateConsumingLoopRunners(pipeCfg, batchRunner, auditRunner)
 
 	// The /metrics bridge composes OUTSIDE BuildHandler, after the audit
 	// runner exists (its VerdictCounts is one of the polled sources). Config
@@ -268,9 +273,9 @@ func main() {
 	// Outer raw-body cap: h2c.NewHandler reads an HTTP/1 upgrade request's body
 	// in full before the inner Connect handler (and its per-RPC read cap) runs,
 	// so a single generous outer bound closes that pre-auth path. Sized to the
-	// largest legitimate request (a stored credential or a pushed body) plus
-	// headroom; per-RPC caps stay tight below it.
-	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize)
+	// largest legitimate request (a stored credential, a pushed body, or a full
+	// RetainPayload stream) plus headroom; per-RPC caps stay tight below it.
+	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize, pipeCfg.MaxRetainPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
@@ -295,6 +300,19 @@ func main() {
 		os.Exit(1)
 	}
 	log.Printf("standalone: shutdown complete")
+}
+
+// gateConsumingLoopRunners nils batchRunner/auditRunner when pipeCfg has no consuming
+// loop, reproducing BuildBatchResolver/BuildAuditRunner's former internal gate at this
+// call site (Task 9: the builders now build unconditionally from their args — see their
+// doc comments in internal/netcompose). A source-only or zero-loop node accumulates no
+// holes and registers no consumed heads, so it still runs neither background runner;
+// otherwise the two runners the builders returned pass through unchanged.
+func gateConsumingLoopRunners(pipeCfg *pipelineconfig.Config, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) (*batchresolver.Runner, *auditor.Runner) {
+	if !pipeCfg.HasConsumingLoop() {
+		return nil, nil
+	}
+	return batchRunner, auditRunner
 }
 
 // runServices runs the HTTP server, the data plane, and the two async background runners

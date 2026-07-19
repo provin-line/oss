@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -41,16 +42,71 @@ const (
 	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
 )
 
-// Handler adapts a Service to the generated AuditServiceHandler.
+// EvidenceRegistrar is the consumer-side view of the evidence-registration
+// service the handler depends on (defined here to keep the dependency
+// pointing inward). *auditor.EvidenceService satisfies it. headVariantID is
+// the wire variant id RegisterEvidenceRequest.head_variant_address carries
+// (P1-A) — auditor.EvidenceService.Register resolves it to a body address
+// internally; this handler never sees that address. registrantDID is the
+// wireauth-proven caller DID (the proof's SignerDID, verified by h.v before
+// Register is ever called) that gets recorded with the receipt.
+type EvidenceRegistrar interface {
+	Register(ctx context.Context, headVariantID string, consumed []string, registrantDID string) error
+}
+
+// Verifier is the wireauth verification seam (an interface so a spy can be
+// injected in tests). *wireauth.Verifier satisfies it.
+type Verifier interface {
+	Verify(ctx context.Context, op string, fields map[string]any, proof wireauth.Proof, authorize wireauth.Authorizer) error
+}
+
+// Handler adapts a Service and an EvidenceRegistrar to the generated
+// AuditServiceHandler. Every method is implemented explicitly (no
+// Unimplemented embedding): RegisterEvidence verifies the caller's L2
+// wireauth proof in-band (mirrors payloadresolver/handler exactly) before
+// delegating to the evidence-registration service.
 type Handler struct {
-	svc Service
+	svc      Service
+	evidence EvidenceRegistrar
+	v        Verifier
 }
 
 var _ auditpbconnect.AuditServiceHandler = (*Handler)(nil)
 
-// New returns a Handler backed by svc.
-func New(svc Service) *Handler {
-	return &Handler{svc: svc}
+// New returns a Handler backed by svc (the read service), evidence (the
+// evidence-registration service RegisterEvidence delegates to), and v (the
+// wireauth verifier RegisterEvidence checks the caller's proof against).
+func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
+	return &Handler{svc: svc, evidence: evidence, v: v}
+}
+
+// RegisterEvidence verifies the L2 wireauth proof over the head variant id
+// plus the CANONICALIZED consumed-source set (sorted, deduplicated —
+// canonicalized BEFORE the signed view is built, so the proof covers the
+// canonical set: a caller resubmitting the same set in a different order
+// signs and verifies identically), then delegates the atomic
+// receipt+enqueue to the evidence-registration service. Canonicalization runs
+// before Verify — a malformed consumed set is a structural request defect,
+// same posture as the issued_at codec, checked before any signature work.
+func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[auditpb.RegisterEvidenceRequest]) (*connect.Response[auditpb.RegisterEvidenceResponse], error) {
+	proof, err := decodeProof(req.Msg.GetAuthProof())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	canonical, err := auditor.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	fields := auditor.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
+	// No separate actor field: the proven signer_did is who gets recorded as
+	// the registering party (the querying actor IS the signer, nil authorizer).
+	if err := h.v.Verify(ctx, auditor.OpRegisterEvidence, fields, proof, nil); err != nil {
+		return nil, mapError(err)
+	}
+	if err := h.evidence.Register(ctx, req.Msg.GetHeadVariantAddress(), canonical, proof.SignerDID); err != nil {
+		return nil, mapError(err)
+	}
+	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil
 }
 
 func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[auditpb.GetAuditStatusRequest]) (*connect.Response[auditpb.GetAuditStatusResponse], error) {
@@ -75,13 +131,21 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 	// a recorded audit with Scope.LinearChain true (it walks head→origin before
 	// VerifyChain), so this field is in practice always present — an empty response is
 	// structurally unreachable. Overall is, in the 17h era, exactly the linear verdict.
+	//
+	// Unresolvable overrides EVERY confidence in this scope (overall + all three axes) to
+	// CONFIDENCE_UNRESOLVABLE: chain assembly never obtained the head's own content, so
+	// none of Overall/Axes were ever a real verification outcome (they hold their
+	// synthesized Indeterminate — projecting that verbatim would misrepresent a resolution
+	// failure as an inconclusive verification). Never applies to source_commitment below:
+	// an unresolved head never reaches VerifyChain, so SourceCommitmentEvaluated is always
+	// false here and that scope stays absent regardless.
 	if rec.Scope.LinearChain {
 		resp.LinearChain = &auditpb.ScopeVerdict{
-			Confidence: confidence(rec.Overall),
+			Confidence: projectedConfidence(rec.Overall, rec.Unresolvable),
 			Axes: &auditpb.AxisVerdict{
-				DataIntegrity:      confidence(rec.Axes.DataIntegrity),
-				SignerAuthenticity: confidence(rec.Axes.SignerAuthenticity),
-				ChainConsistency:   confidence(rec.Axes.ChainConsistency),
+				DataIntegrity:      projectedConfidence(rec.Axes.DataIntegrity, rec.Unresolvable),
+				SignerAuthenticity: projectedConfidence(rec.Axes.SignerAuthenticity, rec.Unresolvable),
+				ChainConsistency:   projectedConfidence(rec.Axes.ChainConsistency, rec.Unresolvable),
 			},
 			Notations: rec.Notations,
 		}
@@ -182,16 +246,47 @@ func parseBound(raw, field string) (time.Time, error) {
 	return ts, nil
 }
 
-// mapError translates the read service's sentinel errors to Connect codes. Unrecognized
-// errors become CodeInternal.
+// mapError translates the read service's, the evidence service's, and
+// RegisterEvidence's wireauth sentinel errors to Connect codes (errors.Is,
+// never string matching). Unrecognized errors become CodeInternal.
 func mapError(err error) error {
 	switch {
+	// Malformed request / proof shape (RegisterEvidence's codec + wireauth).
+	case errors.Is(err, errMalformedIssuedAt),
+		errors.Is(err, wireauth.ErrMissingProof),
+		errors.Is(err, wireauth.ErrMalformedProof),
+		errors.Is(err, wireauth.ErrInvalidView):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	// Inbound caller hung up mid-verification: CodeCanceled, not a server-side
+	// "unavailable". Precedes ErrResolverUnavailable, which the cancellation
+	// also wraps — order decides the mapping.
+	case errors.Is(err, context.Canceled):
+		return connect.NewError(connect.CodeCanceled, err)
+	// Transient resolver condition (timeout/capacity): retryable, NOT an
+	// identity rejection. Must precede the Unauthenticated cases — the error
+	// also wraps ErrResolverUnavailable, and order decides the mapping.
+	case errors.Is(err, wireauth.ErrResolverUnavailable):
+		return connect.NewError(connect.CodeUnavailable, err)
+	// Failed to prove identity (RegisterEvidence's wireauth verification).
+	case errors.Is(err, wireauth.ErrExpired),
+		errors.Is(err, wireauth.ErrFromFuture),
+		errors.Is(err, wireauth.ErrBeforeEpoch),
+		errors.Is(err, wireauth.ErrKeyResolution),
+		errors.Is(err, wireauth.ErrSignatureInvalid),
+		errors.Is(err, wireauth.ErrReplay):
+		return connect.NewError(connect.CodeUnauthenticated, err)
+	// The head variant address is not (yet) admitted in the local VC store —
+	// the arbitrary-hash amplification guard (D1).
+	case errors.Is(err, auditor.ErrHeadNotAdmitted):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	// A recorded receipt already pins a DIFFERENT canonical consumed set for
+	// this head — the set never silently changes.
+	case errors.Is(err, auditor.ErrReceiptConflict):
+		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, auditor.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, auditor.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, context.Canceled):
-		return connect.NewError(connect.CodeCanceled, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	default:
@@ -216,4 +311,20 @@ func confidence(c vc.ConfidenceState) auditpb.Confidence {
 	default:
 		return auditpb.Confidence_CONFIDENCE_UNSPECIFIED
 	}
+}
+
+// projectedConfidence wraps confidence() with the ONE override that lives
+// outside the vc.ConfidenceState domain: when unresolvable is true (chain
+// assembly could not resolve the head's own chain after max retries — a
+// RESOLUTION outcome), it returns CONFIDENCE_UNRESOLVABLE regardless of c,
+// never the domain mapping. c is otherwise whatever synthesized
+// vc.ConfidenceState the record carries (always Indeterminate in practice —
+// a resolution failure never computes a real verification outcome), so
+// confidence(c) is deliberately NOT called in that branch: c never held a
+// meaningful verification result to project.
+func projectedConfidence(c vc.ConfidenceState, unresolvable bool) auditpb.Confidence {
+	if unresolvable {
+		return auditpb.Confidence_CONFIDENCE_UNRESOLVABLE
+	}
+	return confidence(c)
 }
