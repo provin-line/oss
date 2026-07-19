@@ -286,14 +286,35 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 	if len(records) > 0 {
 		nr, aerr := appendJournalFn(dir, currentAcked, tail, records)
 		if aerr != nil {
-			// The journal may hold a partial/uncheckpointed tail beyond
-			// preSize — roll it back so a later retry does not re-append
-			// duplicate indexes (poison if the rollback itself fails).
-			if rerr := truncateJournal(dir, preSize); rerr != nil {
+			// Distinguish a PRE-write failure (open/EMFILE/permission — the
+			// journal never grew) from a PARTIAL write (bytes landed past
+			// preSize). Only a partial write needs rollback: an UNCONDITIONAL
+			// truncate could itself fail for the same transient reason and then
+			// poison a perfectly healthy log for the rest of the process
+			// lifetime. A pre-write failure left nothing on disk, so it is a
+			// clean, retryable error the shipper simply re-attempts.
+			postSize, serr := journalSize(dir)
+			switch {
+			case serr != nil:
+				// Cannot read the post-failure size — the on-disk state is
+				// genuinely unknown and cannot be reconciled at runtime; poison
+				// rather than guess.
 				return 0, s.poison(key, dir, e, existed, logID, fmt.Errorf(
-					"journal append failed and the rollback truncate also failed: append error: %v; truncate error: %w", aerr, rerr))
+					"journal append failed and its post-failure size could not be read: append error: %v; stat error: %w", aerr, serr))
+			case postSize == preSize:
+				// Nothing was written — clean transient failure, no rollback,
+				// no poison.
+				return 0, fmt.Errorf("mirrorstore: append %q: %w", logID, aerr)
+			default:
+				// The journal grew: a partial/uncheckpointed tail beyond
+				// preSize — roll it back so a later retry does not re-append
+				// duplicate indexes (poison only if the rollback itself fails).
+				if rerr := truncateJournal(dir, preSize); rerr != nil {
+					return 0, s.poison(key, dir, e, existed, logID, fmt.Errorf(
+						"journal append failed and the rollback truncate also failed: append error: %v; truncate error: %w", aerr, rerr))
+				}
+				return 0, fmt.Errorf("mirrorstore: append %q: %w", logID, aerr)
 			}
-			return 0, fmt.Errorf("mirrorstore: append %q: %w", logID, aerr)
 		}
 		newRecs = nr
 	}

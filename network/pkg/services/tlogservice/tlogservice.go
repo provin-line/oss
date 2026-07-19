@@ -240,19 +240,26 @@ func custodyOnly(logID string) bool {
 	return err == nil && kind == logident.KindSinkReject
 }
 
-// MirrorCaps reports the D-T2 rule 5 batch caps (max-batch-records,
-// max-batch-bytes) and whether a mirror store is even wired (ok=false on a
-// map-only node). The handler reads them to reject an over-cap batch by cheap
-// count/byte checks BEFORE hashing the untrusted payloads (SegmentDigest) or
-// verifying the wireauth proof — a pre-auth DoS guard. The caps live in
-// MirrorConfig (the single source of truth); MirrorSegment re-checks them as
-// defense in depth. ok=false makes the handler skip the pre-auth check so the
-// call still reaches MirrorSegment's ErrMirrorNotConfigured (→ Unimplemented).
-func (s *Service) MirrorCaps() (maxRecords, maxBytes int, ok bool) {
+// CheckBatchCaps validates a MirrorLogSegment batch's record count and summed
+// byte length against the D-T2 rule 5 caps — the SINGLE cap-policy definition,
+// owned by the service (the caps + the ErrCapExceeded sentinel never leave the
+// domain layer). The handler calls it with the cheap structural sizes
+// (len(payloads), sum of lengths) BEFORE hashing payloads or verifying the
+// wireauth proof (a pre-auth DoS guard); MirrorSegment calls the SAME method as
+// defense in depth, so the two can never diverge. A map-only node (no mirror
+// store wired) has no caps to enforce: the check is a no-op (nil), and the
+// call proceeds to whatever ErrMirrorNotConfigured path applies.
+func (s *Service) CheckBatchCaps(recordCount, totalBytes int) error {
 	if s.mirror == nil {
-		return 0, 0, false
+		return nil
 	}
-	return s.mirror.MaxBatchRecords, s.mirror.MaxBatchBytes, true
+	if recordCount > s.mirror.MaxBatchRecords {
+		return fmt.Errorf("%w: %d records exceeds max-batch-records %d", ErrCapExceeded, recordCount, s.mirror.MaxBatchRecords)
+	}
+	if totalBytes > s.mirror.MaxBatchBytes {
+		return fmt.Errorf("%w: %d bytes exceeds max-batch-bytes %d", ErrCapExceeded, totalBytes, s.mirror.MaxBatchBytes)
+	}
+	return nil
 }
 
 // MirrorState returns the registry's durable mirror size for logID — the
@@ -334,15 +341,12 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 		return 0, err
 	}
 
-	if len(in.Records) > s.mirror.MaxBatchRecords {
-		return 0, fmt.Errorf("%w: %d records exceeds max-batch-records %d", ErrCapExceeded, len(in.Records), s.mirror.MaxBatchRecords)
-	}
 	var totalBytes int
 	for _, p := range in.Records {
 		totalBytes += len(p)
 	}
-	if totalBytes > s.mirror.MaxBatchBytes {
-		return 0, fmt.Errorf("%w: %d bytes exceeds max-batch-bytes %d", ErrCapExceeded, totalBytes, s.mirror.MaxBatchBytes)
+	if err := s.CheckBatchCaps(len(in.Records), totalBytes); err != nil {
+		return 0, err
 	}
 
 	total := in.FromIndex + uint64(len(in.Records))

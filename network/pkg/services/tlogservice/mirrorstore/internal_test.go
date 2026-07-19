@@ -442,6 +442,82 @@ func TestAppendVerified_JournalAppendFailureRollsBack(t *testing.T) {
 	}
 }
 
+// TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison (R1) covers the
+// re-review regression the P1-C rollback introduced: a PRE-write appendJournal
+// failure (EMFILE / permission / open failure — nothing written, the journal
+// stays at preSize) must NOT poison the log. The unconditional truncate the
+// first P1-C cut performed could itself fail for the same transient reason and
+// then poison a perfectly healthy log for the process lifetime. A pre-write
+// failure is a clean, retryable error; a subsequent good append must succeed.
+//
+// Fault-injection: records.ndjson is made read-only so that IF the code wrongly
+// attempts a rollback truncate, that truncate FAILS (the exact condition that
+// poisoned the log pre-fix); appendJournalFn is injected to fail without
+// writing, leaving the journal at preSize.
+func TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file write-permission semantics differ on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses permission checks")
+	}
+	logID := "did:dplaax:example:pipeline:prewrite-fail"
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch1 := [][]byte{[]byte("q0")}
+	head1 := testChainOf(batch1...)
+	if _, err := st.AppendVerified(logID, batch1, testCP(logID, 1, head1)); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	dir := filepath.Join(root, dirName(logID))
+	preSize, err := journalSize(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recPath := filepath.Join(dir, recordsFile)
+	if err := os.Chmod(recPath, 0o400); err != nil { // rollback truncate would fail
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(recPath, 0o600) })
+
+	orig := appendJournalFn
+	appendJournalFn = func(string, uint64, string, [][]byte) ([]*tlog.Record, error) {
+		return nil, fmt.Errorf("injected pre-write open failure (EMFILE)") // writes nothing
+	}
+	batch2 := [][]byte{[]byte("q1")}
+	head2 := ChainHash(head1, batch2[0])
+	cp2 := testCP(logID, 2, head2)
+	_, aerr := st.AppendVerified(logID, batch2, cp2)
+	appendJournalFn = orig
+	if aerr == nil {
+		t.Fatal("append with injected pre-write failure: want error, got nil")
+	}
+
+	// The journal is unchanged and the log must NOT be poisoned.
+	if sz, _ := journalSize(dir); sz != preSize {
+		t.Fatalf("journal size after pre-write failure = %d, want unchanged preSize %d", sz, preSize)
+	}
+	if n, err := st.AckedSize(logID); err != nil || n != 1 {
+		t.Fatalf("AckedSize after pre-write failure = %d, %v; want 1, nil (NOT poisoned — a pre-write failure is retryable)", n, err)
+	}
+
+	// Restore write permission and retry the identical segment — it must succeed
+	// (the log was never poisoned).
+	if err := os.Chmod(recPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	acked, err := st.AppendVerified(logID, batch2, cp2)
+	if err != nil {
+		t.Fatalf("retry after pre-write failure: %v", err)
+	}
+	if acked != 2 {
+		t.Fatalf("acked after retry = %d, want 2", acked)
+	}
+}
+
 // TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates (P2-F) covers
 // the review finding on writeCheckpointFile's ambiguous-durability case: when
 // writeAtomic renames checkpoint.json to the new size SUCCESSFULLY but its
