@@ -458,13 +458,25 @@ func (l *Log) Size(_ context.Context) (uint64, error) {
 
 // Checkpoint produces the signed head commitment at the log's CURRENT
 // size, or ErrUnsignedLog when the log was opened without a
-// CheckpointSigner. It is CheckpointAt at the current size — see
-// CheckpointAt's doc for why there is exactly one signing path.
-func (l *Log) Checkpoint(ctx context.Context) (*tlog.Checkpoint, error) {
+// CheckpointSigner. Its (size, head) pair is snapshotted under a SINGLE lock
+// acquisition (checkpointAtLocked): reading the size and its head in one
+// critical section is what keeps a concurrent Rotate — which truncates
+// l.records to nil under the same lock — from slipping between a size read
+// and a head read and yielding a torn snapshot (a spurious out-of-range, or a
+// head from a different log generation). See CheckpointAt's doc for why there
+// is exactly one signing path.
+func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
 	l.mu.Lock()
 	size := uint64(len(l.records))
+	head, signer, err := l.checkpointAtLocked(size)
 	l.mu.Unlock()
-	return l.CheckpointAt(ctx, size)
+	if err != nil {
+		return nil, err
+	}
+	if signer == nil {
+		return nil, ErrUnsignedLog
+	}
+	return signCheckpoint(size, head, signer, time.Now().UTC().Truncate(time.Second))
 }
 
 // CheckpointAt produces a signed checkpoint over records[0..size) — an
@@ -491,21 +503,35 @@ func (l *Log) Checkpoint(ctx context.Context) (*tlog.Checkpoint, error) {
 // (size, head) pair means.
 func (l *Log) CheckpointAt(_ context.Context, size uint64) (*tlog.Checkpoint, error) {
 	l.mu.Lock()
-	total := uint64(len(l.records))
-	if size > total {
-		l.mu.Unlock()
-		return nil, fmt.Errorf("filelog: checkpoint at %d: out of range (size %d)", size, total)
-	}
-	head := ""
-	if size > 0 {
-		head = l.records[size-1].Hash
-	}
-	signer := l.signer
+	head, signer, err := l.checkpointAtLocked(size)
 	l.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if signer == nil {
 		return nil, ErrUnsignedLog
 	}
 	return signCheckpoint(size, head, signer, time.Now().UTC().Truncate(time.Second))
+}
+
+// checkpointAtLocked validates size against the log's current committed length
+// and returns the head at [0,size) together with the log's signer — all read
+// in ONE critical section. The caller MUST hold l.mu and MUST NOT release it
+// between reading the size it passes and this call (Checkpoint reads the
+// current size under the same lock it then calls this with). It signs nothing
+// and takes no lock, so both Checkpoint and CheckpointAt share one consistent
+// size/head/signer snapshot with no read-unlock-relock window a truncating
+// Rotate could split. An out-of-range size is reported here so the caller can
+// prefer it over ErrUnsignedLog, exactly as the inline check used to.
+func (l *Log) checkpointAtLocked(size uint64) (head string, signer *CheckpointSigner, err error) {
+	total := uint64(len(l.records))
+	if size > total {
+		return "", nil, fmt.Errorf("filelog: checkpoint at %d: out of range (size %d)", size, total)
+	}
+	if size > 0 {
+		head = l.records[size-1].Hash
+	}
+	return head, l.signer, nil
 }
 
 // signCheckpoint signs a head commitment over an EXPLICIT (size, head, ts). It
