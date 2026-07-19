@@ -662,6 +662,14 @@ const dpArchiveReceiptIssr = "did:dplaax:reg:org:acme:pipeline:archive:process:a
 // (sink.receipt.issuer) — the same signer identity this task arms the
 // reject log's checkpoint with (D-T3).
 func dpArchivalSinkCfg() *pipelineconfig.Config {
+	return dpArchivalSinkCfgWithIssuer(dpArchiveReceiptIssr)
+}
+
+// dpArchivalSinkCfgWithIssuer is dpArchivalSinkCfg parameterized on the
+// receipt issuer DID, so tests can construct two archival sinks that differ
+// ONLY in that identity — the axis the reject-log rekeying fix (Task 7) must
+// key storage on.
+func dpArchivalSinkCfgWithIssuer(issuerDID string) *pipelineconfig.Config {
 	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
 		Name:           "archive",
 		Role:           pipelineconfig.RoleSink,
@@ -674,9 +682,9 @@ func dpArchivalSinkCfg() *pipelineconfig.Config {
 			Receipt: pipelineconfig.SinkReceiptConfig{
 				Issue: true,
 				Issuer: pipelineconfig.IssuerConfig{
-					DID:                dpArchiveReceiptIssr,
+					DID:                issuerDID,
 					KeyID:              string(keystore.KeyIDSigning),
-					VerificationMethod: dpArchiveReceiptIssr + "#signing",
+					VerificationMethod: issuerDID + "#signing",
 				},
 				PipelineID: "archive",
 				ProcessID:  "a1",
@@ -688,12 +696,11 @@ func dpArchivalSinkCfg() *pipelineconfig.Config {
 // TestDataPlane_ArchivalSinkRejectLog_SignedIdentity is the D-T3 sink-reject
 // capstone: an archival sink's reject log is armed with the SAME signer as
 // its (mandatory) sink-receipt issuer, so its checkpoint carries the stable
-// custody identity `sink-reject:<receipt-issuer-process-DID>` — while the
-// on-disk directory stays keyed by the loop NAME, not sha256(log id) (unlike
-// newEmission): re-keying by hash would orphan every existing local reject
-// archive on upgrade, and nothing external reconciles against a reject log's
-// directory today (D-T5: never registered into dp.tlogs, never served via
-// TlogService reads) — only the SIGNED identity is new here, not the layout.
+// custody identity `sink-reject:<receipt-issuer-process-DID>` — AND (Task 7
+// rekeying) the on-disk directory is keyed by sha256(log id), exactly like
+// newEmission: identity and storage co-move, so a receipt-DID change across
+// a restart resolves to a fresh directory instead of reopening the old DID's
+// journal under a new signer.
 func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	chainCfg := &chainconfig.Config{
@@ -722,14 +729,15 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dp.conn.Close() })
 
-	// Directory keying is UNCHANGED: the loop NAME, not sha256(log id).
-	if _, err := os.Stat(filepath.Join(rejectDir, "archive", "log.ndjson")); err != nil {
-		t.Fatalf("reject log at the loop-name-keyed path: %v", err)
+	// Directory keying MATCHES newEmission: sha256(log id), not the loop name.
+	wantRejectLogID := "sink-reject:" + dpArchiveReceiptIssr
+	sum := sha256.Sum256([]byte(wantRejectLogID))
+	if _, err := os.Stat(filepath.Join(rejectDir, hex.EncodeToString(sum[:]), "log.ndjson")); err != nil {
+		t.Fatalf("reject log at the identity-derived path: %v", err)
 	}
 
 	// D-T5: the reject log must never be registered into dp.tlogs (custody-only,
 	// never served via TlogService reads).
-	wantRejectLogID := "sink-reject:" + dpArchiveReceiptIssr
 	if _, ok := dp.tlogs[wantRejectLogID]; ok {
 		t.Fatalf("reject log registered into dp.tlogs under %q — must stay unregistered (D-T5)", wantRejectLogID)
 	}
@@ -755,5 +763,142 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	wantSignedBy := dpArchiveReceiptIssr + "#signing"
 	if cp.SignedBy != wantSignedBy {
 		t.Errorf("reject log checkpoint SignedBy = %q, want %q", cp.SignedBy, wantSignedBy)
+	}
+}
+
+// dpArchiveKeyStore returns a filestore keystore holding a fresh signing key
+// for issuerDID — the archival sink's receipt issuer identity.
+func dpArchiveKeyStore(t *testing.T, issuerDID string) keystore.KeyStore {
+	t.Helper()
+	ks := filestore.New(t.TempDir())
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	if err := ks.SaveKeyPair(issuerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatalf("save key: %v", err)
+	}
+	return ks
+}
+
+// TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity is the Task-7 rekeying
+// regression for the P1 custody hole Codex found: with the OLD loop-name
+// keying, a receipt-DID change across a restart (volume retained) reopened
+// the SAME directory under a NEW signer, and every subsequent checkpoint
+// silently re-signed all historical rejects as the new DID's evidence. The
+// fix keys the directory by sha256(log id) — the SAME derivation newEmission
+// uses — so identity and storage co-move:
+//
+//   - a receipt-DID CHANGE must resolve to a FRESH, different directory and
+//     must never touch the old DID's journal (re-attribution is structurally
+//     prevented, not just discouraged);
+//   - a SAME-DID restart must resolve to the SAME directory (continuity is
+//     preserved for the normal, non-rollover case).
+func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
+	}
+	rejectDir := t.TempDir()
+	const didB = "did:dplaax:reg:org:acme:pipeline:archive:process:a2"
+
+	buildArchive := func(issuerDID string, ks keystore.KeyStore) *dataPlane {
+		t.Helper()
+		dp, err := buildDataPlane(context.Background(), chainCfg, dpArchivalSinkCfgWithIssuer(issuerDID), ks, dataPlaneDeps{
+			Resolver:     stubResolver{},
+			SinkWriter:   console.New(io.Discard),
+			VCStore:      dpVCStore(),
+			AuditQueue:   auditor.NewMemQueue(),
+			RejectLogDir: rejectDir,
+		})
+		if err != nil {
+			t.Fatalf("buildDataPlane (issuer %s): %v", issuerDID, err)
+		}
+		if len(dp.tlogClosers) != 1 {
+			t.Fatalf("tlogClosers = %d, want 1 (issuer %s)", len(dp.tlogClosers), issuerDID)
+		}
+		return dp
+	}
+	dirFor := func(issuerDID string) string {
+		sum := sha256.Sum256([]byte("sink-reject:" + issuerDID))
+		return filepath.Join(rejectDir, hex.EncodeToString(sum[:]))
+	}
+
+	// Open under DID-A, append one reject, then release the directory's
+	// single-opener lock (filelog flock) so a later reconstruction under the
+	// SAME DID can reopen it — a real restart releases the lock too.
+	dpA1 := buildArchive(dpArchiveReceiptIssr, dpArchiveKeyStore(t, dpArchiveReceiptIssr))
+	rlA1, ok := dpA1.tlogClosers[0].(tlog.Log)
+	if !ok {
+		t.Fatalf("tlogClosers[0] = %T, want tlog.Log", dpA1.tlogClosers[0])
+	}
+	if _, err := rlA1.Append(context.Background(), []byte(`{"reason":"allow-list"}`)); err != nil {
+		t.Fatalf("append under DID-A: %v", err)
+	}
+	if n, err := rlA1.Size(context.Background()); err != nil || n != 1 {
+		t.Fatalf("DID-A size after append = %d (err %v), want 1", n, err)
+	}
+	if err := dpA1.tlogClosers[0].Close(); err != nil {
+		t.Fatalf("close DID-A reject log: %v", err)
+	}
+	if err := dpA1.conn.Close(); err != nil {
+		t.Fatalf("close DID-A nats conn: %v", err)
+	}
+
+	dirA := dirFor(dpArchiveReceiptIssr)
+	if _, err := os.Stat(filepath.Join(dirA, "log.ndjson")); err != nil {
+		t.Fatalf("DID-A reject log at the identity-derived path: %v", err)
+	}
+
+	// Reconstruct under DID-B — a NEW receipt issuer DID, same RejectLogDir.
+	// The P1 hole: with loop-name keying this would reopen DID-A's journal
+	// under DID-B's signer. With identity keying it must resolve to a
+	// DIFFERENT, fresh directory and must NOT touch DID-A's journal.
+	dpB := buildArchive(didB, dpArchiveKeyStore(t, didB))
+	t.Cleanup(func() { _ = dpB.conn.Close() })
+	t.Cleanup(func() { _ = dpB.tlogClosers[0].Close() })
+
+	dirB := dirFor(didB)
+	if dirB == dirA {
+		t.Fatalf("DID-B resolved to DID-A's directory %q — re-attribution hole", dirB)
+	}
+	rlB, ok := dpB.tlogClosers[0].(tlog.Log)
+	if !ok {
+		t.Fatalf("tlogClosers[0] = %T, want tlog.Log", dpB.tlogClosers[0])
+	}
+	if n, err := rlB.Size(context.Background()); err != nil || n != 0 {
+		t.Fatalf("DID-B size = %d (err %v), want 0 (a fresh log, not DID-A's journal)", n, err)
+	}
+	cpB, err := rlB.Checkpoint(context.Background())
+	if err != nil {
+		t.Fatalf("Checkpoint on DID-B's reject log: %v", err)
+	}
+	if want := "sink-reject:" + didB; cpB.Origin != want {
+		t.Errorf("DID-B checkpoint Origin = %q, want %q", cpB.Origin, want)
+	}
+
+	// DID-A's journal on disk is untouched by DID-B's open: still one record.
+	fi, err := os.Stat(filepath.Join(dirA, "log.ndjson"))
+	if err != nil {
+		t.Fatalf("DID-A journal missing after DID-B open: %v", err)
+	}
+	if fi.Size() == 0 {
+		t.Fatalf("DID-A journal is empty after DID-B open — its append was lost or overwritten")
+	}
+
+	// Reconstruct under DID-A again (a same-DID restart): continuity — same
+	// directory, and the previously appended reject is still there (size 1,
+	// not reset to 0 under a fresh journal).
+	dpA2 := buildArchive(dpArchiveReceiptIssr, dpArchiveKeyStore(t, dpArchiveReceiptIssr))
+	t.Cleanup(func() { _ = dpA2.conn.Close() })
+	t.Cleanup(func() { _ = dpA2.tlogClosers[0].Close() })
+
+	rlA2, ok := dpA2.tlogClosers[0].(tlog.Log)
+	if !ok {
+		t.Fatalf("tlogClosers[0] = %T, want tlog.Log", dpA2.tlogClosers[0])
+	}
+	if n, err := rlA2.Size(context.Background()); err != nil || n != 1 {
+		t.Fatalf("DID-A reconstruct size = %d (err %v), want 1 (continuity — the earlier reject survives)", n, err)
 	}
 }

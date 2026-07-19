@@ -275,9 +275,9 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		return l, nil
 	}
 	// newRejectLog builds one archival sink loop's durable reject log under
-	// RejectLogDir/<loop> (data-dir/evidence/sink-rejects/<loop>). In-memory when
-	// RejectLogDir is empty (unit-test seam; memlog cannot sign — Checkpoint stays
-	// ErrUnsignedLog there, unchanged).
+	// RejectLogDir/sha256(log id) (data-dir/evidence/sink-rejects/<hash>).
+	// In-memory when RejectLogDir is empty (unit-test seam; memlog cannot sign —
+	// Checkpoint stays ErrUnsignedLog there, unchanged).
 	//
 	// Identity (D-T3, DECIDED): archival sinks are already REQUIRED to carry a
 	// receipt issuer (config.go's Kind==archival && !Receipt.Issue boot error), so
@@ -287,22 +287,24 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 	// KindSinkReject shape, one line below KindSinkReceipt's own
 	// `sink-receipt:<DID>`).
 	//
-	// Directory keying is UNCHANGED (asymmetric with the identity change above):
-	// still the raw loop NAME, not sha256(log id) — unlike newEmission, whose log
-	// id is a DID reconciled against by external consumers, so it hashes to
-	// survive a rename. A reject log is custody-only (never registered into
-	// dp.tlogs, D-T5 — never served via TlogService reads; a future shipper reads
-	// the live handle directly), so nothing external reconciles against its
-	// directory today; re-keying by hash here would only orphan every existing
-	// local reject archive on upgrade for no corresponding benefit. Only the
-	// SIGNED identity (the checkpoint's Origin/SignedBy) is new — the on-disk
-	// layout is not.
+	// Directory keying now MATCHES newEmission: sha256(log id), not the raw
+	// loop name. Identity and storage co-move — a same-DID restart resolves to
+	// the same directory (continuity preserved for the normal case), and a
+	// receipt-DID CHANGE resolves to a fresh directory (a new identity gets a
+	// fresh log, consistent with the spec's D-T1 identity-rollover principle),
+	// so historical rejects are never silently re-signed under a new owner.
+	// (Previously the directory stayed keyed by loop NAME even after the
+	// identity above was signed: a receipt-DID change across a restart with
+	// the volume retained reopened the SAME directory under a NEW signer, and
+	// every subsequent checkpoint re-signed all prior rejects as the new
+	// DID's evidence — a P1 custody hole this rekeying closes.)
 	newRejectLog := func(loopName string, issuer pipelineconfig.IssuerConfig) (sink.RejectLog, error) {
 		if deps.RejectLogDir == "" {
 			return &sinkRejectLog{log: memlog.New()}, nil
 		}
-		dir := filepath.Join(deps.RejectLogDir, loopName)
 		logID := "sink-reject:" + issuer.DID
+		sum := sha256.Sum256([]byte(logID))
+		dir := filepath.Join(deps.RejectLogDir, hex.EncodeToString(sum[:]))
 		fl, ferr := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
 			Signer:             keyStore,
 			SignerDID:          issuer.DID,
