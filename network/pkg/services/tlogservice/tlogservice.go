@@ -7,13 +7,14 @@
 package tlogservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/network/pkg/didresolver"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/tlog"
@@ -58,11 +59,18 @@ var (
 // depends on for its D-T2/D-T4 mirror-custody surface (dependency inverted,
 // narrowest interface for what MirrorSegment/MirrorState/Checkpoint/Records
 // actually call). *mirrorstore.Store satisfies it structurally.
+//
+// AppendSegment (not the older AppendVerified) is what MirrorSegment calls:
+// it resolves from_index against the live acked size — replay vs. gap vs.
+// overlap vs. exact-extend — atomically under the store's own lock, so a
+// concurrent identical retry can never read a torn intermediate size and
+// fail the exact-extend arithmetic (which would surface as Internal instead
+// of the required replay no-op success).
 type MirrorStore interface {
 	AckedSize(logID string) (uint64, error)
 	Checkpoint(logID string) (*tlog.Checkpoint, error)
 	Get(logID string, index uint64) (*tlog.Record, error)
-	AppendVerified(logID string, records [][]byte, cp *tlog.Checkpoint) (uint64, error)
+	AppendSegment(logID string, fromIndex uint64, records [][]byte, cp *tlog.Checkpoint) (uint64, error)
 }
 
 // DIDResolver resolves a DID to its document — the read view MirrorSegment
@@ -138,6 +146,14 @@ func (s *Service) Checkpoint(ctx context.Context, logID string) (*tlog.Checkpoin
 		return cp, nil
 	}
 	if s.mirror != nil {
+		if custodyOnly(logID) {
+			// A mirrored sink-reject log is custodied but NEVER served through
+			// TlogService reads (D-T3/D-T5: today's never-served posture —
+			// operator tooling reads the mirror store directly). It stays fully
+			// available to the WRITE/STATE paths (MirrorSegment / MirrorState),
+			// so custody still works; only this read fallback refuses it.
+			return nil, fmt.Errorf("%w: %q", ErrNotFound, logID)
+		}
 		cp, err := s.mirror.Store.Checkpoint(logID)
 		if err != nil {
 			if errors.Is(err, mirrorstore.ErrNotFound) {
@@ -145,7 +161,7 @@ func (s *Service) Checkpoint(ctx context.Context, logID string) (*tlog.Checkpoin
 			}
 			return nil, fmt.Errorf("tlogservice: checkpoint %q: %w", logID, err)
 		}
-		// mirrorstore.AppendVerified already enforces cp.Origin == logID at
+		// mirrorstore.AppendSegment already enforces cp.Origin == logID at
 		// accept time (it is the store's own key), so no re-check is needed
 		// here the way the local-log branch above needs one against an
 		// arbitrarily-armed live signer.
@@ -180,6 +196,11 @@ func (s *Service) Records(ctx context.Context, logID string, start uint64, count
 		return out, nil
 	}
 	if s.mirror != nil {
+		if custodyOnly(logID) {
+			// Sink-reject logs are mirrored for custody but never served
+			// through TlogService reads (see Checkpoint's identical gate).
+			return nil, fmt.Errorf("%w: %q", ErrNotFound, logID)
+		}
 		size, err := s.mirror.Store.AckedSize(logID)
 		if err != nil {
 			return nil, fmt.Errorf("tlogservice: size %q: %w", logID, err)
@@ -202,6 +223,36 @@ func (s *Service) Records(ctx context.Context, logID string, start uint64, count
 		return out, nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrNotFound, logID)
+}
+
+// custodyOnly reports whether logID names a log that is mirrored for custody
+// but MUST NOT be served through TlogService's read RPCs (GetLogCheckpoint /
+// ListLogRecords) — today only the sink-reject kind (spec D-T3/D-T5: reject
+// logs are receipt-issuer-signed evidence, custodied and readable by operator
+// tooling straight off the mirror store, but never exposed to a tlog:read
+// principal). The WRITE/STATE paths (MirrorSegment / MirrorState / the store's
+// AckedSize) do NOT consult this gate, so custody of a sink-reject log still
+// works end to end. A log id logident.Kind cannot classify is not treated as
+// custody-only: it simply is not a sink-reject log, and the store lookup that
+// follows returns NotFound for an unknown id anyway.
+func custodyOnly(logID string) bool {
+	kind, err := logident.Kind(logID)
+	return err == nil && kind == logident.KindSinkReject
+}
+
+// MirrorCaps reports the D-T2 rule 5 batch caps (max-batch-records,
+// max-batch-bytes) and whether a mirror store is even wired (ok=false on a
+// map-only node). The handler reads them to reject an over-cap batch by cheap
+// count/byte checks BEFORE hashing the untrusted payloads (SegmentDigest) or
+// verifying the wireauth proof — a pre-auth DoS guard. The caps live in
+// MirrorConfig (the single source of truth); MirrorSegment re-checks them as
+// defense in depth. ok=false makes the handler skip the pre-auth check so the
+// call still reaches MirrorSegment's ErrMirrorNotConfigured (→ Unimplemented).
+func (s *Service) MirrorCaps() (maxRecords, maxBytes int, ok bool) {
+	if s.mirror == nil {
+		return 0, 0, false
+	}
+	return s.mirror.MaxBatchRecords, s.mirror.MaxBatchBytes, true
 }
 
 // MirrorState returns the registry's durable mirror size for logID — the
@@ -245,11 +296,15 @@ type MirrorSegmentInput struct {
 //     per-kind ancestry/equality, first-segment signer pinning —
 //     ErrIdentityMismatch (PermissionDenied).
 //  2. caps (rule 5) — ErrCapExceeded (ResourceExhausted).
-//  3. alignment / extend / overflow (rules 1, 2) — ErrInvalidArgument
-//     (overflow, checkpoint.size misaligned) or ErrMirrorConflict (gap,
-//     partial overlap).
-//  4. chain-to-head (rule 1) — ErrMirrorConflict (FailedPrecondition).
-//  5. store.AppendVerified (rule 6; monotonicity is enforced by the store).
+//  3. overflow / checkpoint.size alignment (pure, race-free) —
+//     ErrInvalidArgument.
+//  4. store.AppendSegment (rules 1, 2, 6): the alignment-against-live-acked
+//     resolution (exact-extend / gap / partial-overlap / byte-identical
+//     replay) AND the chain-to-head recompute happen INSIDE the store, under
+//     the same lock the durable append holds, so a concurrent identical retry
+//     can never fail on a torn intermediate size. Every "does not align"
+//     outcome comes back as mirrorstore.ErrConflict → ErrMirrorConflict
+//     (FailedPrecondition); monotonicity is enforced by the store.
 //
 // Returns the durable mirror size after the call (unchanged on a
 // byte-identical replay no-op).
@@ -263,7 +318,7 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 	// The checkpoint's OWN Origin (what its signature actually covers) must
 	// agree with the request's top-level log_id — a self-contradictory
 	// request is a malformed argument, not an identity failure, and
-	// catching it here keeps mirrorstore.AppendVerified's own Origin==logID
+	// catching it here keeps mirrorstore.AppendSegment's own Origin==logID
 	// check (a plain, non-sentinel error) structurally unreachable from this
 	// path.
 	if in.Checkpoint.Origin != in.LogID {
@@ -298,65 +353,22 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 		return 0, fmt.Errorf("%w: mirror segment %q: checkpoint.size %d != from_index %d + %d records", ErrInvalidArgument, in.LogID, in.Checkpoint.Size, in.FromIndex, len(in.Records))
 	}
 
-	acked, err := s.mirror.Store.AckedSize(in.LogID)
+	// Alignment against the store's live acked size — the exact-extend /
+	// gap / partial-overlap / byte-identical-replay resolution AND the
+	// chain-to-head recompute (D-T2 rules 1/2) — happens INSIDE the store,
+	// under the same lock the durable append holds. Splitting it across a
+	// separate AckedSize read here and a later append opened a race: two
+	// overlapping identical requests could both read the same acked size,
+	// the first commit as an extend, and the second then fail the
+	// exact-extend arithmetic with a plain (Internal-mapped) error instead
+	// of the replay no-op success D-T2 rule 2 requires. AppendSegment
+	// resolves all four outcomes atomically and returns mirrorstore.ErrConflict
+	// for every "does not align" shape (gap, overlap, chain-head mismatch).
+	newAcked, err := s.mirror.Store.AppendSegment(in.LogID, in.FromIndex, in.Records, in.Checkpoint)
 	if err != nil {
-		return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, err)
-	}
-
-	switch {
-	case in.FromIndex > acked:
-		return 0, fmt.Errorf("%w: mirror segment %q: from_index %d is ahead of the acked size %d (a gap)", ErrMirrorConflict, in.LogID, in.FromIndex, acked)
-	case in.FromIndex < acked:
-		// A replay range that extends PAST the acked size is a partial
-		// overlap, not a clean replay: [from_index, total) re-includes an
-		// already-mirrored prefix AND claims records beyond what is
-		// acked. Reject it up front — left unchecked, the byte-compare
-		// loop below would run Store.Get past the acked size, whose plain
-		// out-of-range error is not sentinel-mapped and would surface as
-		// CodeInternal instead of the FailedPrecondition D-T2 rule 2
-		// requires for every overlap shape.
-		if total > acked {
-			return 0, fmt.Errorf("%w: mirror segment %q: replay range [%d,%d) extends past the acked size %d (partial overlap)", ErrMirrorConflict, in.LogID, in.FromIndex, total, acked)
+		if errors.Is(err, mirrorstore.ErrConflict) {
+			return 0, fmt.Errorf("%w: mirror segment %q: %v", ErrMirrorConflict, in.LogID, err)
 		}
-		// Replay range: every requested record must byte-match what this
-		// store already holds at that position (D-T2 rule 2's
-		// byte-identical no-op). mirrorstore.AppendVerified does not accept
-		// a stale checkpoint carrying non-empty records (see its doc), so a
-		// replay with records is resolved HERE, without ever calling it.
-		for i, payload := range in.Records {
-			stored, gerr := s.mirror.Store.Get(in.LogID, in.FromIndex+uint64(i))
-			if gerr != nil {
-				return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, gerr)
-			}
-			if !bytes.Equal(stored.Payload, payload) {
-				return 0, fmt.Errorf("%w: mirror segment %q: record at index %d does not byte-match the already-mirrored record (partial overlap)", ErrMirrorConflict, in.LogID, in.FromIndex+uint64(i))
-			}
-		}
-		return acked, nil // byte-identical replay — no-op success
-	}
-
-	// Exact extend: recompute the chain head from the stored tail through
-	// the segment (rule 1) BEFORE calling the store, so a mismatch surfaces
-	// the precise connect code — mirrorstore.AppendVerified re-checks this
-	// itself as defense in depth, but its own error is not sentinel-mapped.
-	tail := ""
-	if acked > 0 {
-		last, gerr := s.mirror.Store.Get(in.LogID, acked-1)
-		if gerr != nil {
-			return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, gerr)
-		}
-		tail = last.Hash
-	}
-	head := tail
-	for _, payload := range in.Records {
-		head = mirrorstore.ChainHash(head, payload)
-	}
-	if head != in.Checkpoint.Head {
-		return 0, fmt.Errorf("%w: mirror segment %q: recomputed chain head %q != checkpoint head %q", ErrMirrorConflict, in.LogID, head, in.Checkpoint.Head)
-	}
-
-	newAcked, err := s.mirror.Store.AppendVerified(in.LogID, in.Records, in.Checkpoint)
-	if err != nil {
 		return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, err)
 	}
 	return newAcked, nil
@@ -381,6 +393,14 @@ func (s *Service) verifyMirrorIdentity(ctx context.Context, kind logident.LogKin
 	}
 	doc, err := s.mirror.DIDResolver.Resolve(ctx, signerBase)
 	if err != nil {
+		// A transient resolver condition (cancellation/deadline/at-capacity)
+		// means the signer's identity could NOT be evaluated — never a
+		// PermissionDenied identity rejection. Surface it distinctly so the
+		// handler returns a retryable code (Canceled/DeadlineExceeded/
+		// Unavailable), mirroring wireauth's own resolver-error posture.
+		if t := transientResolverErr(err); t != nil {
+			return fmt.Errorf("tlogservice: mirror segment %q: resolve checkpoint signer %q: %w", in.LogID, signerBase, t)
+		}
 		return fmt.Errorf("%w: resolve checkpoint signer %q: %v", ErrIdentityMismatch, signerBase, err)
 	}
 	pub, err := did.ExtractPublicKey(doc, cp.SignedBy, did.RelationshipAssertionMethod)
@@ -412,6 +432,12 @@ func (s *Service) verifyMirrorIdentity(ctx context.Context, kind logident.LogKin
 	case logident.KindEmission:
 		pipeline, aerr := s.mirror.Ancestry.AncestorPipeline(ctx, signerBase)
 		if aerr != nil {
+			// Same transient-vs-identity split as the signer resolve above: an
+			// ancestry lookup that could not complete (cancellation/deadline/
+			// resolver at capacity) is retryable, not a writer-binding failure.
+			if t := transientResolverErr(aerr); t != nil {
+				return fmt.Errorf("tlogservice: mirror segment %q: resolve signer ancestry: %w", in.LogID, t)
+			}
 			return fmt.Errorf("%w: resolve signer ancestry: %v", ErrIdentityMismatch, aerr)
 		}
 		if pipeline != owner {
@@ -434,6 +460,31 @@ func (s *Service) verifyMirrorIdentity(ctx context.Context, kind logident.LogKin
 		// First segment for this log — nothing to pin against yet.
 	default:
 		return fmt.Errorf("tlogservice: mirror segment %q: pinning check: %w", in.LogID, cerr)
+	}
+	return nil
+}
+
+// transientResolverErr classifies a checkpoint-signer resolution or ancestry
+// lookup failure: it returns a non-nil transient error to propagate (so the
+// handler maps it to a retryable code) when the cause means "identity could
+// not be evaluated at all," or nil for a genuine identity failure that should
+// wear the ErrIdentityMismatch sentinel (→ PermissionDenied).
+//
+// It reuses the SAME classification wireauth applies to its own signer-key
+// resolution (a canceled/deadline context, or the production resolver
+// refusing new work at capacity, didresolver.ErrResolverBusy) and the SAME
+// wireauth.ErrResolverUnavailable sentinel the handler already maps to
+// Unavailable — so a transient condition here surfaces as Canceled /
+// DeadlineExceeded / Unavailable, never as a PermissionDenied identity
+// rejection of an honest signer.
+func transientResolverErr(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return err // handler maps context.Canceled → CodeCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return err // handler maps context.DeadlineExceeded → CodeDeadlineExceeded
+	case errors.Is(err, didresolver.ErrResolverBusy):
+		return fmt.Errorf("%w: %v", wireauth.ErrResolverUnavailable, err) // → CodeUnavailable
 	}
 	return nil
 }

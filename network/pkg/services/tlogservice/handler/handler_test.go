@@ -21,6 +21,10 @@ type fakeService struct {
 
 	gotStart uint64
 	gotCount int
+
+	capRecords int
+	capBytes   int
+	capOK      bool
 }
 
 func (f *fakeService) Checkpoint(context.Context, string) (*tlog.Checkpoint, error) {
@@ -36,6 +40,13 @@ func (f *fakeService) MirrorState(string) (uint64, error) { return 0, f.err }
 
 func (f *fakeService) MirrorSegment(context.Context, tlogservice.MirrorSegmentInput) (uint64, error) {
 	return 0, f.err
+}
+
+// mirrorCaps lets a fakeService opt into the handler's pre-auth cap guard;
+// the zero value (ok=false) keeps the not-configured tests reaching
+// MirrorSegment's ErrMirrorNotConfigured unchanged.
+func (f *fakeService) MirrorCaps() (int, int, bool) {
+	return f.capRecords, f.capBytes, f.capOK
 }
 
 func TestGetLogCheckpoint_Projection(t *testing.T) {

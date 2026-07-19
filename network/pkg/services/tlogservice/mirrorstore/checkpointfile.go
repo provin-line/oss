@@ -72,7 +72,14 @@ func readCheckpointFile(dir string) (*tlog.Checkpoint, error) {
 // AppendVerified call so a crash between the records fsync and this
 // replace leaves the checkpoint at its PRIOR value and the excess records
 // get truncated on the next Open (D-T4 crash ordering).
-func writeCheckpointFile(dir string, cp *tlog.Checkpoint) error {
+//
+// It returns renamed=true once the checkpoint file already names the new
+// contents (writeAtomic's rename succeeded) even when the trailing dir-fsync
+// then failed: the caller must distinguish this post-rename ambiguous
+// durability (poison, never truncate) from a pre-rename failure (safe to
+// roll back). A marshal failure — the only pre-rename failure this function
+// adds on top of writeAtomic's own — reports renamed=false.
+func writeCheckpointFile(dir string, cp *tlog.Checkpoint) (renamed bool, err error) {
 	// A local storage envelope, never hashed or signed over — the
 	// checkpoint's OWN signature already covers Size/Head/Origin/SignedBy/
 	// Timestamp (see tlog/checkpoint.go's SignedView); this envelope is just
@@ -80,10 +87,11 @@ func writeCheckpointFile(dir string, cp *tlog.Checkpoint) error {
 	// (canonicalizer-hygiene-exempt).
 	raw, err := json.Marshal(toEnvelope(cp))
 	if err != nil {
-		return fmt.Errorf("mirrorstore: marshal checkpoint: %w", err)
+		return false, fmt.Errorf("mirrorstore: marshal checkpoint: %w", err)
 	}
-	if err := writeAtomic(filepath.Join(dir, checkpointFile), raw); err != nil {
-		return fmt.Errorf("mirrorstore: write checkpoint %s: %w", dir, err)
+	renamed, err = writeAtomic(filepath.Join(dir, checkpointFile), raw)
+	if err != nil {
+		return renamed, fmt.Errorf("mirrorstore: write checkpoint %s: %w", dir, err)
 	}
-	return nil
+	return true, nil
 }

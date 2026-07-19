@@ -29,6 +29,10 @@ type Service interface {
 	Records(ctx context.Context, logID string, start uint64, count int) ([]*tlog.Record, error)
 	MirrorState(logID string) (uint64, error)
 	MirrorSegment(ctx context.Context, in tlogservice.MirrorSegmentInput) (uint64, error)
+	// MirrorCaps exposes the D-T2 batch caps so MirrorLogSegment can reject an
+	// over-cap batch BEFORE hashing its payloads or verifying the proof
+	// (ok=false on a map-only node, which skips the pre-auth check).
+	MirrorCaps() (maxRecords, maxBytes int, ok bool)
 }
 
 // Verifier is the wireauth verification seam (an interface so a spy can be
@@ -114,6 +118,28 @@ func (h *Handler) ListLogRecords(ctx context.Context, req *connect.Request[tlogp
 // own D-T3 predicate (checkpoint-signer equality, ancestry, pinning) is a
 // richer check than a single signer-to-actor callback can express here.
 func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlogpb.MirrorLogSegmentRequest]) (*connect.Response[tlogpb.MirrorLogSegmentResponse], error) {
+	// Pre-auth DoS guard (D-T2 rule 5, defense in depth with the same cap in
+	// Service.MirrorSegment): reject an over-cap batch by CHEAP structural
+	// count/byte checks at the very top — before SegmentDigest SHA-256s every
+	// record and before the wireauth proof is verified — so millions of
+	// zero-length payloads under the transport byte cap cannot force millions
+	// of pre-auth hashes. A count/byte check reveals nothing about identity,
+	// so running it before authentication leaks no information. ok=false (no
+	// mirror store wired) skips the check so the call still reaches
+	// MirrorSegment's ErrMirrorNotConfigured.
+	if maxRecords, maxBytes, ok := h.svc.MirrorCaps(); ok {
+		payloads := req.Msg.GetRecordPayloads()
+		if len(payloads) > maxRecords {
+			return nil, mapError(fmt.Errorf("%w: %d records exceeds max-batch-records %d", tlogservice.ErrCapExceeded, len(payloads), maxRecords))
+		}
+		var totalBytes int
+		for _, p := range payloads {
+			totalBytes += len(p)
+		}
+		if totalBytes > maxBytes {
+			return nil, mapError(fmt.Errorf("%w: %d bytes exceeds max-batch-bytes %d", tlogservice.ErrCapExceeded, totalBytes, maxBytes))
+		}
+	}
 	proof, err := decodeProof(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
@@ -153,12 +179,22 @@ func (h *Handler) GetMirrorState(_ context.Context, req *connect.Request[tlogpb.
 
 // checkpointFromWire converts a MirrorLogSegmentRequest.checkpoint
 // (wire-shaped identically to GetLogCheckpointResponse) to the domain
-// tlog.Checkpoint the mirror-custody surface verifies and stores. size and
-// timestamp round-trip through the exact strings tlog.Checkpoint.SignedView
-// re-derives its signed bytes from (decimal uint64; RFC 3339 as stamped,
-// never forced to UTC — SignedView does not normalize either, so a
-// non-canonical string simply fails signature verification downstream
-// rather than being silently accepted or rejected here).
+// tlog.Checkpoint the mirror-custody surface verifies and stores. size
+// round-trips through the exact decimal-uint64 string SignedView re-derives
+// its signed bytes from.
+//
+// The timestamp MUST be canonical UTC (proto doc: timestamps are UTC),
+// ENFORCED here before any store write: a legitimately-signed checkpoint
+// whose wire timestamp carries a non-Z offset (+09:00, or +00:00 instead of
+// Z) verifies at accept time — SignedView signs the string AS STAMPED,
+// preserving the offset — but GetLogCheckpoint later reformats it as
+// `.UTC().Format(RFC3339)` (a Z string) while re-serving the ORIGINAL
+// signature, making the SERVED checkpoint unverifiable. Requiring the wire
+// string to equal its own canonical-UTC form (the same discipline
+// parseIssuedAt applies to the wireauth proof) rejects that class outright as
+// InvalidArgument. (SignedView still does not normalize, so the accept-time
+// signature check remains over the exact stored bytes — but those bytes are
+// now guaranteed canonical.)
 func checkpointFromWire(w *tlogpb.GetLogCheckpointResponse) (*tlog.Checkpoint, error) {
 	if w == nil {
 		return nil, fmt.Errorf("%w: missing checkpoint", tlogservice.ErrInvalidArgument)
@@ -170,6 +206,10 @@ func checkpointFromWire(w *tlogpb.GetLogCheckpointResponse) (*tlog.Checkpoint, e
 	ts, err := time.Parse(time.RFC3339, w.GetTimestamp())
 	if err != nil {
 		return nil, fmt.Errorf("%w: checkpoint.timestamp %q is not RFC 3339: %v", tlogservice.ErrInvalidArgument, w.GetTimestamp(), err)
+	}
+	if w.GetTimestamp() != ts.UTC().Format(time.RFC3339) {
+		return nil, fmt.Errorf("%w: checkpoint.timestamp %q is not canonical UTC RFC 3339 (want %q) — the served checkpoint would be reformatted to UTC and its signature would no longer verify",
+			tlogservice.ErrInvalidArgument, w.GetTimestamp(), ts.UTC().Format(time.RFC3339))
 	}
 	return &tlog.Checkpoint{
 		Origin:    w.GetLogId(),

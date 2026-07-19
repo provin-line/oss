@@ -7,6 +7,7 @@ package mirrorstore
 // injection lives in `package merklelog` rather than `merklelog_test`.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -361,5 +362,139 @@ func TestAppendVerified_CheckpointWriteFailureDoesNotAdvanceOrCorrupt(t *testing
 	}
 	if n, err := st2.AckedSize(logID); err != nil || n != 2 {
 		t.Fatalf("reopened AckedSize = %d, %v; want 2, nil", n, err)
+	}
+}
+
+// TestAppendVerified_JournalAppendFailureRollsBack (P1-C) covers the review
+// finding on the appendJournal error path: a partial os.File.Write / Sync
+// failure leaves uncheckpointed bytes on disk; the write path must roll the
+// journal back to its pre-append size (or poison), never return leaving the
+// excess so a later retry re-appends duplicate indexes and poisons on reopen.
+//
+// Fault-injection seam: appendJournalFn is swapped for one that writes a
+// partial (newline-less) line to records.ndjson — exactly the byte state a
+// crash mid-Write leaves — then returns an error, WITHOUT chmod'ing anything,
+// so the rollback truncate that follows can still open the writable file.
+func TestAppendVerified_JournalAppendFailureRollsBack(t *testing.T) {
+	logID := "did:dplaax:example:pipeline:append-fail"
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch1 := [][]byte{[]byte("j0")}
+	head1 := testChainOf(batch1...)
+	if _, err := st.AppendVerified(logID, batch1, testCP(logID, 1, head1)); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+	dir := filepath.Join(root, dirName(logID))
+	preSize, err := journalSize(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := appendJournalFn
+	appendJournalFn = func(d string, _ uint64, _ string, _ [][]byte) ([]*tlog.Record, error) {
+		f, oerr := os.OpenFile(filepath.Join(d, recordsFile), os.O_APPEND|os.O_WRONLY, 0o600)
+		if oerr != nil {
+			return nil, oerr
+		}
+		// A partial, unterminated line — uncheckpointed bytes beyond preSize.
+		_, _ = f.WriteString(`{"v":1,"index":1,"payload":"anoop","hash":"partial-no-newline`)
+		_ = f.Sync()
+		_ = f.Close()
+		return nil, fmt.Errorf("injected journal append failure")
+	}
+	batch2 := [][]byte{[]byte("j1")}
+	head2 := ChainHash(head1, batch2[0])
+	cp2 := testCP(logID, 2, head2)
+	_, aerr := st.AppendVerified(logID, batch2, cp2)
+	appendJournalFn = orig
+	if aerr == nil {
+		t.Fatal("append with injected journal failure: want error, got nil")
+	}
+
+	// The journal must be rolled back to preSize (partial bytes removed).
+	if sz, _ := journalSize(dir); sz != preSize {
+		t.Fatalf("journal size after failed append = %d, want preSize %d (rolled back)", sz, preSize)
+	}
+	if n, err := st.AckedSize(logID); err != nil || n != 1 {
+		t.Fatalf("AckedSize after failed append = %d, %v; want 1, nil (must not advance)", n, err)
+	}
+
+	// A retry of the IDENTICAL segment with the real appendJournal must succeed
+	// cleanly (no orphaned duplicate-index bytes).
+	acked, err := st.AppendVerified(logID, batch2, cp2)
+	if err != nil {
+		t.Fatalf("retry after rollback: %v", err)
+	}
+	if acked != 2 {
+		t.Fatalf("acked after retry = %d, want 2", acked)
+	}
+
+	// Reopen must NOT find the log poisoned — the journal is density-correct.
+	st2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if n, err := st2.AckedSize(logID); err != nil || n != 2 {
+		t.Fatalf("reopened AckedSize = %d, %v; want 2, nil (not poisoned)", n, err)
+	}
+}
+
+// TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates (P2-F) covers
+// the review finding on writeCheckpointFile's ambiguous-durability case: when
+// writeAtomic renames checkpoint.json to the new size SUCCESSFULLY but its
+// trailing dir-fsync then fails, the checkpoint file ALREADY names the new
+// size. Blind-truncating the journal back to the old size (the pre-fix path)
+// leaves the checkpoint AHEAD of the records → poisoned-inconsistent on
+// restart. The fix POISONS the log this session and does NOT truncate, so a
+// fresh reopen finds records and checkpoint consistent at the new size.
+//
+// Fault-injection seam: afterRenameDirSync is swapped for one that fails,
+// after the os.Rename inside writeAtomic has already committed.
+func TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates(t *testing.T) {
+	logID := "did:dplaax:example:pipeline:postrename"
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch1 := [][]byte{[]byte("p0")}
+	head1 := testChainOf(batch1...)
+	if _, err := st.AppendVerified(logID, batch1, testCP(logID, 1, head1)); err != nil {
+		t.Fatalf("seed append: %v", err)
+	}
+
+	orig := afterRenameDirSync
+	afterRenameDirSync = func(string) error { return fmt.Errorf("injected post-rename dir-fsync failure") }
+	batch2 := [][]byte{[]byte("p1")}
+	head2 := ChainHash(head1, batch2[0])
+	cp2 := testCP(logID, 2, head2)
+	_, werr := st.AppendVerified(logID, batch2, cp2)
+	afterRenameDirSync = orig
+	if werr == nil {
+		t.Fatal("append with post-rename fsync failure: want error, got nil")
+	}
+
+	// The live process must POISON this log (durability uncertain), NOT
+	// silently truncate back to size 1.
+	if _, err := st.AckedSize(logID); err == nil {
+		t.Fatal("AckedSize after post-rename failure: want poisoned error, got nil (log was silently truncated)")
+	}
+
+	// checkpoint.json (renamed to 2) and the journal (untruncated at 2) are
+	// consistent on disk, so a FRESH reopen finds a healthy log at 2 — never
+	// checkpoint-ahead-of-records (which the pre-fix truncate produced).
+	st2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if n, err := st2.AckedSize(logID); err != nil || n != 2 {
+		t.Fatalf("reopened AckedSize = %d, %v; want 2, nil (no checkpoint-ahead-of-records)", n, err)
+	}
+	cp, err := st2.Checkpoint(logID)
+	if err != nil || cp.Size != 2 || cp.Head != head2 {
+		t.Fatalf("reopened checkpoint = %+v (err %v), want size 2 head %q", cp, err, head2)
 	}
 }

@@ -83,6 +83,17 @@ import (
 // takes for an absent log.
 var ErrNotFound = errors.New("mirrorstore: no checkpoint recorded for that log")
 
+// ErrConflict is AppendSegment's D-T2 rule 1/2 "does not align" failure that
+// is NOT a malformed-request error: a from_index gap ahead of the acked
+// size, a partial overlap with already-mirrored records (a replay whose
+// payloads do not byte-match what is already stored, or a range that extends
+// past the acked size), or a recomputed chain head that does not equal the
+// checkpoint's head. The tlogservice.Service maps it to its own
+// ErrMirrorConflict (→ connect FailedPrecondition); the store owns this
+// resolution so replay-vs-conflict is decided atomically under the same lock
+// the append itself holds (no torn read between "is this a replay?" and "commit").
+var ErrConflict = errors.New("mirrorstore: segment does not align with the mirrored log")
+
 // logEntry is the in-memory state for one mirrored log, keyed by
 // dirName(logID) in Store.logs. poisonErr, once set at Open, is returned
 // verbatim (wrapped with the failing call's context) by every subsequent
