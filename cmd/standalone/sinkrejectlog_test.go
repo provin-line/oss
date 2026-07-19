@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/tlog"
+	"github.com/provin-line/oss/tlog/memlog"
 )
 
 type capturingLog struct {
@@ -51,5 +53,27 @@ func TestSinkRejectLog_RecordReject(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(string(cap.appended[0])), "payload") {
 		t.Error("reject record JSON mentions payload")
+	}
+}
+
+// TestSinkRejectLog_MemlogFallbackUnsigned is the unit-test seam invariant
+// (RejectLogDir == ""): RecordReject still appends durably (memlog is
+// hash-chained in-memory), but memlog holds no signing key, so Checkpoint
+// still fails ErrUnsignedLog — the reject log's signed-identity arming
+// (D-T3) only ever applies to the durable filelog path, never this seam.
+func TestSinkRejectLog_MemlogFallbackUnsigned(t *testing.T) {
+	rl := &sinkRejectLog{log: memlog.New()}
+
+	rec := sink.RejectRecord{Reason: sink.RejectVerdict, Detail: "not verified"}
+	if err := rl.RecordReject(context.Background(), rec); err != nil {
+		t.Fatalf("RecordReject on memlog fallback: %v", err)
+	}
+	size, err := rl.log.Size(context.Background())
+	if err != nil || size != 1 {
+		t.Fatalf("memlog size = %d (err %v), want 1 (durable append)", size, err)
+	}
+
+	if _, err := rl.log.Checkpoint(context.Background()); !errors.Is(err, tlog.ErrUnsignedLog) {
+		t.Fatalf("Checkpoint on memlog fallback = %v, want tlog.ErrUnsignedLog", err)
 	}
 }

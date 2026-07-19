@@ -56,6 +56,12 @@ const (
 	// TlogServiceListLogRecordsProcedure is the fully-qualified name of the TlogService's
 	// ListLogRecords RPC.
 	TlogServiceListLogRecordsProcedure = "/dplaax.tlog.v1.TlogService/ListLogRecords"
+	// TlogServiceMirrorLogSegmentProcedure is the fully-qualified name of the TlogService's
+	// MirrorLogSegment RPC.
+	TlogServiceMirrorLogSegmentProcedure = "/dplaax.tlog.v1.TlogService/MirrorLogSegment"
+	// TlogServiceGetMirrorStateProcedure is the fully-qualified name of the TlogService's
+	// GetMirrorState RPC.
+	TlogServiceGetMirrorStateProcedure = "/dplaax.tlog.v1.TlogService/GetMirrorState"
 )
 
 // TlogServiceClient is a client for the dplaax.tlog.v1.TlogService service.
@@ -79,6 +85,67 @@ type TlogServiceClient interface {
 	// obscure reconciliation, whose whole point is "which sequence numbers
 	// exist").
 	ListLogRecords(context.Context, *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error)
+	// MirrorLogSegment ships one checkpoint-aligned segment of a producing
+	// loop's local emission log to the registry for durable custody (D-T1
+	// async mirror: sync-append stays rejected, so this call runs off the
+	// per-emission hot path, on a background shipper's own schedule).
+	//
+	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+	// decides whether the caller may mirror at all; the request additionally
+	// carries a wireauth AuthProof the handler verifies in-band, whose signed
+	// view covers log_id, from_index (decimal), checkpoint.head, and
+	// segment_digest = sha256 over the ordered record payload hashes (binds
+	// the payload list into the proof; the signed checkpoint head
+	// additionally commits the payloads transitively — see the alignment
+	// rule below).
+	//
+	// Checkpoint alignment (mandatory): checkpoint.size MUST equal
+	// from_index + len(record_payloads) — no ahead-checkpoints, ever. The
+	// registry recomputes the hash chain from its stored tail through the
+	// segment and REQUIRES the recomputed head to equal checkpoint.head, so
+	// payload substitution breaks the equality even independent of the
+	// segment_digest check above (defense in depth, not redundancy).
+	//
+	// Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
+	// registry re-verifies the checkpoint's OWN signature by rebuilding its
+	// signed view from the checkpoint fields carried here — including
+	// checkpoint.timestamp exactly as served by GetLogCheckpoint, which
+	// projects it via UTC().Format(RFC 3339). A checkpoint originally signed
+	// with a non-UTC-offset timestamp reconstructs to DIFFERENT signed bytes
+	// here than what was actually signed, so its signature never re-verifies
+	// — the segment is permanently unmirrorable, not merely delayed. This is
+	// a hard v0 requirement, not a preference (tlog.Checkpoint.SignedView's
+	// own doc says signers "SHOULD" stamp UTC at the library level; at this
+	// RPC's contract level it is MUST).
+	//
+	// Exact-extend only: from_index MUST equal the log's current
+	// GetMirrorState.acked_size. A byte-identical replay of an already-acked
+	// segment is a no-op success (the idempotent resume case); from_index >
+	// acked_size (a gap) and any partial overlap are FailedPrecondition;
+	// from_index + len(record_payloads) overflow is InvalidArgument.
+	//
+	// Checkpoint monotonicity: the stored/served checkpoint for a log never
+	// regresses — a valid but older checkpoint presented here is ignored and
+	// never replaces the current head.
+	//
+	// Caps (D-T2 rule 5): the segment is additionally bounded by
+	// tlog-mirror.max-batch-records (default 256) and
+	// tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
+	// interaction — a batch over either cap is ResourceExhausted. This RPC is
+	// mounted behind a CREDENTIAL-class read cap, not the smaller proof-class
+	// cap every other TlogService RPC uses: sink-receipt records can carry
+	// full credentials and would otherwise exceed it.
+	MirrorLogSegment(context.Context, *connect.Request[v1.MirrorLogSegmentRequest]) (*connect.Response[v1.MirrorLogSegmentResponse], error)
+	// GetMirrorState returns the registry's durable mirror size for one
+	// emission log — the shipper's resume cursor. Deliberately DISTINCT from
+	// GetLogCheckpoint.size: GetLogCheckpoint reports the local loop's
+	// SIGNED-SOURCE view (what it has produced and signed), while acked_size
+	// here reports what the registry has durably ACCEPTED and verified via
+	// MirrorLogSegment. A shipper resuming after restart reads
+	// GetMirrorState.acked_size and sets the next call's from_index to it —
+	// GetLogCheckpoint.size is NEVER a valid substitute (it can be ahead of
+	// what the registry has actually stored).
+	GetMirrorState(context.Context, *connect.Request[v1.GetMirrorStateRequest]) (*connect.Response[v1.GetMirrorStateResponse], error)
 }
 
 // NewTlogServiceClient constructs a client for the dplaax.tlog.v1.TlogService service. By default,
@@ -104,6 +171,18 @@ func NewTlogServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(tlogServiceMethods.ByName("ListLogRecords")),
 			connect.WithClientOptions(opts...),
 		),
+		mirrorLogSegment: connect.NewClient[v1.MirrorLogSegmentRequest, v1.MirrorLogSegmentResponse](
+			httpClient,
+			baseURL+TlogServiceMirrorLogSegmentProcedure,
+			connect.WithSchema(tlogServiceMethods.ByName("MirrorLogSegment")),
+			connect.WithClientOptions(opts...),
+		),
+		getMirrorState: connect.NewClient[v1.GetMirrorStateRequest, v1.GetMirrorStateResponse](
+			httpClient,
+			baseURL+TlogServiceGetMirrorStateProcedure,
+			connect.WithSchema(tlogServiceMethods.ByName("GetMirrorState")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -111,6 +190,8 @@ func NewTlogServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 type tlogServiceClient struct {
 	getLogCheckpoint *connect.Client[v1.GetLogCheckpointRequest, v1.GetLogCheckpointResponse]
 	listLogRecords   *connect.Client[v1.ListLogRecordsRequest, v1.ListLogRecordsResponse]
+	mirrorLogSegment *connect.Client[v1.MirrorLogSegmentRequest, v1.MirrorLogSegmentResponse]
+	getMirrorState   *connect.Client[v1.GetMirrorStateRequest, v1.GetMirrorStateResponse]
 }
 
 // GetLogCheckpoint calls dplaax.tlog.v1.TlogService.GetLogCheckpoint.
@@ -121,6 +202,16 @@ func (c *tlogServiceClient) GetLogCheckpoint(ctx context.Context, req *connect.R
 // ListLogRecords calls dplaax.tlog.v1.TlogService.ListLogRecords.
 func (c *tlogServiceClient) ListLogRecords(ctx context.Context, req *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error) {
 	return c.listLogRecords.CallUnary(ctx, req)
+}
+
+// MirrorLogSegment calls dplaax.tlog.v1.TlogService.MirrorLogSegment.
+func (c *tlogServiceClient) MirrorLogSegment(ctx context.Context, req *connect.Request[v1.MirrorLogSegmentRequest]) (*connect.Response[v1.MirrorLogSegmentResponse], error) {
+	return c.mirrorLogSegment.CallUnary(ctx, req)
+}
+
+// GetMirrorState calls dplaax.tlog.v1.TlogService.GetMirrorState.
+func (c *tlogServiceClient) GetMirrorState(ctx context.Context, req *connect.Request[v1.GetMirrorStateRequest]) (*connect.Response[v1.GetMirrorStateResponse], error) {
+	return c.getMirrorState.CallUnary(ctx, req)
 }
 
 // TlogServiceHandler is an implementation of the dplaax.tlog.v1.TlogService service.
@@ -144,6 +235,67 @@ type TlogServiceHandler interface {
 	// obscure reconciliation, whose whole point is "which sequence numbers
 	// exist").
 	ListLogRecords(context.Context, *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error)
+	// MirrorLogSegment ships one checkpoint-aligned segment of a producing
+	// loop's local emission log to the registry for durable custody (D-T1
+	// async mirror: sync-append stays rejected, so this call runs off the
+	// per-emission hot path, on a background shipper's own schedule).
+	//
+	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+	// decides whether the caller may mirror at all; the request additionally
+	// carries a wireauth AuthProof the handler verifies in-band, whose signed
+	// view covers log_id, from_index (decimal), checkpoint.head, and
+	// segment_digest = sha256 over the ordered record payload hashes (binds
+	// the payload list into the proof; the signed checkpoint head
+	// additionally commits the payloads transitively — see the alignment
+	// rule below).
+	//
+	// Checkpoint alignment (mandatory): checkpoint.size MUST equal
+	// from_index + len(record_payloads) — no ahead-checkpoints, ever. The
+	// registry recomputes the hash chain from its stored tail through the
+	// segment and REQUIRES the recomputed head to equal checkpoint.head, so
+	// payload substitution breaks the equality even independent of the
+	// segment_digest check above (defense in depth, not redundancy).
+	//
+	// Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
+	// registry re-verifies the checkpoint's OWN signature by rebuilding its
+	// signed view from the checkpoint fields carried here — including
+	// checkpoint.timestamp exactly as served by GetLogCheckpoint, which
+	// projects it via UTC().Format(RFC 3339). A checkpoint originally signed
+	// with a non-UTC-offset timestamp reconstructs to DIFFERENT signed bytes
+	// here than what was actually signed, so its signature never re-verifies
+	// — the segment is permanently unmirrorable, not merely delayed. This is
+	// a hard v0 requirement, not a preference (tlog.Checkpoint.SignedView's
+	// own doc says signers "SHOULD" stamp UTC at the library level; at this
+	// RPC's contract level it is MUST).
+	//
+	// Exact-extend only: from_index MUST equal the log's current
+	// GetMirrorState.acked_size. A byte-identical replay of an already-acked
+	// segment is a no-op success (the idempotent resume case); from_index >
+	// acked_size (a gap) and any partial overlap are FailedPrecondition;
+	// from_index + len(record_payloads) overflow is InvalidArgument.
+	//
+	// Checkpoint monotonicity: the stored/served checkpoint for a log never
+	// regresses — a valid but older checkpoint presented here is ignored and
+	// never replaces the current head.
+	//
+	// Caps (D-T2 rule 5): the segment is additionally bounded by
+	// tlog-mirror.max-batch-records (default 256) and
+	// tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
+	// interaction — a batch over either cap is ResourceExhausted. This RPC is
+	// mounted behind a CREDENTIAL-class read cap, not the smaller proof-class
+	// cap every other TlogService RPC uses: sink-receipt records can carry
+	// full credentials and would otherwise exceed it.
+	MirrorLogSegment(context.Context, *connect.Request[v1.MirrorLogSegmentRequest]) (*connect.Response[v1.MirrorLogSegmentResponse], error)
+	// GetMirrorState returns the registry's durable mirror size for one
+	// emission log — the shipper's resume cursor. Deliberately DISTINCT from
+	// GetLogCheckpoint.size: GetLogCheckpoint reports the local loop's
+	// SIGNED-SOURCE view (what it has produced and signed), while acked_size
+	// here reports what the registry has durably ACCEPTED and verified via
+	// MirrorLogSegment. A shipper resuming after restart reads
+	// GetMirrorState.acked_size and sets the next call's from_index to it —
+	// GetLogCheckpoint.size is NEVER a valid substitute (it can be ahead of
+	// what the registry has actually stored).
+	GetMirrorState(context.Context, *connect.Request[v1.GetMirrorStateRequest]) (*connect.Response[v1.GetMirrorStateResponse], error)
 }
 
 // NewTlogServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -165,12 +317,28 @@ func NewTlogServiceHandler(svc TlogServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(tlogServiceMethods.ByName("ListLogRecords")),
 		connect.WithHandlerOptions(opts...),
 	)
+	tlogServiceMirrorLogSegmentHandler := connect.NewUnaryHandler(
+		TlogServiceMirrorLogSegmentProcedure,
+		svc.MirrorLogSegment,
+		connect.WithSchema(tlogServiceMethods.ByName("MirrorLogSegment")),
+		connect.WithHandlerOptions(opts...),
+	)
+	tlogServiceGetMirrorStateHandler := connect.NewUnaryHandler(
+		TlogServiceGetMirrorStateProcedure,
+		svc.GetMirrorState,
+		connect.WithSchema(tlogServiceMethods.ByName("GetMirrorState")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.tlog.v1.TlogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case TlogServiceGetLogCheckpointProcedure:
 			tlogServiceGetLogCheckpointHandler.ServeHTTP(w, r)
 		case TlogServiceListLogRecordsProcedure:
 			tlogServiceListLogRecordsHandler.ServeHTTP(w, r)
+		case TlogServiceMirrorLogSegmentProcedure:
+			tlogServiceMirrorLogSegmentHandler.ServeHTTP(w, r)
+		case TlogServiceGetMirrorStateProcedure:
+			tlogServiceGetMirrorStateHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -186,4 +354,12 @@ func (UnimplementedTlogServiceHandler) GetLogCheckpoint(context.Context, *connec
 
 func (UnimplementedTlogServiceHandler) ListLogRecords(context.Context, *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.tlog.v1.TlogService.ListLogRecords is not implemented"))
+}
+
+func (UnimplementedTlogServiceHandler) MirrorLogSegment(context.Context, *connect.Request[v1.MirrorLogSegmentRequest]) (*connect.Response[v1.MirrorLogSegmentResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.tlog.v1.TlogService.MirrorLogSegment is not implemented"))
+}
+
+func (UnimplementedTlogServiceHandler) GetMirrorState(context.Context, *connect.Request[v1.GetMirrorStateRequest]) (*connect.Response[v1.GetMirrorStateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.tlog.v1.TlogService.GetMirrorState is not implemented"))
 }

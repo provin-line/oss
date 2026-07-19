@@ -16,6 +16,7 @@ import (
 	payloadpbconnect "github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapbconnect "github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
+	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
@@ -45,6 +46,7 @@ import (
 	signerhandler "github.com/provin-line/oss/network/pkg/services/signer/handler"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
 	tloghandler "github.com/provin-line/oss/network/pkg/services/tlogservice/handler"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	"github.com/provin-line/oss/tlog"
@@ -64,12 +66,42 @@ import (
 //     full-replacement allowlists, which can legitimately be larger.
 //
 // The credential class (StoreVC) keeps its own maxCredentialSize (a boot
-// config value). No SEND cap is set: list RPCs return unpaginated results that
-// can exceed any request cap.
+// config value). MirrorLogSegment (when a mirror store is wired) keeps its
+// OWN class too, derived from the D-T2 batch-bytes cap rather than borrowed
+// from maxCredentialSize — see mirrorReadCapBytes. No SEND cap is set: list
+// RPCs return unpaginated results that can exceed any request cap.
 const (
 	maxProofRequestBytes    = 256 << 10 // 256 KiB
 	maxDocumentRequestBytes = 1 << 20   // 1 MiB
 )
+
+// mirrorReadCapBytes derives MirrorLogSegment's own connect read cap from
+// maxBatchBytes (tlog-mirror.max-batch-bytes, D-T2 rule 5) plus
+// maxProofRequestBytes as headroom for the OTHER fields one MirrorLogSegment
+// call carries alongside record_payloads — the checkpoint (five small,
+// fixed-shape strings/bytes) and the AuthProof (the SAME shape
+// maxProofRequestBytes already sizes for). Deriving the mount cap FROM
+// max-batch-bytes (rather than reusing maxCredentialSize, a value chosen for
+// an unrelated class — the single-VC StoreVC/fetch path) makes the two
+// structurally coherent: they can never disagree, so no operator note is
+// needed to keep them in sync (Task 5 review, M-1).
+//
+// connect.WithReadMaxBytes bounds the RAW request body, and a Connect JSON
+// client base64-encodes record_payloads (~4/3 inflation) plus JSON
+// field-name/escaping overhead — so a legitimate max-batch-bytes batch is
+// larger on the JSON wire than its decoded size. This derivation applies the
+// SAME `*2 + 64 KiB` inflation OuterRequestCapBytes uses (which covers base64
+// plus JSON overhead with margin, plus framing/header headroom), so a valid
+// one-record JSON request is never rejected at the read cap before the
+// handler's own payload-sum check runs.
+//
+// Used by BOTH the MirrorLogSegment mount (BuildHandler, below) and
+// OuterRequestCapBytes, so the per-RPC cap and the outer raw-body cap (which
+// must never be smaller than it, and which inflates this value again) can
+// likewise never drift apart.
+func mirrorReadCapBytes(maxBatchBytes int) int {
+	return (maxBatchBytes+maxProofRequestBytes)*2 + 64<<10
+}
 
 // OuterRequestCapBytes sizes the outermost raw-request-body limit so it is
 // never smaller than any legitimate request under a per-RPC read cap. It must
@@ -88,9 +120,22 @@ const (
 // retain (up to maxRetainPayloadSize), not just its largest single chunk
 // (that per-chunk bound is maxRetainChunkSize, enforced separately by the
 // per-RPC connect.WithReadMaxBytes mount option).
-func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize, maxRetainPayloadSize int) int {
+//
+// maxMirrorBatchBytes is tlog-mirror.max-batch-bytes when a mirror store is
+// wired (cmd/network), or 0 when it is not (cmd/standalone never mounts the
+// MirrorLogSegment cap override, so it contributes nothing here — passing
+// the config value anyway would only widen the outer cap for a class this
+// binary never mounts at that width). A non-zero value is run through the
+// SAME mirrorReadCapBytes derivation the mount site uses, never a bare
+// max-batch-bytes, so this function and the mount can never disagree about
+// what MirrorLogSegment's legitimate ceiling is.
+func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize, maxRetainPayloadSize, maxMirrorBatchBytes int) int {
 	largest := maxCredentialSize
-	for _, v := range []int{maxPushBodySize, maxRetainPayloadSize, maxDocumentRequestBytes, maxProofRequestBytes} {
+	candidates := []int{maxPushBodySize, maxRetainPayloadSize, maxDocumentRequestBytes, maxProofRequestBytes}
+	if maxMirrorBatchBytes > 0 {
+		candidates = append(candidates, mirrorReadCapBytes(maxMirrorBatchBytes))
+	}
+	for _, v := range candidates {
 		if v > largest {
 			largest = v
 		}
@@ -211,7 +256,14 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // []byte, not a stream — see payloadresolver.Store.StoreWriter's doc).
 // maxRetainChunkSize/maxRetainPayloadSize are the max-retain-chunk-size /
 // max-retain-payload-size config quotas (pipelineconfig).
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool, emitHealth *EmitHealthWiring) (http.Handler, error) {
+// mirror is the D-T4 mirror-custody wiring (see MirrorWiring's doc): nil
+// keeps today's map-only TlogService behavior (cmd/standalone); cmd/network
+// opens a mirrorstore.Store and passes it here. When non-nil, MirrorLogSegment
+// additionally mounts under a CREDENTIAL-class read cap (sink-receipt
+// records can carry full credentials, exceeding the proof-class cap every
+// other TlogService RPC uses) — see the mounting loop below for how the two
+// caps coexist on one connect service.
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, mirror *MirrorWiring, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool, emitHealth *EmitHealthWiring) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -331,6 +383,30 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// since a retained chunk's legitimate size is an operator-tunable quota,
 	// same posture as the credential class above).
 	retainChunkCap := connect.WithReadMaxBytes(maxRetainChunkSize)
+
+	// tlogSvc is the read (+ D-T4 mirror-custody, when wired) service behind
+	// TlogService: the static map always, plus — when mirror is non-nil —
+	// the durable mirror store as a second read source and the D-T3
+	// identity-enforcement deps MirrorLogSegment needs, reusing the SAME
+	// resolver/DID-registry infra every other wireauth-checked RPC above
+	// shares (resolver, didSvc, ed25519.Verifier{}).
+	var tlogSvc *tlogservice.Service
+	if mirror != nil {
+		tlogSvc = tlogservice.New(tlogs, &tlogservice.MirrorConfig{
+			Store:           mirror.Store,
+			DIDResolver:     resolver,
+			Ancestry:        logident.NewDIDRegistryAncestry(didSvc),
+			Crypto:          ed25519.Verifier{},
+			MaxBatchRecords: mirror.MaxBatchRecords,
+			MaxBatchBytes:   mirror.MaxBatchBytes,
+		})
+	} else {
+		tlogSvc = tlogservice.New(tlogs, nil)
+	}
+	// peerVerifier is reused for MirrorLogSegment's in-band wireauth proof —
+	// same DID-resolution + nonce-store infra as the L2-only surfaces below.
+	tlogHandlerImpl := tloghandler.New(tlogSvc, peerVerifier)
+
 	mux := http.NewServeMux()
 	for _, p := range []handlerPair{
 		// schema bodies, DID docs/delegations, and full-replacement allowlists
@@ -342,9 +418,12 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		// constant, or the two would diverge when max-credential-size is raised.
 		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
-		// Read-mostly / small-request control surfaces → proof class.
+		// Read-mostly / small-request control surfaces → proof class. (When a
+		// mirror store is wired, MirrorLogSegment's OWN procedure path is
+		// additionally overridden below at its own derived cap — see that
+		// comment for why this mount stays unconditional and unchanged.)
 		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), authz, proofCap)),
-		newPair(tlogpbconnect.NewTlogServiceHandler(tloghandler.New(tlogservice.New(tlogs)), authz, proofCap)),
+		newPair(tlogpbconnect.NewTlogServiceHandler(tlogHandlerImpl, authz, proofCap)),
 		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainOperatorOpts...), authz, docCap)),
 		// PayloadStoreService (RetainPayload) is the L1-gated write side of
 		// by-reference payload delivery (unlike PayloadService below, mounted
@@ -357,6 +436,39 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		newPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, peerVerifier, uint64(maxRetainPayloadSize)), authz, retainChunkCap)),
 	} {
 		mux.Handle(p.path, p.h)
+	}
+
+	// WHEN a mirror store is wired, MirrorLogSegment needs a WIDER read cap
+	// than proofCap: mirrored sink-receipt segments can carry full
+	// credentials and a whole batch of records (up to
+	// tlog-mirror.max-batch-bytes). The cap is DERIVED from max-batch-bytes
+	// (mirrorReadCapBytes), not borrowed from maxCredentialSize — the two
+	// config values govern unrelated classes (single-VC StoreVC/fetch vs.
+	// this batch), and pinning the mount to a plain maxCredentialSize would
+	// silently reject a legitimate batch whenever max-batch-bytes is
+	// configured above it (Task 5 review, M-1: this WAS a real gap against
+	// the repo's own shipped defaults — max-credential-size 1 MiB <
+	// max-batch-bytes 4 MiB). Rather than restructure
+	// NewTlogServiceHandler's uniform per-service option (it applies ONE
+	// set of connect.HandlerOptions to every RPC it mounts), this overrides
+	// the ONE procedure path with its own connect.NewUnaryHandler at the
+	// derived cap: net/http's ServeMux resolves the more specific exact
+	// pattern ("…/MirrorLogSegment") over the subtree pattern
+	// ("…/TlogService/") registered above, REGARDLESS of registration order
+	// (longest/most-specific pattern wins — the documented
+	// net/http.ServeMux precedence rule), so the other three TlogService
+	// RPCs stay on proofCap. cmd/standalone (mirror == nil) registers no
+	// override: MirrorLogSegment there still routes through the subtree
+	// handler at proofCap, unchanged from today.
+	if mirror != nil {
+		mirrorMethod := tlogpb.File_dplaax_tlog_v1_tlog_proto.Services().ByName("TlogService").Methods().ByName("MirrorLogSegment")
+		mirrorHandler := connect.NewUnaryHandler(
+			tlogpbconnect.TlogServiceMirrorLogSegmentProcedure,
+			tlogHandlerImpl.MirrorLogSegment,
+			connect.WithSchema(mirrorMethod),
+			connect.WithHandlerOptions(authz, connect.WithReadMaxBytes(mirrorReadCapBytes(mirror.MaxBatchBytes))),
+		)
+		mux.Handle(tlogpbconnect.TlogServiceMirrorLogSegmentProcedure, mirrorHandler)
 	}
 
 	// Durable relationship-evidence log (transfer.relationship.record): each

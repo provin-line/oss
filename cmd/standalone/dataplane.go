@@ -275,24 +275,48 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		return l, nil
 	}
 	// newRejectLog builds one archival sink loop's durable reject log under
-	// RejectLogDir/<loop> (data-dir/evidence/sink-rejects/<loop>). In-memory when
-	// RejectLogDir is empty (unit-test seam). No checkpoint signer: the reject log
-	// needs durable, hash-chained append, not signed tree heads. The directory is
-	// keyed by the raw loop NAME, not a hash — unlike newEmission (whose log id is
-	// a DID reconciled against by external consumers, so it hashes to survive a
-	// rename): a reject log is operator-facing local evidence that nothing external
-	// reconciles against, so a human-readable per-loop directory is the better
-	// trade, and a rename simply starts a fresh log.
-	newRejectLog := func(loopName string) (sink.RejectLog, error) {
+	// RejectLogDir/sha256(log id) (data-dir/evidence/sink-rejects/<hash>).
+	// In-memory when RejectLogDir is empty (unit-test seam; memlog cannot sign —
+	// Checkpoint stays ErrUnsignedLog there, unchanged).
+	//
+	// Identity (D-T3, DECIDED): archival sinks are already REQUIRED to carry a
+	// receipt issuer (config.go's Kind==archival && !Receipt.Issue boot error), so
+	// the reject log is armed with that SAME signer — the sink's mandatory receipt
+	// issuer — giving its checkpoint the stable custody identity
+	// `sink-reject:<receipt-issuer-process-DID>` (the logident predicate's
+	// KindSinkReject shape, one line below KindSinkReceipt's own
+	// `sink-receipt:<DID>`).
+	//
+	// Directory keying now MATCHES newEmission: sha256(log id), not the raw
+	// loop name. Identity and storage co-move — a same-DID restart resolves to
+	// the same directory (continuity preserved for the normal case), and a
+	// receipt-DID CHANGE resolves to a fresh directory (a new identity gets a
+	// fresh log, consistent with the spec's D-T1 identity-rollover principle),
+	// so historical rejects are never silently re-signed under a new owner.
+	// (Previously the directory stayed keyed by loop NAME even after the
+	// identity above was signed: a receipt-DID change across a restart with
+	// the volume retained reopened the SAME directory under a NEW signer, and
+	// every subsequent checkpoint re-signed all prior rejects as the new
+	// DID's evidence — a P1 custody hole this rekeying closes.)
+	newRejectLog := func(loopName string, issuer pipelineconfig.IssuerConfig) (sink.RejectLog, error) {
 		if deps.RejectLogDir == "" {
 			return &sinkRejectLog{log: memlog.New()}, nil
 		}
-		fl, ferr := filelog.New(filepath.Join(deps.RejectLogDir, loopName))
+		logID := "sink-reject:" + issuer.DID
+		sum := sha256.Sum256([]byte(logID))
+		dir := filepath.Join(deps.RejectLogDir, hex.EncodeToString(sum[:]))
+		fl, ferr := filelog.New(dir, filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+			Signer:             keyStore,
+			SignerDID:          issuer.DID,
+			KeyID:              issuer.KeyID,
+			VerificationMethod: issuer.VerificationMethod,
+			LogID:              logID,
+		}))
 		if ferr != nil {
 			return nil, fmt.Errorf("standalone: loop %q: reject log: %w", loopName, ferr)
 		}
 		dp.tlogClosers = append(dp.tlogClosers, fl)
-		slog.Info("standalone: sink reject log opened", "loop", loopName, "dir", filepath.Join(deps.RejectLogDir, loopName))
+		slog.Info("standalone: sink reject log opened", "loop", loopName, "dir", dir, "log_id", logID)
 		return &sinkRejectLog{log: fl}, nil
 	}
 	// When a vc-store-endpoint is configured, build the network VC-store client once:
@@ -404,10 +428,13 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 				if lc.Sink.Receipt.Issue {
 					receipts, err = buildSinkReceiptRegistrar(builder, deps.VCStore, deps.AuditQueue, publisher, newEmission, lc)
 				}
-				// Archival's reject-with-audit-log obligation: a durable reject log.
+				// Archival's reject-with-audit-log obligation: a durable reject log,
+				// armed with the SAME receipt issuer identity (D-T3) — archival's
+				// config validation already guarantees lc.Sink.Receipt.Issuer is
+				// populated (Issue == true) whenever Kind == archival.
 				var rejectLog sink.RejectLog
 				if err == nil && lc.Sink.Kind == pipelineconfig.SinkArchival {
-					rejectLog, err = newRejectLog(lc.Name)
+					rejectLog, err = newRejectLog(lc.Name, lc.Sink.Receipt.Issuer)
 				}
 				if err == nil {
 					loop, err = buildSinkLoop(conn, vcnt, ingressStore, w, receipts, rejectLog, pw, lc)

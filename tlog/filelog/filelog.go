@@ -456,21 +456,82 @@ func (l *Log) Size(_ context.Context) (uint64, error) {
 	return uint64(len(l.records)), nil
 }
 
-// Checkpoint produces the signed head commitment, or ErrUnsignedLog when
-// the log was opened without a CheckpointSigner.
+// Checkpoint produces the signed head commitment at the log's CURRENT
+// size, or ErrUnsignedLog when the log was opened without a
+// CheckpointSigner. Its (size, head) pair is snapshotted under a SINGLE lock
+// acquisition (checkpointAtLocked): reading the size and its head in one
+// critical section is what keeps a concurrent Rotate — which truncates
+// l.records to nil under the same lock — from slipping between a size read
+// and a head read and yielding a torn snapshot (a spurious out-of-range, or a
+// head from a different log generation). See CheckpointAt's doc for why there
+// is exactly one signing path.
 func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
 	l.mu.Lock()
 	size := uint64(len(l.records))
-	head := ""
-	if size > 0 {
-		head = l.records[size-1].Hash
-	}
-	signer := l.signer
+	head, signer, err := l.checkpointAtLocked(size)
 	l.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if signer == nil {
 		return nil, ErrUnsignedLog
 	}
 	return signCheckpoint(size, head, signer, time.Now().UTC().Truncate(time.Second))
+}
+
+// CheckpointAt produces a signed checkpoint over records[0..size) — an
+// ARBITRARY earlier prefix, not just the log's current head (Checkpoint's
+// own, narrower capability) — or ErrUnsignedLog when the log was opened
+// without a CheckpointSigner. size > the log's current committed length
+// is a clear error, never a silently truncated or zero-valued checkpoint.
+//
+// This is the tlog-custody mirror shipper's own capability (task-6
+// controller decision): the shipper ships cap-bounded batches, each
+// needing a checkpoint covering EXACTLY that batch's end (D-T2 acceptance
+// rule 1) — a boundary that is, in general, strictly before the log's
+// current head. It is deliberately NOT part of the tlog.Log contract:
+// memlog never signs at all, and the tlog-custody spec's v0 scope
+// excludes merklelog (per-segment identity is a named post-v0
+// limitation there), so requiring every implementation to provide it
+// would force a stub on implementations that structurally cannot honor
+// it. Callers detect the capability structurally (mirrors
+// pipeline/transport's own intentLog precedent: a package-local interface
+// asserted against, never added to tlog.Log itself).
+//
+// Checkpoint(ctx) is CheckpointAt(ctx, <current size>) — the ONE signing
+// path both share, so the two can never diverge on what a checkpoint's
+// (size, head) pair means.
+func (l *Log) CheckpointAt(_ context.Context, size uint64) (*tlog.Checkpoint, error) {
+	l.mu.Lock()
+	head, signer, err := l.checkpointAtLocked(size)
+	l.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if signer == nil {
+		return nil, ErrUnsignedLog
+	}
+	return signCheckpoint(size, head, signer, time.Now().UTC().Truncate(time.Second))
+}
+
+// checkpointAtLocked validates size against the log's current committed length
+// and returns the head at [0,size) together with the log's signer — all read
+// in ONE critical section. The caller MUST hold l.mu and MUST NOT release it
+// between reading the size it passes and this call (Checkpoint reads the
+// current size under the same lock it then calls this with). It signs nothing
+// and takes no lock, so both Checkpoint and CheckpointAt share one consistent
+// size/head/signer snapshot with no read-unlock-relock window a truncating
+// Rotate could split. An out-of-range size is reported here so the caller can
+// prefer it over ErrUnsignedLog, exactly as the inline check used to.
+func (l *Log) checkpointAtLocked(size uint64) (head string, signer *CheckpointSigner, err error) {
+	total := uint64(len(l.records))
+	if size > total {
+		return "", nil, fmt.Errorf("filelog: checkpoint at %d: out of range (size %d)", size, total)
+	}
+	if size > 0 {
+		head = l.records[size-1].Hash
+	}
+	return head, l.signer, nil
 }
 
 // signCheckpoint signs a head commitment over an EXPLICIT (size, head, ts). It

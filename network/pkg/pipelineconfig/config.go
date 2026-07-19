@@ -68,6 +68,9 @@ const (
 	maxPushBodySizeKey      = pipelineKey + ".max-push-body-size"
 	maxRetainChunkSizeKey   = pipelineKey + ".max-retain-chunk-size"
 	maxRetainPayloadSizeKey = pipelineKey + ".max-retain-payload-size"
+	tlogMirrorKey           = pipelineKey + ".tlog-mirror"
+	tlogMirrorMaxRecordsKey = tlogMirrorKey + ".max-batch-records"
+	tlogMirrorMaxBytesKey   = tlogMirrorKey + ".max-batch-bytes"
 	batchResolverKey        = pipelineKey + ".batch-resolver"
 	brIntervalKey           = batchResolverKey + ".interval"
 	brBatchSizeKey          = batchResolverKey + ".batch-size"
@@ -124,6 +127,10 @@ type Config struct {
 	// from MaxRetainChunkSize (a single frame). Sourced from reference.conf (no Go
 	// default); a non-positive value fails startup.
 	MaxRetainPayloadSize int
+	// TlogMirror tunes the D-T2 caps MirrorLogSegment enforces (tlog-custody
+	// spec, rule 5). Sourced from reference.conf; a non-positive value fails
+	// startup.
+	TlogMirror TlogMirrorConfig
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
@@ -157,6 +164,20 @@ type AuditRunnerConfig struct {
 	// MaxAttempts bounds a persistently-indeterminate NON-hole verdict before it is dropped
 	// (a hole's liveness is governed by the unresolved pool, not this count).
 	MaxAttempts int
+}
+
+// TlogMirrorConfig is the node-level tuning for MirrorLogSegment's D-T2 rule
+// 5 caps (tlog-custody spec). Both values come from reference.conf (no Go
+// defaults) and must be positive; they are read by BOTH binaries (unlike
+// most quotas here, which are consumed by the client-shipper side too — the
+// registry-side handler enforcing MirrorLogSegment is the primary reader).
+type TlogMirrorConfig struct {
+	// MaxBatchRecords bounds len(record_payloads) in one MirrorLogSegment
+	// call. A batch over this cap is ResourceExhausted.
+	MaxBatchRecords int
+	// MaxBatchBytes bounds the summed byte length of record_payloads in one
+	// MirrorLogSegment call. A batch over this cap is ResourceExhausted.
+	MaxBatchBytes int
 }
 
 // BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
@@ -420,6 +441,12 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.MaxRetainPayloadSize, err = loadPositiveInt(cfg, maxRetainPayloadSizeKey); err != nil {
 		return nil, err
 	}
+	if out.TlogMirror, err = loadTlogMirror(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateTlogMirrorCap(out.TlogMirror, out.MaxCredentialSize); err != nil {
+		return nil, err
+	}
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
@@ -460,6 +487,44 @@ func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
 	}
 	ar.Interval = interval
 	return ar, nil
+}
+
+// loadTlogMirror reads the D-T2 MirrorLogSegment caps from the (layered)
+// config. Both values live in reference.conf (always present); each must be
+// positive — a non-positive override fails startup (no Go-side defaults).
+func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
+	var tm TlogMirrorConfig
+	var err error
+	if tm.MaxBatchRecords, err = loadPositiveInt(cfg, tlogMirrorMaxRecordsKey); err != nil {
+		return TlogMirrorConfig{}, err
+	}
+	if tm.MaxBatchBytes, err = loadPositiveInt(cfg, tlogMirrorMaxBytesKey); err != nil {
+		return TlogMirrorConfig{}, err
+	}
+	return tm, nil
+}
+
+// validateTlogMirrorCap enforces a boot-time cross-key coherence invariant
+// between tlog-mirror.max-batch-bytes and max-credential-size: a single
+// mirrored record can be as large as max-credential-size (a sink-receipt
+// log entry carries a full credential — see the tlog-custody spec's D-T2
+// rule 5 doc), so a batch cap SMALLER than that could never ship such a
+// record, not even alone. Left unchecked, this would not surface as a
+// live-config drift but as a wedge on the very first boot that ever tries
+// to mirror a record near max-credential-size in size — the tlogship
+// shipper's own runtime safety net
+// (pipeline/transport/tlogship.ErrRecordExceedsMaxBatchBytes) exists for
+// an operator raising max-batch-bytes AFTER a working deployment, not for
+// a configuration that was never coherent to begin with. Called from
+// LoadPipelineConfig once both values are loaded (loadTlogMirror itself
+// only sees the raw *hoconconfig.Config, not the sibling MaxCredentialSize
+// value — this check needs both).
+func validateTlogMirrorCap(tm TlogMirrorConfig, maxCredentialSize int) error {
+	if tm.MaxBatchBytes < maxCredentialSize {
+		return fmt.Errorf("pipeline: config %s (%d) must be >= %s (%d) — a single mirrored record can be up to max-credential-size bytes, and a batch cap below that could never ship it",
+			tlogMirrorMaxBytesKey, tm.MaxBatchBytes, maxCredentialSizeKey, maxCredentialSize)
+	}
+	return nil
 }
 
 // loadMaxCredentialSize reads the node-level per-credential byte cap from the (layered)

@@ -33,7 +33,19 @@ Evidence writes land as ordinary wire RPCs (`AuditService.RegisterEvidence`,
 future pipeline runtime reaches them the same way any other client does — no
 in-process bridge back into the control-plane binary is needed for these. The
 relationship-evidence log (`tlog`) and the archival sink's reject log stay
-in-process, pending their own design gate.
+in-process: each pipeline process keeps its own durable, signed log locally,
+and a background shipper can asynchronously mirror checkpoint-aligned segments
+to the registry (`MirrorLogSegment`, L1 + in-band wireauth; `GetMirrorState`
+is a plain L1 read), which custodies and serves the verified prefix without
+ever re-signing it. The shipper package is not yet wired into any binary —
+that wiring lands in a later change — so today's `cmd/standalone` still
+serves TlogService reads from its in-process map and mirrors nothing. Once
+wired: a terminal tail not yet mirrored is lost from the registry's view
+within the flush interval; a process that loses its local volume cannot
+resume the old log's identity and rolls to a fresh one instead. The reject
+log would mirror the same way for custody but, as today, is never served over
+TlogService reads. v0 mirrors `filelog`-backed logs only, and never rotates
+an already-mirrored log.
 
 ## Load-bearing configuration
 

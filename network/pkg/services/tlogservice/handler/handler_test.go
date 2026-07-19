@@ -21,6 +21,8 @@ type fakeService struct {
 
 	gotStart uint64
 	gotCount int
+
+	capErr error
 }
 
 func (f *fakeService) Checkpoint(context.Context, string) (*tlog.Checkpoint, error) {
@@ -32,6 +34,19 @@ func (f *fakeService) Records(_ context.Context, _ string, start uint64, count i
 	return f.recs, f.err
 }
 
+func (f *fakeService) MirrorState(string) (uint64, error) { return 0, f.err }
+
+func (f *fakeService) MirrorSegment(context.Context, tlogservice.MirrorSegmentInput) (uint64, error) {
+	return 0, f.err
+}
+
+// CheckBatchCaps lets a fakeService drive the handler's pre-auth cap guard;
+// the zero value (nil) keeps the not-configured tests reaching MirrorSegment's
+// ErrMirrorNotConfigured unchanged.
+func (f *fakeService) CheckBatchCaps(int, int) error {
+	return f.capErr
+}
+
 func TestGetLogCheckpoint_Projection(t *testing.T) {
 	ts := time.Date(2026, 7, 7, 9, 0, 0, 0, time.UTC)
 	// The response log_id is projected from the SIGNED checkpoint (Origin),
@@ -39,7 +54,7 @@ func TestGetLogCheckpoint_Projection(t *testing.T) {
 	// come back.
 	h := handler.New(&fakeService{cp: &tlog.Checkpoint{
 		Origin: "did:x:pipeline:p", Size: 42, Head: "headhash", Timestamp: ts, SignedBy: "did:x#signing", Signature: []byte{1, 2},
-	}})
+	}}, nil)
 	resp, err := h.GetLogCheckpoint(context.Background(), connect.NewRequest(&tlogpb.GetLogCheckpointRequest{LogId: "did:x:pipeline:p"}))
 	if err != nil {
 		t.Fatalf("GetLogCheckpoint: %v", err)
@@ -53,7 +68,7 @@ func TestGetLogCheckpoint_Projection(t *testing.T) {
 
 func TestListLogRecords_ProjectionAndRange(t *testing.T) {
 	svc := &fakeService{recs: []*tlog.Record{{Index: 7, Payload: []byte("p"), Hash: "h"}}}
-	h := handler.New(svc)
+	h := handler.New(svc, nil)
 	resp, err := h.ListLogRecords(context.Background(), connect.NewRequest(&tlogpb.ListLogRecordsRequest{
 		LogId: "did:x:pipeline:p", StartIndex: "7", Count: 5,
 	}))
@@ -77,7 +92,7 @@ func TestListLogRecords_ProjectionAndRange(t *testing.T) {
 }
 
 func TestListLogRecords_InvalidInputs(t *testing.T) {
-	h := handler.New(&fakeService{})
+	h := handler.New(&fakeService{}, nil)
 	for _, req := range []*tlogpb.ListLogRecordsRequest{
 		{LogId: "x", StartIndex: "not-a-number"},
 		{LogId: "x", StartIndex: "-1"},
@@ -90,11 +105,11 @@ func TestListLogRecords_InvalidInputs(t *testing.T) {
 }
 
 func TestErrorMapping(t *testing.T) {
-	notFound := handler.New(&fakeService{err: fmt.Errorf("wrap: %w", tlogservice.ErrNotFound)})
+	notFound := handler.New(&fakeService{err: fmt.Errorf("wrap: %w", tlogservice.ErrNotFound)}, nil)
 	if _, err := notFound.GetLogCheckpoint(context.Background(), connect.NewRequest(&tlogpb.GetLogCheckpointRequest{LogId: "x"})); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Errorf("not found: code = %v", connect.CodeOf(err))
 	}
-	internal := handler.New(&fakeService{err: fmt.Errorf("unsigned log")})
+	internal := handler.New(&fakeService{err: fmt.Errorf("unsigned log")}, nil)
 	if _, err := internal.GetLogCheckpoint(context.Background(), connect.NewRequest(&tlogpb.GetLogCheckpointRequest{LogId: "x"})); connect.CodeOf(err) != connect.CodeInternal {
 		t.Errorf("unsigned: code = %v, want Internal", connect.CodeOf(err))
 	}

@@ -20,6 +20,7 @@ package dplaax.tlog.v1;
 
 option go_package = "github.com/provin-line/oss/gen/go/dplaax/tlog/v1;tlogpb";
 
+import "dplaax/chain/v1/chain.proto";
 import "o3co/authz/v1/policy.proto";
 
 // TlogService serves emission-log checkpoints and records. Every RPC
@@ -50,6 +51,71 @@ service TlogService {
   // obscure reconciliation, whose whole point is "which sequence numbers
   // exist").
   rpc ListLogRecords(ListLogRecordsRequest) returns (ListLogRecordsResponse) {
+    option (o3co.authz.v1.policy) = {resource: "tlog", action: "read"};
+  }
+  // MirrorLogSegment ships one checkpoint-aligned segment of a producing
+  // loop's local emission log to the registry for durable custody (D-T1
+  // async mirror: sync-append stays rejected, so this call runs off the
+  // per-emission hot path, on a background shipper's own schedule).
+  //
+  // Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
+  // decides whether the caller may mirror at all; the request additionally
+  // carries a wireauth AuthProof the handler verifies in-band, whose signed
+  // view covers log_id, from_index (decimal), checkpoint.head, and
+  // segment_digest = sha256 over the ordered record payload hashes (binds
+  // the payload list into the proof; the signed checkpoint head
+  // additionally commits the payloads transitively — see the alignment
+  // rule below).
+  //
+  // Checkpoint alignment (mandatory): checkpoint.size MUST equal
+  // from_index + len(record_payloads) — no ahead-checkpoints, ever. The
+  // registry recomputes the hash chain from its stored tail through the
+  // segment and REQUIRES the recomputed head to equal checkpoint.head, so
+  // payload substitution breaks the equality even independent of the
+  // segment_digest check above (defense in depth, not redundancy).
+  //
+  // Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
+  // registry re-verifies the checkpoint's OWN signature by rebuilding its
+  // signed view from the checkpoint fields carried here — including
+  // checkpoint.timestamp exactly as served by GetLogCheckpoint, which
+  // projects it via UTC().Format(RFC 3339). A checkpoint originally signed
+  // with a non-UTC-offset timestamp reconstructs to DIFFERENT signed bytes
+  // here than what was actually signed, so its signature never re-verifies
+  // — the segment is permanently unmirrorable, not merely delayed. This is
+  // a hard v0 requirement, not a preference (tlog.Checkpoint.SignedView's
+  // own doc says signers "SHOULD" stamp UTC at the library level; at this
+  // RPC's contract level it is MUST).
+  //
+  // Exact-extend only: from_index MUST equal the log's current
+  // GetMirrorState.acked_size. A byte-identical replay of an already-acked
+  // segment is a no-op success (the idempotent resume case); from_index >
+  // acked_size (a gap) and any partial overlap are FailedPrecondition;
+  // from_index + len(record_payloads) overflow is InvalidArgument.
+  //
+  // Checkpoint monotonicity: the stored/served checkpoint for a log never
+  // regresses — a valid but older checkpoint presented here is ignored and
+  // never replaces the current head.
+  //
+  // Caps (D-T2 rule 5): the segment is additionally bounded by
+  // tlog-mirror.max-batch-records (default 256) and
+  // tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
+  // interaction — a batch over either cap is ResourceExhausted. This RPC is
+  // mounted behind a CREDENTIAL-class read cap, not the smaller proof-class
+  // cap every other TlogService RPC uses: sink-receipt records can carry
+  // full credentials and would otherwise exceed it.
+  rpc MirrorLogSegment(MirrorLogSegmentRequest) returns (MirrorLogSegmentResponse) {
+    option (o3co.authz.v1.policy) = {resource: "tlog", action: "mirror"};
+  }
+  // GetMirrorState returns the registry's durable mirror size for one
+  // emission log — the shipper's resume cursor. Deliberately DISTINCT from
+  // GetLogCheckpoint.size: GetLogCheckpoint reports the local loop's
+  // SIGNED-SOURCE view (what it has produced and signed), while acked_size
+  // here reports what the registry has durably ACCEPTED and verified via
+  // MirrorLogSegment. A shipper resuming after restart reads
+  // GetMirrorState.acked_size and sets the next call's from_index to it —
+  // GetLogCheckpoint.size is NEVER a valid substitute (it can be ahead of
+  // what the registry has actually stored).
+  rpc GetMirrorState(GetMirrorStateRequest) returns (GetMirrorStateResponse) {
     option (o3co.authz.v1.policy) = {resource: "tlog", action: "read"};
   }
 }
@@ -95,4 +161,54 @@ message LogRecord {
 }
 message ListLogRecordsResponse {
   repeated LogRecord records = 1;
+}
+
+message MirrorLogSegmentRequest {
+  // log_id is the emission log's identity — the same log_id as
+  // GetLogCheckpointRequest.log_id (see D-T3 for the registry-side signer
+  // binding this call additionally enforces at the handler).
+  string log_id = 1;
+  // from_index is the segment's starting index. MUST equal the log's
+  // current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
+  // the exact-extend, gap, overlap, and replay rules this enforces.
+  uint64 from_index = 2;
+  // record_payloads are the ordered record payload bytes for
+  // [from_index, from_index + len(record_payloads)) — the same payload
+  // bytes the local log already hash-chained. The registry recomputes the
+  // chain hash from its stored tail through these payloads and requires
+  // the result to equal checkpoint.head.
+  repeated bytes record_payloads = 3;
+  // checkpoint is the loop-signed head covering EXACTLY this segment's end
+  // (checkpoint.size == from_index + len(record_payloads); see
+  // MirrorLogSegment's own doc for the alignment and monotonicity rules).
+  // Wire-shaped identically to GetLogCheckpointResponse so a shipper can
+  // forward what GetLogCheckpoint already returned.
+  GetLogCheckpointResponse checkpoint = 4;
+  // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
+  // proof-carrying shape of dplaax.audit.v1.RegisterEvidenceRequest, reusing
+  // dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
+  // would be a drift source). Its signed view is described on
+  // MirrorLogSegment's own doc (trust model paragraph).
+  dplaax.chain.v1.AuthProof auth_proof = 5;
+}
+message MirrorLogSegmentResponse {
+  // acked_size is the registry's durable mirror size after this call —
+  // equal to from_index + len(record_payloads) on success, or unchanged on
+  // a byte-identical replay no-op (see MirrorLogSegment's own doc). Callers
+  // may treat this the same as a subsequent GetMirrorState.acked_size read.
+  uint64 acked_size = 1;
+}
+
+message GetMirrorStateRequest {
+  // log_id is the emission log's identity, same as
+  // MirrorLogSegmentRequest.log_id / GetLogCheckpointRequest.log_id.
+  string log_id = 1;
+}
+message GetMirrorStateResponse {
+  // acked_size is the AUTHORITATIVE durable mirror size for this log: the
+  // count of records the registry has verified and stored via
+  // MirrorLogSegment. This is the shipper's resume cursor — see
+  // GetMirrorState's own doc for why GetLogCheckpoint.size must never be
+  // used as one.
+  uint64 acked_size = 1;
 }

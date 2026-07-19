@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/provin-line/oss/canon/jcs"
@@ -600,5 +601,111 @@ func TestReconcile_UncommittedShortLiveFailsLoud(t *testing.T) {
 	}
 	if _, err := filelog.New(dir); err == nil {
 		t.Error("uncommitted segment with a short live log: want New to fail loud, got nil")
+	}
+}
+
+// TestCheckpoint_AtomicSnapshotUnderConcurrentRotate proves Checkpoint()
+// snapshots its (size, head) pair under a SINGLE lock acquisition. A concurrent
+// Rotate truncates l.records to nil under the same lock; the pre-refactor
+// Checkpoint read the size, UNLOCKED, then re-locked in CheckpointAt — so a
+// Rotate landing in that window made CheckpointAt(oldSize) spuriously fail
+// "out of range" (or, with fresh appends between, sign a different log
+// generation's head). A healthy signed log must never error from Checkpoint,
+// and every returned checkpoint must be self-consistent (head empty iff size 0).
+// Run under -race to also flag any lock-discipline regression.
+func TestCheckpoint_AtomicSnapshotUnderConcurrentRotate(t *testing.T) {
+	ctx := context.Background()
+	const (
+		logID     = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
+		signerDID = logID + ":process:s1"
+		vm        = signerDID + "#signing"
+	)
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer: ks, SignerDID: signerDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: vm, LogID: logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	if _, err := l.Append(ctx, []byte("seed")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Heavy contention: many Checkpoint goroutines so that — on the pre-fix
+	// read-unlock-relock — at least one is descheduled inside the window
+	// between its size read and CheckpointAt's re-lock while a Rotate acquires
+	// the lock and truncates records to nil, making CheckpointAt(oldSize) fail
+	// out-of-range. The atomic snapshot must make that impossible.
+	const (
+		readers = 64
+		rounds  = 40
+	)
+	done := make(chan struct{})
+	var mu sync.Mutex
+	var cpErr error
+	fail := func(e error) {
+		mu.Lock()
+		if cpErr == nil {
+			cpErr = e
+		}
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				cp, err := l.Checkpoint(ctx)
+				if err != nil {
+					fail(fmt.Errorf("Checkpoint errored on a healthy signed log (torn size/head snapshot): %w", err))
+					return
+				}
+				if (cp.Size == 0) != (cp.Head == "") {
+					fail(fmt.Errorf("torn snapshot: size=%d but head=%q", cp.Size, cp.Head))
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < rounds; i++ {
+		mu.Lock()
+		stop := cpErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+		// A few records per round so the log spends more time non-empty, giving
+		// readers more chances to snapshot a size≥1 that the following Rotate
+		// then truncates.
+		for j := 0; j < 4; j++ {
+			if _, err := l.Append(ctx, []byte("r")); err != nil {
+				t.Fatalf("append round %d: %v", i, err)
+			}
+		}
+		if _, err := l.Rotate(ctx); err != nil {
+			t.Fatalf("rotate round %d: %v", i, err)
+		}
+	}
+	close(done)
+	wg.Wait()
+	if cpErr != nil {
+		t.Fatal(cpErr)
 	}
 }

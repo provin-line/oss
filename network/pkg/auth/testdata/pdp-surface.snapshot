@@ -30,6 +30,7 @@ schemas:read
 schemas:register
 signer:sign-vc
 signer:sign-wire
+tlog:mirror
 tlog:read
 vc:read
 vc:store

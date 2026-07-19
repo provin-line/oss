@@ -12,7 +12,20 @@ The dplaax network services, exposed over ConnectRPC (h2c) by the node binary
 | ChainPeerService | Internet-facing cross-organization peer protocol (L2 wire-signed) |
 | VCResolverService | Provenance-chain VC storage and async cross-registry resolution |
 | AuditService | Async chain-auditor read surface (verdicts, consumed-source receipts) plus evidence registration |
+| TlogService | Emission-log checkpoint/record reads; `MirrorLogSegment` ships checkpoint-aligned segments into registry custody (L1 + in-band wireauth); `GetMirrorState` reads the registry's durable mirror size (L1 read, `tlog:read`) |
 | PayloadStoreService | Write side of by-reference payload delivery — deposits payload bytes for later resolution |
+
+Pipeline durable logs can be mirrored to the registry: `MirrorLogSegment`
+(L1 + in-band wireauth) lets a background shipper replicate checkpoint-aligned
+segments of a pipeline process's local signed log into registry custody, and
+`GetMirrorState` (a plain L1 read) reports the registry's durable mirror size.
+The registry only ever custodies and serves the verified prefix it is handed
+— it never re-signs. The shipper is not yet wired into any binary; wiring it
+into the pipeline runtime is a later change, and until then TlogService reads
+still come from the in-process map `cmd/standalone` wires today. Once wired:
+a terminal tail not yet mirrored is lost from the registry's view within the
+flush interval, and a process that loses its local volume rolls to a fresh
+log identity rather than resuming the old one.
 
 Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`), `GET /healthz`
 (liveness, static), and `GET /readyz` (readiness — dependency-aware: evidence
@@ -23,9 +36,11 @@ store, broker connection when a data plane runs, external PDP reachability).
 All durable state is plain files under a configurable data dir: YAML for
 control-plane records (DID documents, keys, schemas, subscriptions, allow-lists),
 a file-backed evidence dir for the VC store (credentials, resolution pool,
-audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`), and a
+audit queue, verdicts — `vcresolver/filestore` + `auditor/filestore`), a
 file-backed store for retained by-reference payload bytes
-(`payloadresolver/filestore`). Nonce store, infra-operator state, and
+(`payloadresolver/filestore`), and a file-backed mirror store custodying
+verified prefixes of pipeline emission logs (`tlogservice/mirrorstore`).
+Nonce store, infra-operator state, and
 per-publisher emit-health reports (`chainmanager/emithealth`, TTL-based) are
 in-memory (PoC posture — restart implications are documented per service).
 Storage sits behind a seam; swapping files for PostgreSQL is a Hub-side

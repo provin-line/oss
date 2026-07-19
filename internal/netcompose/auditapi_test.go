@@ -55,7 +55,7 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 	}
 	schemaSvc := schemaregistry.New(schemayaml.New(t.TempDir()))
 	payloadStore := payloadmemstore.New()
-	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadStore), payloadStore, nil, 1<<20, 1<<20, 64<<20, nil, nil, nil, nil)
+	h, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, status, auditor.NewMemReceiptStore(), auditor.NewMemQueue(), schemaSvc, payloadresolver.New(payloadStore), payloadStore, nil, nil, 1<<20, 1<<20, 64<<20, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildHandler: %v", err)
 	}

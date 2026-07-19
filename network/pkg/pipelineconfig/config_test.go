@@ -30,6 +30,54 @@ func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
 	if cfg.MaxRetainPayloadSize != 64<<20 {
 		t.Errorf("max-retain-payload-size = %d, want %d", cfg.MaxRetainPayloadSize, 64<<20)
 	}
+	if cfg.TlogMirror.MaxBatchRecords != 256 {
+		t.Errorf("tlog-mirror.max-batch-records = %d, want %d", cfg.TlogMirror.MaxBatchRecords, 256)
+	}
+	if cfg.TlogMirror.MaxBatchBytes != 4<<20 {
+		t.Errorf("tlog-mirror.max-batch-bytes = %d, want %d", cfg.TlogMirror.MaxBatchBytes, 4<<20)
+	}
+}
+
+func TestLoad_TlogMirrorNonPositiveOverrideFails(t *testing.T) {
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.max-batch-records = 0`)); err == nil {
+		t.Fatal("max-batch-records = 0: want a boot error")
+	}
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.max-batch-bytes = -1`)); err == nil {
+		t.Fatal("max-batch-bytes = -1: want a boot error")
+	}
+}
+
+// TestLoad_TlogMirrorMaxBatchBytesBelowMaxCredentialSize_Fails proves the
+// cross-key boot coherence check (task-6 controller amendment, closing the
+// backlog-wedge story): a single mirrored record can be as large as
+// max-credential-size (a sink-receipt log entry carries a full
+// credential), so a max-batch-bytes SMALLER than that could never ship
+// such a record even alone — this must fail boot, naming both keys, not
+// merely surface once a real oversized record is mirrored at runtime.
+func TestLoad_TlogMirrorMaxBatchBytesBelowMaxCredentialSize_Fails(t *testing.T) {
+	_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `
+provin.network.pipeline.max-credential-size = 2097152
+provin.network.pipeline.tlog-mirror.max-batch-bytes = 1048576
+`))
+	if err == nil {
+		t.Fatal("max-batch-bytes (1 MiB) < max-credential-size (2 MiB): want a boot error")
+	}
+	if !strings.Contains(err.Error(), "max-batch-bytes") || !strings.Contains(err.Error(), "max-credential-size") {
+		t.Fatalf("err = %v, want it to name both max-batch-bytes and max-credential-size", err)
+	}
+}
+
+// TestLoad_TlogMirrorMaxBatchBytesDefaultCoherent proves the shipped
+// defaults (max-batch-bytes 4 MiB, max-credential-size 1 MiB) boot clean —
+// the coherence check must not reject the repo's own reference.conf.
+func TestLoad_TlogMirrorMaxBatchBytesDefaultCoherent(t *testing.T) {
+	cfg, err := pipelineconfig.LoadPipelineConfig(loadWith(t, ""))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig with default config: %v", err)
+	}
+	if cfg.TlogMirror.MaxBatchBytes < cfg.MaxCredentialSize {
+		t.Fatalf("default max-batch-bytes (%d) < max-credential-size (%d) — the shipped defaults are incoherent", cfg.TlogMirror.MaxBatchBytes, cfg.MaxCredentialSize)
+	}
 }
 
 func TestLoad_AuditRunnerDefaults(t *testing.T) {

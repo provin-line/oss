@@ -24,7 +24,7 @@ func seeded(t *testing.T, n int) *tlogservice.Service {
 			t.Fatal(err)
 		}
 	}
-	return tlogservice.New(map[string]tlog.Log{logID: l})
+	return tlogservice.New(map[string]tlog.Log{logID: l}, nil)
 }
 
 func TestRecords_RangeSemantics(t *testing.T) {
@@ -70,6 +70,8 @@ func TestTlogService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
 		"GetLogCheckpoint": {"tlog", "read"},
 		"ListLogRecords":   {"tlog", "read"},
+		"MirrorLogSegment": {"tlog", "mirror"},
+		"GetMirrorState":   {"tlog", "read"},
 	}
 	methods := tlogpb.File_dplaax_tlog_v1_tlog_proto.Services().ByName("TlogService").Methods()
 	if methods.Len() != len(want) {
@@ -105,11 +107,32 @@ func (o originLog) Checkpoint(context.Context) (*tlog.Checkpoint, error) {
 	return &tlog.Checkpoint{Origin: o.origin, Size: 1, Head: "h", SignedBy: "did:x#s"}, nil
 }
 
+// TestCheckBatchCaps pins the D-T2 rule 5 cap POLICY in the service (the
+// single definition both the handler's pre-auth guard and MirrorSegment's
+// defense-in-depth check call). A map-only node has no caps; a configured node
+// rejects over-count and over-bytes with ErrCapExceeded and admits a
+// within-caps batch.
+func TestCheckBatchCaps(t *testing.T) {
+	if err := tlogservice.New(map[string]tlog.Log{}, nil).CheckBatchCaps(1_000_000, 1<<30); err != nil {
+		t.Fatalf("map-only node: want nil (no caps to enforce), got %v", err)
+	}
+	svc := tlogservice.New(map[string]tlog.Log{}, &tlogservice.MirrorConfig{MaxBatchRecords: 2, MaxBatchBytes: 5})
+	if err := svc.CheckBatchCaps(3, 0); !errors.Is(err, tlogservice.ErrCapExceeded) {
+		t.Fatalf("over-count: want ErrCapExceeded, got %v", err)
+	}
+	if err := svc.CheckBatchCaps(1, 10); !errors.Is(err, tlogservice.ErrCapExceeded) {
+		t.Fatalf("over-bytes: want ErrCapExceeded, got %v", err)
+	}
+	if err := svc.CheckBatchCaps(2, 5); err != nil {
+		t.Fatalf("within caps: want nil, got %v", err)
+	}
+}
+
 func TestCheckpointOriginGuard(t *testing.T) {
 	svc := tlogservice.New(map[string]tlog.Log{
 		"good": originLog{origin: "good"},
 		"bad":  originLog{origin: "not-the-key"},
-	})
+	}, nil)
 	if cp, err := svc.Checkpoint(context.Background(), "good"); err != nil || cp.Origin != "good" {
 		t.Fatalf("matching origin: cp=%v err=%v", cp, err)
 	}

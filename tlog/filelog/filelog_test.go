@@ -254,6 +254,169 @@ func TestCheckpoint_SignedViewVerifies(t *testing.T) {
 	}
 }
 
+// CheckpointAt is the optional, filelog-only capability the tlog-custody
+// mirror shipper needs (task-6 controller decision): a signed checkpoint
+// over an ARBITRARY earlier prefix, not just the log's current head.
+// CheckpointAt(0)/mid/full all produce a Size/Head pair whose SignedView
+// re-verifies, and CheckpointAt(N) — taken while the log has exactly N
+// records — matches what Checkpoint() returns at that same moment (modulo
+// Timestamp, since both stamp "now").
+func TestCheckpointAt_ZeroMidFull(t *testing.T) {
+	ctx := context.Background()
+	const (
+		logID     = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
+		signerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:s1"
+		vm        = signerDID + "#signing"
+	)
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer: ks, SignerDID: signerDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: vm, LogID: logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hashes []string
+	for _, p := range []string{"r0", "r1", "r2"} {
+		rec, err := l.Append(ctx, []byte(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes = append(hashes, rec.Hash)
+	}
+
+	verifyView := func(t *testing.T, cp *tlog.Checkpoint, wantSize uint64, wantHead string) {
+		t.Helper()
+		if cp.Size != wantSize || cp.Head != wantHead || cp.SignedBy != vm {
+			t.Fatalf("checkpoint = %+v, want size %d / head %q / signedBy %s", cp, wantSize, wantHead, vm)
+		}
+		view, err := cp.SignedView()
+		if err != nil {
+			t.Fatalf("SignedView: %v", err)
+		}
+		ok, err := (ed25519.Verifier{}).Verify(kp.PublicKey, view, cp.Signature)
+		if err != nil || !ok {
+			t.Fatalf("signature does not verify (ok=%v err=%v)", ok, err)
+		}
+	}
+
+	cp0, err := l.CheckpointAt(ctx, 0)
+	if err != nil {
+		t.Fatalf("CheckpointAt(0): %v", err)
+	}
+	verifyView(t, cp0, 0, "")
+
+	cp1, err := l.CheckpointAt(ctx, 1)
+	if err != nil {
+		t.Fatalf("CheckpointAt(1): %v", err)
+	}
+	verifyView(t, cp1, 1, hashes[0])
+
+	cp3, err := l.CheckpointAt(ctx, 3)
+	if err != nil {
+		t.Fatalf("CheckpointAt(3): %v", err)
+	}
+	verifyView(t, cp3, 3, hashes[2])
+}
+
+// CheckpointAt(N), taken while the log has exactly N records, must match
+// what Checkpoint() returns at that same moment — Checkpoint is now
+// literally CheckpointAt(ctx, currentSize) (DRY: one signing path).
+func TestCheckpointAt_MatchesCheckpointAtThatSize(t *testing.T) {
+	ctx := context.Background()
+	const (
+		logID     = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
+		signerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:s1"
+		vm        = signerDID + "#signing"
+	)
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer: ks, SignerDID: signerDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: vm, LogID: logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []string{"r0", "r1", "r2", "r3"} {
+		if _, err := l.Append(ctx, []byte(p)); err != nil {
+			t.Fatal(err)
+		}
+		n := uint64(i + 1)
+		want, err := l.Checkpoint(ctx)
+		if err != nil {
+			t.Fatalf("Checkpoint at size %d: %v", n, err)
+		}
+		got, err := l.CheckpointAt(ctx, n)
+		if err != nil {
+			t.Fatalf("CheckpointAt(%d): %v", n, err)
+		}
+		if got.Size != want.Size || got.Head != want.Head || got.SignedBy != want.SignedBy || got.Origin != want.Origin {
+			t.Fatalf("CheckpointAt(%d) = %+v, want it to match Checkpoint() = %+v (modulo Timestamp)", n, got, want)
+		}
+	}
+}
+
+// An out-of-range size (past the log's current committed length) is a
+// clear error, never a silently truncated or zero-valued checkpoint.
+func TestCheckpointAt_OutOfRange_Error(t *testing.T) {
+	ctx := context.Background()
+	const (
+		logID     = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
+		signerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe:process:s1"
+	)
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := &memKS{keys: map[string][]byte{}}
+	if err := ks.SaveKeyPair(signerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kp}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := filelog.New(t.TempDir(), filelog.WithCheckpointSigner(filelog.CheckpointSigner{
+		Signer: ks, SignerDID: signerDID, KeyID: string(keystore.KeyIDSigning),
+		VerificationMethod: signerDID + "#signing", LogID: logID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(ctx, []byte("r0")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.CheckpointAt(ctx, 2); err == nil {
+		t.Fatal("CheckpointAt(2) over a 1-record log: want error, got nil")
+	}
+}
+
+// CheckpointAt on an unsigned log is the same contract-level sentinel as
+// Checkpoint — a caller holding only tlog.Log must not need to import the
+// implementation to detect it.
+func TestCheckpointAt_UnsignedIsContractSentinel(t *testing.T) {
+	l, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Append(context.Background(), []byte("r0")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.CheckpointAt(context.Background(), 1); !errors.Is(err, tlog.ErrUnsignedLog) {
+		t.Fatalf("err=%v, want errors.Is(tlog.ErrUnsignedLog)", err)
+	}
+}
+
 // A crash mid-append leaves an unterminated final fragment. Every COMPLETE
 // line was fsynced, so the torn tail is provably an uncommitted append:
 // reopen truncates it loudly and the log keeps working — it must not refuse
