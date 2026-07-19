@@ -104,3 +104,37 @@ func TestMirrorLogSegment_MountCapDerivedFromMaxBatchBytes(t *testing.T) {
 		t.Fatalf("2 MiB batch (between max-credential-size and max-batch-bytes): code = %v, want InvalidArgument (a missing proof — proves the request reached the handler, i.e. was NOT rejected at the connect read cap); err=%v", connect.CodeOf(err), err)
 	}
 }
+
+// TestMirrorLogSegment_MountCapCoversJSONBase64Inflation drives a SINGLE record
+// AT max-batch-bytes over the Connect JSON codec (WithProtoJSON), which
+// base64-encodes record_payloads (~4/3 inflation). The RAW JSON body is then
+// ~5.33 MiB for a 4 MiB batch — larger than the DECODED max-batch-bytes. The
+// per-RPC read cap (connect.WithReadMaxBytes, which bounds the RAW body) must
+// cover that inflation, or this legitimate one-record request is rejected at
+// the read cap (CodeResourceExhausted) before the handler ever sees it. The
+// record is exactly max-batch-bytes, so the handler's own payload-sum cap
+// admits it (not > max); with no AuthProof the handler then returns
+// CodeInvalidArgument (missing proof) — a code connect's read-cap enforcement
+// can never produce. Confirmed by reverting mirrorReadCapBytes to
+// `maxBatchBytes + maxProofRequestBytes`: this test then fails with
+// CodeResourceExhausted (the base64-inflated body overruns the un-inflated cap).
+func TestMirrorLogSegment_MountCapCoversJSONBase64Inflation(t *testing.T) {
+	const maxCredentialSize = 1 << 20
+	const maxBatchBytes = 4 << 20 // the repo's shipped default
+	h := assembledHandlerWithMirror(t, maxCredentialSize, 256, maxBatchBytes)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// WithProtoJSON: the JSON codec base64-encodes record_payloads on the wire.
+	client := tlogpbconnect.NewTlogServiceClient(http.DefaultClient, srv.URL,
+		connect.WithProtoJSON(), connect.WithInterceptors(BearerInterceptor("test-bearer")))
+	big := make([]byte, maxBatchBytes) // a single record AT the batch-bytes cap
+	req := connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
+		LogId: pipelineDID, FromIndex: 0, RecordPayloads: [][]byte{big},
+		Checkpoint: &tlogpb.GetLogCheckpointResponse{Size: "1"},
+	})
+	_, err := client.MirrorLogSegment(context.Background(), req)
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("single record at max-batch-bytes over JSON (base64-inflated): code = %v, want InvalidArgument (reached the handler — NOT rejected at the read cap for base64 inflation); err=%v", connect.CodeOf(err), err)
+	}
+}

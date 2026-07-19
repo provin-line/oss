@@ -370,22 +370,29 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 	// for every "does not align" shape (gap, overlap, chain-head mismatch).
 	newAcked, err := s.mirror.Store.AppendSegment(in.LogID, in.FromIndex, in.Records, in.Checkpoint)
 	if err != nil {
-		if errors.Is(err, mirrorstore.ErrConflict) {
+		switch {
+		case errors.Is(err, mirrorstore.ErrSignerMismatch):
+			// D-T3 signer-pin failure resolved atomically in the store — a
+			// writer-binding violation, same connect code as verifyMirrorIdentity's.
+			return 0, fmt.Errorf("%w: mirror segment %q: %v", ErrIdentityMismatch, in.LogID, err)
+		case errors.Is(err, mirrorstore.ErrConflict):
 			return 0, fmt.Errorf("%w: mirror segment %q: %v", ErrMirrorConflict, in.LogID, err)
+		default:
+			return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, err)
 		}
-		return 0, fmt.Errorf("tlogservice: mirror segment %q: %w", in.LogID, err)
 	}
 	return newAcked, nil
 }
 
-// verifyMirrorIdentity implements D-T3: verifies the checkpoint's OWN
-// signature against its SignedBy key, requires the wireauth-proven caller
-// to equal the checkpoint's signer base DID, applies the per-kind
-// writer-binding predicate (emission: ancestry; sink-receipt/sink-reject:
-// direct equality), and — once the log already carries a persisted
-// checkpoint — pins the exact signer (SignedBy, the full verification
-// method, not just its base DID): a sibling process under the same
-// pipeline cannot take over an existing log.
+// verifyMirrorIdentity implements D-T3's STATELESS identity checks: it
+// verifies the checkpoint's OWN signature against its SignedBy key, requires
+// the wireauth-proven caller to equal the checkpoint's signer base DID, and
+// applies the per-kind writer-binding predicate (emission: ancestry;
+// sink-receipt/sink-reject: direct equality). The STATEFUL first-writer signer
+// pin (a sibling process under the same pipeline cannot take over an existing
+// log) is enforced atomically inside Store.AppendSegment instead — under the
+// append lock — so it cannot be lost to a read-then-check race between two
+// concurrent initial segments.
 func (s *Service) verifyMirrorIdentity(ctx context.Context, kind logident.LogKind, in MirrorSegmentInput) error {
 	cp := in.Checkpoint
 	if cp.SignedBy == "" || len(cp.Signature) == 0 {
@@ -453,18 +460,14 @@ func (s *Service) verifyMirrorIdentity(ctx context.Context, kind logident.LogKin
 		}
 	}
 
-	// First-accepted-segment pinning.
-	existing, cerr := s.mirror.Store.Checkpoint(in.LogID)
-	switch {
-	case cerr == nil:
-		if existing.SignedBy != cp.SignedBy {
-			return fmt.Errorf("%w: mirror segment %q: signer %q does not match the log's pinned signer %q", ErrIdentityMismatch, in.LogID, cp.SignedBy, existing.SignedBy)
-		}
-	case errors.Is(cerr, mirrorstore.ErrNotFound):
-		// First segment for this log — nothing to pin against yet.
-	default:
-		return fmt.Errorf("tlogservice: mirror segment %q: pinning check: %w", in.LogID, cerr)
-	}
+	// The stateful first-writer signer PIN (incoming SignedBy must equal the
+	// already-stored checkpoint's SignedBy) is NOT checked here: it is enforced
+	// atomically inside Store.AppendSegment, under the same lock the append
+	// holds, so two concurrent initial segments from different sibling signers
+	// cannot both pass a read-then-check race. AppendSegment returns
+	// mirrorstore.ErrSignerMismatch, which MirrorSegment maps to
+	// ErrIdentityMismatch. This method does only the STATELESS identity checks
+	// (signature verify, caller==signer, per-kind ancestry/equality).
 	return nil
 }
 

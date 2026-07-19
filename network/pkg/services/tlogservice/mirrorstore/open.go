@@ -74,6 +74,17 @@ func openLogDir(dir string) *logEntry {
 	if err != nil {
 		return &logEntry{dir: dir, poisonErr: fmt.Errorf("damaged checkpoint: %w", err)}
 	}
+	// The persisted checkpoint's Origin must hash to THIS directory's name
+	// (the store keys every log dir by dirName(log_id) = sha256hex(log_id) —
+	// the same mapping AppendSegment and the local-log/serve paths use). A
+	// copied, swapped, or corrupted directory would otherwise let a request
+	// for log A be answered with log B's checkpoint+records. On mismatch,
+	// poison rather than serve it under the wrong identity.
+	if cp != nil && dirName(cp.Origin) != filepath.Base(dir) {
+		return &logEntry{dir: dir, poisonErr: fmt.Errorf(
+			"checkpoint origin %q hashes to %q, not this directory %q — a swapped or corrupted log dir",
+			cp.Origin, dirName(cp.Origin), filepath.Base(dir))}
+	}
 	var checkpointSize uint64
 	checkpointHead := ""
 	if cp != nil {

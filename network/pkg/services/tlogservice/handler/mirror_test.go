@@ -164,12 +164,13 @@ func mirrorMustDelegate(t *testing.T, signer crypto.Signer, subject string) *del
 // resolution; store is the durable mirror MirrorSegment writes to and
 // GetMirrorState/Checkpoint/Records read from.
 type mirrorFixture struct {
-	ks       *fixtureKeyStore
-	didSvc   *didregistry.Service
-	resolver mirrorResolverAdapter
-	store    *mirrorstore.Store
-	svc      *tlogservice.Service
-	handler  *handler.Handler
+	ks        *fixtureKeyStore
+	didSvc    *didregistry.Service
+	resolver  mirrorResolverAdapter
+	store     *mirrorstore.Store
+	storeRoot string
+	svc       *tlogservice.Service
+	handler   *handler.Handler
 	// verifier is the SAME wireauth verifier the fixture handler uses; exposed
 	// so a test can wire it into a handler over a differently-configured Service
 	// (e.g. a domain resolver that fails transiently) while keeping wireauth's
@@ -223,7 +224,8 @@ func newMirrorFixture(t *testing.T, maxRecords, maxBytes int) *mirrorFixture {
 		t.Fatalf("wireauth.NewVerifier: %v", err)
 	}
 
-	store, err := mirrorstore.Open(t.TempDir())
+	storeRoot := t.TempDir()
+	store, err := mirrorstore.Open(storeRoot)
 	if err != nil {
 		t.Fatalf("mirrorstore.Open: %v", err)
 	}
@@ -238,9 +240,20 @@ func newMirrorFixture(t *testing.T, maxRecords, maxBytes int) *mirrorFixture {
 	})
 
 	return &mirrorFixture{
-		ks: ks, didSvc: didSvc, resolver: resolver, store: store,
+		ks: ks, didSvc: didSvc, resolver: resolver, store: store, storeRoot: storeRoot,
 		svc: svc, handler: handler.New(svc, verifier), verifier: verifier,
 	}
+}
+
+// handlerForStore builds a Handler over an arbitrary mirror store (e.g. a
+// reopened one) bound to the fixture's issued DIDs / resolver / verifier — for
+// tests that must exercise MirrorLogSegment across a store restart.
+func (f *mirrorFixture) handlerForStore(store *mirrorstore.Store) *handler.Handler {
+	svc := tlogservice.New(map[string]tlog.Log{}, &tlogservice.MirrorConfig{
+		Store: store, DIDResolver: f.resolver, Ancestry: logident.NewDIDRegistryAncestry(f.didSvc),
+		Crypto: ed25519.Verifier{}, MaxBatchRecords: 256, MaxBatchBytes: 4 << 20,
+	})
+	return handler.New(svc, f.verifier)
 }
 
 // mirrorReqParams is a MirrorLogSegmentRequest's fully explicit ingredients:
@@ -520,6 +533,100 @@ func TestMirrorLogSegment_ConcurrentIdenticalRetry_NoInternal(t *testing.T) {
 		if err != nil || state.Msg.GetAckedSize() != 2 {
 			t.Fatalf("iter %d: final acked = %d (err %v), want a single 2", i, state.Msg.GetAckedSize(), err)
 		}
+	}
+}
+
+// --- F1: first-signer pin is atomic with append (concurrency-safe).
+
+// TestMirrorLogSegment_ConcurrentInitialSiblingSigners_ExactlyOnePins fires
+// two INITIAL segments for the SAME emission log from two DIFFERENT valid
+// sibling signers (A1, A2 — both ancestry-valid under pipeline A) concurrently.
+// Exactly one must pin the signer; the other must be PermissionDenied. The pin
+// then survives a restart: the losing signer stays rejected against a reopened
+// store. Pre-fix, the pin was checked in the Service (read Store.Checkpoint)
+// BEFORE the append, so both could observe "no checkpoint yet" and both be
+// accepted — a signer-replacement race.
+func TestMirrorLogSegment_ConcurrentInitialSiblingSigners_ExactlyOnePins(t *testing.T) {
+	f := newMirrorFixture(t, 256, 4<<20)
+	reqs := [2]*tlogpb.MirrorLogSegmentRequest{
+		f.buildRequest(t, validParams(mirrorPipelineA, 0, payloads(2), "", mirrorProcessA1)),
+		f.buildRequest(t, validParams(mirrorPipelineA, 0, payloads(2), "", mirrorProcessA2)),
+	}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	var errs [2]error
+	for j := range reqs {
+		wg.Add(1)
+		go func(j int) {
+			defer wg.Done()
+			<-start
+			_, errs[j] = f.call(reqs[j])
+		}(j)
+	}
+	close(start)
+	wg.Wait()
+
+	successes := 0
+	for j := range reqs {
+		switch {
+		case errs[j] == nil:
+			successes++
+		case connect.CodeOf(errs[j]) != connect.CodePermissionDenied:
+			t.Fatalf("call %d: code = %v, want PermissionDenied for the loser (err=%v)", j, connect.CodeOf(errs[j]), errs[j])
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successes = %d, want exactly 1 (one signer pins, the other rejected — never a signer replacement)", successes)
+	}
+
+	// The store must hold exactly one signer, at the winner's size.
+	cp, err := f.store.Checkpoint(mirrorPipelineA)
+	if err != nil {
+		t.Fatalf("store.Checkpoint: %v", err)
+	}
+	loser := mirrorProcessA1
+	if cp.SignedBy == mirrorProcessA1+"#signing" {
+		loser = mirrorProcessA2
+	}
+
+	// The losing signer stays rejected ACROSS A RESTART (the pin is persisted
+	// in the stored checkpoint's SignedBy, re-read on reopen).
+	reopened, err := mirrorstore.Open(f.storeRoot)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	h2 := f.handlerForStore(reopened)
+	tail := ""
+	for _, p := range payloads(2) {
+		tail = mirrorstore.ChainHash(tail, p)
+	}
+	loserExt := f.buildRequest(t, validParams(mirrorPipelineA, 2, payloads(1), tail, loser))
+	if _, err := h2.MirrorLogSegment(context.Background(), connect.NewRequest(loserExt)); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("losing signer %q after restart: code = %v, want PermissionDenied (pin persisted); err=%v", loser, connect.CodeOf(err), err)
+	}
+}
+
+// --- F2: a byte-identical replay still has its checkpoint head verified.
+
+// TestMirrorLogSegment_ReplayWrongHeadRejected proves a replay whose records
+// byte-match the stored segment but whose (genuinely-signed) checkpoint Head is
+// wrong is rejected (FailedPrecondition), not acked. D-T2 rule 1 requires
+// recomputing every checkpoint head, replay included; pre-fix the replay branch
+// returned success before the head check, so a pinned signer could ack an
+// arbitrary Head.
+func TestMirrorLogSegment_ReplayWrongHeadRejected(t *testing.T) {
+	f := newMirrorFixture(t, 256, 4<<20)
+	seed := payloads(2)
+	if _, err := f.call(f.buildRequest(t, validParams(mirrorPipelineA, 0, seed, "", mirrorProcessA1))); err != nil {
+		t.Fatalf("seed segment: %v", err)
+	}
+	// Replay [0,2): identical records, but a WRONG checkpoint Head — signed
+	// over that wrong head (buildRequest signs whatever CheckpointHead is), so
+	// it passes signature verification and reaches the store's replay branch.
+	p := validParams(mirrorPipelineA, 0, seed, "", mirrorProcessA1)
+	p.CheckpointHead = "0000000000000000000000000000000000000000000000000000000000000bad"
+	if _, err := f.call(f.buildRequest(t, p)); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("replay with a wrong (but signed) head: code = %v, want FailedPrecondition (err=%v)", connect.CodeOf(err), err)
 	}
 }
 

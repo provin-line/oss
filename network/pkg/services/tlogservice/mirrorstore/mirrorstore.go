@@ -94,6 +94,16 @@ var ErrNotFound = errors.New("mirrorstore: no checkpoint recorded for that log")
 // the append itself holds (no torn read between "is this a replay?" and "commit").
 var ErrConflict = errors.New("mirrorstore: segment does not align with the mirrored log")
 
+// ErrSignerMismatch is AppendSegment's D-T3 first-writer-pin failure: a
+// segment whose checkpoint SignedBy differs from the SignedBy of the
+// checkpoint already stored for this log. The pin is enforced HERE, under the
+// same lock the append holds, so two concurrent INITIAL segments from
+// different (each individually ancestry-valid) sibling signers cannot both
+// observe "no checkpoint yet" and both be accepted — the first to commit pins
+// the signer, and the second sees that committed value. The tlogservice.Service
+// maps it to its own ErrIdentityMismatch (→ connect PermissionDenied).
+var ErrSignerMismatch = errors.New("mirrorstore: segment signer does not match the log's pinned signer")
+
 // logEntry is the in-memory state for one mirrored log, keyed by
 // dirName(logID) in Store.logs. poisonErr, once set at Open, is returned
 // verbatim (wrapped with the failing call's context) by every subsequent

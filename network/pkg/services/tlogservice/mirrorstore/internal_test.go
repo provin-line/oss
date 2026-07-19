@@ -442,6 +442,49 @@ func TestAppendVerified_JournalAppendFailureRollsBack(t *testing.T) {
 	}
 }
 
+// TestReopen_CheckpointOriginMismatchPoisons (F4) covers the reopen finding: a
+// log directory whose persisted checkpoint's Origin does NOT hash to that
+// directory's name (a copied/swapped/corrupted dir) must be poisoned on Open,
+// never served — otherwise a request for log B (whose dir the data now sits
+// under) is answered with log A's checkpoint + records.
+func TestReopen_CheckpointOriginMismatchPoisons(t *testing.T) {
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logA := "did:dplaax:example:pipeline:origin-a"
+	logB := "did:dplaax:example:pipeline:origin-b"
+	p := [][]byte{[]byte("o0")}
+	if _, err := st.AppendVerified(logA, p, testCP(logA, 1, testChainOf(p...))); err != nil {
+		t.Fatalf("seed logA: %v", err)
+	}
+	// Swap: move logA's directory to logB's dir name. The dir named
+	// dirName(logB) now holds a checkpoint whose Origin is logA.
+	if err := os.Rename(filepath.Join(root, dirName(logA)), filepath.Join(root, dirName(logB))); err != nil {
+		t.Fatal(err)
+	}
+
+	st2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	// logB's dir must be poisoned (its checkpoint Origin hashes to logA's dir).
+	if _, err := st2.AckedSize(logB); err == nil {
+		t.Fatal("AckedSize(logB) over a swapped dir: want poisoned error, got nil (would serve logA's data under logB)")
+	}
+	if _, err := st2.Get(logB, 0); err == nil {
+		t.Fatal("Get(logB,0) over a swapped dir: want poisoned error, got nil")
+	}
+	if _, err := st2.Checkpoint(logB); err == nil {
+		t.Fatal("Checkpoint(logB) over a swapped dir: want poisoned error, got nil")
+	}
+	// logA's own dir is gone, so it is simply unknown (size 0) — never served.
+	if n, err := st2.AckedSize(logA); err != nil || n != 0 {
+		t.Fatalf("AckedSize(logA) after its dir moved = %d, %v; want 0, nil", n, err)
+	}
+}
+
 // TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison (R1) covers the
 // re-review regression the P1-C rollback introduced: a PRE-write appendJournal
 // failure (EMFILE / permission / open failure — nothing written, the journal

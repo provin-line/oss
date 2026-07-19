@@ -188,6 +188,19 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 		tail = currentRecords[currentAcked-1].Hash
 	}
 
+	// First-writer signer PIN (D-T3), enforced atomically under s.mu: once a
+	// checkpoint is stored, every later segment — extend OR replay — MUST
+	// carry the same SignedBy. Doing this in the store (rather than a Service
+	// read-then-check before the append) is what closes the concurrency hole:
+	// two INITIAL segments from different ancestry-valid sibling signers can
+	// both pass the Service's stateless identity checks, but only the first to
+	// take this lock and commit pins the signer; the second sees currentCP and
+	// is rejected here, never accepted as a signer replacement.
+	if currentCP != nil && currentCP.SignedBy != cp.SignedBy {
+		return 0, fmt.Errorf("%w: append %q: signer %q does not match the log's pinned signer %q",
+			ErrSignerMismatch, logID, cp.SignedBy, currentCP.SignedBy)
+	}
+
 	if fromIndex != nil {
 		// --- Atomic segment resolution (D-T2 rule 2). Race-free: the acked
 		// size is read here, under the same lock the append below holds.
@@ -211,7 +224,21 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 						ErrConflict, logID, *fromIndex+uint64(i))
 				}
 			}
-			return currentAcked, nil // byte-identical replay — no-op success
+			// D-T2 rule 1 applies to a replay too: even byte-identical records
+			// arrive under a genuinely-signed checkpoint whose Head must equal
+			// the recorded chain head at cp.Size. Without this a pinned signer
+			// could replay with an ARBITRARY (still-signed) Head and have the
+			// registry ack it. Recompute from the stored chain, never trust the
+			// claimed Head.
+			expectedHead := ""
+			if cp.Size > 0 {
+				expectedHead = currentRecords[cp.Size-1].Hash
+			}
+			if expectedHead != cp.Head {
+				return 0, fmt.Errorf("%w: append %q: replay checkpoint head %q != recorded chain head %q at size %d",
+					ErrConflict, logID, cp.Head, expectedHead, cp.Size)
+			}
+			return currentAcked, nil // byte-identical replay with matching head — no-op success
 		}
 		// *fromIndex == currentAcked: exact extend. Re-verify the checkpoint
 		// arithmetic the caller already checked (defense in depth).

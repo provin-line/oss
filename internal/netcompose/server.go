@@ -80,17 +80,27 @@ const (
 // maxProofRequestBytes as headroom for the OTHER fields one MirrorLogSegment
 // call carries alongside record_payloads — the checkpoint (five small,
 // fixed-shape strings/bytes) and the AuthProof (the SAME shape
-// maxProofRequestBytes already sizes for) — plus protobuf framing. Deriving
-// the mount cap FROM max-batch-bytes (rather than reusing maxCredentialSize,
-// a value chosen for an unrelated class — the single-VC StoreVC/fetch path)
-// makes the two structurally coherent: they can never disagree, so no
-// operator note is needed to keep them in sync (Task 5 review, M-1).
+// maxProofRequestBytes already sizes for). Deriving the mount cap FROM
+// max-batch-bytes (rather than reusing maxCredentialSize, a value chosen for
+// an unrelated class — the single-VC StoreVC/fetch path) makes the two
+// structurally coherent: they can never disagree, so no operator note is
+// needed to keep them in sync (Task 5 review, M-1).
+//
+// connect.WithReadMaxBytes bounds the RAW request body, and a Connect JSON
+// client base64-encodes record_payloads (~4/3 inflation) plus JSON
+// field-name/escaping overhead — so a legitimate max-batch-bytes batch is
+// larger on the JSON wire than its decoded size. This derivation applies the
+// SAME `*2 + 64 KiB` inflation OuterRequestCapBytes uses (which covers base64
+// plus JSON overhead with margin, plus framing/header headroom), so a valid
+// one-record JSON request is never rejected at the read cap before the
+// handler's own payload-sum check runs.
 //
 // Used by BOTH the MirrorLogSegment mount (BuildHandler, below) and
-// OuterRequestCapBytes, so the per-RPC cap and the outer raw-body cap that
-// must never be smaller than it can likewise never drift apart.
+// OuterRequestCapBytes, so the per-RPC cap and the outer raw-body cap (which
+// must never be smaller than it, and which inflates this value again) can
+// likewise never drift apart.
 func mirrorReadCapBytes(maxBatchBytes int) int {
-	return maxBatchBytes + maxProofRequestBytes
+	return (maxBatchBytes+maxProofRequestBytes)*2 + 64<<10
 }
 
 // OuterRequestCapBytes sizes the outermost raw-request-body limit so it is
