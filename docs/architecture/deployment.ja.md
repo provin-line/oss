@@ -15,7 +15,7 @@ provin ノードのデプロイ形態と、**load-bearing な**（間違える�
 
 現在バイナリは 2 つ存在する。`cmd/standalone` は上記の all-in-one 構成のまま利用でき続けるが、**非推奨**。`cmd/network` は同じコントロールプレーンのみを動かす — データプレーンは無く、設定に pipeline loop が 1 つでも宣言されていれば起動を拒否する。`cmd/network` と組む pipeline runtime は今後の作業で、それが実装されるまで `cmd/standalone` が pipeline loop を動かす唯一の手段。
 
-evidence の書き込みは通常の wire RPC として実装されている（`AuditService.RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`）。したがって将来の pipeline runtime は、他の client と同じ経路でこれらに到達でき、control-plane バイナリへの in-process ブリッジは不要である。relationship-evidence log（`tlog`）とアーカイバル sink の reject log は、それぞれの design gate を待つ間 in-process のまま残る。
+evidence の書き込みは通常の wire RPC として実装されている（`AuditService.RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`）。したがって将来の pipeline runtime は、他の client と同じ経路でこれらに到達でき、control-plane バイナリへの in-process ブリッジは不要である。relationship-evidence log（`tlog`）とアーカイバル sink の reject log は in-process のまま残る: 各 pipeline process は自分の永続的な署名済み log をローカルに保持し、background の shipper が `MirrorLogSegment`（L1 + in-band wireauth。`GetMirrorState` は plain な L1 read）経由で checkpoint-aligned な segment を非同期に registry へミラーできる。registry はその検証済み prefix を custody・提供するだけで、決して再署名しない。shipper package はまだどのバイナリにも配線されていない — その配線は後続の変更で入る。それまで今日の `cmd/standalone` は TlogService の読み取りを in-process map から返し続け、何もミラーされない。配線後は、まだミラーされていない terminal tail は flush interval の間 registry 側から見えず、ローカルボリュームを失った process は古い log の identity を引き継げず、代わりに新しい identity へ切り替わる。reject log も同じ経路で custody のためにミラーされることになるが、従来どおり TlogService の読み取りでは決して served されない。v0 は `filelog` バックの log のみをミラーし、ミラー済みの log を rotation することは決してない。
 
 ## Load-bearing な設定
 

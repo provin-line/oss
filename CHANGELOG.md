@@ -385,6 +385,47 @@ closure required, now met with executed evidence rather than review.
   never obtained the evidence needed to verify at all), distinct from
   `CONFIDENCE_INDETERMINATE` (a verification outcome: the evidence was
   obtained and evaluated, but the verdict itself could not be concluded).
+- Tlog mirror custody: two new TlogService RPCs, `MirrorLogSegment` and
+  `GetMirrorState`, let a background shipper on each pipeline process
+  replicate checkpoint-aligned segments of its local signed emission log to
+  the registry, which custodies and serves the verified prefix — it never
+  re-signs. Sync-append stays rejected, so mirroring never rides the
+  per-emission hot path; an unmirrored terminal tail is lost from the
+  registry's view within the flush interval, and a process that loses its
+  local volume rolls to a fresh log identity rather than resuming the old
+  one. `MirrorLogSegment` is L1 + in-band wireauth: the PDP gate decides who
+  may mirror, and the wireauth proof binds `log_id`, `from_index`,
+  `checkpoint.head`, and a digest over the ordered record payload hashes.
+  `GetMirrorState` is a plain L1 read (`tlog:read`), the same posture as
+  `GetLogCheckpoint`/`ListLogRecords` — no wireauth proof involved. A single
+  fail-closed log-identity predicate (`tlogservice/logident`) classifies a
+  log id as emission / sink-receipt / sink-reject; the mirror service
+  (`tlogservice.Service.MirrorSegment`) uses that classification to pin the
+  exact process signer on a log's first accepted segment, so a sibling
+  process under the same pipeline can never take over an existing log. The
+  registry's mirror store (`tlogservice/mirrorstore`, under
+  `DataDir/tlog-mirrors/`) persists the remote loop-signed checkpoint
+  verbatim — it has no loop key and never synthesizes one — and serves only
+  its verified prefix.
+- Archival sink reject logs now sign their checkpoints with the same
+  receipt-issuer identity their config already requires
+  (`sink-reject:<receipt-issuer process DID>`), giving them a stable,
+  mirrorable identity. They remain custody-only: still never served over
+  TlogService reads.
+- `tlog/filelog.Log` gains **`CheckpointAt`** (new, additive public method): a
+  signed checkpoint over an arbitrary earlier prefix, not just the log's
+  current head — the capability the mirror shipper needs to produce a
+  checkpoint covering exactly one cap-bounded batch's end. It is deliberately
+  outside the `tlog.Log` contract (`memlog` cannot sign at all, and the
+  tlog-custody spec's v0 scope excludes `merklelog`), so callers detect it
+  structurally instead of every implementation being forced to stub it.
+- New config keys `tlog-mirror.max-batch-records` (default 256) and
+  `tlog-mirror.max-batch-bytes` (default 4 MiB) bound the shipper's batch
+  sizes (the shipper's ticking cadence itself defaults to 5s via
+  `tlogship.DefaultFlushInterval`, a Go constant — not a config key). A
+  boot-time coherence check now requires `max-batch-bytes >=
+  max-credential-size`: a sink-receipt record can carry a full credential, so
+  a batch cap below the credential cap could never ship one, even alone.
 
 ### Changed
 
