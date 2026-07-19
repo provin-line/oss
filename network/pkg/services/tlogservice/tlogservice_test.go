@@ -24,7 +24,7 @@ func seeded(t *testing.T, n int) *tlogservice.Service {
 			t.Fatal(err)
 		}
 	}
-	return tlogservice.New(map[string]tlog.Log{logID: l})
+	return tlogservice.New(map[string]tlog.Log{logID: l}, nil)
 }
 
 func TestRecords_RangeSemantics(t *testing.T) {
@@ -111,7 +111,7 @@ func TestCheckpointOriginGuard(t *testing.T) {
 	svc := tlogservice.New(map[string]tlog.Log{
 		"good": originLog{origin: "good"},
 		"bad":  originLog{origin: "not-the-key"},
-	})
+	}, nil)
 	if cp, err := svc.Checkpoint(context.Background(), "good"); err != nil || cp.Origin != "good" {
 		t.Fatalf("matching origin: cp=%v err=%v", cp, err)
 	}

@@ -74,6 +74,18 @@ service TlogService {
   // payload substitution breaks the equality even independent of the
   // segment_digest check above (defense in depth, not redundancy).
   //
+  // Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
+  // registry re-verifies the checkpoint's OWN signature by rebuilding its
+  // signed view from the checkpoint fields carried here — including
+  // checkpoint.timestamp exactly as served by GetLogCheckpoint, which
+  // projects it via UTC().Format(RFC 3339). A checkpoint originally signed
+  // with a non-UTC-offset timestamp reconstructs to DIFFERENT signed bytes
+  // here than what was actually signed, so its signature never re-verifies
+  // — the segment is permanently unmirrorable, not merely delayed. This is
+  // a hard v0 requirement, not a preference (tlog.Checkpoint.SignedView's
+  // own doc says signers "SHOULD" stamp UTC at the library level; at this
+  // RPC's contract level it is MUST).
+  //
   // Exact-extend only: from_index MUST equal the log's current
   // GetMirrorState.acked_size. A byte-identical replay of an already-acked
   // segment is a no-op success (the idempotent resume case); from_index >
@@ -83,6 +95,14 @@ service TlogService {
   // Checkpoint monotonicity: the stored/served checkpoint for a log never
   // regresses — a valid but older checkpoint presented here is ignored and
   // never replaces the current head.
+  //
+  // Caps (D-T2 rule 5): the segment is additionally bounded by
+  // tlog-mirror.max-batch-records (default 256) and
+  // tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
+  // interaction — a batch over either cap is ResourceExhausted. This RPC is
+  // mounted behind a CREDENTIAL-class read cap, not the smaller proof-class
+  // cap every other TlogService RPC uses: sink-receipt records can carry
+  // full credentials and would otherwise exceed it.
   rpc MirrorLogSegment(MirrorLogSegmentRequest) returns (MirrorLogSegmentResponse) {
     option (o3co.authz.v1.policy) = {resource: "tlog", action: "mirror"};
   }

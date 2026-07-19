@@ -89,17 +89,17 @@ func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
 	// assertions depend on.
 	const maxDocumentRequestBytes = 1 << 20
 	const cred, push = 1 << 20, 4 << 20
-	got := outerRequestCapBytes(cred, push, 0)
+	got := outerRequestCapBytes(cred, push, 0, 0)
 	if got <= push {
 		t.Errorf("cap %d not above the largest legit request %d", got, push)
 	}
-	if outerRequestCapBytes(push, cred, 0) != got {
+	if outerRequestCapBytes(push, cred, 0, 0) != got {
 		t.Error("cap must not depend on argument order (it takes the max)")
 	}
 	// Even with credential/push configured BELOW the document-class per-RPC cap,
 	// the outer bound must still exceed a document-class request plus its JSON
 	// base64 inflation — otherwise a legit doc request is rejected pre-auth.
-	small := outerRequestCapBytes(4<<10, 4<<10, 4<<10)
+	small := outerRequestCapBytes(4<<10, 4<<10, 4<<10, 0)
 	if small <= maxDocumentRequestBytes {
 		t.Errorf("outer cap %d does not cover the document class %d when cred/push are tiny", small, maxDocumentRequestBytes)
 	}
@@ -112,9 +112,27 @@ func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
 	// legitimate large retain is truncated mid-stream by the outer
 	// http.MaxBytesHandler, never reaching the per-RPC (per-chunk) read cap.
 	const retain = 64 << 20
-	gotRetain := outerRequestCapBytes(4<<10, 4<<10, retain)
+	gotRetain := outerRequestCapBytes(4<<10, 4<<10, retain, 0)
 	if gotRetain <= retain {
 		t.Errorf("cap %d not above max-retain-payload-size %d", gotRetain, retain)
+	}
+	// A zero mirror-batch-bytes argument (cmd/standalone never wires a
+	// mirror store) must not widen the outer cap at all — the class simply
+	// does not participate when this binary's own posture never mounts it.
+	if outerRequestCapBytes(4<<10, 4<<10, 4<<10, 0) != small {
+		t.Error("mirror-batch-bytes = 0 must not change the outer cap versus omitting the class entirely")
+	}
+	// A non-zero mirror-batch-bytes MUST widen the outer cap to cover
+	// MirrorLogSegment's OWN derived read cap (max-batch-bytes +
+	// maxProofRequestBytes headroom, internal/netcompose's
+	// mirrorReadCapBytes) — not the bare max-batch-bytes value — or a
+	// legitimate batch-cap-sized segment would be truncated by the outer
+	// http.MaxBytesHandler before ever reaching that per-RPC cap.
+	const maxBatchBytes = 4 << 20
+	const maxProofRequestBytes = 256 << 10 // mirrors internal/netcompose's private constant.
+	gotMirror := outerRequestCapBytes(4<<10, 4<<10, 4<<10, maxBatchBytes)
+	if gotMirror <= maxBatchBytes+maxProofRequestBytes {
+		t.Errorf("outer cap %d does not cover MirrorLogSegment's derived read cap %d", gotMirror, maxBatchBytes+maxProofRequestBytes)
 	}
 }
 

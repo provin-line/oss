@@ -233,8 +233,11 @@ func main() {
 	// its own in-process byRefGate above (the global model), never the
 	// per-publisher report-mode gate (chainmanager.New would panic if both
 	// were wired on the same Service).
+	// mirror is nil: cmd/standalone stays on the map-only path (D-T4) — it
+	// runs no registry-side mirror store, only the local producing logs in
+	// dp.tlogs.
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, payloadStore, dp.tlogs, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
+		schemaSvc, payloadSvc, payloadStore, dp.tlogs, nil, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -275,7 +278,10 @@ func main() {
 	// so a single generous outer bound closes that pre-auth path. Sized to the
 	// largest legitimate request (a stored credential, a pushed body, or a full
 	// RetainPayload stream) plus headroom; per-RPC caps stay tight below it.
-	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize, pipeCfg.MaxRetainPayloadSize)
+	// The fourth argument (mirror batch bytes) is 0: this binary never wires a
+	// mirror store (D-T4's map-only posture), so it never mounts
+	// MirrorLogSegment's derived cap override for that class to cover.
+	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxCredentialSize, pipeCfg.MaxPushBodySize, pipeCfg.MaxRetainPayloadSize, 0)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)

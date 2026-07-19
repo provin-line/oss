@@ -30,6 +30,21 @@ func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
 	if cfg.MaxRetainPayloadSize != 64<<20 {
 		t.Errorf("max-retain-payload-size = %d, want %d", cfg.MaxRetainPayloadSize, 64<<20)
 	}
+	if cfg.TlogMirror.MaxBatchRecords != 256 {
+		t.Errorf("tlog-mirror.max-batch-records = %d, want %d", cfg.TlogMirror.MaxBatchRecords, 256)
+	}
+	if cfg.TlogMirror.MaxBatchBytes != 4<<20 {
+		t.Errorf("tlog-mirror.max-batch-bytes = %d, want %d", cfg.TlogMirror.MaxBatchBytes, 4<<20)
+	}
+}
+
+func TestLoad_TlogMirrorNonPositiveOverrideFails(t *testing.T) {
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.max-batch-records = 0`)); err == nil {
+		t.Fatal("max-batch-records = 0: want a boot error")
+	}
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.max-batch-bytes = -1`)); err == nil {
+		t.Fatal("max-batch-bytes = -1: want a boot error")
+	}
 }
 
 func TestLoad_AuditRunnerDefaults(t *testing.T) {

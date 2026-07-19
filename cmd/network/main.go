@@ -42,6 +42,7 @@ import (
 	payloadfilestore "github.com/provin-line/oss/network/pkg/services/payloadresolver/filestore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
@@ -217,12 +218,32 @@ func main() {
 		AdvertiseWithoutReports: chainCfg.EmitHealth.AdvertiseWithoutReports,
 	}
 
+	// The D-T4 mirror-custody store (tlog-custody spec): this control-plane
+	// node runs no producing loops of its own (the guard above enforces
+	// zero pipeline loops), so its ENTIRE TlogService surface is served
+	// from mirrored copies — MirrorLogSegment's identity enforcement
+	// (D-T3), the batch caps, and GetMirrorState/GetLogCheckpoint/
+	// ListLogRecords' second read source all go through this one store.
+	// BuildHandler wires the rest (the DID resolver + AncestorPipeline
+	// adapter over its own didregistry.Service + the wireauth verifier) —
+	// see its mirror-mounting comment for why MirrorLogSegment gets its own
+	// credential-class read cap here.
+	mirrorStore, err := mirrorstore.Open(filepath.Join(coreCfg.DataDir, "tlog-mirrors"))
+	if err != nil {
+		log.Fatalf("network: build tlog mirror store: %v", err)
+	}
+	mirror := &netcompose.MirrorWiring{
+		Store:           mirrorStore,
+		MaxBatchRecords: pipeCfg.TlogMirror.MaxBatchRecords,
+		MaxBatchBytes:   pipeCfg.TlogMirror.MaxBatchBytes,
+	}
+
 	// mountIngest and byRefHealthy are both nil: no data plane means no
 	// push-ingest routes to mount and no in-process by-reference producer
 	// health to gate advertisement on (emitHealth above replaces it for this
 	// report-mode binary).
 	handler, err := netcompose.BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil, emitHealth)
+		schemaSvc, payloadSvc, payloadStore, map[string]tlog.Log{}, mirror, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, nil, readiness, nil, emitHealth)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
 	}
@@ -262,8 +283,13 @@ func main() {
 	}
 
 	// Outer raw-body cap: no push-body class on this binary (it mounts no
-	// push-ingest routes), so the second argument is 0.
-	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0, pipeCfg.MaxRetainPayloadSize)
+	// push-ingest routes), so the second argument is 0. The fourth argument
+	// is tlog-mirror.max-batch-bytes: this binary always wires a mirror
+	// store (mirror, above), so MirrorLogSegment's own derived read cap
+	// (mirrorReadCapBytes) must be covered here too, or a legitimate
+	// batch-cap-sized segment would be rejected by the outer
+	// http.MaxBytesHandler before it ever reaches that per-RPC cap.
+	maxHTTPRequestBytes := netcompose.OuterRequestCapBytes(pipeCfg.MaxCredentialSize, 0, pipeCfg.MaxRetainPayloadSize, pipeCfg.TlogMirror.MaxBatchBytes)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("network: build server: %v", err)
