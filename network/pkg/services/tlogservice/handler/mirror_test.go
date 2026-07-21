@@ -328,7 +328,7 @@ func (f *mirrorFixture) buildRequest(t *testing.T, p mirrorReqParams) *tlogpb.Mi
 		t.Fatalf("wireauth.Sign: %v", err)
 	}
 	return &tlogpb.MirrorLogSegmentRequest{
-		LogId: p.LogID, FromIndex: p.FromIndex, RecordPayloads: p.Payloads, Checkpoint: wireCP,
+		LogId: p.LogID, FromIndex: p.FromIndex, RecordPayloadsFramed: tlogservice.FrameRecordPayloads(p.Payloads), Checkpoint: wireCP,
 		AuthProof: &chainpb.AuthProof{
 			SignerDid: proof.SignerDID, Nonce: proof.Nonce,
 			IssuedAt: proof.IssuedAt.Format(time.RFC3339), Signature: proof.Signature,
@@ -1060,5 +1060,36 @@ func TestGetMirrorState_NotConfigured_Unimplemented(t *testing.T) {
 	_, err := h.GetMirrorState(context.Background(), connect.NewRequest(&tlogpb.GetMirrorStateRequest{LogId: "x"}))
 	if connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("no mirror store wired: code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+}
+
+// --- pre-auth regression: an over-cap framed blob is rejected before the
+// wireauth proof is ever decoded.
+
+// TestMirrorLogSegment_OverRecordCapRejectedPreAuth proves a framed blob
+// encoding more records than the service's max-batch-records cap is rejected
+// as ResourceExhausted at DecodeSegment — BEFORE the wireauth proof is ever
+// decoded or verified (the reshape's whole point: the framed blob decodes as
+// ONE wire-sized allocation and the unframe stops at the cap DURING the
+// scan). This fixture (mirrorFixture) wires a REAL wireauth.Verifier, not a
+// spy that records whether Verify was called, so the proof of "pre-auth" is
+// structural instead: AuthProof and Checkpoint are deliberately omitted
+// (nil) from the request. If DecodeSegment ran AFTER proof decoding, a nil
+// AuthProof would surface InvalidArgument — see
+// TestMirrorLogSegment_Rule1_MissingAuthProof_InvalidArgument, which proves
+// exactly that for a well-formed batch — so getting ResourceExhausted here
+// instead is only possible if the cap check ran first.
+func TestMirrorLogSegment_OverRecordCapRejectedPreAuth(t *testing.T) {
+	f := newMirrorFixture(t, 2, 4<<20) // max-batch-records = 2
+	over := payloads(3)                // 3 records over the cap of 2
+	req := &tlogpb.MirrorLogSegmentRequest{
+		LogId:                mirrorPipelineA,
+		FromIndex:            0,
+		RecordPayloadsFramed: tlogservice.FrameRecordPayloads(over),
+		// Checkpoint and AuthProof deliberately omitted — DecodeSegment must
+		// reject the over-cap batch before either is ever inspected.
+	}
+	if _, err := f.call(req); connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Fatalf("over-cap framed blob with no proof: code = %v, want ResourceExhausted pre-auth (err=%v)", connect.CodeOf(err), err)
 	}
 }

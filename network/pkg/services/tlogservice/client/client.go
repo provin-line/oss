@@ -129,11 +129,11 @@ func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex u
 		return 0, err
 	}
 	resp, err := c.svc.MirrorLogSegment(ctx, connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
-		LogId:          logID,
-		FromIndex:      fromIndex,
-		RecordPayloads: payloads,
-		Checkpoint:     checkpointToWire(cp),
-		AuthProof:      ap,
+		LogId:                logID,
+		FromIndex:            fromIndex,
+		RecordPayloadsFramed: tlogservice.FrameRecordPayloads(payloads),
+		Checkpoint:           checkpointToWire(cp),
+		AuthProof:            ap,
 	}))
 	if err != nil {
 		return 0, err

@@ -21,8 +21,6 @@ type fakeService struct {
 
 	gotStart uint64
 	gotCount int
-
-	capErr error
 }
 
 func (f *fakeService) Checkpoint(context.Context, string) (*tlog.Checkpoint, error) {
@@ -40,11 +38,18 @@ func (f *fakeService) MirrorSegment(context.Context, tlogservice.MirrorSegmentIn
 	return 0, f.err
 }
 
-// CheckBatchCaps lets a fakeService drive the handler's pre-auth cap guard;
-// the zero value (nil) keeps the not-configured tests reaching MirrorSegment's
-// ErrMirrorNotConfigured unchanged.
-func (f *fakeService) CheckBatchCaps(int, int) error {
-	return f.capErr
+// DecodeSegment lets a fakeService drive the handler's pre-auth unframe
+// guard: it returns f.err (unframed) when set — mirroring
+// ErrMirrorNotConfigured reaching this one step earlier than the old
+// CheckBatchCaps did — else delegates to the real
+// tlogservice.UnframeRecordPayloads under a sensible default cap, so a
+// fakeService-backed MirrorLogSegment call with no err set still decodes a
+// real framed blob correctly.
+func (f *fakeService) DecodeSegment(framed []byte) ([][]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return tlogservice.UnframeRecordPayloads(framed, 256, 4<<20)
 }
 
 func TestGetLogCheckpoint_Projection(t *testing.T) {

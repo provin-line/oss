@@ -26,6 +26,7 @@ import (
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
@@ -96,7 +97,7 @@ func TestMirrorLogSegment_MountCapDerivedFromMaxBatchBytes(t *testing.T) {
 	client := tlogpbconnect.NewTlogServiceClient(http.DefaultClient, srv.URL, connect.WithInterceptors(BearerInterceptor("test-bearer")))
 	big := make([]byte, 2<<20) // between max-credential-size and max-batch-bytes
 	req := connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
-		LogId: pipelineDID, FromIndex: 0, RecordPayloads: [][]byte{big},
+		LogId: pipelineDID, FromIndex: 0, RecordPayloadsFramed: tlogservice.FrameRecordPayloads([][]byte{big}),
 		Checkpoint: &tlogpb.GetLogCheckpointResponse{Size: "1"},
 	})
 	_, err := client.MirrorLogSegment(context.Background(), req)
@@ -107,7 +108,7 @@ func TestMirrorLogSegment_MountCapDerivedFromMaxBatchBytes(t *testing.T) {
 
 // TestMirrorLogSegment_MountCapCoversJSONBase64Inflation drives a SINGLE record
 // AT max-batch-bytes over the Connect JSON codec (WithProtoJSON), which
-// base64-encodes record_payloads (~4/3 inflation). The RAW JSON body is then
+// base64-encodes record_payloads_framed (~4/3 inflation). The RAW JSON body is then
 // ~5.33 MiB for a 4 MiB batch — larger than the DECODED max-batch-bytes. The
 // per-RPC read cap (connect.WithReadMaxBytes, which bounds the RAW body) must
 // cover that inflation, or this legitimate one-record request is rejected at
@@ -125,12 +126,12 @@ func TestMirrorLogSegment_MountCapCoversJSONBase64Inflation(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	// WithProtoJSON: the JSON codec base64-encodes record_payloads on the wire.
+	// WithProtoJSON: the JSON codec base64-encodes record_payloads_framed on the wire.
 	client := tlogpbconnect.NewTlogServiceClient(http.DefaultClient, srv.URL,
 		connect.WithProtoJSON(), connect.WithInterceptors(BearerInterceptor("test-bearer")))
 	big := make([]byte, maxBatchBytes) // a single record AT the batch-bytes cap
 	req := connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
-		LogId: pipelineDID, FromIndex: 0, RecordPayloads: [][]byte{big},
+		LogId: pipelineDID, FromIndex: 0, RecordPayloadsFramed: tlogservice.FrameRecordPayloads([][]byte{big}),
 		Checkpoint: &tlogpb.GetLogCheckpointResponse{Size: "1"},
 	})
 	_, err := client.MirrorLogSegment(context.Background(), req)

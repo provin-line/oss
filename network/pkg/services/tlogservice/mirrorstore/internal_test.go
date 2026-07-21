@@ -7,6 +7,7 @@ package mirrorstore
 // injection lives in `package merklelog` rather than `merklelog_test`.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -615,5 +616,29 @@ func TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates(t *testing.T) 
 	cp, err := st2.Checkpoint(logID)
 	if err != nil || cp.Size != 2 || cp.Head != head2 {
 		t.Fatalf("reopened checkpoint = %+v (err %v), want size 2 head %q", cp, err, head2)
+	}
+}
+
+// TestOpenFsyncsRootParent (finding #2) covers the review finding: Open
+// creates the mirror-store root with os.MkdirAll but never fsynced the
+// newly-created root's PARENT directory. A power loss right after a
+// segment is acked could then lose the whole mirror root's directory
+// entry. Prove the call happens (its only observable effect) by injecting
+// a failure and a path capture.
+func TestOpenFsyncsRootParent(t *testing.T) {
+	orig := fsyncRootParent
+	t.Cleanup(func() { fsyncRootParent = orig })
+
+	var gotParent string
+	sentinel := errors.New("injected parent fsync failure")
+	fsyncRootParent = func(dir string) error { gotParent = dir; return sentinel }
+
+	root := filepath.Join(t.TempDir(), "tlog-mirrors")
+	_, err := Open(root)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Open must surface the parent-fsync failure, got %v", err)
+	}
+	if gotParent != filepath.Dir(root) {
+		t.Fatalf("fsynced %q, want the root's parent %q", gotParent, filepath.Dir(root))
 	}
 }
