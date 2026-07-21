@@ -7,6 +7,12 @@ import (
 	"path/filepath"
 )
 
+// fsyncRootParent is Open's post-MkdirAll parent-directory fsync — a package
+// var ONLY so a white-box test can inject a failure (the durability call has
+// no other observable effect). Production binds it to fsyncDir. Mirrors the
+// afterRenameDirSync seam in fsutil.go.
+var fsyncRootParent = fsyncDir
+
 // Open opens (creating if needed) the mirror store rooted at root, one
 // subdirectory per log. Every EXISTING log directory is replay-verified
 // and reconciled here (reopen recovery, D-T4): records beyond the
@@ -22,6 +28,14 @@ import (
 func Open(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("mirrorstore: create root %s: %w", root, err)
+	}
+	// Make the newly-created root's directory entry durable: fsync its parent,
+	// the same parent-fsync tlog/filelog.New performs after its own MkdirAll.
+	// The per-log subdirs and their journals are fsynced by AppendSegment, but
+	// the root's own entry in its parent must be flushed too — otherwise a
+	// power loss after a segment is acked can lose the entire mirror root.
+	if err := fsyncRootParent(filepath.Dir(root)); err != nil {
+		return nil, fmt.Errorf("mirrorstore: fsync root parent %s: %w", filepath.Dir(root), err)
 	}
 	des, err := os.ReadDir(root)
 	if err != nil {
