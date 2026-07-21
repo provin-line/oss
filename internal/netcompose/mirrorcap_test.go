@@ -108,7 +108,7 @@ func TestMirrorLogSegment_MountCapDerivedFromMaxBatchBytes(t *testing.T) {
 
 // TestMirrorLogSegment_MountCapCoversJSONBase64Inflation drives a SINGLE record
 // AT max-batch-bytes over the Connect JSON codec (WithProtoJSON), which
-// base64-encodes record_payloads (~4/3 inflation). The RAW JSON body is then
+// base64-encodes record_payloads_framed (~4/3 inflation). The RAW JSON body is then
 // ~5.33 MiB for a 4 MiB batch — larger than the DECODED max-batch-bytes. The
 // per-RPC read cap (connect.WithReadMaxBytes, which bounds the RAW body) must
 // cover that inflation, or this legitimate one-record request is rejected at
@@ -126,7 +126,7 @@ func TestMirrorLogSegment_MountCapCoversJSONBase64Inflation(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	// WithProtoJSON: the JSON codec base64-encodes record_payloads on the wire.
+	// WithProtoJSON: the JSON codec base64-encodes record_payloads_framed on the wire.
 	client := tlogpbconnect.NewTlogServiceClient(http.DefaultClient, srv.URL,
 		connect.WithProtoJSON(), connect.WithInterceptors(BearerInterceptor("test-bearer")))
 	big := make([]byte, maxBatchBytes) // a single record AT the batch-bytes cap
