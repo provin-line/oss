@@ -396,6 +396,11 @@ closure required, now met with executed evidence rather than review.
   one. `MirrorLogSegment` is L1 + in-band wireauth: the PDP gate decides who
   may mirror, and the wireauth proof binds `log_id`, `from_index`,
   `checkpoint.head`, and a digest over the ordered record payload hashes.
+  A segment's records travel as one length-prefix-framed blob
+  (`record_payloads_framed`), which the registry decodes as a single
+  wire-sized allocation and unframes under the batch caps at the decode
+  boundary — so a hostile request cannot amplify into an unbounded
+  per-element allocation before the caps or the wireauth proof are checked.
   `GetMirrorState` is a plain L1 read (`tlog:read`), the same posture as
   `GetLogCheckpoint`/`ListLogRecords` — no wireauth proof involved. A single
   fail-closed log-identity predicate (`tlogservice/logident`) classifies a
@@ -406,7 +411,9 @@ closure required, now met with executed evidence rather than review.
   registry's mirror store (`tlogservice/mirrorstore`, under
   `DataDir/tlog-mirrors/`) persists the remote loop-signed checkpoint
   verbatim — it has no loop key and never synthesizes one — and serves only
-  its verified prefix.
+  its verified prefix. It is crash-durable: journals fsync before their
+  checkpoint, each log directory is fsynced, and the mirror root's parent is
+  fsynced on open, so an acked segment survives power loss.
 - Archival sink reject logs now sign their checkpoints with the same
   receipt-issuer identity their config already requires
   (`sink-reject:<receipt-issuer process DID>`), giving them a stable,
