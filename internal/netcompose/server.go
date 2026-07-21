@@ -78,8 +78,8 @@ const (
 // mirrorReadCapBytes derives MirrorLogSegment's own connect read cap from
 // maxBatchBytes (tlog-mirror.max-batch-bytes, D-T2 rule 5) plus
 // maxProofRequestBytes as headroom for the OTHER fields one MirrorLogSegment
-// call carries alongside record_payloads — the checkpoint (five small,
-// fixed-shape strings/bytes) and the AuthProof (the SAME shape
+// call carries alongside record_payloads_framed — the checkpoint (five
+// small, fixed-shape strings/bytes) and the AuthProof (the SAME shape
 // maxProofRequestBytes already sizes for). Deriving the mount cap FROM
 // max-batch-bytes (rather than reusing maxCredentialSize, a value chosen for
 // an unrelated class — the single-VC StoreVC/fetch path) makes the two
@@ -87,7 +87,8 @@ const (
 // needed to keep them in sync (Task 5 review, M-1).
 //
 // connect.WithReadMaxBytes bounds the RAW request body, and a Connect JSON
-// client base64-encodes record_payloads (~4/3 inflation) plus JSON
+// client base64-encodes record_payloads_framed (~4/3 inflation, now a single
+// bytes blob rather than a base64'd array of elements) plus JSON
 // field-name/escaping overhead — so a legitimate max-batch-bytes batch is
 // larger on the JSON wire than its decoded size. This derivation applies the
 // SAME `*2 + 64 KiB` inflation OuterRequestCapBytes uses (which covers base64

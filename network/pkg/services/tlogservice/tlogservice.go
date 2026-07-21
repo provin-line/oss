@@ -262,6 +262,27 @@ func (s *Service) CheckBatchCaps(recordCount, totalBytes int) error {
 	return nil
 }
 
+// DecodeSegment unframes a MirrorLogSegment request's record_payloads_framed
+// blob into the ordered payload list, bounded by this service's D-T2 caps —
+// the BOUNDED pre-auth guard the handler runs before hashing payloads or
+// verifying the wireauth proof. UnframeRecordPayloads enforces the count/byte
+// caps DURING the scan, so a hostile blob is rejected before a [][]byte larger
+// than the caps is ever materialized (unlike the old repeated-bytes field,
+// which Connect decoded in full before any guard ran).
+//
+// A map-only node (no mirror store wired) has no caps and never custodies — it
+// returns ErrMirrorNotConfigured before touching the blob, so the handler maps
+// it to Unimplemented WITHOUT unframing (mirrors MirrorState's not-configured
+// posture). CheckBatchCaps stays the shared cap POLICY that MirrorSegment
+// re-applies to in.Records as defense in depth; DecodeSegment is the same
+// policy applied at the decode boundary.
+func (s *Service) DecodeSegment(framed []byte) ([][]byte, error) {
+	if s.mirror == nil {
+		return nil, ErrMirrorNotConfigured
+	}
+	return UnframeRecordPayloads(framed, s.mirror.MaxBatchRecords, s.mirror.MaxBatchBytes)
+}
+
 // MirrorState returns the registry's durable mirror size for logID — the
 // shipper's resume cursor (GetMirrorState, D-T2 rule 6). logID is
 // identity-parsed (logident.Kind) before touching the store: a malformed id

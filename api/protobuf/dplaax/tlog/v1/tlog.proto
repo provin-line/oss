@@ -68,11 +68,12 @@ service TlogService {
   // rule below).
   //
   // Checkpoint alignment (mandatory): checkpoint.size MUST equal
-  // from_index + len(record_payloads) — no ahead-checkpoints, ever. The
-  // registry recomputes the hash chain from its stored tail through the
-  // segment and REQUIRES the recomputed head to equal checkpoint.head, so
-  // payload substitution breaks the equality even independent of the
-  // segment_digest check above (defense in depth, not redundancy).
+  // from_index + N, where N is the number of framed records in
+  // record_payloads_framed — no ahead-checkpoints, ever. The registry
+  // recomputes the hash chain from its stored tail through the segment and
+  // REQUIRES the recomputed head to equal checkpoint.head, so payload
+  // substitution breaks the equality even independent of the segment_digest
+  // check above (defense in depth, not redundancy).
   //
   // Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
   // registry re-verifies the checkpoint's OWN signature by rebuilding its
@@ -90,7 +91,7 @@ service TlogService {
   // GetMirrorState.acked_size. A byte-identical replay of an already-acked
   // segment is a no-op success (the idempotent resume case); from_index >
   // acked_size (a gap) and any partial overlap are FailedPrecondition;
-  // from_index + len(record_payloads) overflow is InvalidArgument.
+  // from_index + N (N framed records) overflow is InvalidArgument.
   //
   // Checkpoint monotonicity: the stored/served checkpoint for a log never
   // regresses — a valid but older checkpoint presented here is ignored and
@@ -172,30 +173,47 @@ message MirrorLogSegmentRequest {
   // current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
   // the exact-extend, gap, overlap, and replay rules this enforces.
   uint64 from_index = 2;
-  // record_payloads are the ordered record payload bytes for
-  // [from_index, from_index + len(record_payloads)) — the same payload
-  // bytes the local log already hash-chained. The registry recomputes the
-  // chain hash from its stored tail through these payloads and requires
-  // the result to equal checkpoint.head.
-  repeated bytes record_payloads = 3;
+  // Field 3 was `repeated bytes record_payloads`. Reshaped to
+  // record_payloads_framed (6): a repeated-bytes field is decoded in full —
+  // one slice header per element — before the caps or the wireauth proof run,
+  // so millions of zero-length elements amplify into ~100 MiB pre-auth. The
+  // framed blob decodes as ONE wire-sized allocation and is unframed under the
+  // D-T2 caps.
+  reserved 3;
+  reserved "record_payloads";
   // checkpoint is the loop-signed head covering EXACTLY this segment's end
-  // (checkpoint.size == from_index + len(record_payloads); see
-  // MirrorLogSegment's own doc for the alignment and monotonicity rules).
-  // Wire-shaped identically to GetLogCheckpointResponse so a shipper can
-  // forward what GetLogCheckpoint already returned.
+  // (checkpoint.size == from_index + N, where N is the number of framed
+  // records in record_payloads_framed; see MirrorLogSegment's own doc for
+  // the alignment and monotonicity rules). Wire-shaped identically to
+  // GetLogCheckpointResponse so a shipper can forward what GetLogCheckpoint
+  // already returned.
   GetLogCheckpointResponse checkpoint = 4;
   // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
   // proof-carrying shape of dplaax.audit.v1.RegisterEvidenceRequest, reusing
-  // dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
-  // would be a drift source). Its signed view is described on
-  // MirrorLogSegment's own doc (trust model paragraph).
+  // dplaax.chain.v1.AuthProof rather than redefining it. Its signed view is
+  // described on MirrorLogSegment's own doc (trust model paragraph).
   dplaax.chain.v1.AuthProof auth_proof = 5;
+  // record_payloads_framed carries the ordered record payloads for
+  // [from_index, from_index + N) as a SINGLE length-prefixed blob: for each
+  // payload in order, an unsigned varint of its byte length followed by the
+  // payload bytes. It replaces a repeated-bytes field (reserved 3) so the
+  // registry decodes the whole segment as ONE allocation the size of the wire
+  // blob and bounds the record count/bytes DURING the unframe scan — a
+  // repeated-bytes field is decoded in full before the caps or the wireauth
+  // proof are checked, letting millions of zero-length elements amplify into
+  // ~100 MiB pre-auth. N is recovered by scanning the blob (it equals
+  // checkpoint.size - from_index); the registry recomputes the chain hash
+  // through these payloads and REQUIRES the result to equal checkpoint.head
+  // (D-T2 rule 1), and segment_digest in the wireauth proof binds the same
+  // ordered list.
+  bytes record_payloads_framed = 6;
 }
 message MirrorLogSegmentResponse {
   // acked_size is the registry's durable mirror size after this call —
-  // equal to from_index + len(record_payloads) on success, or unchanged on
-  // a byte-identical replay no-op (see MirrorLogSegment's own doc). Callers
-  // may treat this the same as a subsequent GetMirrorState.acked_size read.
+  // equal to from_index + N (N framed records in record_payloads_framed) on
+  // success, or unchanged on a byte-identical replay no-op (see
+  // MirrorLogSegment's own doc). Callers may treat this the same as a
+  // subsequent GetMirrorState.acked_size read.
   uint64 acked_size = 1;
 }
 

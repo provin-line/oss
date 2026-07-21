@@ -29,12 +29,11 @@ type Service interface {
 	Records(ctx context.Context, logID string, start uint64, count int) ([]*tlog.Record, error)
 	MirrorState(logID string) (uint64, error)
 	MirrorSegment(ctx context.Context, in tlogservice.MirrorSegmentInput) (uint64, error)
-	// CheckBatchCaps validates a batch's (cheap) structural size against the
-	// D-T2 caps so MirrorLogSegment can reject an over-cap batch BEFORE hashing
-	// its payloads or verifying the proof. The cap POLICY (and ErrCapExceeded)
-	// lives in the service; the handler only supplies the count/byte sizes and
-	// maps the sentinel.
-	CheckBatchCaps(recordCount, totalBytes int) error
+	// DecodeSegment unframes the record_payloads_framed blob into the ordered
+	// payload list under the service's D-T2 caps — the bounded pre-auth guard
+	// (rejects an over-cap or malformed blob DURING the unframe, before hashing
+	// or proof verification). ErrMirrorNotConfigured on a map-only node.
+	DecodeSegment(framed []byte) ([][]byte, error)
 }
 
 // Verifier is the wireauth verification seam (an interface so a spy can be
@@ -120,21 +119,17 @@ func (h *Handler) ListLogRecords(ctx context.Context, req *connect.Request[tlogp
 // own D-T3 predicate (checkpoint-signer equality, ancestry, pinning) is a
 // richer check than a single signer-to-actor callback can express here.
 func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlogpb.MirrorLogSegmentRequest]) (*connect.Response[tlogpb.MirrorLogSegmentResponse], error) {
-	// Pre-auth DoS guard (D-T2 rule 5): reject an over-cap batch by CHEAP
-	// structural count/byte sizes at the very top — before SegmentDigest
-	// SHA-256s every record and before the wireauth proof is verified — so
-	// millions of zero-length payloads under the transport byte cap cannot
-	// force millions of pre-auth hashes. A count/byte size reveals nothing
-	// about identity, so running it before authentication leaks no
-	// information. The cap POLICY lives in the service (CheckBatchCaps, the
-	// same method MirrorSegment enforces as defense in depth); the handler
-	// only supplies the sizes and maps the sentinel.
-	payloads := req.Msg.GetRecordPayloads()
-	var totalBytes int
-	for _, p := range payloads {
-		totalBytes += len(p)
-	}
-	if err := h.svc.CheckBatchCaps(len(payloads), totalBytes); err != nil {
+	// Pre-auth DoS guard (D-T2 rule 5): unframe under the service's caps at the
+	// very top — before SegmentDigest hashes every record and before the
+	// wireauth proof is verified. UnframeRecordPayloads enforces the count/byte
+	// caps DURING the scan, so a hostile record_payloads_framed blob cannot
+	// force an unbounded [][]byte (the reshape's purpose: Connect decodes the
+	// blob as ONE wire-sized allocation, and this bounds the expansion). A
+	// structural size reveals nothing about identity, so unframing before
+	// authentication leaks no information. A map-only node returns
+	// ErrMirrorNotConfigured here (→ Unimplemented) before any unframe.
+	payloads, err := h.svc.DecodeSegment(req.Msg.GetRecordPayloadsFramed())
+	if err != nil {
 		return nil, mapError(err)
 	}
 	proof, err := decodeProof(req.Msg.GetAuthProof())
@@ -145,7 +140,7 @@ func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlo
 	if err != nil {
 		return nil, mapError(err)
 	}
-	digest := tlogservice.SegmentDigest(req.Msg.GetRecordPayloads())
+	digest := tlogservice.SegmentDigest(payloads)
 	fields := tlogservice.MirrorLogSegmentFields(req.Msg.GetLogId(), req.Msg.GetFromIndex(), cp.Head, digest)
 	if err := h.v.Verify(ctx, tlogservice.OpMirrorLogSegment, fields, proof, nil); err != nil {
 		return nil, mapError(err)
@@ -153,7 +148,7 @@ func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlo
 	acked, err := h.svc.MirrorSegment(ctx, tlogservice.MirrorSegmentInput{
 		LogID:      req.Msg.GetLogId(),
 		FromIndex:  req.Msg.GetFromIndex(),
-		Records:    req.Msg.GetRecordPayloads(),
+		Records:    payloads,
 		Checkpoint: cp,
 		CallerDID:  proof.SignerDID,
 	})

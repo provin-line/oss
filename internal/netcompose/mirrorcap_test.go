@@ -26,6 +26,7 @@ import (
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemayaml "github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
@@ -96,7 +97,7 @@ func TestMirrorLogSegment_MountCapDerivedFromMaxBatchBytes(t *testing.T) {
 	client := tlogpbconnect.NewTlogServiceClient(http.DefaultClient, srv.URL, connect.WithInterceptors(BearerInterceptor("test-bearer")))
 	big := make([]byte, 2<<20) // between max-credential-size and max-batch-bytes
 	req := connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
-		LogId: pipelineDID, FromIndex: 0, RecordPayloads: [][]byte{big},
+		LogId: pipelineDID, FromIndex: 0, RecordPayloadsFramed: tlogservice.FrameRecordPayloads([][]byte{big}),
 		Checkpoint: &tlogpb.GetLogCheckpointResponse{Size: "1"},
 	})
 	_, err := client.MirrorLogSegment(context.Background(), req)
@@ -130,7 +131,7 @@ func TestMirrorLogSegment_MountCapCoversJSONBase64Inflation(t *testing.T) {
 		connect.WithProtoJSON(), connect.WithInterceptors(BearerInterceptor("test-bearer")))
 	big := make([]byte, maxBatchBytes) // a single record AT the batch-bytes cap
 	req := connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
-		LogId: pipelineDID, FromIndex: 0, RecordPayloads: [][]byte{big},
+		LogId: pipelineDID, FromIndex: 0, RecordPayloadsFramed: tlogservice.FrameRecordPayloads([][]byte{big}),
 		Checkpoint: &tlogpb.GetLogCheckpointResponse{Size: "1"},
 	})
 	_, err := client.MirrorLogSegment(context.Background(), req)

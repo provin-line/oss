@@ -172,11 +172,13 @@ type AuditRunnerConfig struct {
 // most quotas here, which are consumed by the client-shipper side too — the
 // registry-side handler enforcing MirrorLogSegment is the primary reader).
 type TlogMirrorConfig struct {
-	// MaxBatchRecords bounds len(record_payloads) in one MirrorLogSegment
-	// call. A batch over this cap is ResourceExhausted.
+	// MaxBatchRecords bounds the number of records framed into
+	// record_payloads_framed in one MirrorLogSegment call. A batch over this
+	// cap is ResourceExhausted.
 	MaxBatchRecords int
-	// MaxBatchBytes bounds the summed byte length of record_payloads in one
-	// MirrorLogSegment call. A batch over this cap is ResourceExhausted.
+	// MaxBatchBytes bounds the summed byte length of the records framed into
+	// record_payloads_framed in one MirrorLogSegment call. A batch over this
+	// cap is ResourceExhausted.
 	MaxBatchBytes int
 }
 

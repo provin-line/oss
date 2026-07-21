@@ -359,26 +359,34 @@ type MirrorLogSegmentRequest struct {
 	// current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
 	// the exact-extend, gap, overlap, and replay rules this enforces.
 	FromIndex uint64 `protobuf:"varint,2,opt,name=from_index,json=fromIndex,proto3" json:"from_index,omitempty"`
-	// record_payloads are the ordered record payload bytes for
-	// [from_index, from_index + len(record_payloads)) — the same payload
-	// bytes the local log already hash-chained. The registry recomputes the
-	// chain hash from its stored tail through these payloads and requires
-	// the result to equal checkpoint.head.
-	RecordPayloads [][]byte `protobuf:"bytes,3,rep,name=record_payloads,json=recordPayloads,proto3" json:"record_payloads,omitempty"`
 	// checkpoint is the loop-signed head covering EXACTLY this segment's end
-	// (checkpoint.size == from_index + len(record_payloads); see
-	// MirrorLogSegment's own doc for the alignment and monotonicity rules).
-	// Wire-shaped identically to GetLogCheckpointResponse so a shipper can
-	// forward what GetLogCheckpoint already returned.
+	// (checkpoint.size == from_index + N, where N is the number of framed
+	// records in record_payloads_framed; see MirrorLogSegment's own doc for
+	// the alignment and monotonicity rules). Wire-shaped identically to
+	// GetLogCheckpointResponse so a shipper can forward what GetLogCheckpoint
+	// already returned.
 	Checkpoint *GetLogCheckpointResponse `protobuf:"bytes,4,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
 	// proof-carrying shape of dplaax.audit.v1.RegisterEvidenceRequest, reusing
-	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
-	// would be a drift source). Its signed view is described on
-	// MirrorLogSegment's own doc (trust model paragraph).
-	AuthProof     *v1.AuthProof `protobuf:"bytes,5,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// dplaax.chain.v1.AuthProof rather than redefining it. Its signed view is
+	// described on MirrorLogSegment's own doc (trust model paragraph).
+	AuthProof *v1.AuthProof `protobuf:"bytes,5,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	// record_payloads_framed carries the ordered record payloads for
+	// [from_index, from_index + N) as a SINGLE length-prefixed blob: for each
+	// payload in order, an unsigned varint of its byte length followed by the
+	// payload bytes. It replaces a repeated-bytes field (reserved 3) so the
+	// registry decodes the whole segment as ONE allocation the size of the wire
+	// blob and bounds the record count/bytes DURING the unframe scan — a
+	// repeated-bytes field is decoded in full before the caps or the wireauth
+	// proof are checked, letting millions of zero-length elements amplify into
+	// ~100 MiB pre-auth. N is recovered by scanning the blob (it equals
+	// checkpoint.size - from_index); the registry recomputes the chain hash
+	// through these payloads and REQUIRES the result to equal checkpoint.head
+	// (D-T2 rule 1), and segment_digest in the wireauth proof binds the same
+	// ordered list.
+	RecordPayloadsFramed []byte `protobuf:"bytes,6,opt,name=record_payloads_framed,json=recordPayloadsFramed,proto3" json:"record_payloads_framed,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *MirrorLogSegmentRequest) Reset() {
@@ -425,13 +433,6 @@ func (x *MirrorLogSegmentRequest) GetFromIndex() uint64 {
 	return 0
 }
 
-func (x *MirrorLogSegmentRequest) GetRecordPayloads() [][]byte {
-	if x != nil {
-		return x.RecordPayloads
-	}
-	return nil
-}
-
 func (x *MirrorLogSegmentRequest) GetCheckpoint() *GetLogCheckpointResponse {
 	if x != nil {
 		return x.Checkpoint
@@ -446,12 +447,20 @@ func (x *MirrorLogSegmentRequest) GetAuthProof() *v1.AuthProof {
 	return nil
 }
 
+func (x *MirrorLogSegmentRequest) GetRecordPayloadsFramed() []byte {
+	if x != nil {
+		return x.RecordPayloadsFramed
+	}
+	return nil
+}
+
 type MirrorLogSegmentResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// acked_size is the registry's durable mirror size after this call —
-	// equal to from_index + len(record_payloads) on success, or unchanged on
-	// a byte-identical replay no-op (see MirrorLogSegment's own doc). Callers
-	// may treat this the same as a subsequent GetMirrorState.acked_size read.
+	// equal to from_index + N (N framed records in record_payloads_framed) on
+	// success, or unchanged on a byte-identical replay no-op (see
+	// MirrorLogSegment's own doc). Callers may treat this the same as a
+	// subsequent GetMirrorState.acked_size read.
 	AckedSize     uint64 `protobuf:"varint,1,opt,name=acked_size,json=ackedSize,proto3" json:"acked_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -613,17 +622,17 @@ const file_dplaax_tlog_v1_tlog_proto_rawDesc = "" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x12\n" +
 	"\x04hash\x18\x03 \x01(\tR\x04hash\"M\n" +
 	"\x16ListLogRecordsResponse\x123\n" +
-	"\arecords\x18\x01 \x03(\v2\x19.dplaax.tlog.v1.LogRecordR\arecords\"\xfd\x01\n" +
+	"\arecords\x18\x01 \x03(\v2\x19.dplaax.tlog.v1.LogRecordR\arecords\"\xa1\x02\n" +
 	"\x17MirrorLogSegmentRequest\x12\x15\n" +
 	"\x06log_id\x18\x01 \x01(\tR\x05logId\x12\x1d\n" +
 	"\n" +
-	"from_index\x18\x02 \x01(\x04R\tfromIndex\x12'\n" +
-	"\x0frecord_payloads\x18\x03 \x03(\fR\x0erecordPayloads\x12H\n" +
+	"from_index\x18\x02 \x01(\x04R\tfromIndex\x12H\n" +
 	"\n" +
 	"checkpoint\x18\x04 \x01(\v2(.dplaax.tlog.v1.GetLogCheckpointResponseR\n" +
 	"checkpoint\x129\n" +
 	"\n" +
-	"auth_proof\x18\x05 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"9\n" +
+	"auth_proof\x18\x05 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\x124\n" +
+	"\x16record_payloads_framed\x18\x06 \x01(\fR\x14recordPayloadsFramedJ\x04\b\x03\x10\x04R\x0frecord_payloads\"9\n" +
 	"\x18MirrorLogSegmentResponse\x12\x1d\n" +
 	"\n" +
 	"acked_size\x18\x01 \x01(\x04R\tackedSize\".\n" +

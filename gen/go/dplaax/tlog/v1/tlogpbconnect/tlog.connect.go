@@ -100,11 +100,12 @@ type TlogServiceClient interface {
 	// rule below).
 	//
 	// Checkpoint alignment (mandatory): checkpoint.size MUST equal
-	// from_index + len(record_payloads) — no ahead-checkpoints, ever. The
-	// registry recomputes the hash chain from its stored tail through the
-	// segment and REQUIRES the recomputed head to equal checkpoint.head, so
-	// payload substitution breaks the equality even independent of the
-	// segment_digest check above (defense in depth, not redundancy).
+	// from_index + N, where N is the number of framed records in
+	// record_payloads_framed — no ahead-checkpoints, ever. The registry
+	// recomputes the hash chain from its stored tail through the segment and
+	// REQUIRES the recomputed head to equal checkpoint.head, so payload
+	// substitution breaks the equality even independent of the segment_digest
+	// check above (defense in depth, not redundancy).
 	//
 	// Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
 	// registry re-verifies the checkpoint's OWN signature by rebuilding its
@@ -122,7 +123,7 @@ type TlogServiceClient interface {
 	// GetMirrorState.acked_size. A byte-identical replay of an already-acked
 	// segment is a no-op success (the idempotent resume case); from_index >
 	// acked_size (a gap) and any partial overlap are FailedPrecondition;
-	// from_index + len(record_payloads) overflow is InvalidArgument.
+	// from_index + N (N framed records) overflow is InvalidArgument.
 	//
 	// Checkpoint monotonicity: the stored/served checkpoint for a log never
 	// regresses — a valid but older checkpoint presented here is ignored and
@@ -250,11 +251,12 @@ type TlogServiceHandler interface {
 	// rule below).
 	//
 	// Checkpoint alignment (mandatory): checkpoint.size MUST equal
-	// from_index + len(record_payloads) — no ahead-checkpoints, ever. The
-	// registry recomputes the hash chain from its stored tail through the
-	// segment and REQUIRES the recomputed head to equal checkpoint.head, so
-	// payload substitution breaks the equality even independent of the
-	// segment_digest check above (defense in depth, not redundancy).
+	// from_index + N, where N is the number of framed records in
+	// record_payloads_framed — no ahead-checkpoints, ever. The registry
+	// recomputes the hash chain from its stored tail through the segment and
+	// REQUIRES the recomputed head to equal checkpoint.head, so payload
+	// substitution breaks the equality even independent of the segment_digest
+	// check above (defense in depth, not redundancy).
 	//
 	// Checkpoint timestamp: MUST be UTC-stamped to be mirrorable in v0. The
 	// registry re-verifies the checkpoint's OWN signature by rebuilding its
@@ -272,7 +274,7 @@ type TlogServiceHandler interface {
 	// GetMirrorState.acked_size. A byte-identical replay of an already-acked
 	// segment is a no-op success (the idempotent resume case); from_index >
 	// acked_size (a gap) and any partial overlap are FailedPrecondition;
-	// from_index + len(record_payloads) overflow is InvalidArgument.
+	// from_index + N (N framed records) overflow is InvalidArgument.
 	//
 	// Checkpoint monotonicity: the stored/served checkpoint for a log never
 	// regresses — a valid but older checkpoint presented here is ignored and
