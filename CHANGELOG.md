@@ -313,6 +313,15 @@ closure required, now met with executed evidence rather than review.
 
 ### Added
 
+- `RegisterAuditHead` audit RPC: registers an ADMITTED head for linear async
+  audit without a consumed-set receipt — the wire form of the data plane's
+  in-process audit-head registration (ordinary sink/chained ingress and
+  sink-receipt heads). `RegisterEvidence` cannot serve it: that RPC requires
+  a non-empty consumed set and pins an irreversible first-write-wins receipt
+  (it remains the aggregate's consumed-set path). Same admission gate, same
+  queue, same L1 policy pair (`audit:register` — registering into the audit
+  substrate is one grant class) plus an in-band wireauth proof over
+  `head_variant_address`.
 - `cmd/network`: the control-plane-only node binary (the control-plane half
   of `cmd/standalone`, extracted) — the same ConnectRPC services, DID
   resolution, and health endpoints, with no pipeline loops; it refuses to
