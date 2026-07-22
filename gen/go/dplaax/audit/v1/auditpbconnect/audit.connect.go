@@ -58,6 +58,9 @@ const (
 	// AuditServiceRegisterEvidenceProcedure is the fully-qualified name of the AuditService's
 	// RegisterEvidence RPC.
 	AuditServiceRegisterEvidenceProcedure = "/dplaax.audit.v1.AuditService/RegisterEvidence"
+	// AuditServiceRegisterAuditHeadProcedure is the fully-qualified name of the AuditService's
+	// RegisterAuditHead RPC.
+	AuditServiceRegisterAuditHeadProcedure = "/dplaax.audit.v1.AuditService/RegisterAuditHead"
 )
 
 // AuditServiceClient is a client for the dplaax.audit.v1.AuditService service.
@@ -122,6 +125,39 @@ type AuditServiceClient interface {
 	// body it audited, not which of possibly several valid variants proved
 	// admission for a given registration.
 	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
+	// RegisterAuditHead enqueues an ADMITTED head for the async audit runner
+	// WITHOUT a consumed-set receipt — the wire form of the data plane's
+	// in-process linear-audit head registration (AuditRegistrar.Add): the
+	// receiptless enqueue used for ordinary sink/chained ingress and
+	// sink-receipt heads, where no aggregate consumed set exists to record.
+	// Contrast with RegisterEvidence: that RPC REQUIRES a non-empty consumed
+	// set and writes an irreversible first-write-wins consumed-set receipt
+	// (D1, aggregate emission evidence); this RPC writes no receipt at all —
+	// a head registered here surfaces via GetAuditStatus but never via
+	// GetConsumedSources (NotFound, same as any other linear-only coverage).
+	// Use RegisterEvidence instead when the head is an aggregate's output and
+	// its consumed sources need recording.
+	//
+	// Admission rule: head_variant_address must name ADMITTED bytes — the
+	// same variant resolution RegisterEvidence performs (see
+	// RegisterAuditHeadRequest.head_variant_address, and RegisterEvidence's
+	// own doc for the P1-A admission/persistence identity split); the
+	// registration is keyed by the admitted head's BODY address, matching
+	// every other reader of recorded evidence (GetAuditStatus,
+	// GetConsumedSources — both take a body address).
+	//
+	// Trust model: L1 audit:register (this policy option) + in-band wireauth
+	// over head_variant_address — mirrors RegisterEvidence's proof scope
+	// minus the consumed set this RPC never carries.
+	//
+	// Idempotency: re-registering a head that is CURRENTLY QUEUED for audit
+	// is a no-op — it neither resets the attempt counter nor moves the
+	// entry's position (the audit queue's documented Add semantics, both the
+	// in-memory and file-backed implementations). A head that is not
+	// currently queued (never registered, or already audited to a terminal
+	// verdict and removed) is enqueued fresh with its attempt counter at
+	// zero, the same as a first registration.
+	RegisterAuditHead(context.Context, *connect.Request[v1.RegisterAuditHeadRequest]) (*connect.Response[v1.RegisterAuditHeadResponse], error)
 }
 
 // NewAuditServiceClient constructs a client for the dplaax.audit.v1.AuditService service. By
@@ -159,6 +195,12 @@ func NewAuditServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(auditServiceMethods.ByName("RegisterEvidence")),
 			connect.WithClientOptions(opts...),
 		),
+		registerAuditHead: connect.NewClient[v1.RegisterAuditHeadRequest, v1.RegisterAuditHeadResponse](
+			httpClient,
+			baseURL+AuditServiceRegisterAuditHeadProcedure,
+			connect.WithSchema(auditServiceMethods.ByName("RegisterAuditHead")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -168,6 +210,7 @@ type auditServiceClient struct {
 	listAuditStatuses  *connect.Client[v1.ListAuditStatusesRequest, v1.ListAuditStatusesResponse]
 	getConsumedSources *connect.Client[v1.GetConsumedSourcesRequest, v1.GetConsumedSourcesResponse]
 	registerEvidence   *connect.Client[v1.RegisterEvidenceRequest, v1.RegisterEvidenceResponse]
+	registerAuditHead  *connect.Client[v1.RegisterAuditHeadRequest, v1.RegisterAuditHeadResponse]
 }
 
 // GetAuditStatus calls dplaax.audit.v1.AuditService.GetAuditStatus.
@@ -188,6 +231,11 @@ func (c *auditServiceClient) GetConsumedSources(ctx context.Context, req *connec
 // RegisterEvidence calls dplaax.audit.v1.AuditService.RegisterEvidence.
 func (c *auditServiceClient) RegisterEvidence(ctx context.Context, req *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error) {
 	return c.registerEvidence.CallUnary(ctx, req)
+}
+
+// RegisterAuditHead calls dplaax.audit.v1.AuditService.RegisterAuditHead.
+func (c *auditServiceClient) RegisterAuditHead(ctx context.Context, req *connect.Request[v1.RegisterAuditHeadRequest]) (*connect.Response[v1.RegisterAuditHeadResponse], error) {
+	return c.registerAuditHead.CallUnary(ctx, req)
 }
 
 // AuditServiceHandler is an implementation of the dplaax.audit.v1.AuditService service.
@@ -252,6 +300,39 @@ type AuditServiceHandler interface {
 	// body it audited, not which of possibly several valid variants proved
 	// admission for a given registration.
 	RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error)
+	// RegisterAuditHead enqueues an ADMITTED head for the async audit runner
+	// WITHOUT a consumed-set receipt — the wire form of the data plane's
+	// in-process linear-audit head registration (AuditRegistrar.Add): the
+	// receiptless enqueue used for ordinary sink/chained ingress and
+	// sink-receipt heads, where no aggregate consumed set exists to record.
+	// Contrast with RegisterEvidence: that RPC REQUIRES a non-empty consumed
+	// set and writes an irreversible first-write-wins consumed-set receipt
+	// (D1, aggregate emission evidence); this RPC writes no receipt at all —
+	// a head registered here surfaces via GetAuditStatus but never via
+	// GetConsumedSources (NotFound, same as any other linear-only coverage).
+	// Use RegisterEvidence instead when the head is an aggregate's output and
+	// its consumed sources need recording.
+	//
+	// Admission rule: head_variant_address must name ADMITTED bytes — the
+	// same variant resolution RegisterEvidence performs (see
+	// RegisterAuditHeadRequest.head_variant_address, and RegisterEvidence's
+	// own doc for the P1-A admission/persistence identity split); the
+	// registration is keyed by the admitted head's BODY address, matching
+	// every other reader of recorded evidence (GetAuditStatus,
+	// GetConsumedSources — both take a body address).
+	//
+	// Trust model: L1 audit:register (this policy option) + in-band wireauth
+	// over head_variant_address — mirrors RegisterEvidence's proof scope
+	// minus the consumed set this RPC never carries.
+	//
+	// Idempotency: re-registering a head that is CURRENTLY QUEUED for audit
+	// is a no-op — it neither resets the attempt counter nor moves the
+	// entry's position (the audit queue's documented Add semantics, both the
+	// in-memory and file-backed implementations). A head that is not
+	// currently queued (never registered, or already audited to a terminal
+	// verdict and removed) is enqueued fresh with its attempt counter at
+	// zero, the same as a first registration.
+	RegisterAuditHead(context.Context, *connect.Request[v1.RegisterAuditHeadRequest]) (*connect.Response[v1.RegisterAuditHeadResponse], error)
 }
 
 // NewAuditServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -285,6 +366,12 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(auditServiceMethods.ByName("RegisterEvidence")),
 		connect.WithHandlerOptions(opts...),
 	)
+	auditServiceRegisterAuditHeadHandler := connect.NewUnaryHandler(
+		AuditServiceRegisterAuditHeadProcedure,
+		svc.RegisterAuditHead,
+		connect.WithSchema(auditServiceMethods.ByName("RegisterAuditHead")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/dplaax.audit.v1.AuditService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuditServiceGetAuditStatusProcedure:
@@ -295,6 +382,8 @@ func NewAuditServiceHandler(svc AuditServiceHandler, opts ...connect.HandlerOpti
 			auditServiceGetConsumedSourcesHandler.ServeHTTP(w, r)
 		case AuditServiceRegisterEvidenceProcedure:
 			auditServiceRegisterEvidenceHandler.ServeHTTP(w, r)
+		case AuditServiceRegisterAuditHeadProcedure:
+			auditServiceRegisterAuditHeadHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -318,4 +407,8 @@ func (UnimplementedAuditServiceHandler) GetConsumedSources(context.Context, *con
 
 func (UnimplementedAuditServiceHandler) RegisterEvidence(context.Context, *connect.Request[v1.RegisterEvidenceRequest]) (*connect.Response[v1.RegisterEvidenceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.RegisterEvidence is not implemented"))
+}
+
+func (UnimplementedAuditServiceHandler) RegisterAuditHead(context.Context, *connect.Request[v1.RegisterAuditHeadRequest]) (*connect.Response[v1.RegisterAuditHeadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("dplaax.audit.v1.AuditService.RegisterAuditHead is not implemented"))
 }

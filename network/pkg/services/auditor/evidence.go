@@ -136,3 +136,42 @@ func (s *EvidenceService) Register(ctx context.Context, headVariantID string, co
 	}
 	return nil
 }
+
+// RegisterHead validates/canonicalizes headVariantID, resolves admission,
+// and enqueues the head for audit — Register's validate→admission→enqueue
+// path MINUS the receipt leg: it shares the SAME vc.IsWireVariantID check
+// and the SAME s.admitted admission gate (still returning the BODY address
+// everything downstream keys by, never the variant id — see the type doc's
+// note on the variant/verdict partition trap), then reaches s.queue.Add
+// directly, with no consumed set and no registrantDID recording. This is
+// the delegate for RegisterAuditHead (the receiptless wire RPC): a head
+// registered here surfaces via GetAuditStatus but never via
+// GetConsumedSources (no receipt was ever written — the defining contrast
+// with Register/RegisterEvidence, which REQUIRES a non-empty consumed set
+// and writes an irreversible first-write-wins receipt).
+//
+// Idempotency: s.queue.Add is itself idempotent (AuditQueue.Add's
+// documented contract, both the in-memory and file-backed implementations):
+// a re-add of a CURRENTLY QUEUED head is a no-op that preserves the
+// existing attempt count and entry position; a head NOT currently queued
+// (never registered, or already audited to a terminal verdict and removed)
+// is enqueued fresh with Attempts=0, the same as any first registration.
+func (s *EvidenceService) RegisterHead(ctx context.Context, headVariantID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !vc.IsWireVariantID(headVariantID) {
+		return fmt.Errorf("%w: head_variant_address %q is not a wire variant id", ErrInvalidArgument, headVariantID)
+	}
+	bodyAddress, ok, err := s.admitted(ctx, headVariantID)
+	if err != nil {
+		return fmt.Errorf("auditor: check admission for %q: %w", headVariantID, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrHeadNotAdmitted, headVariantID)
+	}
+	if err := s.queue.Add(bodyAddress); err != nil {
+		return fmt.Errorf("auditor: enqueue %q for audit: %w", bodyAddress, err)
+	}
+	return nil
+}

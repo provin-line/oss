@@ -419,3 +419,80 @@ func TestRegisterEvidence_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
 	}
 }
+
+// --- RegisterAuditHead ---
+
+// TestRegisterAuditHead_RoundTrip proves the client's signed view is exactly
+// what the real handler verifies end-to-end for the receiptless RPC: a real
+// StoreVC-admitted variant registers by its resolved BODY address, and —
+// the distinguishing property vs RegisterEvidence's own round-trip test —
+// NO receipt is ever written for it. Because newHarness's verifier is a
+// REAL wireauth.Verifier that reconstructs its expected view via the SAME
+// auditor.OpRegisterAuditHead + auditor.RegisterAuditHeadFields the handler
+// uses, a successful round trip also proves the client signed that exact
+// op and field (a mismatch would fail signature verification, not merely
+// compare unequal).
+func TestRegisterAuditHead_RoundTrip(t *testing.T) {
+	h := newHarness(t)
+	stored := storeCred(t, h.vcSvc, "audit-head-roundtrip")
+
+	if err := h.client.RegisterAuditHead(context.Background(), stored.WireVariantID); err != nil {
+		t.Fatalf("RegisterAuditHead: %v", err)
+	}
+	if h.httpc.calls == 0 {
+		t.Error("expected the RPC to reach the network")
+	}
+
+	cands, err := h.queue.ListNewest(10)
+	if err != nil {
+		t.Fatalf("ListNewest: %v", err)
+	}
+	if len(cands) != 1 || cands[0].HeadHash != stored.BodyAddress {
+		t.Errorf("queue = %+v, want exactly one candidate for the BODY address %q", cands, stored.BodyAddress)
+	}
+
+	if _, err := h.receipts.Get(stored.BodyAddress); !errors.Is(err, auditor.ErrNotFound) {
+		t.Errorf("receipts.Get(body address) = %v, want ErrNotFound (RegisterAuditHead writes no receipt)", err)
+	}
+}
+
+// TestRegisterAuditHead_UnknownVariant_FailedPrecondition mirrors
+// RegisterEvidence's own: the arbitrary-hash amplification guard (D1) still
+// holds — a well-formed wire variant id this node never admitted is
+// FailedPrecondition, never silently registered.
+func TestRegisterAuditHead_UnknownVariant_FailedPrecondition(t *testing.T) {
+	h := newHarness(t)
+	err := h.client.RegisterAuditHead(context.Background(), variantAddr("9"))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("unknown variant: code = %v, want FailedPrecondition", connect.CodeOf(err))
+	}
+}
+
+// TestRegisterAuditHead_BearerPresented_L1Passes proves a client configured
+// with Config.Bearer reaches an L1-gated RegisterAuditHead — the SAME
+// bearerInterceptor path RegisterEvidence uses, since it is installed once
+// per Client (New), not per call.
+func TestRegisterAuditHead_BearerPresented_L1Passes(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
+	client := auditclient.New(auditclient.Config{
+		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc, Bearer: "test-l1-token",
+	})
+	if err := client.RegisterAuditHead(context.Background(), variantAddr("a")); err != nil {
+		t.Fatalf("RegisterAuditHead with Bearer set: %v", err)
+	}
+}
+
+// TestRegisterAuditHead_NoBearer_L1RejectionPassesThrough mirrors
+// RegisterEvidence's own: without Config.Bearer, the client presents no
+// Authorization header and the real L1 rejection code passes through
+// unmangled.
+func TestRegisterAuditHead_NoBearer_L1RejectionPassesThrough(t *testing.T) {
+	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
+	client := auditclient.New(auditclient.Config{
+		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc,
+	})
+	err := client.RegisterAuditHead(context.Background(), variantAddr("a"))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
+	}
+}

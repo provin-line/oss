@@ -93,6 +93,41 @@ service AuditService {
   rpc RegisterEvidence(RegisterEvidenceRequest) returns (RegisterEvidenceResponse) {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "register"};
   }
+  // RegisterAuditHead enqueues an ADMITTED head for the async audit runner
+  // WITHOUT a consumed-set receipt — the wire form of the data plane's
+  // in-process linear-audit head registration (AuditRegistrar.Add): the
+  // receiptless enqueue used for ordinary sink/chained ingress and
+  // sink-receipt heads, where no aggregate consumed set exists to record.
+  // Contrast with RegisterEvidence: that RPC REQUIRES a non-empty consumed
+  // set and writes an irreversible first-write-wins consumed-set receipt
+  // (D1, aggregate emission evidence); this RPC writes no receipt at all —
+  // a head registered here surfaces via GetAuditStatus but never via
+  // GetConsumedSources (NotFound, same as any other linear-only coverage).
+  // Use RegisterEvidence instead when the head is an aggregate's output and
+  // its consumed sources need recording.
+  //
+  // Admission rule: head_variant_address must name ADMITTED bytes — the
+  // same variant resolution RegisterEvidence performs (see
+  // RegisterAuditHeadRequest.head_variant_address, and RegisterEvidence's
+  // own doc for the P1-A admission/persistence identity split); the
+  // registration is keyed by the admitted head's BODY address, matching
+  // every other reader of recorded evidence (GetAuditStatus,
+  // GetConsumedSources — both take a body address).
+  //
+  // Trust model: L1 audit:register (this policy option) + in-band wireauth
+  // over head_variant_address — mirrors RegisterEvidence's proof scope
+  // minus the consumed set this RPC never carries.
+  //
+  // Idempotency: re-registering a head that is CURRENTLY QUEUED for audit
+  // is a no-op — it neither resets the attempt counter nor moves the
+  // entry's position (the audit queue's documented Add semantics, both the
+  // in-memory and file-backed implementations). A head that is not
+  // currently queued (never registered, or already audited to a terminal
+  // verdict and removed) is enqueued fresh with its attempt counter at
+  // zero, the same as a first registration.
+  rpc RegisterAuditHead(RegisterAuditHeadRequest) returns (RegisterAuditHeadResponse) {
+    option (o3co.authz.v1.policy) = {resource: "audit", action: "register"};
+  }
 }
 
 // Confidence is the wire projection of the verifier's three-state domain
@@ -261,3 +296,24 @@ message RegisterEvidenceRequest {
 }
 
 message RegisterEvidenceResponse {}
+
+message RegisterAuditHeadRequest {
+  // head_variant_address is the WIRE VARIANT id of the ADMITTED bytes this
+  // registration is FOR — the exact string a StoreVC call already returned
+  // as its response's wire_variant_id (dplaax.vc.v1 StoreVCResponse /
+  // vc.PipelinePassCredential.WireVariantID: "wire:v1:jcs-rfc8785:
+  // sha256:<hex>" over the canonical FULL wire document, proof included),
+  // NOT a bare sha256:<hex> body content address — a registering caller
+  // never holds a body address to pair with it, only what StoreVC handed
+  // back. The registry resolves this to prove those exact bytes are
+  // admitted, then enqueues the head keyed by its BODY address (see
+  // RegisterAuditHead's own doc for why admission and enqueueing key on
+  // different identities of the same head).
+  string head_variant_address = 1;
+  // auth_proof is the L2 wireauth token, verified in-handler over
+  // head_variant_address — mirrors RegisterEvidenceRequest.auth_proof
+  // minus the consumed set this RPC never carries.
+  dplaax.chain.v1.AuthProof auth_proof = 2;
+}
+
+message RegisterAuditHeadResponse {}

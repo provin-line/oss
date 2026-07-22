@@ -74,7 +74,7 @@ posture.
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
   epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no
   auth-off mode for L2.** L2 is independent of the PDP — it needs no policy-verifier.
-- **Evidence writes** (`RegisterEvidence` / `RetainPayload` / `ReportEmitHealth`):
+- **Evidence writes** (`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`):
   L1 + in-band wireauth — the PDP gate (the L1 policy option) decides whether the
   caller may write at all, and the request additionally carries a wireauth
   `AuthProof` the handler verifies in-band; the proven DID is authoritative.
