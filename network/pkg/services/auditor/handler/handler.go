@@ -64,7 +64,9 @@ type Verifier interface {
 // AuditServiceHandler. Every method is implemented explicitly (no
 // Unimplemented embedding): RegisterEvidence verifies the caller's L2
 // wireauth proof in-band (mirrors payloadresolver/handler exactly) before
-// delegating to the evidence-registration service.
+// delegating to the evidence-registration service. RegisterAuditHead is
+// currently a completeness stub (see its own doc) — its proto surface
+// landed ahead of its domain wiring.
 type Handler struct {
 	svc      Service
 	evidence EvidenceRegistrar
@@ -107,6 +109,15 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 		return nil, mapError(err)
 	}
 	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil
+}
+
+// RegisterAuditHead is a completeness stub: the proto surface (Task 1) is
+// staged ahead of its domain wiring (Task 2 — the receiptless
+// AuditRegistrar.Add-backed registration service and its wireauth
+// verification). Task 2 replaces this with a real implementation mirroring
+// RegisterEvidence's proof-then-delegate shape, minus the consumed set.
+func (h *Handler) RegisterAuditHead(ctx context.Context, req *connect.Request[auditpb.RegisterAuditHeadRequest]) (*connect.Response[auditpb.RegisterAuditHeadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auditor: RegisterAuditHead not yet implemented"))
 }
 
 func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[auditpb.GetAuditStatusRequest]) (*connect.Response[auditpb.GetAuditStatusResponse], error) {
