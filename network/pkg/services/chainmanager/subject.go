@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/provin-line/oss/wireprofile"
 )
 
 // ByReferenceSubjectPrefix is the wire subject prefix a by-reference-mode
@@ -20,7 +22,12 @@ import (
 // loop's dual-emit stripped-form publish to the EXACT subject this package
 // will export for that loop's output under a by-reference subscription
 // (subjectForMode) — the two must never drift independently.
-const ByReferenceSubjectPrefix = "byref."
+//
+// The literal itself is defined in wireprofile (network/ and pipeline/ never
+// import each other, so the shared wire-convention leaf holds the one
+// definition both trees can agree on); this is a const alias so no
+// chainmanager call site needs to change.
+const ByReferenceSubjectPrefix = wireprofile.ByReferenceSubjectPrefix
 
 // ErrUnsafeSubject is returned when a publisher DID contains characters that
 // are unsafe as a NATS subject — whitespace, the wildcard tokens `*` / `>`,
