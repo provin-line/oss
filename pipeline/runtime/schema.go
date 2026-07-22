@@ -52,9 +52,12 @@ var ErrSchemaNotFound = errors.New("runtime: schema not registered")
 // immutable), and a schema deprecated after boot keeps issuing until the next
 // restart.
 //
-// Mirrors internal/netcompose/schemaresolver.go's ResolveSchemaRefAtBoot
-// (severed here — see SchemaGetter's doc — so pipeline/runtime no longer
-// imports internal/netcompose).
+// Relocated from internal/netcompose when the data plane was extracted — this
+// is now the ONLY owner of boot-time schema-ref resolution (only the data
+// plane embeds a schema-ref at issuance; netcompose keeps just the
+// verify-side SchemaBridge). netcompose's cross-side agreement test
+// (schema_e2e_test.go) pins the verify side against this convention's exact
+// bytes.
 func resolveSchemaRefAtBoot(ctx context.Context, svc SchemaGetter, shortForm string) (vc.SchemaRef, error) {
 	name, version, err := vc.SplitSchemaRef(shortForm)
 	if err != nil {

@@ -2,6 +2,8 @@ package netcompose
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -13,13 +15,17 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// TestSchemaValidation_RegistryToVerification exercises the whole schema wiring
-// against a REAL registry (not a fake resolver): register a schema, boot-resolve
-// its config short-form into the signed reference the issuance path embeds, then
-// verify credentials carrying that reference through the same registry via the
-// SchemaBridge bridge. The key property is cross-side agreement — the content
-// hash ResolveSchemaRefAtBoot computes at issuance equals the one the verifier
-// re-derives at verification (independent code paths over the same registry).
+// TestSchemaValidation_RegistryToVerification exercises the verify-side schema
+// wiring against a REAL registry (not a fake resolver): register a schema,
+// construct the signed reference the issuance path embeds, then verify
+// credentials carrying that reference through the same registry via the
+// SchemaBridge bridge. The key property is cross-side agreement — the
+// issuance-side reference convention (canonical schema URI + sha256 content
+// hash over the registered body, owned by pipeline/runtime's
+// resolveSchemaRefAtBoot since the data-plane extraction; netcompose and
+// pipeline/runtime never import each other, so the convention's exact bytes
+// are constructed inline here) equals what the verifier re-derives at
+// verification (independent code paths over the same registry).
 func TestSchemaValidation_RegistryToVerification(t *testing.T) {
 	ctx := context.Background()
 	svc := schemaregistry.New(schemayaml.New(t.TempDir()))
@@ -29,10 +35,14 @@ func TestSchemaValidation_RegistryToVerification(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// Issuance side: boot-resolve the config short-form to the signed reference.
-	ref, err := ResolveSchemaRefAtBoot(ctx, svc, "readings@"+sc.Version)
-	if err != nil {
-		t.Fatalf("ResolveSchemaRefAtBoot: %v", err)
+	// Issuance side: the signed reference a producing loop embeds — the exact
+	// bytes pipeline/runtime's resolveSchemaRefAtBoot produces (pinned by its
+	// own unit test, pipeline/runtime/schema_test.go), constructed inline.
+	sum := sha256.Sum256(body)
+	ref := vc.SchemaRef{
+		ID:          vc.SchemaURI("readings", sc.Version),
+		Type:        "JsonSchema",
+		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
 	}
 
 	// Verification side: a verifier wired to the same registry through the bridge.

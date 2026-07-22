@@ -2,8 +2,6 @@ package netcompose
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -13,10 +11,13 @@ import (
 
 // SchemaGetter is the narrow read seam the schema wiring needs from the schema
 // registry — *schemaregistry.Service satisfies it. Kept consumer-defined so the
-// bridge and boot-resolve depend on Get alone, not the whole service. Exported
-// because pipeline/runtime/dataplane.go's Deps declares a field of this type
-// (the data plane resolves a producing loop's schema-ref through it) — a
-// documented mid-branch import (PR3a Task 2), severed in Task 3.
+// bridge depends on Get alone, not the whole service. Exported because
+// SchemaBridge.Svc is of this type and the composition roots construct the
+// bridge directly (netcompose.SchemaBridge{Svc: schemaSvc} in cmd/network's
+// and cmd/standalone's mains). The data plane's boot-time schema-ref
+// resolution has its OWN getter seam (pipeline/runtime.SchemaGetter, over a
+// runtime-owned Schema type) — two layers, two owners, never an import
+// between them (AGENTS.md rule 2).
 type SchemaGetter interface {
 	Get(ctx context.Context, name, version string) (*store.Schema, error)
 }
@@ -48,32 +49,8 @@ func (r SchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (*vc.
 	return &vc.ResolvedSchema{Format: sc.SchemaFormat, Body: sc.SchemaBody}, nil
 }
 
-// ResolveSchemaRefAtBoot resolves a config schema-ref short-form
-// ("<name>@<version>") to the full, signed reference a producing loop embeds in
-// every credential it issues. Fail-closed: a missing or deprecated schema is a
-// boot error (an operator must register or advance to a current version before
-// the loop runs). The content hash is computed here, once, over the registered
-// body — issuance itself does no registry I/O (schemas are immutable), and a
-// schema deprecated after boot keeps issuing until the next restart.
-func ResolveSchemaRefAtBoot(ctx context.Context, svc SchemaGetter, shortForm string) (vc.SchemaRef, error) {
-	name, version, err := vc.SplitSchemaRef(shortForm)
-	if err != nil {
-		return vc.SchemaRef{}, err
-	}
-	sc, err := svc.Get(ctx, name, version)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return vc.SchemaRef{}, fmt.Errorf("schema %s@%s is not registered", name, version)
-		}
-		return vc.SchemaRef{}, fmt.Errorf("resolve schema %s@%s: %w", name, version, err)
-	}
-	if sc.Deprecated {
-		return vc.SchemaRef{}, fmt.Errorf("schema %s@%s is deprecated: register and reference a current version", name, version)
-	}
-	sum := sha256.Sum256(sc.SchemaBody)
-	return vc.SchemaRef{
-		ID:          vc.SchemaURI(name, version),
-		Type:        sc.SchemaFormat,
-		ContentHash: "sha256:" + hex.EncodeToString(sum[:]),
-	}, nil
-}
+// Boot-time schema-ref resolution (the issuance side) lives in
+// pipeline/runtime (resolveSchemaRefAtBoot there): only the data plane embeds
+// a schema-ref at issuance, and this control-plane composition never does —
+// the netcompose copy that predated the pipeline/runtime extraction is gone.
+// This file keeps only the VERIFY-side bridge above.

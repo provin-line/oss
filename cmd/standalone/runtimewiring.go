@@ -70,7 +70,9 @@ func runtimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Con
 	}
 	if chainCfg.Transport != chainconfig.TransportNATS {
 		if len(pipeCfg.Loops) > 0 {
-			return pipelineruntime.Config{}, fmt.Errorf("standalone: data-plane loops require the nats transport, got %q", chainCfg.Transport)
+			// No "standalone:" prefix here — main.go's log.Fatalf("standalone: %v")
+			// re-prefixes, and a doubled prefix reads like a bug.
+			return pipelineruntime.Config{}, fmt.Errorf("data-plane loops require the nats transport, got %q", chainCfg.Transport)
 		}
 		return cfg, nil
 	}
