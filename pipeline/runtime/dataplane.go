@@ -179,6 +179,15 @@ type Runtime struct {
 	// tlogClosers releases the durable logs' file handles at teardown (the
 	// memlog fallback has nothing to close).
 	tlogClosers []io.Closer
+	// custodyLogs is the custody-log registry (D6): every DURABLE local log
+	// this runtime opened (emission, sink-receipt, sink-reject), each labelled
+	// with its log id and the issuer identity whose key signs its checkpoints.
+	// Unlike tlogs (the TlogService READ surface), this INCLUDES sink-reject
+	// logs — the mirror shipper (wired in a later task) must custody every
+	// durable local log to the registry, reject logs included. Memlog
+	// fallbacks (empty TlogDir/RejectLogDir, the unit-test seam) are never
+	// custodied: nothing durable to ship.
+	custodyLogs []CustodyLog
 	// pushBindings are the HTTP ingest surfaces of push-enabled source loops
 	// (push-ingress = true): cmd/standalone's BuildHandler mounts one apipush
 	// adapter per binding, read through PushBindings(). The bound publishers
@@ -189,6 +198,28 @@ type Runtime struct {
 // Tlogs returns the emission-log registry (log id = producing output subject
 // -> log). cmd/standalone's BuildHandler mounts the TlogService over it.
 func (r *Runtime) Tlogs() map[string]tlog.Log { return r.tlogs }
+
+// CustodyLog is one durable local log the mirror shipper custodies to the
+// registry: the live handle, its log id, and the issuer identity whose key
+// signs its checkpoints (the shipper signs MirrorLogSegment wireauth proofs
+// as this SAME identity — D-T3: checkpoint signer == wireauth signer).
+type CustodyLog struct {
+	LogID  string
+	Log    tlog.Log
+	Signer IssuerConfig
+}
+
+// CustodyLogs returns every durable local log this runtime opened —
+// emission logs, sink-receipt logs, and sink-reject logs alike — each
+// labelled with its log id and signer identity. Unlike Tlogs() (the
+// TlogService READ surface), this INCLUDES sink-reject logs: they are
+// deliberately absent from Tlogs (custody-only, never served over reads),
+// but the mirror shipper must still custody them to the registry like every
+// other durable log. Memlog fallbacks (empty TlogDir/RejectLogDir, the
+// unit-test seam) are never entered here — nothing durable to ship. Order
+// follows construction (cfg.Loops order) and is not a contract — a consumer
+// wanting a stable order sorts by LogID itself.
+func (r *Runtime) CustodyLogs() []CustodyLog { return r.custodyLogs }
 
 // PushBindings returns the HTTP ingest surfaces of every push-enabled source
 // loop. cmd/standalone's mountPushRoutes mounts one apipush adapter per
@@ -312,6 +343,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 			}
 			slog.Info("runtime: durable loop log opened", "loop", loopName, "log_id", subject, "dir", dir)
 			dp.tlogClosers = append(dp.tlogClosers, fl)
+			dp.custodyLogs = append(dp.custodyLogs, CustodyLog{LogID: subject, Log: fl, Signer: issuer})
 			l = fl
 		}
 		dp.tlogs[subject] = l
@@ -359,6 +391,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 			return nil, fmt.Errorf("runtime: loop %q: reject log: %w", loopName, ferr)
 		}
 		dp.tlogClosers = append(dp.tlogClosers, fl)
+		dp.custodyLogs = append(dp.custodyLogs, CustodyLog{LogID: logID, Log: fl, Signer: issuer})
 		slog.Info("runtime: sink reject log opened", "loop", loopName, "dir", dir, "log_id", logID)
 		return &sinkRejectLog{log: fl}, nil
 	}
