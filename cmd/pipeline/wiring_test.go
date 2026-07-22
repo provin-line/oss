@@ -19,6 +19,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
@@ -30,6 +31,8 @@ import (
 	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/storehandler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemaclient "github.com/provin-line/oss/network/pkg/services/schemaregistry/client"
 	schemahandler "github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
@@ -37,7 +40,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	vcresolvermemstore "github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/vc"
 )
@@ -216,7 +219,7 @@ func TestWireSchemaBridge_ResolveSchema(t *testing.T) {
 
 func newVCStoreAdapter(t *testing.T) (vcStoreAdapter, string, *http.Client) {
 	t.Helper()
-	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	svc := vcresolver.New(vcresolver.NewVariantStore(vcresolvermemstore.NewBackend()), vcresolvermemstore.NewPool())
 	_, h := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(svc))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -371,7 +374,7 @@ func newWireHarness(t *testing.T) *wireHarness {
 		t.Fatalf("NewReceiptStore: %v", err)
 	}
 	queue := auditor.NewMemQueue()
-	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(vcresolvermemstore.NewBackend()), vcresolvermemstore.NewPool())
 	admitted := func(ctx context.Context, headVariantID string) (string, bool, error) {
 		bodyAddress, err := vcSvc.ResolveVariantBody(ctx, headVariantID)
 		if err != nil {
@@ -495,5 +498,210 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 	}
 	if len(cands) != 1 || cands[0].HeadHash != head.BodyAddress {
 		t.Errorf("queue = %+v, want exactly one candidate for %q", cands, head.BodyAddress)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// payloadClientFactory / wirePayloadStore — the D9 fix: RetainPayload
+// requires owner_did == the wireauth-proven signer (storehandler's
+// errOwnerMismatch), so a node running more than one producing loop (each
+// with its OWN output subject) needs one signing client PER owner, not one
+// shared node-identity client. This harness proves the fix directly: a real
+// storehandler.Handler + wireauth.Verifier + memstore over httptest, driven
+// through wirePayloadStore for TWO DIFFERENT owner DIDs sharing ONE
+// keystore — both retains must succeed, each recorded under its OWN owner.
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestPayloadClientFactory_CachesPerDID(t *testing.T) {
+	f := newPayloadClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
+	if a1 != a2 {
+		t.Error("For(sameDID) returned two different clients, want the cached one")
+	}
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg")
+	if a1 == b1 {
+		t.Error("For(differentDID) returned the SAME client as another DID")
+	}
+}
+
+const (
+	payloadOwnerA = "did:dplaax:reg:org:acme:pipeline:src1"
+	payloadOwnerB = "did:dplaax:reg:org:acme:pipeline:agg"
+)
+
+// payloadRetainHarness stands up a real storehandler.Handler (over a real
+// memstore.Store) behind a real wireauth.Verifier, served over httptest —
+// mirrors network/pkg/services/payloadresolver/storehandler/retain_e2e_test.
+// go's own harness shape, reusing THIS file's fakeDIDResolver/authDoc/jwk
+// helpers (defined above for the audit/receipt harness).
+type payloadRetainHarness struct {
+	store *memstore.Store
+	ks    *ksfilestore.Store
+	url   string
+	httpc *http.Client
+}
+
+func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarness {
+	t.Helper()
+	ks := ksfilestore.New(t.TempDir())
+	gen := ed25519.Generator{}
+	resolver := fakeDIDResolver{}
+	for _, owner := range owners {
+		kp, err := gen.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ks.SaveKeyPair(owner, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+			t.Fatal(err)
+		}
+		resolver[owner] = authDoc(owner, kp.PublicKey)
+	}
+
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+		Epoch:    time.Now().Add(-time.Hour),
+		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	store := memstore.New()
+	h := storehandler.New(store, v, 1<<20)
+	path, hh := payloadpbconnect.NewPayloadStoreServiceHandler(h)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &payloadRetainHarness{store: store, ks: ks, url: srv.URL, httpc: srv.Client()}
+}
+
+// TestWirePayloadStore_SignsEachRetainAsItsOwnOwner is the D9 fix's core
+// proof: ONE wirePayloadStore (backed by ONE payloadClientFactory, ONE
+// shared keystore) retains payloads for TWO DIFFERENT owner DIDs — the exact
+// topology a node running two producing loops with different output
+// subjects needs. Before the fix, ONE shared client signed every retain as a
+// single node identity, so at most one of these two calls could ever
+// satisfy storehandler's owner_did == proven-signer requirement; both must
+// now succeed, each recorded under its OWN owner.
+func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
+	h := newPayloadRetainHarness(t, payloadOwnerA, payloadOwnerB)
+	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc)
+	store := wirePayloadStore{factory: factory}
+
+	payloadA := []byte("bytes produced by src1's output subject")
+	addrA, err := store.Store(context.Background(), payloadA, payloadOwnerA)
+	if err != nil {
+		t.Fatalf("Store(ownerA): %v", err)
+	}
+	gotA, ownersA, err := h.store.Get(addrA)
+	if err != nil {
+		t.Fatalf("Get(addrA): %v", err)
+	}
+	if string(gotA) != string(payloadA) || len(ownersA) != 1 || ownersA[0] != payloadOwnerA {
+		t.Errorf("ownerA retain: bytes=%q owners=%v, want %q owned by [%s]", gotA, ownersA, payloadA, payloadOwnerA)
+	}
+
+	payloadB := []byte("bytes produced by agg's DIFFERENT output subject")
+	addrB, err := store.Store(context.Background(), payloadB, payloadOwnerB)
+	if err != nil {
+		t.Fatalf("Store(ownerB): %v", err)
+	}
+	gotB, ownersB, err := h.store.Get(addrB)
+	if err != nil {
+		t.Fatalf("Get(addrB): %v", err)
+	}
+	if string(gotB) != string(payloadB) || len(ownersB) != 1 || ownersB[0] != payloadOwnerB {
+		t.Errorf("ownerB retain: bytes=%q owners=%v, want %q owned by [%s]", gotB, ownersB, payloadB, payloadOwnerB)
+	}
+
+	// The factory must have cached (and reused) a distinct client per owner —
+	// never one shared client the way the pre-fix wiring did.
+	if factory.For(payloadOwnerA) == factory.For(payloadOwnerB) {
+		t.Error("factory returned the SAME client for two different owners")
+	}
+}
+
+// TestWirePayloadStore_MissingOwnerKey_Errors proves a keystore that never
+// held a key for the claimed owner fails the retain (no silent bypass) —
+// the exact runtime symptom the D9 boot preflight (main.go) exists to catch
+// before it ever reaches this wire call.
+func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
+	h := newPayloadRetainHarness(t, payloadOwnerA) // payloadOwnerB's key is never provisioned
+	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc)
+	store := wirePayloadStore{factory: factory}
+
+	if _, err := store.Store(context.Background(), []byte("orphan bytes"), payloadOwnerB); err == nil {
+		t.Fatal("Store with no key for the owner: want error, got nil")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// preflightPayloadRetainKeys — the D9 boot preflight (main.go's Boot guard
+// 5): every producing loop's own output subject must already have a #auth
+// key in the keystore BEFORE this binary starts its data plane, since a
+// missing key would otherwise only surface as a runtime RetainPayload
+// failure that aborts the whole emission (dataplane.go's payloadWiring,
+// D-6).
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestPreflightPayloadRetainKeys_AllKeysPresent_OK(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	gen := ed25519.Generator{}
+	for _, subject := range []string{payloadOwnerA, payloadOwnerB} {
+		kp, err := gen.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loops := []pipelineconfig.LoopConfig{
+		{Name: "src1", Role: pipelineconfig.RoleSource, Source: pipelineconfig.SourceConfig{OutputSubject: payloadOwnerA}},
+		{Name: "agg", Role: pipelineconfig.RoleAggregate, Aggregate: pipelineconfig.AggregateConfig{OutputSubject: payloadOwnerB}},
+	}
+	if err := preflightPayloadRetainKeys(ks, loops); err != nil {
+		t.Fatalf("preflightPayloadRetainKeys: %v", err)
+	}
+}
+
+func TestPreflightPayloadRetainKeys_MissingKey_NamesTheLoopAndSubject(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	gen := ed25519.Generator{}
+	kp, err := gen.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only payloadOwnerA gets a key; payloadOwnerB (the "agg" loop) does not.
+	if err := ks.SaveKeyPair(payloadOwnerA, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+		t.Fatal(err)
+	}
+	loops := []pipelineconfig.LoopConfig{
+		{Name: "src1", Role: pipelineconfig.RoleSource, Source: pipelineconfig.SourceConfig{OutputSubject: payloadOwnerA}},
+		{Name: "agg", Role: pipelineconfig.RoleAggregate, Aggregate: pipelineconfig.AggregateConfig{OutputSubject: payloadOwnerB}},
+	}
+	err = preflightPayloadRetainKeys(ks, loops)
+	if err == nil {
+		t.Fatal("preflightPayloadRetainKeys: want error for the loop with no provisioned key, got nil")
+	}
+	for _, want := range []string{`"agg"`, payloadOwnerB} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("preflightPayloadRetainKeys error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestPreflightPayloadRetainKeys_NoProducingLoops_OK(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	loops := []pipelineconfig.LoopConfig{
+		{Name: "snk", Role: pipelineconfig.RoleSink, Sink: pipelineconfig.SinkConfig{}},
+	}
+	if err := preflightPayloadRetainKeys(ks, loops); err != nil {
+		t.Fatalf("preflightPayloadRetainKeys: %v (a sink loop needs no retain key)", err)
 	}
 }

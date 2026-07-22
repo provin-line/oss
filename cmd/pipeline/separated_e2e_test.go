@@ -24,10 +24,11 @@ package main
 //     resolves EVERY wireauth caller's signer_did against (RegisterAuditHead
 //     as the node identity, RegisterEvidence as the aggregate's issuer, and
 //     MirrorLogSegment's checkpoint-signature check for every custody log).
-//  2. For ONE producing loop's emission log specifically (src1), the
-//     registry's OWN internal DID store (network/pkg/services/didregistry/
-//     store/yamlstore) is seeded directly, bypassing its RPC surface
-//     entirely: MirrorLogSegment's D-T3 "emission" writer-binding check
+//  2. For each producing loop's OWN emission log (src1's and, since the D9
+//     update below, agg's too), the registry's OWN internal DID store
+//     (network/pkg/services/didregistry/store/yamlstore) is seeded directly,
+//     bypassing its RPC surface entirely: MirrorLogSegment's D-T3 "emission"
+//     writer-binding check
 //     (network/pkg/services/tlogservice/logident.AncestorPipeline) resolves
 //     the checkpoint signer through the registry's OWN in-process
 //     didregistry.Service, not through BuildHandler's outbound resolver —
@@ -42,6 +43,16 @@ package main
 //
 // See the report (.superpowers/sdd/task-9-cmdpipeline-report.md) for the full
 // per-case assertion map and this identity analysis in more detail.
+//
+// D9 update: the main scenario originally had to split src1 and agg (two
+// producing loops with different output subjects) across TWO separate
+// runtimes/node identities, working around a real production gap this task
+// discovered in buildDeps' payload-retain wiring (see the report's "Fix"
+// section for the full analysis). That gap is now fixed
+// (payloadClientFactory, wiring.go signs each RetainPayload call as the
+// OWNING loop's own output subject), so the main scenario below runs all
+// four loops — src1, sink1, archive, agg — on ONE runtime, and doubles as
+// that fix's own end-to-end proof.
 
 import (
 	"bytes"
@@ -500,9 +511,11 @@ func sepFindAuditedCredential(t *testing.T, ctx context.Context, queue *auditor.
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// The main scenario: ONE registry + ONE pipeline (four loops: a real source,
-// an observation-only sink, an archival sink with a receipt issuer, and an
-// aggregate) over ONE embedded NATS broker — proving cases 1-4.
+// The main scenario: ONE registry + ONE pipeline RUNTIME (four loops: a real
+// source, an observation-only sink, an archival sink with a receipt issuer,
+// and an aggregate — src1 and agg are two producing loops with DIFFERENT
+// output subjects, sharing this one runtime's keystore) over ONE embedded
+// NATS broker — proving cases 1-4.
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
@@ -529,22 +542,29 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		}
 		return kp.PublicKey
 	}
-	// This node runs as TWO separate runtimes (Runtime A: src1+sink1+archive;
-	// Runtime B: agg alone), each with its OWN node identity equal to its
-	// OWN producing loop's output subject. This is forced by a real
-	// architectural gap this task discovered (reported in full in the task
-	// report): buildDeps' PayloadStore/dual-emit retain client
-	// (wiring.go's wirePayloadStore) always signs as ONE shared nodeDID, but
-	// PayloadStoreService's RetainPayload requires owner_did (the emitting
-	// loop's OWN output subject — dataplane.go's retainerFor(src.OutputSubject))
-	// to equal the proven signer (network/pkg/services/payloadresolver/
-	// storehandler's errOwnerMismatch) — "a producing process retains its own
-	// emitted payload" per that package's own retain_e2e_test.go. One shared
-	// nodeDID can satisfy at most ONE producing loop's output subject, so a
-	// node with two DIFFERENT producing loops (src1, agg) cannot make both
-	// retains succeed under buildDeps' current wiring — hence two runtimes,
-	// each self-consistent. This is a pre-existing production gap, not
-	// something this test works around by changing production code.
+	// This node runs as ONE runtime with FOUR loops — src1 (source), sink1
+	// (observation-only), archive (archival + receipt), and agg (aggregate) —
+	// sharing ONE node identity and ONE keystore. src1 and agg are TWO
+	// DIFFERENT producing loops with TWO DIFFERENT output subjects: exactly
+	// the topology that used to be impossible on a single runtime before the
+	// D9 fix (payloadClientFactory, wiring.go). PayloadStoreService's
+	// RetainPayload requires owner_did (the emitting loop's OWN output
+	// subject — dataplane.go's retainerFor(src.OutputSubject)) to equal the
+	// proven signer (network/pkg/services/payloadresolver/storehandler's
+	// errOwnerMismatch) — "a producing process retains its own emitted
+	// payload" per that package's own retain_e2e_test.go — and buildDeps used
+	// to wire ONE shared node-identity retain client for every producing
+	// loop, which could satisfy at most ONE loop's output subject at a time
+	// (this test used to run src1 and agg as two SEPARATE runtimes to work
+	// around exactly that gap — see git history for the prior version, and
+	// the task report's "Blocker discovered" section for the original
+	// analysis). buildDeps now signs each retain call as the OWNING loop's
+	// OWN output subject (payloadClientFactory.For(ownerDID), keyed per
+	// call), so ONE runtime now suffices as long as the keystore holds BOTH
+	// producing loops' output-subject keys — which this test already
+	// provisions below (src1NodePub, aggNodePub) for an unrelated reason
+	// (both are ALSO the wireauth caller identities each loop's own
+	// emission-log mirror checkpoint signs as).
 	src1NodePub := genIdentity(sepSrc1Pipeline, false)
 	aggNodePub := genIdentity(sepAggPipeline, false)
 	src1Pub := genIdentity(sepSrc1IssuerDID, true)
@@ -588,15 +608,24 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		sepArchiveIssuerDID: sepIdentityDoc(t, sepArchiveIssuerDID, archivePub),
 	})
 
-	// The registry itself, with src1's process DID pre-seeded into its OWN
-	// internal DID store (emission-log mirror custody's D-T3 ancestry check —
-	// see the file doc).
+	// The registry itself, with src1's AND agg's process DIDs pre-seeded into
+	// its OWN internal DID store (emission-log mirror custody's D-T3 ancestry
+	// check — see the file doc): both are producing loops whose emission log
+	// classifies as logident.KindEmission, which resolves its checkpoint
+	// signer's ancestor pipeline through this internal store, not the fake
+	// external DID server (archive's receipt log is the one exception —
+	// KindSinkReceipt needs no such seeding, see the file doc).
 	reg := buildSepRegistry(t, fakeDIDURL, map[string]*did.DIDDocument{
 		sepSrc1IssuerDID: sepInternalProcessDoc(t, sepSrc1IssuerDID, sepSrc1Pipeline, src1Pub),
+		sepAggIssuerDID:  sepInternalProcessDoc(t, sepAggIssuerDID, sepAggPipeline, aggPub),
 	}, nil)
 
-	// Runtime A: the real source loop + its two consumers (sink1, archive).
-	pipeCfgA := &pipelineconfig.Config{
+	// ONE pipeline config, FOUR loops: src1 (source), sink1 (observation-only
+	// consumer), archive (archival sink + receipt issuer), and agg
+	// (aggregate) — src1 and agg are the two producing loops with DIFFERENT
+	// output subjects the D9 fix (see this function's own doc, above) makes
+	// coexist on a single runtime.
+	pipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint:   reg.url,
 		VCStoreBearer:     sepBearer,
 		MaxCredentialSize: 1 << 20,
@@ -625,17 +654,6 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 					},
 				},
 			},
-		},
-	}
-
-	// Runtime B: the aggregate, alone (see the file/section doc for why it is
-	// a separate node identity+runtime rather than a fourth loop on Runtime A).
-	pipeCfgB := &pipelineconfig.Config{
-		VCStoreEndpoint:   reg.url,
-		VCStoreBearer:     sepBearer,
-		MaxCredentialSize: 1 << 20,
-		TlogMirror:        pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 256, MaxBatchBytes: 4 << 20, FlushInterval: time.Hour},
-		Loops: []pipelineconfig.LoopConfig{
 			{
 				Name: "agg", Role: pipelineconfig.RoleAggregate,
 				Aggregate: pipelineconfig.AggregateConfig{
@@ -687,12 +705,12 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		t.Cleanup(func() { cancel(); <-runDone })
 		return dp
 	}
-	dpA := buildRuntime(pipeCfgA, sepSrc1Pipeline, "a")
-	// Runtime B (the aggregate) is exercised entirely through its NATS I/O
-	// (aggOut below) and the registry's wire surface (case 2) — nothing in
-	// this test inspects its Runtime handle directly, only its side effect
-	// (running) matters.
-	_ = buildRuntime(pipeCfgB, sepAggPipeline, "b")
+	// ONE runtime for all four loops. nodeDID (this runtime's own subscriber/
+	// AuditQueue/PayloadResolver identity) can be ANY identity the keystore
+	// already holds an #auth key for — it need not equal either producing
+	// loop's own output subject any more (that was the pre-D9 constraint);
+	// sepSrc1Pipeline is reused here only because its key already exists.
+	dp := buildRuntime(pipeCfg, sepSrc1Pipeline, "a")
 
 	inj, err := natstransport.Connect(context.Background(), natstransport.Config{URL: natsURL, AccountSeed: string(accSeed)})
 	if err != nil {
@@ -790,22 +808,28 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		}
 	})
 
-	// ── Case 4: mirror custody LIVE — the shippers ship src1's emission log
-	// and archive's receipt log; GetMirrorState advances to the local log's
-	// size. ──
+	// ── Case 4: mirror custody LIVE — the shippers ship src1's emission log,
+	// archive's receipt log, AND agg's emission log; GetMirrorState advances
+	// to each local log's size. agg's own emission log is included here (not
+	// just src1's and archive's, as before the D9 fix) precisely BECAUSE it
+	// now shares this ONE runtime with src1: a nonempty local log for agg is
+	// itself proof its retain succeeded — dataplane.go's payloadWiring
+	// aborts an emission (and so never appends it to the emission log)
+	// before it is ever broadcast when the retain call fails, per the task
+	// report's own analysis. ──
 	t.Run("MirrorCustody_LiveGetMirrorStateAdvances", func(t *testing.T) {
 		var wanted []pipelineruntime.CustodyLog
-		for _, c := range dpA.CustodyLogs() {
-			if c.LogID == sepSrc1Pipeline || c.LogID == "sink-receipt:"+sepArchiveIssuerDID {
+		for _, c := range dp.CustodyLogs() {
+			if c.LogID == sepSrc1Pipeline || c.LogID == "sink-receipt:"+sepArchiveIssuerDID || c.LogID == sepAggPipeline {
 				wanted = append(wanted, c)
 			}
 		}
-		if len(wanted) != 2 {
-			t.Fatalf("custody logs matched = %d, want 2 (src1 emission + archive receipt); all custody logs: %+v", len(wanted), dpA.CustodyLogs())
+		if len(wanted) != 3 {
+			t.Fatalf("custody logs matched = %d, want 3 (src1 emission + archive receipt + agg emission); all custody logs: %+v", len(wanted), dp.CustodyLogs())
 		}
 
 		mirrorFactory := newMirrorClientFactory(ks, reg.url, sepBearer, guard.HTTPClient())
-		shippers, err := buildShippers(wanted, mirrorFactory.forClient, pipeCfgA.TlogMirror)
+		shippers, err := buildShippers(wanted, mirrorFactory.forClient, pipeCfg.TlogMirror)
 		if err != nil {
 			t.Fatalf("buildShippers: %v", err)
 		}
@@ -867,13 +891,14 @@ const (
 func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	gen := ed25519.Generator{}
-	// The node identity equals the source loop's own output subject — see
-	// the main scenario's buildRuntime doc for why buildDeps' shared-nodeDID
-	// payload-retain client forces this (a pre-existing production gap, not
-	// a test-side shortcut). RetainPayload runs at boot (VCResolverService/
-	// PayloadStoreService stay fast — only TlogService is slowed below), so
-	// this identity DOES need to resolve, unlike a case with no producing
-	// loop at all.
+	// The node identity happens to equal the source loop's own output
+	// subject here — harmless either way post-D9 (buildDeps' payload-retain
+	// client now signs each retain as the OWNING loop's own output subject
+	// via payloadClientFactory, not the shared node identity), kept only
+	// because this identity's key is what gets provisioned below.
+	// RetainPayload runs at boot (VCResolverService/PayloadStoreService stay
+	// fast — only TlogService is slowed below), so this identity DOES need
+	// to resolve, unlike a case with no producing loop at all.
 	//
 	// Saved BEFORE the process identity below: ksfilestore.SaveKeyPair is
 	// create-only or keyed on a DIRECTORY it will not overwrite, and

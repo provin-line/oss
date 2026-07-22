@@ -152,19 +152,35 @@ func main() {
 	nodeDID := chainCfg.NATS.NodeDID
 
 	// The pipeline-local keystore: THIS binary's own DataDir/keys, never the
-	// registry's. It must hold the #auth key for nodeDID (AuditRegistrar,
-	// PayloadResolver/Retain); the #signing/#auth keys for every configured
-	// loop's issuer identity (source/chained/aggregate issuers, sink receipt
-	// issuers); the #auth key for the checkpoint-signer identity of every
-	// durable log (the SAME issuer/receipt keys above — the mirror shipper
-	// signs MirrorLogSegment as that same identity, tlog-custody spec D-T3);
-	// and (PR3b Task 7) the #auth key for every producing loop's OWN
-	// pipeline DID (its OutputSubject, distinct from its issuer DID) — the
-	// identity the emit-health reporter signs ReportEmitHealth as (see
-	// emithealthwiring.go's package doc for why it must be the pipeline DID,
-	// not the issuer DID). Provisioning them is an operator/CLI concern, out
-	// of this task's scope, same convention cmd/standalone follows.
+	// registry's. It must hold the #auth key for nodeDID (AuditRegistrar);
+	// the #signing/#auth keys for every configured loop's issuer identity
+	// (source/chained/aggregate issuers, sink receipt issuers); the #auth key
+	// for the checkpoint-signer identity of every durable log (the SAME
+	// issuer/receipt keys above — the mirror shipper signs MirrorLogSegment
+	// as that same identity, tlog-custody spec D-T3); and the #auth key for
+	// every producing loop's OWN pipeline DID (its OutputSubject, distinct
+	// from its issuer DID) — the identity BOTH the emit-health reporter
+	// signs ReportEmitHealth as (PR3b Task 7 — see emithealthwiring.go's
+	// package doc for why it must be the pipeline DID, not the issuer DID)
+	// AND, as of D9, the identity by-reference retain (wirePayloadStore's
+	// payloadClientFactory, wiring.go) signs RetainPayload as — guard 5,
+	// below, checks the latter fails closed at boot rather than silently at
+	// first emit. Provisioning them is an operator/CLI concern, out of this
+	// task's scope, same convention cmd/standalone follows.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
+
+	// Boot guard 5 (fail-closed, named, D9): by-reference retain
+	// (wirePayloadStore's payloadClientFactory, wiring.go) signs each
+	// RetainPayload call as the OWNING producing loop's output subject, never
+	// the node identity — network/pkg/services/payloadresolver/storehandler
+	// enforces owner_did == the proven signer (the PR2 signer-to-actor
+	// binding). A missing key here would otherwise only surface as a runtime
+	// retain failure that aborts the whole emission (dataplane.go's
+	// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits,
+	// D-6), so this is checked before any loop ever runs.
+	if err := preflightPayloadRetainKeys(keyStore, pipeCfg.Loops); err != nil {
+		log.Fatalf("pipeline: %v", err)
+	}
 
 	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID)
 

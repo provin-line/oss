@@ -157,21 +157,49 @@ func (r *emitHealthReporter) report(ctx context.Context) {
 	}
 }
 
-// producingLoopPublishers returns the pipeline DID (OutputSubject) of every
-// PRODUCING loop in loops — source, chained, and aggregate roles (a sink
-// loop consumes, never publishes, so it advertises nothing and needs no
-// reporter).
-func producingLoopPublishers(loops []pipelineconfig.LoopConfig) []string {
-	var out []string
+// producingLoopRef pairs a producing loop's config name with its own output
+// pipeline DID — both halves main.go's D9 boot preflight
+// (preflightPayloadRetainKeys, wiring.go) needs to name the loop a missing
+// payload-retain key belongs to; producingLoopPublishers (below) needs only
+// the DID half.
+type producingLoopRef struct {
+	Name          string
+	OutputSubject string
+}
+
+// producingLoops returns the (Name, OutputSubject) pair for every PRODUCING
+// loop in loops — source, chained, and aggregate roles (a sink loop
+// consumes, never publishes; it has no OutputSubject and needs neither an
+// emit-health reporter nor a payload-retain key).
+func producingLoops(loops []pipelineconfig.LoopConfig) []producingLoopRef {
+	var out []producingLoopRef
 	for _, lc := range loops {
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
-			out = append(out, lc.Source.OutputSubject)
+			out = append(out, producingLoopRef{Name: lc.Name, OutputSubject: lc.Source.OutputSubject})
 		case pipelineconfig.RoleChained:
-			out = append(out, lc.Chained.OutputSubject)
+			out = append(out, producingLoopRef{Name: lc.Name, OutputSubject: lc.Chained.OutputSubject})
 		case pipelineconfig.RoleAggregate:
-			out = append(out, lc.Aggregate.OutputSubject)
+			out = append(out, producingLoopRef{Name: lc.Name, OutputSubject: lc.Aggregate.OutputSubject})
 		}
+	}
+	return out
+}
+
+// producingLoopPublishers returns the pipeline DID (OutputSubject) of every
+// PRODUCING loop in loops — source, chained, and aggregate roles (a sink
+// loop consumes, never publishes, so it advertises nothing and needs no
+// reporter). Derived from producingLoops, which also carries each loop's
+// config Name (needed by main.go's D9 boot preflight, not by this
+// function's own caller).
+func producingLoopPublishers(loops []pipelineconfig.LoopConfig) []string {
+	refs := producingLoops(loops)
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = r.OutputSubject
 	}
 	return out
 }

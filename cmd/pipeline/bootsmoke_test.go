@@ -50,10 +50,20 @@ func TestPipeline_ActualBoot(t *testing.T) {
 	dir := t.TempDir()
 	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
 	port := freePort(t)
+	dataDir := filepath.Join(dir, "data")
+
+	// D9 boot preflight (main.go's Boot guard 5, preflightPayloadRetainKeys):
+	// validSourceLoopConf's "src" loop is a producing loop, so its own output
+	// subject needs a #auth key in the keystore BEFORE this binary starts —
+	// provisioned directly into the DataDir/keys tree the real binary's
+	// keystore (main.go) will open, same convention
+	// bootreject_test.go's own TestPipeline_BootRejectsMissingPayloadRetainKey
+	// uses.
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
 
 	confPath := writeBootConfigFile(t, dir, bootConfig{
 		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
-		DataDir:    filepath.Join(dir, "data"),
+		DataDir:    dataDir,
 		// The registry stand-in below is a loopback httptest server; the SSRF
 		// guard blocks loopback outbound targets by default (local-dev-only
 		// opt-in), so this smoke needs it explicitly.

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/ed25519"
+	stded25519 "crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -18,6 +18,10 @@ import (
 
 	"github.com/nats-io/nkeys"
 
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/keystore"
+	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 )
 
@@ -198,6 +202,93 @@ func TestPipeline_BootRejectsPrivateNetworksWithoutScopedResolution(t *testing.T
 	}
 }
 
+// TestPipeline_BootRejectsMissingPayloadRetainKey proves the D9 boot
+// preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
+// wiring.go): TWO producing loops with DIFFERENT output subjects — src1
+// (provisioned) and src2 (deliberately NOT provisioned) — must reject boot
+// naming SPECIFICALLY the loop and output subject missing its key, proving
+// the guard checks EVERY producing loop rather than stopping at the first.
+func TestPipeline_BootRejectsMissingPayloadRetainKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary")
+	}
+	bin := buildPipelineBinary(t)
+	dir := t.TempDir()
+	certFile, keyFile := writeSelfSignedCert(t)
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+	dataDir := filepath.Join(dir, "data")
+
+	// Provision ONLY src1's own output-subject key, directly into the
+	// DataDir/keys tree the real binary's keystore (main.go) will open — src2's
+	// is deliberately left unprovisioned so the guard must name IT, not src1.
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe1")
+
+	confPath := writeBootConfigFile(t, dir, bootConfig{
+		ListenAddr: fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:    dataDir,
+		CertFile:   certFile,
+		KeyFile:    keyFile,
+		Transport:  "nats",
+		// Unreachable on purpose: guard 5 must die BEFORE any nats dial.
+		NATSURL:         "nats://127.0.0.1:1",
+		AccSeed:         accSeedFile,
+		TrustSeed:       trustSeedFile,
+		ResolveDir:      filepath.Join(dir, "resolver"),
+		NodeDID:         "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		PipelineLoops:   twoProducingLoopsConf,
+		VCStoreEndpoint: "https://127.0.0.1:1/",
+		VCStoreBearer:   "test-bearer",
+	})
+
+	out, err := runPipelineBinary(t, bin, dir, confPath)
+	if err == nil {
+		t.Fatalf("pipeline booted with src2's payload-retain key missing; want a non-zero exit\noutput:\n%s", out)
+	}
+	for _, want := range []string{"no signing key for output subject", `"src2"`, "did:dplaax:reg:org:acme:pipeline:pipe2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("boot failure does not name the D9 guard (want %q):\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `"src1"`) {
+		t.Errorf("boot failure names src1 (which HAD its key provisioned) — want it to name only src2:\n%s", out)
+	}
+}
+
+// twoProducingLoopsConf declares TWO source loops with DIFFERENT output
+// subjects (pipe1, pipe2) — the exact topology the D9 gap broke: a node
+// running more than one producing loop, each needing its OWN payload-retain
+// signing key.
+const twoProducingLoopsConf = `
+    src1 {
+      role = "source"
+      ingress-subject = "ingest.src1"
+      output-subject = "did:dplaax:reg:org:acme:pipeline:pipe1"
+      issuer {
+        did = "did:dplaax:reg:org:acme:pipeline:pipe1:process:src1"
+        key-id = "signing"
+        verification-method = "did:dplaax:reg:org:acme:pipeline:pipe1:process:src1#signing"
+      }
+      pipeline-id = "pipe1"
+      process-id = "src1"
+      transformation-claim = "convert"
+      schema-ref = ""
+    }
+    src2 {
+      role = "source"
+      ingress-subject = "ingest.src2"
+      output-subject = "did:dplaax:reg:org:acme:pipeline:pipe2"
+      issuer {
+        did = "did:dplaax:reg:org:acme:pipeline:pipe2:process:src2"
+        key-id = "signing"
+        verification-method = "did:dplaax:reg:org:acme:pipeline:pipe2:process:src2#signing"
+      }
+      pipeline-id = "pipe2"
+      process-id = "src2"
+      transformation-claim = "convert"
+      schema-ref = ""
+    }
+`
+
 // validSourceLoopConf is a single, fully valid "source" loop — LoadPipelineConfig
 // must succeed so whichever guard is under test (which runs AFTER it) is what
 // rejects the boot, not an unrelated config error. Mirrors cmd/network's own
@@ -306,6 +397,26 @@ provin.network.chain {
 	return path
 }
 
+// provisionPayloadRetainKey writes a #auth key for subjectDID directly into
+// dataDir/keys — the SAME directory main.go's own filestore.New(filepath.
+// Join(coreCfg.DataDir, "keys")) opens — so a boot-reject/smoke test can
+// satisfy (or deliberately withhold, for the negative case) the D9 boot
+// preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
+// wiring.go) for a producing loop's OWN output subject BEFORE the real
+// binary ever starts. Shared by TestPipeline_BootRejectsMissingPayloadRetainKey
+// (this file) and TestPipeline_ActualBoot (bootsmoke_test.go).
+func provisionPayloadRetainKey(t *testing.T, dataDir, subjectDID string) {
+	t.Helper()
+	ks := ksfilestore.New(filepath.Join(dataDir, "keys"))
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.SaveKeyPair(subjectDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // runPipelineBinary execs bin with CONFIG_FILE=confPath and cmd.Dir = dir,
 // returning combined output and the exit error.
 func runPipelineBinary(t *testing.T, bin, dir, confPath string) (string, error) {
@@ -336,7 +447,7 @@ func buildPipelineBinary(t *testing.T) string {
 // cmd/network/bootreject_test.go.
 func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	pub, priv, err := stded25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}

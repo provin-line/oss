@@ -14,6 +14,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/didresolver"
@@ -477,31 +478,94 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 	return &vc.ResolvedSchema{Format: sc.Format, Body: sc.Body}, nil
 }
 
-// wirePayloadStore adapts *payloadclient.Resolver's Retain (a
-// (io.Reader, size) streaming shape) to pipeline/runtime.PayloadRetainStore's
-// whole-buffer Store(ctx, payload []byte, ownerDID string) shape — the
-// producer half of by-reference delivery. Retain signs as the NODE
-// identity (see buildDeps) and streams to Config.StoreEndpoint
-// (pipeCfg.VCStoreEndpoint, the same ONE registry base URL every other wire
-// Dep uses).
+// payloadClientFactory builds and caches one payloadclient.Resolver per
+// signer identity (DID) — mirrors auditClientFactory/mirrorClientFactory/
+// reportClientFactory exactly. This is the D9 fix: PayloadStoreService's
+// RetainPayload enforces owner_did == the wireauth-proven signer
+// (storehandler's errOwnerMismatch — "the proven DID is authoritative over
+// the claimed owner_did", and that package's own retain_e2e_test.go docs the
+// common case outright: "a producing process retains its own emitted
+// payload"). A node running more than one producing loop (each with its OWN
+// output subject — source/chained/aggregate all declare one) therefore needs
+// one signing client PER LOOP'S OUTPUT SUBJECT, never one client shared
+// across every loop under a single node identity: a shared client can
+// satisfy AT MOST one producing loop's retain calls, and every OTHER
+// loop's retain then fails PermissionDenied — which (per dataplane.go's
+// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits,
+// D-6) aborts that loop's ENTIRE emission, not merely its by-reference
+// side-channel. This is the production gap PR3b Task 9's separated e2e
+// discovered (see the report's "Blocker discovered" section, now fixed
+// here).
+//
+// The RESOLVE side (ResolvePayload, Deps.PayloadResolver) is NOT
+// owner-bound: the querying actor IS the signer (nil authorizer — see
+// payloadresolver/handler.Handler.ResolvePayload's own doc), admitted
+// against the payload's owner ALLOW-LIST rather than required to equal the
+// owner. buildDeps therefore still wires Deps.PayloadResolver from ONE
+// client signing as the node identity (For(nodeDID)), sharing this SAME
+// cache rather than needing a second factory.
+type payloadClientFactory struct {
+	signer        crypto.Signer
+	storeEndpoint string
+	bearer        string
+	httpClient    connect.HTTPClient
+
+	mu      sync.Mutex
+	clients map[string]*payloadclient.Resolver
+}
+
+func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, bearer string, httpClient connect.HTTPClient) *payloadClientFactory {
+	return &payloadClientFactory{signer: signer, storeEndpoint: storeEndpoint, bearer: bearer, httpClient: httpClient, clients: map[string]*payloadclient.Resolver{}}
+}
+
+// For returns the cached client signing as signerDID, building and caching
+// one on first use.
+func (f *payloadClientFactory) For(signerDID string) *payloadclient.Resolver {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.clients[signerDID]; ok {
+		return c
+	}
+	c := payloadclient.New(payloadclient.Config{
+		Signer:        f.signer,
+		SignerDID:     signerDID,
+		HTTPClient:    f.httpClient,
+		StoreEndpoint: f.storeEndpoint,
+		Bearer:        f.bearer,
+	})
+	f.clients[signerDID] = c
+	return c
+}
+
+// wirePayloadStore adapts payloadClientFactory's per-owner *payloadclient.
+// Resolver clients — each a (io.Reader, size) streaming Retain — to
+// pipeline/runtime.PayloadRetainStore's whole-buffer Store(ctx, payload
+// []byte, ownerDID string) shape — the producer half of by-reference
+// delivery. Store selects factory.For(ownerDID) so each retain call signs AS
+// the owning producing loop (D9 — see payloadClientFactory's doc), and
+// streams to Config.StoreEndpoint (pipeCfg.VCStoreEndpoint, the same ONE
+// registry base URL every other wire Dep uses).
 type wirePayloadStore struct {
-	client *payloadclient.Resolver
+	factory *payloadClientFactory
 }
 
 func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID string) (string, error) {
-	return s.client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
+	return s.factory.For(ownerDID).Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
 }
 
 // buildDeps assembles pipeline/runtime.Deps entirely from WIRE clients
 // pointed at pipeCfg.VCStoreEndpoint (the ONE registry base URL — see this
 // file's package-level doc). keyStore is THIS binary's own pipeline-local
 // keystore (DataDir/keys), never the registry's — every signing identity
-// below (the node identity for AuditRegistrar/PayloadResolver, and each
-// aggregate/loop issuer ReceiptWriter signs as) must have its #auth key
-// provisioned there. nodeDID is chainCfg.NATS.NodeDID, guaranteed non-empty
-// by the time this runs (main's guards require the nats transport whenever
-// any loop is configured, and chainconfig.LoadChainConfig requires
-// node-did non-empty on that transport).
+// below (the node identity for AuditRegistrar/PayloadResolver, EACH
+// producing loop's OWN output subject for PayloadStore/retain — see
+// payloadClientFactory's doc — and each aggregate/loop issuer ReceiptWriter
+// signs as) must have its #auth key provisioned there; main's boot preflight
+// (D9, preflightPayloadRetainKeys) checks the producing-loop case fails
+// closed at boot rather than at first emit. nodeDID is chainCfg.NATS.NodeDID,
+// guaranteed non-empty by the time this runs (main's guards require the nats
+// transport whenever any loop is configured, and chainconfig.
+// LoadChainConfig requires node-did non-empty on that transport).
 func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID string) pipelineruntime.Deps {
 	httpClient := guard.HTTPClient()
 
@@ -516,13 +580,7 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		Bearer:     pipeCfg.VCStoreBearer,
 	})
 
-	payloadCli := payloadclient.New(payloadclient.Config{
-		Signer:        keyStore,
-		SignerDID:     nodeDID,
-		HTTPClient:    httpClient,
-		StoreEndpoint: pipeCfg.VCStoreEndpoint,
-		Bearer:        pipeCfg.VCStoreBearer,
-	})
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient)
 
 	return pipelineruntime.Deps{
 		Resolver:            didResolver,
@@ -531,8 +589,42 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		Receipts:            wireReceiptWriter{resolver: vcClient, factory: factory},
 		SchemaResolver:      wireSchemaBridge{client: schemaCli},
 		SchemaGetter:        wireSchemaGetter{client: schemaCli},
-		PayloadStore:        wirePayloadStore{client: payloadCli},
-		PayloadResolver:     payloadCli,
+		PayloadStore:        wirePayloadStore{factory: payloadFactory},
+		PayloadResolver:     payloadFactory.For(nodeDID),
 		CredentialPublisher: store,
 	}
+}
+
+// preflightProbeData is signed (never transmitted anywhere) purely to probe
+// keyStore for a key's presence — see preflightPayloadRetainKeys' doc for why
+// Sign, rather than a raw-key existence check, is the right seam to probe
+// through.
+var preflightProbeData = []byte("cmd/pipeline: D9 payload-retain key preflight probe")
+
+// preflightPayloadRetainKeys verifies keyStore already holds a #auth signing
+// key for EVERY producing loop's own output subject (D9) — the identity
+// wirePayloadStore's payloadClientFactory (this file, above) signs each
+// retain call as. Without this, a misprovisioned deployment would only
+// discover the gap at first emit, as a RetainPayload PermissionDenied that
+// aborts the whole emission (dataplane.go's payloadWiring — PayloadStore
+// wired ⇒ every producing loop dual-emits, D-6); checking here at boot turns
+// that into an immediate, named failure instead.
+//
+// It probes via Sign (the only read keystore.KeyStore's contract exposes),
+// not a raw-key existence check: this preflight must work for ANY KeyStore
+// implementation the crypto.Signer seam admits (a future keep-keys-opaque
+// TPM/KMS backend could never support the latter), not only filestore's.
+// keyStore.Sign's error is a wrapped keystore.ErrNotFound when no key is
+// held for a well-formed (did, keyID) — errors.Is distinguishes that from a
+// malformed/storage failure, which is reported too (never silently passed).
+func preflightPayloadRetainKeys(keyStore crypto.Signer, loops []pipelineconfig.LoopConfig) error {
+	for _, ref := range producingLoops(loops) {
+		if _, err := keyStore.Sign(ref.OutputSubject, string(keystore.KeyIDAuth), preflightProbeData); err != nil {
+			if errors.Is(err, keystore.ErrNotFound) {
+				return fmt.Errorf("producing loop %q: no signing key for output subject %s — by-reference retain signs as the owner", ref.Name, ref.OutputSubject)
+			}
+			return fmt.Errorf("producing loop %q: checking signing key for output subject %s: %w", ref.Name, ref.OutputSubject, err)
+		}
+	}
+	return nil
 }

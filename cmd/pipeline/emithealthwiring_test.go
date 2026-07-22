@@ -80,6 +80,41 @@ func TestProducingLoopPublishers_EmptyLoopsYieldsEmpty(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// producingLoops — the (Name, OutputSubject) pairing producingLoopPublishers
+// now derives from, and main.go's D9 boot preflight
+// (preflightPayloadRetainKeys) needs the Name half of for its error message.
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestProducingLoops_ExcludesSink(t *testing.T) {
+	loops := []pipelineconfig.LoopConfig{
+		{Name: "src", Role: pipelineconfig.RoleSource, Source: pipelineconfig.SourceConfig{OutputSubject: "did:dplaax:reg:org:acme:pipeline:src"}},
+		{Name: "chn", Role: pipelineconfig.RoleChained, Chained: pipelineconfig.ChainedConfig{OutputSubject: "did:dplaax:reg:org:acme:pipeline:chn"}},
+		{Name: "agg", Role: pipelineconfig.RoleAggregate, Aggregate: pipelineconfig.AggregateConfig{OutputSubject: "did:dplaax:reg:org:acme:pipeline:agg"}},
+		{Name: "snk", Role: pipelineconfig.RoleSink, Sink: pipelineconfig.SinkConfig{}},
+	}
+	got := producingLoops(loops)
+	want := []producingLoopRef{
+		{Name: "src", OutputSubject: "did:dplaax:reg:org:acme:pipeline:src"},
+		{Name: "chn", OutputSubject: "did:dplaax:reg:org:acme:pipeline:chn"},
+		{Name: "agg", OutputSubject: "did:dplaax:reg:org:acme:pipeline:agg"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("producingLoops = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("producingLoops = %+v, want %+v", got, want)
+		}
+	}
+}
+
+func TestProducingLoops_EmptyLoopsYieldsEmpty(t *testing.T) {
+	if got := producingLoops(nil); len(got) != 0 {
+		t.Fatalf("producingLoops(nil) = %+v, want empty", got)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // emitHealthReporter.run — cadence + immediate-first-report + stop-on-cancel.
 // ─────────────────────────────────────────────────────────────────────────
 
