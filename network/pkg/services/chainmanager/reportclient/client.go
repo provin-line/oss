@@ -4,13 +4,15 @@
 // stays fresh for.
 //
 // It reproduces the EXACT signed view the handler verifies by calling the
-// SAME shared builder the handler does — chainmanager.OpReportEmitHealth and
-// chainmanager.ReportEmitHealthFields — so the two derivations cannot drift
+// SAME shared builder the handler does — wirecontract.OpReportEmitHealth and
+// wirecontract.ReportEmitHealthFields — so the two derivations cannot drift
 // (mirrors auditor/client and payloadresolver/client).
 //
-// It imports only the generated client, connect, and crypto — never
-// pipeline/ (AGENTS.md layer rule: network and pipeline interact only over
-// the wire).
+// It imports only the generated client, connect, crypto, and the
+// chainmanager/wirecontract LEAF — never the chainmanager service ROOT
+// (which carries the Service implementation and its store/infra/emithealth
+// dependencies; see wirecontract's own package doc) and never pipeline/
+// (AGENTS.md layer rule: network and pipeline interact only over the wire).
 package reportclient
 
 import (
@@ -23,8 +25,8 @@ import (
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
 )
 
 // Config configures a Client. Signer, SignerDID, BaseURL, and HTTPClient are
@@ -45,7 +47,7 @@ type Config struct {
 	HTTPClient connect.HTTPClient
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call. ReportEmitHealth is mounted behind L1 authz IN ADDITION
-	// to the L2 wireauth proof (chainmanager.OpReportEmitHealth) this client
+	// to the L2 wireauth proof (wirecontract.OpReportEmitHealth) this client
 	// already signs — L2 proves WHO is reporting, L1 decides whether the
 	// caller may reach the RPC at all, and this client previously had no way
 	// to present anything for the latter. Empty presents no header (an
@@ -100,7 +102,7 @@ func bearerInterceptor(token string) connect.Interceptor {
 // PermissionDenied for a publisherDID that does not match the signing
 // identity).
 func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, healthy bool) (time.Duration, error) {
-	ap, err := c.proof(chainmanager.ReportEmitHealthFields(publisherDID, healthy))
+	ap, err := c.proof(wirecontract.ReportEmitHealthFields(publisherDID, healthy))
 	if err != nil {
 		return 0, err
 	}
@@ -115,7 +117,7 @@ func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, heal
 	return resp.Msg.GetTtl().AsDuration(), nil
 }
 
-// proof signs chainmanager.OpReportEmitHealth over fields as the configured
+// proof signs wirecontract.OpReportEmitHealth over fields as the configured
 // identity and converts the wireauth.Proof to the wire AuthProof (issued_at
 // as canonical second-precision UTC RFC 3339 — the exact form the handler's
 // strict codec accepts).
@@ -124,9 +126,9 @@ func (c *Client) proof(fields map[string]any) (*chainpb.AuthProof, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reportclient: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, chainmanager.OpReportEmitHealth, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, wirecontract.OpReportEmitHealth, fields, nonce, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("reportclient: sign %s: %w", chainmanager.OpReportEmitHealth, err)
+		return nil, fmt.Errorf("reportclient: sign %s: %w", wirecontract.OpReportEmitHealth, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
