@@ -31,6 +31,7 @@ import (
 	payloadclient "github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	payloadhandler "github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
@@ -75,7 +76,7 @@ import (
 //  2. The HTTP hop is real and observed: payloadReqs counts requests that
 //     actually reached the mounted PayloadService handler. The ONLY writer
 //     into payloadSvc's store is the publisher data plane's retain path
-//     (PayloadStore: payloadSvc passed to buildDataPlane) — this test never
+//     (PayloadStore: payloadSvc passed to pipelineruntime.Build) — this test never
 //     calls payloadSvc.Store directly — so a delivered record with matching
 //     bytes plus payloadReqs > 0 together prove the sink actually fetched
 //     over the wire rather than short-circuiting.
@@ -185,7 +186,7 @@ func TestCapstone_ByReferenceCrossNodeFetchAndDeliver(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := buildDataPlane(ctx, pubChainCfg, capSourceCfg(), ks, dataPlaneDeps{PayloadStore: payloadSvc})
+	pubDP, err := pipelineruntime.Build(ctx, pubChainCfg, capSourceCfg(), ks, pipelineruntime.Deps{PayloadStore: payloadSvc})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestCapstone_ByReferenceCrossNodeFetchAndDeliver(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := buildDataPlane(ctx, subChainCfg, capByRefSinkCfg(pubPeerSrv.URL), filestore.New(t.TempDir()), dataPlaneDeps{
+	subDP, err := pipelineruntime.Build(ctx, subChainCfg, capByRefSinkCfg(pubPeerSrv.URL), filestore.New(t.TempDir()), pipelineruntime.Deps{
 		Resolver:        res,
 		SinkWriter:      writer,
 		VCStore:         dpVCStore(),

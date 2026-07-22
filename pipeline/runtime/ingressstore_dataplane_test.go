@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestBuildDataPlane_SinkRequiresVCStore(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 	// Resolver and SinkWriter are provided, but VCStore is nil — must fail.
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	if _, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    nil,
@@ -42,7 +42,7 @@ func TestBuildDataPlane_ChainedRequiresVCStore(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{
+	if _, err := Build(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  nil,
 	}); err == nil {
@@ -58,13 +58,13 @@ func TestBuildDataPlane_SinkWithVCStoreAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    newTestVCSvc(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (sink + VCStore): %v", err)
+		t.Fatalf("Build (sink + VCStore): %v", err)
 	}
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
@@ -84,12 +84,12 @@ func TestBuildDataPlane_ChainedWithVCStoreAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  newTestVCSvc(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (chained + VCStore): %v", err)
+		t.Fatalf("Build (chained + VCStore): %v", err)
 	}
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))

@@ -21,6 +21,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	natsop "github.com/provin-line/oss/network/pkg/services/chainmanager/infra/nats"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/sink"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
@@ -165,7 +166,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := buildDataPlane(context.Background(), pubChain, capSourceCfg(), ks, dataPlaneDeps{})
+	pubDP, err := pipelineruntime.Build(context.Background(), pubChain, capSourceCfg(), ks, pipelineruntime.Deps{})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -178,7 +179,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := buildDataPlane(context.Background(), subChain, capSinkCfg(), filestore.New(t.TempDir()), dataPlaneDeps{
+	subDP, err := pipelineruntime.Build(context.Background(), subChain, capSinkCfg(), filestore.New(t.TempDir()), pipelineruntime.Deps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),

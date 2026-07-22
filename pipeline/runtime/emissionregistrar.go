@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// receiptWriter records the emit-time consumed-set receipt for an aggregate head (slice-17o):
+// ReceiptWriter records the emit-time consumed-set receipt for an aggregate head (slice-17o):
 // head content address → the consumed source content addresses, plus the registrant DID
 // recorded alongside them (an audit-trail fact — see auditor.ReceiptStore.Put's doc).
 // cmd/standalone owns this local interface (capability, not concrete);
 // *auditor.MemReceiptStore satisfies it.
-type receiptWriter interface {
+type ReceiptWriter interface {
 	Put(headHash string, registrantDID string, consumedHashes []string) error
 }
 
@@ -27,13 +27,21 @@ type receiptWriter interface {
 // aggregate path does NOT wrap its signer in publishingSigner (which would publish during
 // signing, before the head hash even exists): the remote publish is reordered to here.
 type emissionRegistrar struct {
-	local     ingressStorer       // local StoreVC (returns the head content address)
-	receipts  receiptWriter       // records head → consumed source hashes
-	audit     auditRegistrar      // enqueues the head for self-audit
+	local     IngressStorer       // local StoreVC (returns the head content address)
+	receipts  ReceiptWriter       // records head → consumed source hashes
+	audit     AuditRegistrar      // enqueues the head for self-audit
 	publisher credentialPublisher // optional remote VC-store publish (nil => skip)
 }
 
 var _ aggregate.EmissionRegistrar = (*emissionRegistrar)(nil)
+
+// NewEmissionRegistrar builds the composition-root aggregate.EmissionRegistrar
+// directly. Exported for composition-level tests that register a real emitted
+// credential for self-audit outside Build's own assembly path (which wires
+// this internally whenever deps.Receipts and deps.AuditQueue are both set).
+func NewEmissionRegistrar(local IngressStorer, receipts ReceiptWriter, audit AuditRegistrar, publisher credentialPublisher) aggregate.EmissionRegistrar {
+	return &emissionRegistrar{local: local, receipts: receipts, audit: audit, publisher: publisher}
+}
 
 // RegisterEmission persists the emitted credential locally, records the receipt, enqueues the
 // head, and (if configured) publishes remotely — each fail-closed, in order.

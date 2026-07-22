@@ -19,6 +19,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
@@ -91,7 +92,7 @@ func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
 	cfg := fullChainCfg(srv.URL)
-	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{
+	dp, err := pipelineruntime.Build(context.Background(), chainCfg, cfg, ks, pipelineruntime.Deps{
 		Resolver:          res,
 		SinkWriter:        writer,
 		VCStoreHTTPClient: srv.Client(),
@@ -99,7 +100,7 @@ func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http
 		AuditQueue:        auditQueue,
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (full chain): %v", err)
+		t.Fatalf("pipelineruntime.Build (full chain): %v", err)
 	}
 	// The async audit runner walks the full chain from localSvc and records the verdict —
 	// the coverage that replaces real-time full (slice-17j). It resolves issuer DIDs via res.
@@ -198,7 +199,7 @@ func TestFullChain_AsyncAuditRecordsVerified(t *testing.T) {
 
 // TestFullChain_BearerReachesStore proves the configured vc-store-bearer is presented to
 // the store as an Authorization header. The bearer is node config (pipelineconfig.Config),
-// so main — which loads and passes that config to buildDataPlane — carries it to the wire
+// so main — which loads and passes that config to pipelineruntime.Build — carries it to the wire
 // without a separate composition step. A real L1-protected store would reject every
 // publish/resolve without it, so this guards the production token path.
 func TestFullChain_BearerReachesStore(t *testing.T) {

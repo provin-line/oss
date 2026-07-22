@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -76,12 +76,12 @@ func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (aggregate): %v", err)
+		t.Fatalf("Build (aggregate): %v", err)
 	}
 	if len(dp.aggregates) != 1 {
 		t.Fatalf("aggregates: got %d want 1", len(dp.aggregates))
@@ -104,7 +104,7 @@ func TestBuildDataPlane_AggregateRequiresConsumerDeps(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := Build(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("aggregate without resolver/VC store: want error, got nil")
 	}
 }

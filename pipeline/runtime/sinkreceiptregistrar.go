@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -27,13 +27,22 @@ import (
 // the identity claim (input == output, transforms nothing).
 type sinkReceiptRegistrar struct {
 	signer     provenance.ChainedSigner // TransformationClaim = provin:sink-receipt
-	local      ingressStorer            // local StoreVC (returns the head content address)
+	local      IngressStorer            // local StoreVC (returns the head content address)
 	receiptLog tlog.Log                 // dedicated durable, hash-chained receipt log
-	audit      auditRegistrar           // enqueues the receipt head for self-audit
+	audit      AuditRegistrar           // enqueues the receipt head for self-audit
 	publisher  credentialPublisher      // optional remote VC-store publish (nil => skip)
 }
 
 var _ sink.ReceiptIssuer = (*sinkReceiptRegistrar)(nil)
+
+// NewSinkReceiptRegistrar builds the composition-root sink.ReceiptIssuer
+// directly from a pre-built signer and receipt log, bypassing
+// buildSinkReceiptRegistrar's loop-config-driven log construction. Exported
+// for composition-level tests that arm a receipt registrar by hand (e.g. over
+// an in-memory log) outside Build's own assembly path.
+func NewSinkReceiptRegistrar(signer provenance.ChainedSigner, local IngressStorer, receiptLog tlog.Log, audit AuditRegistrar, publisher credentialPublisher) sink.ReceiptIssuer {
+	return &sinkReceiptRegistrar{signer: signer, local: local, receiptLog: receiptLog, audit: audit, publisher: publisher}
+}
 
 // buildSinkReceiptRegistrar assembles the receipt issuer for a receipt-configured
 // sink loop: a signer minting provin:sink-receipt under the loop's receipt issuer
@@ -44,8 +53,8 @@ var _ sink.ReceiptIssuer = (*sinkReceiptRegistrar)(nil)
 // per-loop log (the composition root's emission-log constructor, reused).
 func buildSinkReceiptRegistrar(
 	builder *vc.Builder,
-	local ingressStorer,
-	audit auditRegistrar,
+	local IngressStorer,
+	audit AuditRegistrar,
 	publisher credentialPublisher,
 	newLog func(loopName, logID string, issuer pipelineconfig.IssuerConfig) (tlog.Log, error),
 	lc pipelineconfig.LoopConfig,

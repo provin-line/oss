@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -116,9 +116,9 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
+	dp, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{})
 	if err != nil {
-		t.Fatalf("buildDataPlane: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -228,7 +228,7 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}
-	dp := &dataPlane{conn: conn, loops: []*transport.Loop{good, bad}}
+	dp := &Runtime{conn: conn, loops: []*transport.Loop{good, bad}}
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- dp.Run(context.Background()) }()
@@ -244,16 +244,16 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 }
 
 // TestDataPlane_ZeroLoopsNoDial asserts the no-dial short-circuit: with no loops
-// configured, buildDataPlane must NOT dial nats (a bogus URL must not error), so an
+// configured, Build must NOT dial nats (a bogus URL must not error), so an
 // empty pipeline config never requires a live broker.
 func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 	chainCfg := &chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: "nats://192.0.2.1:4222", AccountSeed: "bogus"},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), dataPlaneDeps{})
+	dp, err := Build(context.Background(), chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), Deps{})
 	if err != nil {
-		t.Fatalf("buildDataPlane (zero loops): %v", err)
+		t.Fatalf("Build (zero loops): %v", err)
 	}
 	if err := dp.Run(context.Background()); err != nil {
 		t.Fatalf("zero-loop Run: %v", err)
@@ -290,13 +290,13 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (sink): %v", err)
+		t.Fatalf("Build (sink): %v", err)
 	}
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
@@ -319,9 +319,9 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 
-	src, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
+	src, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{})
 	if err != nil {
-		t.Fatalf("buildDataPlane (source): %v", err)
+		t.Fatalf("Build (source): %v", err)
 	}
 	if len(src.metrics) != 1 {
 		t.Fatalf("source metrics entries: got %d want 1", len(src.metrics))
@@ -340,13 +340,13 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Error("source loop: verify accessor registered, want nil (source verifies nothing)")
 	}
 
-	snk, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{
+	snk, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (sink): %v", err)
+		t.Fatalf("Build (sink): %v", err)
 	}
 	if len(snk.metrics) != 1 {
 		t.Fatalf("sink metrics entries: got %d want 1", len(snk.metrics))
@@ -375,23 +375,23 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	}
 
 	// Source with a payload store: the dual-emit gate registers stripped.
-	src, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{
+	src, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{
 		PayloadStore: fakePayloadStore{},
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (source+store): %v", err)
+		t.Fatalf("Build (source+store): %v", err)
 	}
 	if lm := src.metrics[0]; lm.Stripped == nil {
 		t.Error("source loop with a payload store: stripped accessor is nil, want registered (dual-emit)")
 	}
 
 	// Chained: producer AND consumer.
-	chd, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+	chd, err := Build(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (chained): %v", err)
+		t.Fatalf("Build (chained): %v", err)
 	}
 	if len(chd.metrics) != 1 {
 		t.Fatalf("chained metrics entries: got %d want 1", len(chd.metrics))
@@ -423,13 +423,13 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 			},
 		},
 	}}}
-	agg, err := buildDataPlane(context.Background(), chainCfg, aggCfg, dpKeyStore(t), dataPlaneDeps{
+	agg, err := Build(context.Background(), chainCfg, aggCfg, dpKeyStore(t), Deps{
 		Resolver:     stubResolver{},
 		VCStore:      dpVCStore(),
 		PayloadStore: fakePayloadStore{},
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (aggregate): %v", err)
+		t.Fatalf("Build (aggregate): %v", err)
 	}
 	if len(agg.metrics) != 1 {
 		t.Fatalf("aggregate metrics entries: got %d want 1 (early-continue path must append exactly once)", len(agg.metrics))
@@ -505,12 +505,12 @@ func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "consumed.ndjson")
 	cfg.Loops[0].Sink.Output = pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path}
 
-	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, cfg, dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (file sink, no injected writer): %v", err)
+		t.Fatalf("Build (file sink, no injected writer): %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("output file not created at boot: %v", err)
@@ -531,7 +531,7 @@ func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("sink loop without resolver/writer: want error, got nil")
 	}
 }
@@ -571,12 +571,12 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (chained): %v", err)
+		t.Fatalf("Build (chained): %v", err)
 	}
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
@@ -597,7 +597,7 @@ func TestBuildDataPlane_ChainedRequiresResolver(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), dataPlaneDeps{}); err == nil {
+	if _, err := Build(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("chained loop without resolver: want error, got nil")
 	}
 }
@@ -610,7 +610,7 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	if _, err := buildDataPlane(context.Background(), chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), dataPlaneDeps{
+	if _, err := Build(context.Background(), chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	}); err == nil {
@@ -618,7 +618,7 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 	}
 }
 
-// The durable node path: with TlogDir set, buildDataPlane opens a filelog
+// The durable node path: with TlogDir set, Build opens a filelog
 // per producing loop under sha256(log id), registers it under the OUTPUT
 // SUBJECT, and arms it with the loop's issuer key — a signed checkpoint
 // must verify as coming from that identity.
@@ -629,9 +629,9 @@ func TestDataPlane_DurableEmissionLog(t *testing.T) {
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
 	tlogDir := t.TempDir()
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{TlogDir: tlogDir})
+	dp, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{TlogDir: tlogDir})
 	if err != nil {
-		t.Fatalf("buildDataPlane: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	t.Cleanup(func() { _ = dp.conn.Close() })
 
@@ -717,7 +717,7 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	}
 
 	rejectDir := t.TempDir()
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpArchivalSinkCfg(), ks, dataPlaneDeps{
+	dp, err := Build(context.Background(), chainCfg, dpArchivalSinkCfg(), ks, Deps{
 		Resolver:     stubResolver{},
 		SinkWriter:   console.New(io.Discard),
 		VCStore:      dpVCStore(),
@@ -725,7 +725,7 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 		RejectLogDir: rejectDir,
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (archival sink): %v", err)
+		t.Fatalf("Build (archival sink): %v", err)
 	}
 	t.Cleanup(func() { _ = dp.conn.Close() })
 
@@ -803,9 +803,9 @@ func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
 	rejectDir := t.TempDir()
 	const didB = "did:dplaax:reg:org:acme:pipeline:archive:process:a2"
 
-	buildArchive := func(issuerDID string, ks keystore.KeyStore) *dataPlane {
+	buildArchive := func(issuerDID string, ks keystore.KeyStore) *Runtime {
 		t.Helper()
-		dp, err := buildDataPlane(context.Background(), chainCfg, dpArchivalSinkCfgWithIssuer(issuerDID), ks, dataPlaneDeps{
+		dp, err := Build(context.Background(), chainCfg, dpArchivalSinkCfgWithIssuer(issuerDID), ks, Deps{
 			Resolver:     stubResolver{},
 			SinkWriter:   console.New(io.Discard),
 			VCStore:      dpVCStore(),
@@ -813,7 +813,7 @@ func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
 			RejectLogDir: rejectDir,
 		})
 		if err != nil {
-			t.Fatalf("buildDataPlane (issuer %s): %v", issuerDID, err)
+			t.Fatalf("Build (issuer %s): %v", issuerDID, err)
 		}
 		if len(dp.tlogClosers) != 1 {
 			t.Fatalf("tlogClosers = %d, want 1 (issuer %s)", len(dp.tlogClosers), issuerDID)

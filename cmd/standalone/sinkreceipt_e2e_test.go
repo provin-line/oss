@@ -15,6 +15,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver/local"
@@ -76,7 +77,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 	receipts := auditor.NewMemReceiptStore()
 
 	verifier := vc.NewVerifier(res, ed25519.Verifier{})
-	ingressStore := &serviceIngressStore{store: localSvc, audit: queue}
+	ingressStore := pipelineruntime.NewServiceIngressStore(localSvc, queue)
 
 	receiptSigner, err := vcdid.NewSigner(vcdid.Config{
 		Builder: builder, IssuerDID: srSinkIss, KeyID: string(keystore.KeyIDSigning),
@@ -86,9 +87,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receipt signer: %v", err)
 	}
-	registrar := &sinkReceiptRegistrar{
-		signer: receiptSigner, local: localSvc, receiptLog: memlog.New(), audit: queue, publisher: nil,
-	}
+	registrar := pipelineruntime.NewSinkReceiptRegistrar(receiptSigner, localSvc, memlog.New(), queue, nil)
 
 	writer := &captureWriter{}
 	proc, err := sink.New(sink.Config{

@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/internal/netcompose"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -56,11 +57,11 @@ var _ chainwalk.CredentialResolver = (*vcresolverclient.Resolver)(nil)
 // reason — the client package stays free of any pipeline/ import (AGENTS.md layer rule).
 var _ contract.PayloadResolver = (*payloadclient.Resolver)(nil)
 
-// dataPlaneDeps are the cross-plane dependencies a data plane needs beyond its own
+// Deps are the cross-plane dependencies a data plane needs beyond its own
 // keystore: the shared DID resolver (sink loops verify upstream credentials through it)
 // and an optional sink Writer override. They are zero for a source-only node — a
 // source loop uses neither.
-type dataPlaneDeps struct {
+type Deps struct {
 	Resolver resolver.Resolver
 	// SinkWriter, when non-nil, overrides every sink loop's config-selected
 	// delivery surface — the test seam (assert on a buffer instead of a real
@@ -71,7 +72,7 @@ type dataPlaneDeps struct {
 	// Consuming loops (sink, chained) store every verified ingress credential through it,
 	// populating the unresolved pool for the async chain-audit path (D-17f-1, D-17f-7).
 	// Nil is a boot error for any consuming loop; a source-only node needs none.
-	VCStore ingressStorer
+	VCStore IngressStorer
 	// TlogDir is the root directory for durable per-loop emission logs
 	// (data-dir/tlog). Empty falls back to in-memory logs — the unit-test
 	// seam; the node always sets it (emission logs are durable by default,
@@ -84,11 +85,11 @@ type dataPlaneDeps struct {
 	VCStoreHTTPClient connect.HTTPClient
 	// AuditQueue registers each consumed head for async audit (slice-17h, D-17h-2). Nil
 	// disables registration (a node/test without the audit runner); main always wires it.
-	AuditQueue auditRegistrar
+	AuditQueue AuditRegistrar
 	// Receipts records the emit-time consumed-set receipt for an aggregate's own emission
 	// (slice-17o), enabling emit-locus source-commitment self-audit. Nil (with AuditQueue)
 	// leaves an aggregate broadcast-only (no self-audit); main always wires it.
-	Receipts receiptWriter
+	Receipts ReceiptWriter
 	// RejectLogDir is the root directory for archival sinks' durable reject logs
 	// (data-dir/evidence/sink-rejects). Empty falls back to in-memory logs — the
 	// unit-test seam; the node always sets it (reject logs are durable by default,
@@ -105,7 +106,7 @@ type dataPlaneDeps struct {
 	// PayloadStore, when non-nil, retains each producing loop's payload before
 	// publishing so a by-reference subscriber can later fetch it (the publisher
 	// half of by-reference delivery). Nil leaves producing loops inline-only.
-	PayloadStore payloadRetainStore
+	PayloadStore PayloadRetainStore
 	// PayloadResolver dereferences a by-reference ingress payload by content
 	// address (the consumer half). Required for any consuming loop whose config
 	// declares payload-delivery = by-reference (the runtime fails closed
@@ -113,10 +114,10 @@ type dataPlaneDeps struct {
 	PayloadResolver contract.PayloadResolver
 }
 
-// payloadRetainStore retains a producing loop's payload bytes keyed by their
+// PayloadRetainStore retains a producing loop's payload bytes keyed by their
 // content address, recording ownerDID (the producing pipeline) for serving
 // authorization. *payloadresolver.Service satisfies it.
-type payloadRetainStore interface {
+type PayloadRetainStore interface {
 	Store(ctx context.Context, payload []byte, ownerDID string) (string, error)
 }
 
@@ -124,7 +125,7 @@ type payloadRetainStore interface {
 // producer-side retain store (bound per loop to its output pipeline DID) and a
 // consumer-side resolver. Both nil unless the node is wired for by-reference.
 type payloadWiring struct {
-	store    payloadRetainStore
+	store    PayloadRetainStore
 	resolver contract.PayloadResolver
 }
 
@@ -139,7 +140,7 @@ func (pw payloadWiring) retainerFor(ownerDID string) transport.PayloadRetainer {
 }
 
 type boundRetainer struct {
-	store payloadRetainStore
+	store PayloadRetainStore
 	owner string
 }
 
@@ -185,26 +186,35 @@ func parseDelivery(s string) contract.PayloadDelivery {
 	return d
 }
 
-// emitCounters, strippedCounter, verifyCounts, and loopMetrics moved to
+// emitCounters, strippedCounter, verifyCounts, and LoopMetrics moved to
 // internal/netcompose/metrics.go (EmitCounters, StrippedCounter, VerifyCounts,
 // LoopMetrics) — they are field types of LoopMetrics, which moved there per
-// the extraction plan. dataplane.go reaches LoopMetrics via the compat alias
-// `loopMetrics` and never needs to name the three interfaces directly (it
-// only assigns concrete types — *transport.Loop, *aggregate.Process,
-// *verifycount.Verifier — into LoopMetrics's exported fields; Go's structural
-// typing resolves the rest).
+// the extraction plan. dataplane.go never needs to name the three interfaces
+// directly (it only assigns concrete types — *transport.Loop,
+// *aggregate.Process, *verifycount.Verifier — into LoopMetrics's exported
+// fields; Go's structural typing resolves the rest).
+//
+// LoopMetrics and schemaGetter are interim aliases onto internal/netcompose,
+// the control-plane composition package cmd/standalone still owns: this
+// package importing netcompose (a pipeline/ -> the netcompose glue -> network/
+// path) is a documented mid-branch state, severed in the boundary-surgery
+// follow-up (this package will define its own types then).
+type (
+	LoopMetrics  = netcompose.LoopMetrics
+	schemaGetter = netcompose.SchemaGetter
+)
 
-// dataPlane is the node's set of running pipeline loops over one shared nats
+// Runtime is the node's set of running pipeline loops over one shared nats
 // connection. It owns the connection's lifecycle: Run starts the loops, waits for
 // them to drain on context cancellation, then closes the shared connection (the 17a
 // Conn-owns-teardown contract realized at node level).
-type dataPlane struct {
+type Runtime struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
 	aggregates []*aggregate.Process // self-triggered aggregate processes (contract.Process)
 	// metrics is the per-loop metrics wiring the /metrics bridge polls; one
 	// entry per constructed loop/aggregate, in construction order.
-	metrics []loopMetrics
+	metrics []LoopMetrics
 	// tlogs is the emission-log registry (log id = producing output subject →
 	// log) that BuildHandler mounts the TlogService over.
 	tlogs map[string]tlog.Log
@@ -212,12 +222,82 @@ type dataPlane struct {
 	// memlog fallback has nothing to close).
 	tlogClosers []io.Closer
 	// pushBindings are the HTTP ingest surfaces of push-enabled source loops
-	// (push-ingress = true): BuildHandler mounts one apipush adapter per binding.
-	// The bound publishers ride the shared conn — no separate teardown path.
-	pushBindings []pushBinding
+	// (push-ingress = true): cmd/standalone's BuildHandler mounts one apipush
+	// adapter per binding, read through PushBindings(). The bound publishers
+	// ride the shared conn — no separate teardown path.
+	pushBindings []PushBinding
 }
 
-// buildDataPlane assembles the node's pipeline loops from the pipeline config. When
+// Tlogs returns the emission-log registry (log id = producing output subject
+// -> log). cmd/standalone's BuildHandler mounts the TlogService over it.
+func (r *Runtime) Tlogs() map[string]tlog.Log { return r.tlogs }
+
+// PushBindings returns the HTTP ingest surfaces of every push-enabled source
+// loop. cmd/standalone's mountPushRoutes mounts one apipush adapter per
+// binding under /ingest/<name>/.
+func (r *Runtime) PushBindings() []PushBinding { return r.pushBindings }
+
+// Metrics returns the per-loop metrics wiring, one entry per constructed
+// loop/aggregate in construction order. cmd/standalone's /metrics bridge
+// polls these.
+func (r *Runtime) Metrics() []LoopMetrics { return r.metrics }
+
+// Loops returns every constructed transport loop (source, sink, chained), in
+// construction order. cmd/standalone wires these into the by-reference
+// advertisement health gate (D-5) alongside Aggregates.
+func (r *Runtime) Loops() []*transport.Loop { return r.loops }
+
+// Aggregates returns every constructed aggregate process, in construction
+// order. cmd/standalone wires these into the by-reference advertisement
+// health gate (D-5) alongside Loops.
+func (r *Runtime) Aggregates() []*aggregate.Process { return r.aggregates }
+
+// Conn returns the runtime's shared NATS connection, or nil for a zero-loop
+// runtime that never dialed. cmd/standalone wires Conn().Healthy into the
+// /readyz NATS check.
+func (r *Runtime) Conn() *natstransport.Conn { return r.conn }
+
+// PushBinding is one push-enabled source loop's HTTP ingest surface: the loop
+// name (already validated as a URL-safe segment at config load), a Publisher on
+// the loop's ingress subject over the shared data-plane connection, and the
+// loop's subscription-readiness latch. Build produces the bindings;
+// cmd/standalone's BuildHandler mounts one apipush adapter per binding at
+// /ingest/<name>/.
+type PushBinding struct {
+	Name      string
+	Publisher transport.Publisher
+	Ready     <-chan struct{}
+}
+
+// readySubscriber decorates a transport.Subscriber with a readiness latch that
+// closes when Subscribe returns without error — the Subscriber contract confirms
+// the subscription with the broker before returning, so the latch is exactly
+// "the loop can now receive". cmd/standalone's push route gates on it: core NATS
+// silently drops a publish with no subscriber, so a 202 before the latch would be
+// a lie.
+type readySubscriber struct {
+	transport.Subscriber
+	once  sync.Once
+	ready chan struct{}
+}
+
+func newReadySubscriber(s transport.Subscriber) *readySubscriber {
+	return &readySubscriber{Subscriber: s, ready: make(chan struct{})}
+}
+
+// Subscribe implements transport.Subscriber, latching readiness on success.
+func (r *readySubscriber) Subscribe(handler func(data []byte)) error {
+	err := r.Subscriber.Subscribe(handler)
+	if err == nil {
+		r.once.Do(func() { close(r.ready) })
+	}
+	return err
+}
+
+// Ready returns the latch channel (closed once the subscription is confirmed).
+func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
+
+// Build assembles the node's pipeline loops from the pipeline config. When
 // no loops are configured it returns a no-op runner WITHOUT dialing nats, so an
 // empty/absent pipeline config never requires a live broker (it does not regress the
 // HTTP-only deployment). Otherwise it dials once as the node account and builds one
@@ -225,9 +305,9 @@ type dataPlane struct {
 // loop signs FirstDrop credentials with keyStore; a sink loop verifies upstream
 // credentials through deps.Resolver and delivers consumed events to its
 // config-selected output surface (sink.output; deps.SinkWriter overrides for tests).
-func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps dataPlaneDeps) (*dataPlane, error) {
+func Build(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, keyStore keystore.KeyStore, deps Deps) (*Runtime, error) {
 	if len(pipeCfg.Loops) == 0 {
-		return &dataPlane{}, nil
+		return &Runtime{}, nil
 	}
 	if chainCfg.Transport != chainconfig.TransportNATS {
 		return nil, fmt.Errorf("standalone: data-plane loops require the nats transport, got %q", chainCfg.Transport)
@@ -242,7 +322,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		return nil, fmt.Errorf("standalone: data-plane nats connect: %w", err)
 	}
 
-	dp := &dataPlane{conn: conn, tlogs: map[string]tlog.Log{}}
+	dp := &Runtime{conn: conn, tlogs: map[string]tlog.Log{}}
 	builder := vc.NewBuilder(keyStore)
 	// newEmission builds one producing loop's emission log and registers it
 	// under its log id (the output subject). Durable + checkpoint-armed when
@@ -329,7 +409,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		}
 		vcClient = vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 			httpClient, pipeCfg.VCStoreEndpoint,
-			connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+			connect.WithInterceptors(netcompose.BearerInterceptor(pipeCfg.VCStoreBearer)),
 			connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize), // D-17g-13: bound a resolved VC (protects 17e's full walk)
 		))
 	}
@@ -369,7 +449,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		if deps.SchemaGetter == nil {
 			return vc.SchemaRef{}, fmt.Errorf("standalone: loop %q: schema-ref set but no schema registry is available", loopName)
 		}
-		ref, err := resolveSchemaRefAtBoot(ctx, deps.SchemaGetter, shortForm)
+		ref, err := netcompose.ResolveSchemaRefAtBoot(ctx, deps.SchemaGetter, shortForm)
 		if err != nil {
 			return vc.SchemaRef{}, fmt.Errorf("standalone: loop %q: %w", loopName, err)
 		}
@@ -388,7 +468,7 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 		// lm collects this loop's metrics wiring; appended alongside the loop
 		// handle on success. dualEmits mirrors strippedPublisherFor's gate (a
 		// PayloadStore ⇒ every producing loop dual-emits, D-6).
-		lm := loopMetrics{Name: lc.Name, Role: lc.Role}
+		lm := LoopMetrics{Name: lc.Name, Role: lc.Role}
 		dualEmits := pw.store != nil
 		switch lc.Role {
 		case pipelineconfig.RoleSource:
@@ -399,10 +479,10 @@ func buildDataPlane(ctx context.Context, chainCfg *chainconfig.Config, pipeCfg *
 			if lc.Source.PushIngress {
 				rs := newReadySubscriber(sub)
 				sub = rs
-				dp.pushBindings = append(dp.pushBindings, pushBinding{
-					name:      lc.Name,
-					publisher: conn.Publisher(lc.IngressSubject),
-					ready:     rs.Ready(),
+				dp.pushBindings = append(dp.pushBindings, PushBinding{
+					Name:      lc.Name,
+					Publisher: conn.Publisher(lc.IngressSubject),
+					Ready:     rs.Ready(),
 				})
 			}
 			var schemaRef vc.SchemaRef
@@ -783,8 +863,8 @@ func sinkKind(k string) (contract.SinkKind, error) {
 // Loops share a child context derived from ctx, so the first loop to fail (e.g. a
 // boot-time Subscribe error) cancels its siblings and Run returns promptly — it does
 // not block until an external cancellation arrives.
-func (d *dataPlane) Run(ctx context.Context) error {
-	total := len(d.loops) + len(d.aggregates)
+func (r *Runtime) Run(ctx context.Context) error {
+	total := len(r.loops) + len(r.aggregates)
 	if total == 0 {
 		return nil
 	}
@@ -802,11 +882,11 @@ func (d *dataPlane) Run(ctx context.Context) error {
 			cancel()
 		}
 	}
-	for _, l := range d.loops {
+	for _, l := range r.loops {
 		wg.Add(1)
 		go run(l)
 	}
-	for _, a := range d.aggregates {
+	for _, a := range r.aggregates {
 		wg.Add(1)
 		go run(a)
 	}
@@ -815,8 +895,8 @@ func (d *dataPlane) Run(ctx context.Context) error {
 
 	// All processes have drained (Subscriber.Drain + Publisher.Close); only now tear the
 	// shared connection down and release the emission logs' file handles.
-	closeErr := d.conn.Close()
-	for _, c := range d.tlogClosers {
+	closeErr := r.conn.Close()
+	for _, c := range r.tlogClosers {
 		if err := c.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}

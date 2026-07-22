@@ -29,6 +29,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
@@ -241,7 +242,7 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := buildDataPlane(ctx, pubChainCfg, capSourceCfg(), ks, dataPlaneDeps{PayloadStore: payloadSvc})
+	pubDP, err := pipelineruntime.Build(ctx, pubChainCfg, capSourceCfg(), ks, pipelineruntime.Deps{PayloadStore: payloadSvc})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := buildDataPlane(ctx, subChainCfg, capByRefSinkCfg("https://acme.example/pipelines/pipe"), filestore.New(t.TempDir()), dataPlaneDeps{
+	subDP, err := pipelineruntime.Build(ctx, subChainCfg, capByRefSinkCfg("https://acme.example/pipelines/pipe"), filestore.New(t.TempDir()), pipelineruntime.Deps{
 		Resolver:        res,
 		SinkWriter:      writer,
 		VCStore:         dpVCStore(),

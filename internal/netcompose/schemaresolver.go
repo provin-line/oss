@@ -14,8 +14,9 @@ import (
 // SchemaGetter is the narrow read seam the schema wiring needs from the schema
 // registry — *schemaregistry.Service satisfies it. Kept consumer-defined so the
 // bridge and boot-resolve depend on Get alone, not the whole service. Exported
-// because cmd/standalone/dataplane.go's dataPlaneDeps declares a field of this
-// type (the data plane resolves a producing loop's schema-ref through it).
+// because pipeline/runtime/dataplane.go's Deps declares a field of this type
+// (the data plane resolves a producing loop's schema-ref through it) — a
+// documented mid-branch import (PR3a Task 2), severed in Task 3.
 type SchemaGetter interface {
 	Get(ctx context.Context, name, version string) (*store.Schema, error)
 }

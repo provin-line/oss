@@ -14,6 +14,7 @@ import (
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	"github.com/provin-line/oss/network/pkg/chainconfig"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 )
@@ -33,18 +34,18 @@ func TestPushIngest_Boot(t *testing.T) {
 	pipeCfg := dpPipelineCfg()
 	pipeCfg.Loops[0].Source.PushIngress = true
 
-	dp, err := buildDataPlane(context.Background(), chainCfg, pipeCfg, dpKeyStore(t), dataPlaneDeps{})
+	dp, err := pipelineruntime.Build(context.Background(), chainCfg, pipeCfg, dpKeyStore(t), pipelineruntime.Deps{})
 	if err != nil {
-		t.Fatalf("buildDataPlane: %v", err)
+		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
-	if len(dp.pushBindings) != 1 || dp.pushBindings[0].name != "src" {
-		t.Fatalf("pushBindings = %+v, want one binding for loop src", dp.pushBindings)
+	if len(dp.PushBindings()) != 1 || dp.PushBindings()[0].Name != "src" {
+		t.Fatalf("pushBindings = %+v, want one binding for loop src", dp.PushBindings())
 	}
 
 	// Mount exactly as BuildHandler does; the PDP allows (ingest, push).
 	verifier := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "ingest", Action: "push"}})
 	mux := http.NewServeMux()
-	if err := mountPushRoutes(mux, dp.pushBindings, verifier, 1<<20); err != nil {
+	if err := mountPushRoutes(mux, dp.PushBindings(), verifier, 1<<20); err != nil {
 		t.Fatalf("mountPushRoutes: %v", err)
 	}
 	srv := httptest.NewServer(mux)

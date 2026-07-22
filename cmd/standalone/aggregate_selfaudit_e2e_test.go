@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
@@ -21,7 +22,7 @@ import (
 )
 
 // TestAggregate_SelfAudit_RecordsSourceCommitmentVerified is the slice-17p capstone: a
-// config-wired aggregate node (built through buildDataPlane WITH the audit substrate —
+// config-wired aggregate node (built through pipelineruntime.Build WITH the audit substrate —
 // AuditQueue + Receipts) consumes two real signed source FirstDrops over embedded NATS, folds
 // them on a window tick, emits a provin:aggregate FirstDrop, and SELF-REGISTERS it via the
 // composition-root emissionRegistrar (local store + receipt + queue). The node's own audit
@@ -29,7 +30,7 @@ import (
 // head — a DISTINCT SourceCommitment=Verified with SourceCommitmentEvaluated=true, over the
 // real DID graph. This proves the emit-locus self-audit path end to end through the real
 // wiring (17o's integration test drove the registrar directly with a hand-signed credential;
-// 17p drives the aggregate runtime + buildDataPlane + the live tick over NATS).
+// 17p drives the aggregate runtime + pipelineruntime.Build + the live tick over NATS).
 func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 
@@ -90,11 +91,11 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
 
-	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{
+	dp, err := pipelineruntime.Build(context.Background(), chainCfg, cfg, ks, pipelineruntime.Deps{
 		Resolver: res, VCStore: localSvc, AuditQueue: queue, Receipts: receipts,
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (aggregate self-audit): %v", err)
+		t.Fatalf("pipelineruntime.Build (aggregate self-audit): %v", err)
 	}
 	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, nil, cfg)
 	if err != nil || runner == nil {

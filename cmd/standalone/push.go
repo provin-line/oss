@@ -4,63 +4,27 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 
 	interceptors "github.com/o3co/protobuf.interceptors"
 	"github.com/provin-line/oss/network/pkg/auth"
 
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/source/ingest/apipush"
-	"github.com/provin-line/oss/pipeline/transport"
 )
-
-// pushBinding is one push-enabled source loop's HTTP ingest surface: the loop
-// name (already validated as a URL-safe segment at config load), a Publisher on
-// the loop's ingress subject over the shared data-plane connection, and the
-// loop's subscription-readiness latch. buildDataPlane produces the bindings;
-// BuildHandler mounts them at /ingest/<name>/.
-type pushBinding struct {
-	name      string
-	publisher transport.Publisher
-	ready     <-chan struct{}
-}
-
-// readySubscriber decorates a transport.Subscriber with a readiness latch that
-// closes when Subscribe returns without error — the Subscriber contract confirms
-// the subscription with the broker before returning, so the latch is exactly
-// "the loop can now receive". The push route gates on it: core NATS silently
-// drops a publish with no subscriber, so a 202 before the latch would be a lie.
-type readySubscriber struct {
-	transport.Subscriber
-	once  sync.Once
-	ready chan struct{}
-}
-
-func newReadySubscriber(s transport.Subscriber) *readySubscriber {
-	return &readySubscriber{Subscriber: s, ready: make(chan struct{})}
-}
-
-// Subscribe implements transport.Subscriber, latching readiness on success.
-func (r *readySubscriber) Subscribe(handler func(data []byte)) error {
-	err := r.Subscriber.Subscribe(handler)
-	if err == nil {
-		r.once.Do(func() { close(r.ready) })
-	}
-	return err
-}
-
-// Ready returns the latch channel (closed once the subscription is confirmed).
-func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
 
 // mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/.
 // Zero bindings mount nothing (HTTP-only and NATS-only deployments unchanged).
-func mountPushRoutes(mux *http.ServeMux, bindings []pushBinding, verifier auth.Verifier, maxBodyBytes int) error {
+// The bindings themselves (pipelineruntime.PushBinding) come from the data
+// plane's loop builders (pipeline/runtime.Build); this file owns only the
+// control-plane HTTP mounting that consumes them.
+func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding, verifier auth.Verifier, maxBodyBytes int) error {
 	for _, b := range bindings {
-		inner, err := apipush.New(apipush.Config{Publisher: b.publisher, MaxBodyBytes: maxBodyBytes})
+		inner, err := apipush.New(apipush.Config{Publisher: b.Publisher, MaxBodyBytes: maxBodyBytes})
 		if err != nil {
-			return fmt.Errorf("standalone: loop %q: push adapter: %w", b.name, err)
+			return fmt.Errorf("standalone: loop %q: push adapter: %w", b.Name, err)
 		}
-		prefix := "/ingest/" + b.name
-		mux.Handle(prefix+"/", http.StripPrefix(prefix, pushRoutes(inner, verifier, b.ready)))
+		prefix := "/ingest/" + b.Name
+		mux.Handle(prefix+"/", http.StripPrefix(prefix, pushRoutes(inner, verifier, b.Ready)))
 	}
 	return nil
 }

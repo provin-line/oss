@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 )
 
-// fakePayloadStore is a minimal payloadRetainStore stub — strippedPublisherFor
+// fakePayloadStore is a minimal PayloadRetainStore stub — strippedPublisherFor
 // only checks whether pw.store is nil, so a trivial stub suffices.
 type fakePayloadStore struct{}
 
