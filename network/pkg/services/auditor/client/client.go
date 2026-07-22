@@ -37,9 +37,10 @@ import (
 type Config struct {
 	// Signer signs each call's wireauth proof as SignerDID.
 	Signer crypto.Signer
-	// SignerDID is the identity RegisterEvidence proves — the querying actor
-	// IS the signer (the handler runs no separate authorization check; the
-	// proven signer_did is authoritative for who registered the evidence).
+	// SignerDID is the identity the write RPCs (RegisterEvidence /
+	// RegisterAuditHead) prove — the querying actor IS the signer (the
+	// handler runs no separate authorization check; the proven signer_did is
+	// authoritative for who registered the evidence).
 	SignerDID string
 	// BaseURL is the AuditService's ConnectRPC endpoint. Unlike
 	// payloadresolver/client (which dials whichever serving boundary is
@@ -66,8 +67,8 @@ type Config struct {
 }
 
 // Client is a wireauth-signing ConnectRPC client for AuditService's
-// RegisterEvidence RPC. It signs as a single configured identity
-// (signerDID + signer).
+// write surface (RegisterEvidence, RegisterAuditHead). It signs as a single
+// configured identity (signerDID + signer).
 type Client struct {
 	signer    crypto.Signer
 	signerDID string

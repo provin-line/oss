@@ -280,11 +280,11 @@ func parseBound(raw, field string) (time.Time, error) {
 }
 
 // mapError translates the read service's, the evidence service's, and
-// RegisterEvidence's wireauth sentinel errors to Connect codes (errors.Is,
+// the evidence-write RPCs' (RegisterEvidence/RegisterAuditHead) wireauth sentinel errors to Connect codes (errors.Is,
 // never string matching). Unrecognized errors become CodeInternal.
 func mapError(err error) error {
 	switch {
-	// Malformed request / proof shape (RegisterEvidence's codec + wireauth).
+	// Malformed request / proof shape (the evidence-write RPCs' codec + wireauth).
 	case errors.Is(err, errMalformedIssuedAt),
 		errors.Is(err, wireauth.ErrMissingProof),
 		errors.Is(err, wireauth.ErrMalformedProof),
@@ -300,7 +300,7 @@ func mapError(err error) error {
 	// also wraps ErrResolverUnavailable, and order decides the mapping.
 	case errors.Is(err, wireauth.ErrResolverUnavailable):
 		return connect.NewError(connect.CodeUnavailable, err)
-	// Failed to prove identity (RegisterEvidence's wireauth verification).
+	// Failed to prove identity (the evidence-write RPCs' wireauth verification).
 	case errors.Is(err, wireauth.ErrExpired),
 		errors.Is(err, wireauth.ErrFromFuture),
 		errors.Is(err, wireauth.ErrBeforeEpoch),
