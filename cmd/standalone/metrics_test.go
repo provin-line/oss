@@ -186,11 +186,15 @@ func TestMetrics_RealEmitReachesExposition(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), pipelineruntime.Deps{})
+	rtCfg, err := runtimeConfigFrom(chainCfg, dpPipelineCfg(), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
-	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), dp.Metrics(), nil)
+	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), netcomposeMetricsFrom(dp.Metrics()), nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics: %v", err)
 	}

@@ -117,7 +117,11 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 			},
 		},
 	}}}
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, cfg, ks, pipelineruntime.Deps{Resolver: res, VCStore: dpVCStore()})
+	rtCfg, err := runtimeConfigFrom(chainCfg, cfg, "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{Resolver: res, VCStore: dpVCStore()})
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (aggregate): %v", err)
 	}

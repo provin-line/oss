@@ -42,7 +42,11 @@ func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	// test needs — a runtime that assembles successfully but fails during Run.
 	badCfg := dpPipelineCfg()
 	badCfg.Loops[0].IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, badCfg, dpKeyStore(t), pipelineruntime.Deps{})
+	rtCfg, err := runtimeConfigFrom(chainCfg, badCfg, "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,11 +22,6 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
-	"github.com/provin-line/oss/network/pkg/chainconfig"
-	"github.com/provin-line/oss/network/pkg/pipelineconfig"
-	"github.com/provin-line/oss/network/pkg/services/auditor"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/sink/console"
 	"github.com/provin-line/oss/pipeline/transport"
@@ -36,10 +32,45 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// dpVCStore returns a fresh in-memory vcresolver.Service for use in data-plane tests
-// that build consuming loops (slice-17f: all consuming loops require a VCStore).
-func dpVCStore() *vcresolver.Service {
-	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+// fakeVCStore is a minimal IngressStorer test double: it derives a
+// deterministic body address (sha256 of the credential bytes) and does no
+// persistence. It is enough for the assembly-level tests in this file, which
+// assert Build/Run succeed and check metrics bookkeeping — not storage
+// semantics (predecessor-pool holes, resolvability, out-of-order draining,
+// malformed-previousCredential rejection). Those are
+// network/pkg/services/vcresolver's own concern and already covered by its
+// own test suite (vcresolver_test.go); this package no longer imports
+// network/pkg/services/vcresolver at all (network/ and pipeline/ never
+// import each other, AGENTS.md rule 2) — cmd/standalone adapts the real
+// service to IngressStorer for production and its own composition-level e2e
+// tests.
+type fakeVCStore struct{}
+
+func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int) (string, error) {
+	sum := sha256.Sum256(credential)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// dpVCStore returns a fresh IngressStorer for data-plane tests that build
+// consuming loops (slice-17f: all consuming loops require a VCStore).
+func dpVCStore() IngressStorer {
+	return fakeVCStore{}
+}
+
+// memAuditQueue is a minimal AuditRegistrar test double recording every
+// registered head — enough for these tests, which only need audit
+// registration to succeed (no assertions on the queue's own drain/list
+// behavior; network/pkg/services/auditor.MemQueue is the production-shaped
+// one, wired by cmd/standalone). A package-local fake keeps this package
+// free of any network/ import (network/ and pipeline/ never import each
+// other, AGENTS.md rule 2).
+type memAuditQueue struct{ heads []string }
+
+func newMemAuditQueue() *memAuditQueue { return &memAuditQueue{} }
+
+func (q *memAuditQueue) Add(headHash string) error {
+	q.heads = append(q.heads, headHash)
+	return nil
 }
 
 // dpAccountServer embeds a single-account operator-trusted nats-server and returns
@@ -68,6 +99,15 @@ func dpAccountServer(t *testing.T) (url, accountSeed string) {
 	return s.ClientURL(), string(accSeed)
 }
 
+// withNATS attaches the embedded broker's connection parameters to cfg and
+// returns it — the common assembly every Build call in this file needs (cfg
+// itself carries only Loops; NATS is wired per-test against the embedded
+// broker dpAccountServer starts).
+func withNATS(url, accSeed string, cfg *Config) *Config {
+	cfg.NATS = NATSConfig{URL: url, AccountSeed: accSeed}
+	return cfg
+}
+
 const (
 	dpPipelineDID = "did:dplaax:reg:org:acme:pipeline:pipe"
 	dpIssuerDID   = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"
@@ -87,14 +127,14 @@ func dpKeyStore(t *testing.T) keystore.KeyStore {
 	return ks
 }
 
-func dpPipelineCfg() *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+func dpPipelineCfg() *Config {
+	return &Config{Loops: []LoopConfig{{
 		Name:           "src",
-		Role:           pipelineconfig.RoleSource,
+		Role:           RoleSource,
 		IngressSubject: dpIngress,
-		Source: pipelineconfig.SourceConfig{
+		Source: SourceConfig{
 			OutputSubject: dpPipelineDID,
-			Issuer: pipelineconfig.IssuerConfig{
+			Issuer: IssuerConfig{
 				DID: dpIssuerDID, KeyID: string(keystore.KeyIDSigning),
 				VerificationMethod: dpIssuerDID + "#signing",
 			},
@@ -111,12 +151,8 @@ func dpPipelineCfg() *pipelineconfig.Config {
 // subject; cancelling the context drains the runner.
 func TestDataPlane_SourceLoopBoot(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 
-	dp, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{})
+	dp, err := Build(context.Background(), withNATS(url, accSeed, dpPipelineCfg()), dpKeyStore(t), Deps{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -247,16 +283,29 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 // configured, Build must NOT dial nats (a bogus URL must not error), so an
 // empty pipeline config never requires a live broker.
 func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: "nats://192.0.2.1:4222", AccountSeed: "bogus"},
-	}
-	dp, err := Build(context.Background(), chainCfg, &pipelineconfig.Config{}, dpKeyStore(t), Deps{})
+	cfg := &Config{NATS: NATSConfig{URL: "nats://192.0.2.1:4222", AccountSeed: "bogus"}}
+	dp, err := Build(context.Background(), cfg, dpKeyStore(t), Deps{})
 	if err != nil {
 		t.Fatalf("Build (zero loops): %v", err)
 	}
 	if err := dp.Run(context.Background()); err != nil {
 		t.Fatalf("zero-loop Run: %v", err)
+	}
+}
+
+// TestBuildRequiresNATSConfig asserts Build's own NATS-by-construction guard
+// (the severed replacement for the old chainCfg.Transport != NATS check,
+// which moved out to cmd/standalone's mapping — see runtimeConfigFrom):
+// loops configured with an empty NATS URL is a build error naming the
+// problem, not a nil-deref or an opaque dial failure from natstransport.
+func TestBuildRequiresNATSConfig(t *testing.T) {
+	cfg := dpPipelineCfg() // NATS left zero-value: URL == ""
+	_, err := Build(context.Background(), cfg, dpKeyStore(t), Deps{})
+	if err == nil {
+		t.Fatal("loops configured with an empty NATS URL: want a build error, got nil")
+	}
+	if !strings.Contains(err.Error(), "nats configuration") {
+		t.Errorf("error %q does not name the missing nats configuration (an opaque dial failure instead of the purpose-built guard?)", err)
 	}
 }
 
@@ -268,14 +317,14 @@ func (stubResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
 	return nil, fmt.Errorf("stub resolver")
 }
 
-func dpSinkCfg() *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+func dpSinkCfg() *Config {
+	return &Config{Loops: []LoopConfig{{
 		Name:           "archive",
-		Role:           pipelineconfig.RoleSink,
+		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,
-		Sink: pipelineconfig.SinkConfig{
-			Kind:                 pipelineconfig.SinkObservationOnly,
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+		Sink: SinkConfig{
+			Kind:                 SinkObservationOnly,
+			VerificationStrategy: StrategyAdjacent,
 			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
 		},
 	}}}
@@ -286,11 +335,7 @@ func dpSinkCfg() *pipelineconfig.Config {
 // and a writer.
 func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	dp, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
+	dp, err := Build(context.Background(), withNATS(url, accSeed, dpSinkCfg()), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    dpVCStore(),
@@ -314,12 +359,8 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 // payload store); a sink registers verify counting only.
 func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 
-	src, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{})
+	src, err := Build(context.Background(), withNATS(url, accSeed, dpPipelineCfg()), dpKeyStore(t), Deps{})
 	if err != nil {
 		t.Fatalf("Build (source): %v", err)
 	}
@@ -327,7 +368,7 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Fatalf("source metrics entries: got %d want 1", len(src.metrics))
 	}
 	lm := src.metrics[0]
-	if lm.Name != "src" || lm.Role != pipelineconfig.RoleSource {
+	if lm.Name != "src" || lm.Role != RoleSource {
 		t.Errorf("source entry = %q/%q, want src/source", lm.Name, lm.Role)
 	}
 	if lm.Emits == nil {
@@ -340,7 +381,7 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Error("source loop: verify accessor registered, want nil (source verifies nothing)")
 	}
 
-	snk, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{
+	snk, err := Build(context.Background(), withNATS(url, accSeed, dpSinkCfg()), dpKeyStore(t), Deps{
 		Resolver:   stubResolver{},
 		SinkWriter: console.New(io.Discard),
 		VCStore:    dpVCStore(),
@@ -352,7 +393,7 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 		t.Fatalf("sink metrics entries: got %d want 1", len(snk.metrics))
 	}
 	lm = snk.metrics[0]
-	if lm.Role != pipelineconfig.RoleSink {
+	if lm.Role != RoleSink {
 		t.Errorf("sink entry role = %q, want sink", lm.Role)
 	}
 	if lm.Verify == nil {
@@ -369,13 +410,9 @@ func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
 // path records exactly one entry with the full producer+consumer set.
 func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 
 	// Source with a payload store: the dual-emit gate registers stripped.
-	src, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{
+	src, err := Build(context.Background(), withNATS(url, accSeed, dpPipelineCfg()), dpKeyStore(t), Deps{
 		PayloadStore: fakePayloadStore{},
 	})
 	if err != nil {
@@ -386,7 +423,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	}
 
 	// Chained: producer AND consumer.
-	chd, err := Build(context.Background(), chainCfg, dpChainedCfg("{ 'relayed': true }"), dpKeyStore(t), Deps{
+	chd, err := Build(context.Background(), withNATS(url, accSeed, dpChainedCfg("{ 'relayed': true }")), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -397,7 +434,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 		t.Fatalf("chained metrics entries: got %d want 1", len(chd.metrics))
 	}
 	lm := chd.metrics[0]
-	if lm.Role != pipelineconfig.RoleChained || lm.Emits == nil || lm.Verify == nil {
+	if lm.Role != RoleChained || lm.Emits == nil || lm.Verify == nil {
 		t.Errorf("chained entry = role %q emits %v verify %v; want chained + both registered", lm.Role, lm.Emits, lm.Verify)
 	}
 	if lm.Stripped != nil {
@@ -405,25 +442,24 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	}
 
 	// Aggregate: the early-continue path appends exactly once, producer+consumer.
-	aggCfg := &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+	aggCfg := &Config{Loops: []LoopConfig{{
 		Name: "agg",
-		Role: pipelineconfig.RoleAggregate,
-		Aggregate: pipelineconfig.AggregateConfig{
+		Role: RoleAggregate,
+		Aggregate: AggregateConfig{
 			OutputSubject: dpRelayDID,
-			Issuer: pipelineconfig.IssuerConfig{
+			Issuer: IssuerConfig{
 				DID: dpRelayIssr, KeyID: string(keystore.KeyIDSigning),
 				VerificationMethod: dpRelayIssr + "#signing",
 			},
-			PipelineID:           "relay",
-			ProcessID:            "r1",
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
-			Window:               100 * time.Millisecond,
-			Ingresses: []pipelineconfig.AggregateIngress{
+			PipelineID: "relay",
+			ProcessID:  "r1",
+			Window:     100 * time.Millisecond,
+			Ingresses: []AggregateIngress{
 				{Subject: dpPipelineDID, UpstreamEndpoint: "https://acme.example/pipelines/pipe"},
 			},
 		},
 	}}}
-	agg, err := Build(context.Background(), chainCfg, aggCfg, dpKeyStore(t), Deps{
+	agg, err := Build(context.Background(), withNATS(url, accSeed, aggCfg), dpKeyStore(t), Deps{
 		Resolver:     stubResolver{},
 		VCStore:      dpVCStore(),
 		PayloadStore: fakePayloadStore{},
@@ -435,7 +471,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 		t.Fatalf("aggregate metrics entries: got %d want 1 (early-continue path must append exactly once)", len(agg.metrics))
 	}
 	lm = agg.metrics[0]
-	if lm.Role != pipelineconfig.RoleAggregate || lm.Emits == nil || lm.Verify == nil || lm.Stripped == nil {
+	if lm.Role != RoleAggregate || lm.Emits == nil || lm.Verify == nil || lm.Stripped == nil {
 		t.Errorf("aggregate entry = role %q emits %v verify %v stripped %v; want aggregate + all three registered",
 			lm.Role, lm.Emits, lm.Verify, lm.Stripped)
 	}
@@ -450,13 +486,13 @@ func TestSinkWriters_ProviderSemantics(t *testing.T) {
 	path := filepath.Join(dir, "out.ndjson")
 	sw := newSinkWriters(nil)
 
-	w1, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path})
+	w1, err := sw.writerFor(SinkOutputConfig{Type: SinkOutputFile, Path: path})
 	if err != nil {
 		t.Fatalf("writerFor(file): %v", err)
 	}
 	// Same file spelled differently must resolve to the SAME writer instance.
-	w2, err := sw.writerFor(pipelineconfig.SinkOutputConfig{
-		Type: pipelineconfig.SinkOutputFile, Path: filepath.Join(dir, "sub", "..", "out.ndjson")})
+	w2, err := sw.writerFor(SinkOutputConfig{
+		Type: SinkOutputFile, Path: filepath.Join(dir, "sub", "..", "out.ndjson")})
 	if err != nil {
 		t.Fatalf("writerFor(file, uncleaned): %v", err)
 	}
@@ -469,11 +505,11 @@ func TestSinkWriters_ProviderSemantics(t *testing.T) {
 
 	// Console: the default for a zero-value Output (typed-config construction)
 	// and the explicit type; one shared instance.
-	c1, err := sw.writerFor(pipelineconfig.SinkOutputConfig{})
+	c1, err := sw.writerFor(SinkOutputConfig{})
 	if err != nil {
 		t.Fatalf("writerFor(zero): %v", err)
 	}
-	c2, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputConsole})
+	c2, err := sw.writerFor(SinkOutputConfig{Type: SinkOutputConsole})
 	if err != nil {
 		t.Fatalf("writerFor(console): %v", err)
 	}
@@ -481,14 +517,14 @@ func TestSinkWriters_ProviderSemantics(t *testing.T) {
 		t.Error("console writers not shared")
 	}
 
-	if _, err := sw.writerFor(pipelineconfig.SinkOutputConfig{Type: "warehouse"}); err == nil {
+	if _, err := sw.writerFor(SinkOutputConfig{Type: "warehouse"}); err == nil {
 		t.Error("unknown output type: want error (fail closed)")
 	}
 
 	// The injection seam wins over any config.
 	inj := console.New(io.Discard)
 	swo := newSinkWriters(inj)
-	if w, err := swo.writerFor(pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path}); err != nil || w != sink.Writer(inj) {
+	if w, err := swo.writerFor(SinkOutputConfig{Type: SinkOutputFile, Path: path}); err != nil || w != sink.Writer(inj) {
 		t.Errorf("override: got %v (err %v), want the injected writer", w, err)
 	}
 }
@@ -497,15 +533,11 @@ func TestSinkWriters_ProviderSemantics(t *testing.T) {
 // comes from config, and the file exists after boot (fail-closed construction).
 func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 	cfg := dpSinkCfg()
 	path := filepath.Join(t.TempDir(), "consumed.ndjson")
-	cfg.Loops[0].Sink.Output = pipelineconfig.SinkOutputConfig{Type: pipelineconfig.SinkOutputFile, Path: path}
+	cfg.Loops[0].Sink.Output = SinkOutputConfig{Type: SinkOutputFile, Path: path}
 
-	dp, err := Build(context.Background(), chainCfg, cfg, dpKeyStore(t), Deps{
+	dp, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -527,11 +559,7 @@ func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 // longer gates assembly: it comes from sink.output config, console by default.)
 func TestBuildDataPlane_SinkRequiresDeps(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	if _, err := Build(context.Background(), chainCfg, dpSinkCfg(), dpKeyStore(t), Deps{}); err == nil {
+	if _, err := Build(context.Background(), withNATS(url, accSeed, dpSinkCfg()), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("sink loop without resolver/writer: want error, got nil")
 	}
 }
@@ -541,21 +569,21 @@ const (
 	dpRelayIssr = "did:dplaax:reg:org:beta:pipeline:relay:process:r1"
 )
 
-func dpChainedCfg(converter string) *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+func dpChainedCfg(converter string) *Config {
+	return &Config{Loops: []LoopConfig{{
 		Name:           "relay",
-		Role:           pipelineconfig.RoleChained,
+		Role:           RoleChained,
 		IngressSubject: dpPipelineDID,
-		Chained: pipelineconfig.ChainedConfig{
+		Chained: ChainedConfig{
 			OutputSubject: dpRelayDID,
-			Issuer: pipelineconfig.IssuerConfig{
+			Issuer: IssuerConfig{
 				DID: dpRelayIssr, KeyID: string(keystore.KeyIDSigning),
 				VerificationMethod: dpRelayIssr + "#signing",
 			},
 			PipelineID:           "relay",
 			ProcessID:            "r1",
 			TransformationClaim:  vc.ClaimConvert,
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+			VerificationStrategy: StrategyAdjacent,
 			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
 			Converter:            converter,
 		},
@@ -567,11 +595,7 @@ func dpChainedCfg(converter string) *pipelineconfig.Config {
 // a chained loop needs no sink writer.
 func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	dp, err := Build(context.Background(), chainCfg, dpChainedCfg("{ 'reading': reading, 'relayed': true }"), dpKeyStore(t), Deps{
+	dp, err := Build(context.Background(), withNATS(url, accSeed, dpChainedCfg("{ 'reading': reading, 'relayed': true }")), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -593,11 +617,7 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 // chained loop needs a resolver (to verify ingress) but no sink writer.
 func TestBuildDataPlane_ChainedRequiresResolver(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	if _, err := Build(context.Background(), chainCfg, dpChainedCfg(""), dpKeyStore(t), Deps{}); err == nil {
+	if _, err := Build(context.Background(), withNATS(url, accSeed, dpChainedCfg("")), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("chained loop without resolver: want error, got nil")
 	}
 }
@@ -606,11 +626,7 @@ func TestBuildDataPlane_ChainedRequiresResolver(t *testing.T) {
 // expression fails closed at build (compiled at loop-build time), not at first event.
 func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	if _, err := Build(context.Background(), chainCfg, dpChainedCfg("{ unterminated"), dpKeyStore(t), Deps{
+	if _, err := Build(context.Background(), withNATS(url, accSeed, dpChainedCfg("{ unterminated")), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	}); err == nil {
@@ -624,12 +640,10 @@ func TestBuildDataPlane_ChainedMalformedConverterFails(t *testing.T) {
 // must verify as coming from that identity.
 func TestDataPlane_DurableEmissionLog(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 	tlogDir := t.TempDir()
-	dp, err := Build(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), Deps{TlogDir: tlogDir})
+	cfg := withNATS(url, accSeed, dpPipelineCfg())
+	cfg.TlogDir = tlogDir
+	dp, err := Build(context.Background(), cfg, dpKeyStore(t), Deps{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -661,7 +675,7 @@ const dpArchiveReceiptIssr = "did:dplaax:reg:org:acme:pipeline:archive:process:a
 // validation (config.go) already REQUIRES to carry a receipt issuer
 // (sink.receipt.issuer) — the same signer identity this task arms the
 // reject log's checkpoint with (D-T3).
-func dpArchivalSinkCfg() *pipelineconfig.Config {
+func dpArchivalSinkCfg() *Config {
 	return dpArchivalSinkCfgWithIssuer(dpArchiveReceiptIssr)
 }
 
@@ -669,19 +683,19 @@ func dpArchivalSinkCfg() *pipelineconfig.Config {
 // receipt issuer DID, so tests can construct two archival sinks that differ
 // ONLY in that identity — the axis the reject-log rekeying fix (Task 7) must
 // key storage on.
-func dpArchivalSinkCfgWithIssuer(issuerDID string) *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+func dpArchivalSinkCfgWithIssuer(issuerDID string) *Config {
+	return &Config{Loops: []LoopConfig{{
 		Name:           "archive",
-		Role:           pipelineconfig.RoleSink,
+		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,
-		Sink: pipelineconfig.SinkConfig{
-			Kind:                 pipelineconfig.SinkArchival,
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
+		Sink: SinkConfig{
+			Kind:                 SinkArchival,
+			VerificationStrategy: StrategyAdjacent,
 			UpstreamEndpoint:     "https://acme.example/pipelines/pipe",
 			AllowIssuers:         []string{"did:dplaax:reg:org:acme:*"},
-			Receipt: pipelineconfig.SinkReceiptConfig{
+			Receipt: SinkReceiptConfig{
 				Issue: true,
-				Issuer: pipelineconfig.IssuerConfig{
+				Issuer: IssuerConfig{
 					DID:                issuerDID,
 					KeyID:              string(keystore.KeyIDSigning),
 					VerificationMethod: issuerDID + "#signing",
@@ -703,10 +717,6 @@ func dpArchivalSinkCfgWithIssuer(issuerDID string) *pipelineconfig.Config {
 // journal under a new signer.
 func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 	ks := filestore.New(t.TempDir())
 	kp, err := (ed25519.Generator{}).Generate()
 	if err != nil {
@@ -717,12 +727,13 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	}
 
 	rejectDir := t.TempDir()
-	dp, err := Build(context.Background(), chainCfg, dpArchivalSinkCfg(), ks, Deps{
-		Resolver:     stubResolver{},
-		SinkWriter:   console.New(io.Discard),
-		VCStore:      dpVCStore(),
-		AuditQueue:   auditor.NewMemQueue(),
-		RejectLogDir: rejectDir,
+	cfg := withNATS(url, accSeed, dpArchivalSinkCfg())
+	cfg.RejectLogDir = rejectDir
+	dp, err := Build(context.Background(), cfg, ks, Deps{
+		Resolver:   stubResolver{},
+		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
+		AuditQueue: newMemAuditQueue(),
 	})
 	if err != nil {
 		t.Fatalf("Build (archival sink): %v", err)
@@ -796,21 +807,18 @@ func dpArchiveKeyStore(t *testing.T, issuerDID string) keystore.KeyStore {
 //     preserved for the normal, non-rollover case).
 func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
 	rejectDir := t.TempDir()
 	const didB = "did:dplaax:reg:org:acme:pipeline:archive:process:a2"
 
 	buildArchive := func(issuerDID string, ks keystore.KeyStore) *Runtime {
 		t.Helper()
-		dp, err := Build(context.Background(), chainCfg, dpArchivalSinkCfgWithIssuer(issuerDID), ks, Deps{
-			Resolver:     stubResolver{},
-			SinkWriter:   console.New(io.Discard),
-			VCStore:      dpVCStore(),
-			AuditQueue:   auditor.NewMemQueue(),
-			RejectLogDir: rejectDir,
+		cfg := withNATS(url, accSeed, dpArchivalSinkCfgWithIssuer(issuerDID))
+		cfg.RejectLogDir = rejectDir
+		dp, err := Build(context.Background(), cfg, ks, Deps{
+			Resolver:   stubResolver{},
+			SinkWriter: console.New(io.Discard),
+			VCStore:    dpVCStore(),
+			AuditQueue: newMemAuditQueue(),
 		})
 		if err != nil {
 			t.Fatalf("Build (issuer %s): %v", issuerDID, err)

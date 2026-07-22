@@ -242,7 +242,11 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := pipelineruntime.Build(ctx, pubChainCfg, capSourceCfg(), ks, pipelineruntime.Deps{PayloadStore: payloadSvc})
+	pubRTCfg, err := runtimeConfigFrom(pubChainCfg, capSourceCfg(), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom (publisher): %v", err)
+	}
+	pubDP, err := pipelineruntime.Build(ctx, &pubRTCfg, ks, pipelineruntime.Deps{PayloadStore: payloadSvc})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -256,7 +260,11 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := pipelineruntime.Build(ctx, subChainCfg, capByRefSinkCfg("https://acme.example/pipelines/pipe"), filestore.New(t.TempDir()), pipelineruntime.Deps{
+	subRTCfg, err := runtimeConfigFrom(subChainCfg, capByRefSinkCfg("https://acme.example/pipelines/pipe"), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom (subscriber): %v", err)
+	}
+	subDP, err := pipelineruntime.Build(ctx, &subRTCfg, filestore.New(t.TempDir()), pipelineruntime.Deps{
 		Resolver:        res,
 		SinkWriter:      writer,
 		VCStore:         dpVCStore(),

@@ -30,7 +30,7 @@ type emissionRegistrar struct {
 	local     IngressStorer       // local StoreVC (returns the head content address)
 	receipts  ReceiptWriter       // records head → consumed source hashes
 	audit     AuditRegistrar      // enqueues the head for self-audit
-	publisher credentialPublisher // optional remote VC-store publish (nil => skip)
+	publisher CredentialPublisher // optional remote VC-store publish (nil => skip)
 }
 
 var _ aggregate.EmissionRegistrar = (*emissionRegistrar)(nil)
@@ -39,7 +39,7 @@ var _ aggregate.EmissionRegistrar = (*emissionRegistrar)(nil)
 // directly. Exported for composition-level tests that register a real emitted
 // credential for self-audit outside Build's own assembly path (which wires
 // this internally whenever deps.Receipts and deps.AuditQueue are both set).
-func NewEmissionRegistrar(local IngressStorer, receipts ReceiptWriter, audit AuditRegistrar, publisher credentialPublisher) aggregate.EmissionRegistrar {
+func NewEmissionRegistrar(local IngressStorer, receipts ReceiptWriter, audit AuditRegistrar, publisher CredentialPublisher) aggregate.EmissionRegistrar {
 	return &emissionRegistrar{local: local, receipts: receipts, audit: audit, publisher: publisher}
 }
 
@@ -51,12 +51,12 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 		return fmt.Errorf("emissionRegistrar: marshal emitted credential: %w", err)
 	}
 	// An aggregate FirstDrop has no predecessor → no upstream hint, assembly depth 0. StoreVC
-	// returns the server-recomputed addresses; the BODY address is the authoritative head hash
-	// used as both the receipt key and the audit-queue key (so all three agree). Keying on the
-	// admitted variant instead is P0-1 slices B/C: it is the verdict that has to name the exact
-	// bytes evaluated (invariants 6 and 12), and neither the receipt store nor the audit queue
-	// can carry that yet.
-	res, err := r.local.StoreVC(ctx, b, "", 0)
+	// returns the server-recomputed body address, the authoritative head hash used as both
+	// the receipt key and the audit-queue key (so all three agree). Keying on the admitted
+	// variant instead is P0-1 slices B/C: it is the verdict that has to name the exact bytes
+	// evaluated (invariants 6 and 12), and neither the receipt store nor the audit queue can
+	// carry that yet.
+	bodyAddress, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("emissionRegistrar: local store emitted head: %w", err)
 	}
@@ -65,10 +65,10 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 	// (there is no wire caller here to prove one). Recorded as the receipt's registrant, an
 	// audit-trail fact only (see auditor.ReceiptStore.Put's doc): this is NOT an ownership
 	// check, and RegisterEmission never validates it against anything else.
-	if err := r.receipts.Put(res.BodyAddress, cred.Issuer(), consumedHashes); err != nil {
+	if err := r.receipts.Put(bodyAddress, cred.Issuer(), consumedHashes); err != nil {
 		return fmt.Errorf("emissionRegistrar: write consumed-set receipt: %w", err)
 	}
-	if err := r.audit.Add(res.BodyAddress); err != nil {
+	if err := r.audit.Add(bodyAddress); err != nil {
 		return fmt.Errorf("emissionRegistrar: enqueue head for self-audit: %w", err)
 	}
 	if r.publisher != nil {

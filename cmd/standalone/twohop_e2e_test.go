@@ -105,7 +105,11 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, twoHopCfg(converter, filters), ks, pipelineruntime.Deps{
+	rtCfg, err := runtimeConfigFrom(chainCfg, twoHopCfg(converter, filters), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),

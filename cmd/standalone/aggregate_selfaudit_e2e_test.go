@@ -91,8 +91,12 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
 
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, cfg, ks, pipelineruntime.Deps{
-		Resolver: res, VCStore: localSvc, AuditQueue: queue, Receipts: receipts,
+	rtCfg, err := runtimeConfigFrom(chainCfg, cfg, "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{
+		Resolver: res, VCStore: ingressStoreAdapter{svc: localSvc}, AuditQueue: queue, Receipts: receipts,
 	})
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (aggregate self-audit): %v", err)

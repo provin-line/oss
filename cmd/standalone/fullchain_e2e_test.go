@@ -92,12 +92,16 @@ func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http
 	auditQueue := auditor.NewMemQueue()
 	auditStatus := auditor.NewMemStatusStore()
 	cfg := fullChainCfg(srv.URL)
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, cfg, ks, pipelineruntime.Deps{
-		Resolver:          res,
-		SinkWriter:        writer,
-		VCStoreHTTPClient: srv.Client(),
-		VCStore:           localSvc,
-		AuditQueue:        auditQueue,
+	rtCfg, err := runtimeConfigFrom(chainCfg, cfg, "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{
+		Resolver:            res,
+		SinkWriter:          writer,
+		VCStore:             ingressStoreAdapter{svc: localSvc},
+		AuditQueue:          auditQueue,
+		CredentialPublisher: credentialPublisherFrom(cfg, srv.Client()),
 	})
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (full chain): %v", err)

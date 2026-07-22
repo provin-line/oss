@@ -166,7 +166,11 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(pubAccSeed)},
 	}
-	pubDP, err := pipelineruntime.Build(context.Background(), pubChain, capSourceCfg(), ks, pipelineruntime.Deps{})
+	pubRTCfg, err := runtimeConfigFrom(pubChain, capSourceCfg(), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom (publisher): %v", err)
+	}
+	pubDP, err := pipelineruntime.Build(context.Background(), &pubRTCfg, ks, pipelineruntime.Deps{})
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
@@ -179,7 +183,11 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: string(subAccSeed)},
 	}
-	subDP, err := pipelineruntime.Build(context.Background(), subChain, capSinkCfg(), filestore.New(t.TempDir()), pipelineruntime.Deps{
+	subRTCfg, err := runtimeConfigFrom(subChain, capSinkCfg(), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom (subscriber): %v", err)
+	}
+	subDP, err := pipelineruntime.Build(context.Background(), &subRTCfg, filestore.New(t.TempDir()), pipelineruntime.Deps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),

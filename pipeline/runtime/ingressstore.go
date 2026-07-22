@@ -4,16 +4,19 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/vc"
 )
 
-// IngressStorer is the StoreVC seam the consuming loops' ingress store writes through —
-// satisfied by *vcresolver.Service. cmd/standalone owns this local interface so the data
-// plane depends on the capability, not the concrete service.
+// IngressStorer is the StoreVC seam the consuming loops' ingress store writes
+// through. StoreIngressVC's only read of the result is the stored head's
+// body address (see below), so the seam returns that string directly rather
+// than network/pkg/services/vcresolver.StoreVCResult — this package stays
+// network-agnostic (network/ and pipeline/ never import each other,
+// AGENTS.md rule 2). cmd/standalone adapts *vcresolver.Service to this
+// interface.
 type IngressStorer interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (bodyAddress string, err error)
 }
 
 // AuditRegistrar registers a consumed head's content address for async audit (slice-17h).
@@ -58,7 +61,7 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	}
 	// A consumed ingress credential is directly received — assembly depth 0; its
 	// missing predecessor enqueues at depth 1.
-	res, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
+	bodyAddress, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
 	if err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
 	}
@@ -72,7 +75,7 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	// variant here would only move the mismatch, since nothing downstream can
 	// yet receive it.
 	if s.audit != nil {
-		if err := s.audit.Add(res.BodyAddress); err != nil {
+		if err := s.audit.Add(bodyAddress); err != nil {
 			return fmt.Errorf("ingressstore: register audit head: %w", err)
 		}
 	}

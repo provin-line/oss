@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
 	"github.com/provin-line/oss/pipeline/sink"
@@ -30,7 +29,7 @@ type sinkReceiptRegistrar struct {
 	local      IngressStorer            // local StoreVC (returns the head content address)
 	receiptLog tlog.Log                 // dedicated durable, hash-chained receipt log
 	audit      AuditRegistrar           // enqueues the receipt head for self-audit
-	publisher  credentialPublisher      // optional remote VC-store publish (nil => skip)
+	publisher  CredentialPublisher      // optional remote VC-store publish (nil => skip)
 }
 
 var _ sink.ReceiptIssuer = (*sinkReceiptRegistrar)(nil)
@@ -40,7 +39,7 @@ var _ sink.ReceiptIssuer = (*sinkReceiptRegistrar)(nil)
 // buildSinkReceiptRegistrar's loop-config-driven log construction. Exported
 // for composition-level tests that arm a receipt registrar by hand (e.g. over
 // an in-memory log) outside Build's own assembly path.
-func NewSinkReceiptRegistrar(signer provenance.ChainedSigner, local IngressStorer, receiptLog tlog.Log, audit AuditRegistrar, publisher credentialPublisher) sink.ReceiptIssuer {
+func NewSinkReceiptRegistrar(signer provenance.ChainedSigner, local IngressStorer, receiptLog tlog.Log, audit AuditRegistrar, publisher CredentialPublisher) sink.ReceiptIssuer {
 	return &sinkReceiptRegistrar{signer: signer, local: local, receiptLog: receiptLog, audit: audit, publisher: publisher}
 }
 
@@ -55,12 +54,12 @@ func buildSinkReceiptRegistrar(
 	builder *vc.Builder,
 	local IngressStorer,
 	audit AuditRegistrar,
-	publisher credentialPublisher,
-	newLog func(loopName, logID string, issuer pipelineconfig.IssuerConfig) (tlog.Log, error),
-	lc pipelineconfig.LoopConfig,
+	publisher CredentialPublisher,
+	newLog func(loopName, logID string, issuer IssuerConfig) (tlog.Log, error),
+	lc LoopConfig,
 ) (sink.ReceiptIssuer, error) {
 	if local == nil || audit == nil {
-		return nil, fmt.Errorf("standalone: loop %q: sink receipts require a VC store and audit queue", lc.Name)
+		return nil, fmt.Errorf("runtime: loop %q: sink receipts require a VC store and audit queue", lc.Name)
 	}
 	rc := lc.Sink.Receipt
 	signer, err := vcdid.NewSigner(vcdid.Config{
@@ -73,13 +72,13 @@ func buildSinkReceiptRegistrar(
 		TransformationClaim: vc.ClaimSinkReceipt,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("standalone: loop %q: sink receipt signer: %w", lc.Name, err)
+		return nil, fmt.Errorf("runtime: loop %q: sink receipt signer: %w", lc.Name, err)
 	}
 	// The receipt log is keyed by a stable, receipt-specific id (the receipt
 	// issuer DID) — distinct from any producing loop's emission subject.
 	receiptLog, err := newLog(lc.Name, "sink-receipt:"+rc.Issuer.DID, rc.Issuer)
 	if err != nil {
-		return nil, fmt.Errorf("standalone: loop %q: sink receipt log: %w", lc.Name, err)
+		return nil, fmt.Errorf("runtime: loop %q: sink receipt log: %w", lc.Name, err)
 	}
 	return &sinkReceiptRegistrar{
 		signer:     signer,
@@ -116,9 +115,9 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 	}
 
 	// 1. Local store — the head must be locally resolvable before the audit runner
-	// dequeues it. StoreVC returns the server-recomputed addresses; the queue is
+	// dequeues it. StoreVC returns the server-recomputed body address; the queue is
 	// body-keyed (see emissionregistrar.go on why the variant is not carried yet).
-	res, err := r.local.StoreVC(ctx, b, "", 0)
+	bodyAddress, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: local store receipt: %w", err)
 	}
@@ -128,7 +127,7 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 		return fmt.Errorf("sinkReceiptRegistrar: append receipt tlog: %w", err)
 	}
 	// 3. Enqueue the receipt head for self-audit (verifies receipt→consumed→…).
-	if err := r.audit.Add(res.BodyAddress); err != nil {
+	if err := r.audit.Add(bodyAddress); err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: enqueue receipt head: %w", err)
 	}
 	// 4. Optional remote publish — external visibility strictly after (1)–(3).

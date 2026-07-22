@@ -183,7 +183,7 @@ func TestAuditAPI_ServesSourceCommitmentVerified(t *testing.T) {
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
-	reg := pipelineruntime.NewEmissionRegistrar(localSvc, receipts, queue, nil)
+	reg := pipelineruntime.NewEmissionRegistrar(ingressStoreAdapter{svc: localSvc}, receipts, queue, nil)
 	if err := reg.RegisterEmission(ctx, aggCred, []string{hA, hB}); err != nil {
 		t.Fatalf("RegisterEmission: %v", err)
 	}

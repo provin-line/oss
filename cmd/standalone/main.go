@@ -184,17 +184,20 @@ func main() {
 	if nodeDID := nodeDIDOf(chainCfg); nodeDID != "" {
 		payloadClient = payloadclient.New(payloadclient.Config{Signer: keyStore, SignerDID: nodeDID, HTTPClient: guard.HTTPClient()})
 	}
-	dp, err := pipelineruntime.Build(ctx, chainCfg, pipeCfg, keyStore, pipelineruntime.Deps{
-		Resolver:        resolver,
-		VCStore:         vcSvc,
-		AuditQueue:      auditQueue,
-		Receipts:        auditReceipts,
-		TlogDir:         filepath.Join(coreCfg.DataDir, "tlog"),
-		RejectLogDir:    filepath.Join(evidenceDir, "sink-rejects"),
-		SchemaResolver:  schemaBridge,
-		SchemaGetter:    schemaSvc,
-		PayloadStore:    payloadSvc,
-		PayloadResolver: payloadClient,
+	rtCfg, err := runtimeConfigFrom(chainCfg, pipeCfg, coreCfg.DataDir)
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, pipelineruntime.Deps{
+		Resolver:            resolver,
+		VCStore:             ingressStoreAdapter{svc: vcSvc},
+		AuditQueue:          auditQueue,
+		Receipts:            auditReceipts,
+		SchemaResolver:      schemaBridge,
+		SchemaGetter:        schemaGetterAdapter{svc: schemaSvc},
+		PayloadStore:        payloadSvc,
+		PayloadResolver:     payloadClient,
+		CredentialPublisher: credentialPublisherFrom(pipeCfg, nil),
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
@@ -267,7 +270,7 @@ func main() {
 	if auditRunner != nil {
 		verdicts = auditRunner.VerdictCounts
 	}
-	handler, err = maybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, dp.Metrics(), verdicts)
+	handler, err = maybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, netcomposeMetricsFrom(dp.Metrics()), verdicts)
 	if err != nil {
 		log.Fatalf("standalone: build metrics: %v", err)
 	}

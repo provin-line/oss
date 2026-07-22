@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
 )
@@ -16,10 +15,30 @@ type fullSigner interface {
 	provenance.ChainedSigner
 }
 
-// credentialPublisher publishes an issued credential to the VC store and returns what
-// the server assigned it. *vcresolverclient.Resolver satisfies it.
-type credentialPublisher interface {
-	StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (vcresolverclient.StoredCredential, error)
+// StoredCredential is what a store assigned to a published credential: the
+// body address successors link to, and the variant naming the exact signed
+// form it admitted — the two fields publishIssuedCredential's round-trip
+// check reads. Mirrored from
+// network/pkg/services/vcresolver/client.StoredCredential so this package
+// stays network-agnostic (network/ and pipeline/ never import each other,
+// AGENTS.md rule 2); a Go interface method's return type must match exactly
+// for structural satisfaction, so CredentialPublisher cannot simply reuse the
+// network-side struct — cmd/standalone's adapter converts between the two.
+type StoredCredential struct {
+	// BodyAddress is the server-recomputed content address ("sha256:<hex>").
+	BodyAddress string
+	// WireVariantID names the exact wire bytes the store admitted
+	// ("wire:v1:jcs-rfc8785:sha256:<hex>").
+	WireVariantID string
+}
+
+// CredentialPublisher publishes an issued credential to the VC store and
+// returns what the server assigned it. cmd/standalone's runtimewiring.go
+// adapts a *vcresolverclient.Resolver to this interface (the exact method
+// this package's earlier, unexported credentialPublisher named — exported as
+// part of the boundary severance since it is now Deps' field type).
+type CredentialPublisher interface {
+	StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (StoredCredential, error)
 }
 
 // publishingSigner decorates a producing signer so each issued credential is published
@@ -32,7 +51,7 @@ type credentialPublisher interface {
 // FirstDrop has no predecessor, so its hint is empty.
 type publishingSigner struct {
 	inner            fullSigner
-	publisher        credentialPublisher
+	publisher        CredentialPublisher
 	upstreamEndpoint string
 }
 
@@ -94,7 +113,7 @@ func (p *publishingSigner) publish(ctx context.Context, cred *vc.PipelinePassCre
 // just as well when the store holds a different signed form of the same claims — which is
 // the case this check exists to catch, and the one the address alone cannot see. Comparing
 // the variant compares the whole document, signature included.
-func publishIssuedCredential(ctx context.Context, publisher credentialPublisher, cred *vc.PipelinePassCredential, upstreamEndpoint string) error {
+func publishIssuedCredential(ctx context.Context, publisher CredentialPublisher, cred *vc.PipelinePassCredential, upstreamEndpoint string) error {
 	stored, err := publisher.StoreCredential(ctx, cred, upstreamEndpoint)
 	if err != nil {
 		return fmt.Errorf("publish issued credential to vc store: %w", err)

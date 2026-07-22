@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/keystore"
-	"github.com/provin-line/oss/network/pkg/chainconfig"
-	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -20,11 +18,11 @@ import (
 // conn/builder, so a legible boot error is produced rather than the raw vcdid
 // "aggregate requires SourceRootCanonical" construction error.
 func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {
-	lc := pipelineconfig.LoopConfig{
-		Name: "agg", Role: pipelineconfig.RoleSource, IngressSubject: "in",
-		Source: pipelineconfig.SourceConfig{
+	lc := LoopConfig{
+		Name: "agg", Role: RoleSource, IngressSubject: "in",
+		Source: SourceConfig{
 			OutputSubject: "out",
-			Issuer: pipelineconfig.IssuerConfig{
+			Issuer: IssuerConfig{
 				DID: "did:x", KeyID: "signing", VerificationMethod: "did:x#signing",
 			},
 			PipelineID: "p", ProcessID: "s", TransformationClaim: vc.ClaimAggregate,
@@ -46,21 +44,20 @@ const (
 
 // dpAggregateCfg is one aggregate loop consuming the shared pipeline DID as its single
 // ingress (a valid N=1 aggregate) and emitting on its own output subject.
-func dpAggregateCfg() *pipelineconfig.Config {
-	return &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+func dpAggregateCfg() *Config {
+	return &Config{Loops: []LoopConfig{{
 		Name: "agg",
-		Role: pipelineconfig.RoleAggregate,
-		Aggregate: pipelineconfig.AggregateConfig{
+		Role: RoleAggregate,
+		Aggregate: AggregateConfig{
 			OutputSubject: dpAggDID,
-			Issuer: pipelineconfig.IssuerConfig{
+			Issuer: IssuerConfig{
 				DID: dpAggIssr, KeyID: string(keystore.KeyIDSigning),
 				VerificationMethod: dpAggIssr + "#signing",
 			},
-			PipelineID:           "agg",
-			ProcessID:            "a1",
-			VerificationStrategy: pipelineconfig.StrategyAdjacent,
-			Window:               time.Second,
-			Ingresses: []pipelineconfig.AggregateIngress{
+			PipelineID: "agg",
+			ProcessID:  "a1",
+			Window:     time.Second,
+			Ingresses: []AggregateIngress{
 				{Subject: dpPipelineDID, UpstreamEndpoint: "https://acme.example/pipelines/pipe"},
 			},
 		},
@@ -72,11 +69,7 @@ func dpAggregateCfg() *pipelineconfig.Config {
 // VC store, and that dp.Run drains it cleanly.
 func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	dp, err := Build(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), Deps{
+	dp, err := Build(context.Background(), withNATS(url, accSeed, dpAggregateCfg()), dpKeyStore(t), Deps{
 		Resolver: stubResolver{},
 		VCStore:  dpVCStore(),
 	})
@@ -100,11 +93,7 @@ func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
 // resolver/VC store is a build error (it verifies+stores ingress, like sink/chained).
 func TestBuildDataPlane_AggregateRequiresConsumerDeps(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	if _, err := Build(context.Background(), chainCfg, dpAggregateCfg(), dpKeyStore(t), Deps{}); err == nil {
+	if _, err := Build(context.Background(), withNATS(url, accSeed, dpAggregateCfg()), dpKeyStore(t), Deps{}); err == nil {
 		t.Fatal("aggregate without resolver/VC store: want error, got nil")
 	}
 }

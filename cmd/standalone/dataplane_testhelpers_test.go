@@ -15,6 +15,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -29,11 +30,13 @@ import (
 // source pipeline config). Kept behaviorally identical to the pipeline/runtime
 // originals.
 
-// dpVCStore returns a fresh in-memory vcresolver.Service for use in data-plane
-// tests that build consuming loops (slice-17f: all consuming loops require a
-// VCStore).
-func dpVCStore() *vcresolver.Service {
-	return vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+// dpVCStore returns a fresh in-memory vcresolver.Service, adapted to
+// pipeline/runtime's network-agnostic IngressStorer seam (ingressStoreAdapter,
+// runtimewiring.go — the same adapter production wraps the node's real VC
+// store with), for use in data-plane tests that build consuming loops
+// (slice-17f: all consuming loops require a VCStore).
+func dpVCStore() pipelineruntime.IngressStorer {
+	return ingressStoreAdapter{svc: vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())}
 }
 
 // dpAccountServer embeds a single-account operator-trusted nats-server and returns

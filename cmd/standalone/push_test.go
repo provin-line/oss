@@ -34,7 +34,11 @@ func TestPushIngest_Boot(t *testing.T) {
 	pipeCfg := dpPipelineCfg()
 	pipeCfg.Loops[0].Source.PushIngress = true
 
-	dp, err := pipelineruntime.Build(context.Background(), chainCfg, pipeCfg, dpKeyStore(t), pipelineruntime.Deps{})
+	rtCfg, err := runtimeConfigFrom(chainCfg, pipeCfg, "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
