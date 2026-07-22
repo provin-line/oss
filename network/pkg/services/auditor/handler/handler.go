@@ -42,16 +42,23 @@ const (
 	listingConsumedSources = "dplaax.audit.v1.AuditService.GetConsumedSources"
 )
 
-// EvidenceRegistrar is the consumer-side view of the evidence-registration
-// service the handler depends on (defined here to keep the dependency
-// pointing inward). *auditor.EvidenceService satisfies it. headVariantID is
-// the wire variant id RegisterEvidenceRequest.head_variant_address carries
-// (P1-A) — auditor.EvidenceService.Register resolves it to a body address
-// internally; this handler never sees that address. registrantDID is the
-// wireauth-proven caller DID (the proof's SignerDID, verified by h.v before
-// Register is ever called) that gets recorded with the receipt.
+// EvidenceRegistrar is the consumer-side view of the auditor write-path
+// service the handler depends on for BOTH evidence-write RPCs (defined here
+// to keep the dependency pointing inward). *auditor.EvidenceService
+// satisfies it: Register is RegisterEvidence's delegate (receipt-bearing —
+// see its own doc for the consumed-set receipt it writes) and RegisterHead
+// is RegisterAuditHead's delegate (receiptless — Register minus the receipt
+// leg, sharing the same admission gate and queue; see
+// EvidenceService.RegisterHead's own doc). headVariantID in both is the
+// wire variant id the respective request's head_variant_address field
+// carries (P1-A) — the service resolves it to a body address internally;
+// this handler never sees that address. registrantDID (Register only) is
+// the wireauth-proven caller DID (the proof's SignerDID, verified by h.v
+// before Register is ever called) that gets recorded with the receipt;
+// RegisterHead records no registrant — it writes no receipt to attribute.
 type EvidenceRegistrar interface {
 	Register(ctx context.Context, headVariantID string, consumed []string, registrantDID string) error
+	RegisterHead(ctx context.Context, headVariantID string) error
 }
 
 // Verifier is the wireauth verification seam (an interface so a spy can be
@@ -62,11 +69,11 @@ type Verifier interface {
 
 // Handler adapts a Service and an EvidenceRegistrar to the generated
 // AuditServiceHandler. Every method is implemented explicitly (no
-// Unimplemented embedding): RegisterEvidence verifies the caller's L2
-// wireauth proof in-band (mirrors payloadresolver/handler exactly) before
-// delegating to the evidence-registration service. RegisterAuditHead is
-// currently a completeness stub (see its own doc) — its proto surface
-// landed ahead of its domain wiring.
+// Unimplemented embedding): both RegisterEvidence and RegisterAuditHead
+// verify the caller's L2 wireauth proof in-band (mirrors
+// payloadresolver/handler exactly) before delegating to the write-path
+// service — RegisterEvidence to its receipt-bearing Register, RegisterAuditHead
+// to its receiptless RegisterHead.
 type Handler struct {
 	svc      Service
 	evidence EvidenceRegistrar
@@ -76,8 +83,9 @@ type Handler struct {
 var _ auditpbconnect.AuditServiceHandler = (*Handler)(nil)
 
 // New returns a Handler backed by svc (the read service), evidence (the
-// evidence-registration service RegisterEvidence delegates to), and v (the
-// wireauth verifier RegisterEvidence checks the caller's proof against).
+// write-path service both RegisterEvidence and RegisterAuditHead delegate
+// to), and v (the wireauth verifier both RPCs check the caller's proof
+// against).
 func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
 	return &Handler{svc: svc, evidence: evidence, v: v}
 }
@@ -111,13 +119,27 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil
 }
 
-// RegisterAuditHead is a completeness stub: the proto surface (Task 1) is
-// staged ahead of its domain wiring (Task 2 — the receiptless
-// AuditRegistrar.Add-backed registration service and its wireauth
-// verification). Task 2 replaces this with a real implementation mirroring
-// RegisterEvidence's proof-then-delegate shape, minus the consumed set.
+// RegisterAuditHead verifies the L2 wireauth proof over head_variant_address
+// — RegisterEvidence's exact proof-then-delegate shape, minus the consumed
+// set this RPC never carries (auditor.RegisterAuditHeadFields signs only
+// head_variant_address) — then delegates to the SAME write-path service's
+// receiptless RegisterHead (contrast RegisterEvidence, which delegates to
+// Register; see EvidenceRegistrar's own doc for how the two differ).
 func (h *Handler) RegisterAuditHead(ctx context.Context, req *connect.Request[auditpb.RegisterAuditHeadRequest]) (*connect.Response[auditpb.RegisterAuditHeadResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auditor: RegisterAuditHead not yet implemented"))
+	proof, err := decodeProof(req.Msg.GetAuthProof())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	fields := auditor.RegisterAuditHeadFields(req.Msg.GetHeadVariantAddress())
+	// No separate actor field, same posture as RegisterEvidence: the
+	// querying actor IS the proven signer, nil authorizer.
+	if err := h.v.Verify(ctx, auditor.OpRegisterAuditHead, fields, proof, nil); err != nil {
+		return nil, mapError(err)
+	}
+	if err := h.evidence.RegisterHead(ctx, req.Msg.GetHeadVariantAddress()); err != nil {
+		return nil, mapError(err)
+	}
+	return connect.NewResponse(&auditpb.RegisterAuditHeadResponse{}), nil
 }
 
 func (h *Handler) GetAuditStatus(ctx context.Context, req *connect.Request[auditpb.GetAuditStatusRequest]) (*connect.Response[auditpb.GetAuditStatusResponse], error) {

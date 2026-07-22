@@ -1,12 +1,15 @@
 // Package client is the production network client for AuditService's
-// evidence-write surface: it registers evidence (a head's wire variant id —
-// StoreVCResult.WireVariantID, not a body content address, see P1-A — plus
-// the source content addresses it consumed) with a single wireauth-signed
-// RegisterEvidence call.
+// write surface: RegisterEvidence registers evidence (a head's wire variant
+// id — StoreVCResult.WireVariantID, not a body content address, see P1-A —
+// plus the source content addresses it consumed) with a single
+// wireauth-signed call that writes an irreversible receipt; RegisterAuditHead
+// registers a head for audit the SAME way but WITHOUT a consumed-set receipt
+// (the wire form of the data plane's in-process AuditRegistrar.Add).
 //
-// It reproduces the EXACT signed view the handler verifies by calling the
-// SAME shared builder the handler does — auditor.OpRegisterEvidence and
-// auditor.RegisterEvidenceFields (network/pkg/services/auditor/wireview.go)
+// Both reproduce the EXACT signed view the handler verifies by calling the
+// SAME shared builders the handler does — auditor.OpRegisterEvidence /
+// auditor.RegisterEvidenceFields and auditor.OpRegisterAuditHead /
+// auditor.RegisterAuditHeadFields (network/pkg/services/auditor/wireview.go)
 // — so the two derivations cannot drift.
 //
 // It imports only the generated client, connect, and crypto — never
@@ -48,12 +51,13 @@ type Config struct {
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
 	HTTPClient connect.HTTPClient
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
-	// on every call. RegisterEvidence is mounted behind L1 authz IN ADDITION
-	// to the L2 wireauth proof (auditor.OpRegisterEvidence) this client
-	// already signs — L2 proves WHO is registering evidence, L1 decides
-	// whether the caller may reach the RPC at all, and this client
-	// previously had no way to present anything for the latter, so a real L1
-	// deployment rejected every call before wireauth was ever checked. Empty
+	// on every call. Both RegisterEvidence and RegisterAuditHead are mounted
+	// behind L1 authz IN ADDITION to the L2 wireauth proof
+	// (auditor.OpRegisterEvidence / auditor.OpRegisterAuditHead) this client
+	// already signs — L2 proves WHO is registering, L1 decides whether the
+	// caller may reach the RPC at all, and this client previously had no way
+	// to present anything for the latter, so a real L1 deployment rejected
+	// every call before wireauth was ever checked. Empty
 	// presents no header (an unauthenticated-at-L1 PoC node; the server-side
 	// interceptor decides whether that is acceptable) — same convention as
 	// internal/netcompose.BearerInterceptor, replicated here rather than
@@ -124,7 +128,7 @@ func (c *Client) RegisterEvidence(ctx context.Context, headVariantID string, con
 	if err != nil {
 		return fmt.Errorf("auditor/client: %w", err)
 	}
-	ap, err := c.proof(auditor.RegisterEvidenceFields(headVariantID, canonical))
+	ap, err := c.proof(auditor.OpRegisterEvidence, auditor.RegisterEvidenceFields(headVariantID, canonical))
 	if err != nil {
 		return err
 	}
@@ -136,18 +140,43 @@ func (c *Client) RegisterEvidence(ctx context.Context, headVariantID string, con
 	return err
 }
 
-// proof signs auditor.OpRegisterEvidence over fields as the configured
-// identity and converts the wireauth.Proof to the wire AuthProof (issued_at
-// as canonical second-precision UTC RFC 3339 — the exact form the handler's
-// strict codec accepts).
-func (c *Client) proof(fields map[string]any) (*chainpb.AuthProof, error) {
+// RegisterAuditHead registers headVariantID with the AuditService for async
+// audit WITHOUT a consumed-set receipt — the wire form of the data plane's
+// in-process AuditRegistrar.Add. headVariantID is the SAME kind of id
+// RegisterEvidence takes (a prior StoreVC call's StoreVCResult.WireVariantID,
+// never a body address); the registry resolves it server-side to prove
+// admission and enqueue by the body address it derives (see
+// AuditServiceHandler.RegisterAuditHead's own wire doc for exactly when to
+// use this RPC instead of RegisterEvidence). It signs
+// auditor.OpRegisterAuditHead over auditor.RegisterAuditHeadFields — the
+// exact bytes the handler reconstructs to verify — and returns any Connect
+// error as-is (no swallowing), the same convention RegisterEvidence follows.
+func (c *Client) RegisterAuditHead(ctx context.Context, headVariantID string) error {
+	ap, err := c.proof(auditor.OpRegisterAuditHead, auditor.RegisterAuditHeadFields(headVariantID))
+	if err != nil {
+		return err
+	}
+	_, err = c.svc.RegisterAuditHead(ctx, connect.NewRequest(&auditpb.RegisterAuditHeadRequest{
+		HeadVariantAddress: headVariantID,
+		AuthProof:          ap,
+	}))
+	return err
+}
+
+// proof signs op over fields as the configured identity and converts the
+// wireauth.Proof to the wire AuthProof (issued_at as canonical
+// second-precision UTC RFC 3339 — the exact form the handler's strict codec
+// accepts). Shared by every write RPC this client signs (RegisterEvidence,
+// RegisterAuditHead) — op and fields are the only things that vary between
+// them.
+func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
 	nonce, err := wireauth.NewNonce()
 	if err != nil {
 		return nil, fmt.Errorf("auditor/client: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, auditor.OpRegisterEvidence, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("auditor/client: sign %s: %w", auditor.OpRegisterEvidence, err)
+		return nil, fmt.Errorf("auditor/client: sign %s: %w", op, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,

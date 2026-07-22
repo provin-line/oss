@@ -410,13 +410,20 @@ func TestGetConsumedSources_PageAndErrors(t *testing.T) {
 // --- RegisterEvidence ---
 
 // fakeEvidence is a spy handler.EvidenceRegistrar: it records the (headVariantAddr,
-// consumed, registrantDID) Register was called with and returns a preset error.
+// consumed, registrantDID) Register was called with, and separately the headVariantAddr
+// RegisterHead was called with — kept as distinct fields so a RegisterEvidence test and a
+// RegisterAuditHead test never contaminate each other's spy state — and returns a preset
+// error for each.
 type fakeEvidence struct {
 	called        bool
 	gotHead       string
 	gotCons       []string
 	gotRegistrant string
 	err           error
+
+	headCalled     bool
+	gotHeadVariant string
+	headErr        error
 }
 
 func (f *fakeEvidence) Register(_ context.Context, headVariantAddr string, consumed []string, registrantDID string) error {
@@ -425,6 +432,12 @@ func (f *fakeEvidence) Register(_ context.Context, headVariantAddr string, consu
 	f.gotCons = append([]string(nil), consumed...)
 	f.gotRegistrant = registrantDID
 	return f.err
+}
+
+func (f *fakeEvidence) RegisterHead(_ context.Context, headVariantAddr string) error {
+	f.headCalled = true
+	f.gotHeadVariant = headVariantAddr
+	return f.headErr
 }
 
 // spyVerifier records the (op, fields, proof) RegisterEvidence passes and
@@ -609,6 +622,142 @@ func TestRegisterEvidence_DomainErrorMapping(t *testing.T) {
 				AuthProof:               evidenceProof("did:dplaax:reg:org:pipeline"),
 			}
 			_, err := h.RegisterEvidence(context.Background(), connect.NewRequest(req))
+			if connect.CodeOf(err) != c.want {
+				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
+			}
+		})
+	}
+}
+
+// --- RegisterAuditHead ---
+
+const auditHeadIssuedAt = "2026-07-19T00:00:00Z"
+
+func auditHeadProof(signer string) *chainpb.AuthProof {
+	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: auditHeadIssuedAt, Signature: []byte("sig")}
+}
+
+// TestRegisterAuditHead_VerifyContract pins the wireauth view: the op name is
+// the RPC's full namespaced name, the ONLY signed field is
+// head_variant_address (no consumed set — RegisterAuditHead never carries
+// one, contrast RegisterEvidence's two-key view), and the domain call
+// (evidence.RegisterHead, NOT Register) only happens after Verify succeeds.
+func TestRegisterAuditHead_VerifyContract(t *testing.T) {
+	v := &spyVerifier{}
+	ev := &fakeEvidence{}
+	h := handler.New(nil, ev, v)
+
+	head := headAddr("a")
+	req := &auditpb.RegisterAuditHeadRequest{
+		HeadVariantAddress: head,
+		AuthProof:          auditHeadProof("did:dplaax:reg:org:pipeline"),
+	}
+	_, err := h.RegisterAuditHead(context.Background(), connect.NewRequest(req))
+	if err != nil {
+		t.Fatalf("RegisterAuditHead: %v", err)
+	}
+	if !v.called || v.gotOp != "dplaax.audit.v1.AuditService/RegisterAuditHead" {
+		t.Errorf("verify op = %q, called=%v", v.gotOp, v.called)
+	}
+	if v.gotFields["head_variant_address"] != head {
+		t.Errorf("fields[head_variant_address] = %v, want %q", v.gotFields["head_variant_address"], head)
+	}
+	if len(v.gotFields) != 1 {
+		t.Errorf("fields = %+v, want exactly 1 key (no consumed set)", v.gotFields)
+	}
+	if v.gotProof.SignerDID != "did:dplaax:reg:org:pipeline" || v.gotProof.Nonce != "n1" {
+		t.Errorf("proof = %+v", v.gotProof)
+	}
+	if !ev.headCalled || ev.gotHeadVariant != head {
+		t.Errorf("evidence.RegisterHead called=%v head=%q, want called with %q", ev.headCalled, ev.gotHeadVariant, head)
+	}
+	// The RECEIPT-bearing Register must never be reached by this RPC.
+	if ev.called {
+		t.Error("evidence.Register called by RegisterAuditHead — it must delegate to RegisterHead only")
+	}
+}
+
+// TestRegisterAuditHead_MissingAuthProof rejects a request with no auth_proof
+// as InvalidArgument, before Verify (and the domain) are ever called.
+func TestRegisterAuditHead_MissingAuthProof(t *testing.T) {
+	v := &spyVerifier{}
+	ev := &fakeEvidence{}
+	h := handler.New(nil, ev, v)
+	req := &auditpb.RegisterAuditHeadRequest{HeadVariantAddress: headAddr("a")}
+	_, err := h.RegisterAuditHead(context.Background(), connect.NewRequest(req))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", connect.CodeOf(err))
+	}
+	if v.called {
+		t.Error("Verify called with no auth_proof")
+	}
+	if ev.headCalled {
+		t.Error("evidence.RegisterHead called despite missing auth_proof")
+	}
+}
+
+// TestRegisterAuditHead_VerifyFailure_Mapped mirrors
+// TestRegisterEvidence_VerifyFailure_Mapped: a wireauth failure maps to its
+// Connect code and the domain (evidence.RegisterHead) is never reached.
+func TestRegisterAuditHead_VerifyFailure_Mapped(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want connect.Code
+	}{
+		{"signature invalid", wireauth.ErrSignatureInvalid, connect.CodeUnauthenticated},
+		{"replay", wireauth.ErrReplay, connect.CodeUnauthenticated},
+		{"key resolution", wireauth.ErrKeyResolution, connect.CodeUnauthenticated},
+		{"expired", wireauth.ErrExpired, connect.CodeUnauthenticated},
+		{"resolver unavailable", wireauth.ErrResolverUnavailable, connect.CodeUnavailable},
+		{"malformed proof", wireauth.ErrMalformedProof, connect.CodeInvalidArgument},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := &spyVerifier{err: c.err}
+			ev := &fakeEvidence{}
+			h := handler.New(nil, ev, v)
+			req := &auditpb.RegisterAuditHeadRequest{
+				HeadVariantAddress: headAddr("a"),
+				AuthProof:          auditHeadProof("did:dplaax:reg:org:pipeline"),
+			}
+			_, err := h.RegisterAuditHead(context.Background(), connect.NewRequest(req))
+			if connect.CodeOf(err) != c.want {
+				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
+			}
+			if ev.headCalled {
+				t.Error("evidence.RegisterHead called despite a Verify failure")
+			}
+		})
+	}
+}
+
+// TestRegisterAuditHead_DomainErrorMapping proves the service's sentinel
+// errors map to the RPC's frozen contract: an unadmitted head →
+// FailedPrecondition, invalid argument → InvalidArgument, and an
+// unrecognized error → Internal. No ErrReceiptConflict case here (unlike
+// RegisterEvidence's own domain-error-mapping test): RegisterHead never
+// writes a receipt, so that sentinel can never surface from this RPC.
+func TestRegisterAuditHead_DomainErrorMapping(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want connect.Code
+	}{
+		{"unknown head", fmt.Errorf("wrap: %w", auditor.ErrHeadNotAdmitted), connect.CodeFailedPrecondition},
+		{"invalid argument", fmt.Errorf("wrap: %w", auditor.ErrInvalidArgument), connect.CodeInvalidArgument},
+		{"unknown", errors.New("boom"), connect.CodeInternal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := &spyVerifier{}
+			ev := &fakeEvidence{headErr: c.err}
+			h := handler.New(nil, ev, v)
+			req := &auditpb.RegisterAuditHeadRequest{
+				HeadVariantAddress: headAddr("a"),
+				AuthProof:          auditHeadProof("did:dplaax:reg:org:pipeline"),
+			}
+			_, err := h.RegisterAuditHead(context.Background(), connect.NewRequest(req))
 			if connect.CodeOf(err) != c.want {
 				t.Errorf("code = %v, want %v", connect.CodeOf(err), c.want)
 			}

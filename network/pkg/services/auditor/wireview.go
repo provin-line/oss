@@ -53,3 +53,31 @@ func RegisterEvidenceFields(headVariantAddr string, canonicalConsumed []string) 
 		"consumed_source_addresses": strings.Join(canonicalConsumed, registerEvidenceJoinSeparator),
 	}
 }
+
+// OpRegisterAuditHead is the wireauth op name for the RegisterAuditHead
+// RPC — mirrors OpRegisterEvidence's exact convention (the full namespaced
+// RPC identity, since RegisterAuditHead is reached through the SAME
+// L1-authorized AuditService mux): it MUST match exactly between the
+// client's signed view and the handler's verification view.
+//
+// Exported for the same reason OpRegisterEvidence is: the auditclient
+// package signs the SAME op this package's handler verifies — living in one
+// place is what keeps the two from ever drifting.
+const OpRegisterAuditHead = "dplaax.audit.v1.AuditService/RegisterAuditHead"
+
+// RegisterAuditHeadFields builds the exact wireauth signed-view fields for
+// one RegisterAuditHead call: head_variant_address verbatim — mirrors
+// RegisterEvidenceFields' style and doc, minus the consumed-set join
+// RegisterEvidenceFields also carries: RegisterAuditHead never carries a
+// consumed set (it writes no receipt at all, see
+// EvidenceService.RegisterHead's own doc), so there is nothing else to fold
+// into the signed view.
+//
+// Both the handler (verifying) and the auditclient package (signing) call
+// this SAME builder — the one place that keeps the two derivations from
+// drifting.
+func RegisterAuditHeadFields(headVariantAddr string) map[string]any {
+	return map[string]any{
+		"head_variant_address": headVariantAddr,
+	}
+}

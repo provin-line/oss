@@ -294,3 +294,109 @@ func TestEvidenceService_MalformedConsumedMember_InvalidArgument(t *testing.T) {
 		})
 	}
 }
+
+// --- RegisterHead ---
+
+// TestEvidenceService_RegisterHead_AdmittedHead_EnqueuedByBodyAddress_ReceiptsUntouched
+// proves RegisterHead's two defining properties vs Register: it shares the
+// SAME admission gate and body-address keying (queue.Add is keyed by the
+// RESOLVED BODY address, never the variant id), and it writes NO receipt at
+// all — the distinguishing property (a head registered here surfaces via
+// GetAuditStatus but never via GetConsumedSources).
+func TestEvidenceService_RegisterHead_AdmittedHead_EnqueuedByBodyAddress_ReceiptsUntouched(t *testing.T) {
+	receipts := &evidenceFakeReceipts{}
+	queue := &evidenceFakeQueue{}
+	head := variantAddr("a")
+	body := addr("h")
+	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
+
+	if err := svc.RegisterHead(context.Background(), head); err != nil {
+		t.Fatalf("RegisterHead: %v", err)
+	}
+	if len(queue.calls) != 1 || queue.calls[0] != body {
+		t.Fatalf("queue.Add calls = %v, want exactly [%q] (the BODY address, not the variant id %q)", queue.calls, body, head)
+	}
+	if len(receipts.calls) != 0 {
+		t.Errorf("receipts.Put called %d times, want 0 (RegisterHead writes no receipt)", len(receipts.calls))
+	}
+}
+
+// TestEvidenceService_RegisterHead_InvalidHeadFormat_InvalidArgument proves a
+// malformed head id is rejected before either the admission check or the
+// queue runs.
+func TestEvidenceService_RegisterHead_InvalidHeadFormat_InvalidArgument(t *testing.T) {
+	receipts := &evidenceFakeReceipts{}
+	queue := &evidenceFakeQueue{}
+	admitCalled := false
+	admitted := func(context.Context, string) (string, bool, error) { admitCalled = true; return "", true, nil }
+	svc := auditor.NewEvidenceService(receipts, queue, admitted)
+
+	err := svc.RegisterHead(context.Background(), "not-a-content-address")
+	if !errors.Is(err, auditor.ErrInvalidArgument) {
+		t.Fatalf("RegisterHead: err = %v, want ErrInvalidArgument", err)
+	}
+	if admitCalled {
+		t.Error("admission check called despite a malformed head id")
+	}
+	if len(queue.calls) != 0 {
+		t.Error("queue touched despite a malformed head id")
+	}
+}
+
+// TestEvidenceService_RegisterHead_UnknownHead_NotAdmitted proves the
+// arbitrary-hash amplification guard (D1) holds for RegisterHead too: a head
+// not admitted into the local VC store is rejected before the queue is
+// touched.
+func TestEvidenceService_RegisterHead_UnknownHead_NotAdmitted(t *testing.T) {
+	receipts := &evidenceFakeReceipts{}
+	queue := &evidenceFakeQueue{}
+	svc := auditor.NewEvidenceService(receipts, queue, admitNone)
+
+	err := svc.RegisterHead(context.Background(), variantAddr("a"))
+	if !errors.Is(err, auditor.ErrHeadNotAdmitted) {
+		t.Fatalf("RegisterHead: err = %v, want ErrHeadNotAdmitted", err)
+	}
+	if len(queue.calls) != 0 {
+		t.Errorf("queue.Add called %d times, want 0", len(queue.calls))
+	}
+}
+
+// TestEvidenceService_RegisterHead_DuplicateRegistration_Idempotent pins the
+// Task-1-discovered AuditQueue.Add idempotency semantic at the SERVICE level
+// (not just the queue's own unit tests, queue_test.go): re-registering a
+// CURRENTLY QUEUED head is a no-op that preserves the existing attempt count
+// and does not duplicate the entry — RegisterHead must not defeat this by,
+// e.g., removing and re-adding. Uses a REAL auditor.MemQueue (not the spy
+// above) since only a real AuditQueue implementation actually carries the
+// Attempts state this test observes.
+func TestEvidenceService_RegisterHead_DuplicateRegistration_Idempotent(t *testing.T) {
+	receipts := &evidenceFakeReceipts{}
+	queue := auditor.NewMemQueue()
+	head, body := variantAddr("a"), addr("h")
+	svc := auditor.NewEvidenceService(receipts, queue, admittedMap(map[string]string{head: body}))
+
+	if err := svc.RegisterHead(context.Background(), head); err != nil {
+		t.Fatalf("first RegisterHead: %v", err)
+	}
+	// Simulate the runner having attempted the audit once before the caller
+	// re-registers the same, still-queued head.
+	if err := queue.IncrementAttempt(body); err != nil {
+		t.Fatalf("IncrementAttempt: %v", err)
+	}
+	if err := svc.RegisterHead(context.Background(), head); err != nil {
+		t.Fatalf("duplicate RegisterHead: %v", err)
+	}
+	cands, err := queue.ListNewest(10)
+	if err != nil {
+		t.Fatalf("ListNewest: %v", err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("queue has %d candidates, want exactly 1 (re-add of a currently-queued head must not duplicate)", len(cands))
+	}
+	if cands[0].HeadHash != body {
+		t.Errorf("queued head = %q, want the BODY address %q", cands[0].HeadHash, body)
+	}
+	if cands[0].Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1 (duplicate registration must not reset the attempt counter)", cands[0].Attempts)
+	}
+}
