@@ -433,6 +433,17 @@ closure required, now met with executed evidence rather than review.
   boot-time coherence check now requires `max-batch-bytes >=
   max-credential-size`: a sink-receipt record can carry a full credential, so
   a batch cap below the credential cap could never ship one, even alone.
+- `pipeline/runtime`: the network-agnostic data-plane assembly (source/sink/
+  chained loop wiring, keystore-backed signing, ingress storage) both
+  deployment roots compose. AGENTS.md layer rule 2 (`network/` and
+  `pipeline/` never import each other) is now compiler-enforced across the
+  whole `pipeline/` tree and pinned by a depsguard test
+  (`pipeline/runtime/depsguard_test.go`, mirroring `cmd/network`'s).
+  `cmd/standalone` composes it today, through in-process seams;
+  `cmd/pipeline` — the data-plane-only binary — arrives next.
+- `wireprofile`: the shared wire-convention leaf (`ByReferenceSubjectPrefix`)
+  that lets `network/` and `pipeline/` agree on wire constants without
+  importing each other.
 
 ### Changed
 
