@@ -3,11 +3,17 @@ package main
 // /readyz is a deliberately small, HONEST readiness surface (task brief:
 // "a cheap probe to the registry base URL; keep it honest and simple") — NOT
 // a port of internal/netcompose's readiness.go (this binary must not import
-// netcompose): no per-check pluggable registry, no PDP probing (cmd/pipeline
-// mounts no PDP-gated ConnectRPC services of its own to be ready FOR), just
-// the two dependencies this binary actually has: the shared NATS connection
-// every loop rides, and the one registry base URL every wire Dep (VC store,
-// audit, schema, payload) is pointed at.
+// netcompose): no per-check pluggable registry, just the dependencies this
+// binary actually has: the shared NATS connection every loop rides, the one
+// registry base URL every wire Dep (VC store, audit, schema, payload) is
+// pointed at, and — as of the branch review's P2 Codex fix, ADDED, not
+// ported — the external PDP, but ONLY when relevant: this binary still
+// mounts no PDP-gated ConnectRPC services of its own, but a push-ingress
+// route IS PDP-guarded (push.go's pushRoutes calls verifier.Verify), so
+// pdpCheck (below, main.go's buildHandler) is added exactly when at least
+// one loop mounts a push route AND the configured backend is external —
+// never unconditionally the way cmd/network/cmd/standalone add it (they
+// always mount PDP-gated RPC surfaces, so it is always relevant there).
 //
 // A tiny TTL cache still guards against turning an unauthenticated /readyz
 // flood into an outbound registry-probe amplifier (the same concern
@@ -17,6 +23,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +31,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/provin-line/oss/network/pkg/auth"
 )
 
 // readinessCheck is one named dependency probe.
@@ -78,6 +87,66 @@ func registryCheck(client *http.Client, baseURL string) readinessCheck {
 			return nil
 		},
 	}
+}
+
+// pdpCheck probes the configured external PDP for REACHABILITY — mirrors
+// internal/netcompose.PDPCheck EXACTLY (this binary must not import
+// netcompose; kept in lockstep by inspection, same convention as wiring.go's
+// newDIDResolution/registryBaseURL): an HTTP round-trip to its base URL that
+// yields any HTTP response counts as reachable (a 404 from a PDP that mounts
+// no root route still proves the dependency is there) — whether the PDP
+// would AUTHORIZE a given request is L1's per-RPC business, not readiness.
+// Returns (check, true) for an external backend (o3co/opa/cedar); (zero,
+// false) for static (nothing to probe — the decision is in-process) or an
+// unrecognized backend.
+//
+// Precondition: cfg is post-LoadAuthConfig (validated/normalized) — the ""->
+// o3co default is applied there, so an empty Backend never reaches this
+// switch from production wiring (main.go always passes authCfg straight from
+// auth.LoadAuthConfig).
+func pdpCheck(cfg *auth.AuthConfig) (readinessCheck, bool) {
+	var base string
+	switch cfg.Backend {
+	case auth.BackendO3co:
+		base = cfg.PolicyVerifierURL
+	case auth.BackendOPA:
+		base = cfg.OPA.BaseURL
+	case auth.BackendCedar:
+		base = cfg.Cedar.BaseURL
+	default:
+		return readinessCheck{}, false
+	}
+	client := &http.Client{
+		// Reachability needs only the FIRST response; following redirects
+		// could walk off-host.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	} // per-request ctx carries the timeout
+	return readinessCheck{
+		name: "pdp",
+		check: func(ctx context.Context) error {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil)
+			if err != nil {
+				return fmt.Errorf("pdp probe: %w", err)
+			}
+			res, err := client.Do(req)
+			if err != nil {
+				// client.Do returns a *url.Error whose message embeds the FULL
+				// request URL (path + query). Unwrap to its inner cause so the
+				// log carries only scheme://host (see hostOnly) plus the reason.
+				cause := err
+				var ue *url.Error
+				if errors.As(err, &ue) {
+					cause = ue.Err
+				}
+				return fmt.Errorf("pdp unreachable at %s: %w", hostOnly(base), cause)
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 512))
+			_ = res.Body.Close()
+			return nil
+		},
+	}, true
 }
 
 // hostOnly reduces a URL to scheme://host[:port] for logging — never the

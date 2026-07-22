@@ -410,6 +410,18 @@ func (a wireAuditRegistrar) Add(head pipelineruntime.StoredHead) error {
 // extra network round trip (aggregate self-audit registration only — a
 // low-frequency, per-window-tick event, not per-credential-ingest) for a
 // stateless, race-free adapter.
+//
+// NOTE (branch review, minor): pipeline/runtime's emissionRegistrar.
+// RegisterEmission calls this Put (RegisterEvidence, over the wire) and then
+// deps.AuditQueue.Add (wireAuditRegistrar, RegisterAuditHead, ALSO over the
+// wire) for the SAME emitted head — both RPCs enqueue that head into the
+// SAME server-side audit queue (network/pkg/services/auditor/evidence.go
+// calls queue.Add from both the RegisterEvidence and RegisterAuditHead
+// handlers). This double-enqueue is harmless (AuditQueue.Add is idempotent
+// and preserves an existing entry's Attempts — see that package's own doc)
+// and is a faithful port of the in-process topology's identical double-call
+// shape; unlike there, though, each call here costs its OWN separate wire
+// RPC rather than two cheap in-process function calls.
 type wireReceiptWriter struct {
 	resolver *vcresolverclient.Resolver
 	factory  *auditClientFactory
@@ -505,17 +517,66 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 // client signing as the node identity (For(nodeDID)), sharing this SAME
 // cache rather than needing a second factory.
 type payloadClientFactory struct {
-	signer        crypto.Signer
-	storeEndpoint string
-	bearer        string
-	httpClient    connect.HTTPClient
+	signer          crypto.Signer
+	storeEndpoint   string
+	bearer          string
+	httpClient      connect.HTTPClient
+	retainChunkSize int
 
 	mu      sync.Mutex
 	clients map[string]*payloadclient.Resolver
 }
 
-func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, bearer string, httpClient connect.HTTPClient) *payloadClientFactory {
-	return &payloadClientFactory{signer: signer, storeEndpoint: storeEndpoint, bearer: bearer, httpClient: httpClient, clients: map[string]*payloadclient.Resolver{}}
+// retainFrameOverhead is the bytes ON TOP OF the raw chunk payload one
+// RetainPayload chunk frame costs on the wire — the protobuf oneof
+// field-tag + varint length-delimiter (api/protobuf/dplaax/payload/v1/
+// payload.proto's RetainPayloadRequest.chunk, field 2) plus the Connect
+// streaming envelope's own per-message frame header — bytes the server's
+// connect.WithReadMaxBytes(maxRetainChunkSize) mount counts against the RAW
+// request body (internal/netcompose/server.go's retainChunkCap: "connect.
+// WithReadMaxBytes bounds the RAW request body"), never subtracted from
+// maxRetainChunkSize's own accounting. Generous relative to the actual
+// ~9-byte cost so a configured cap at a round number never trips
+// ResourceExhausted on its largest legitimate chunk.
+const retainFrameOverhead = 64
+
+// retainChunkSizeFor derives payloadClientFactory's outbound Retain chunk
+// size from pipeCfg.MaxRetainChunkSize (P2 Codex fix, branch review: the
+// payload client previously always used payloadclient.DefaultRetainChunkSize
+// — 256 KiB — regardless of config, so a registry configured with a SMALLER
+// max-retain-chunk-size rejected every frame at its connect.WithReadMaxBytes
+// mount, aborting emission via dataplane.go's payloadWiring, D-6).
+// Subtracts retainFrameOverhead so the actual over-the-wire message (chunk
+// bytes + protobuf/Connect framing) never exceeds the server's configured
+// cap, floored at 1 so a pathologically tiny configured cap still produces a
+// valid (if inefficient) chunk size rather than silently falling through to
+// <=0 and re-adopting the 256 KiB default (defeating a deliberately-small
+// operator quota). A non-positive maxRetainChunkSize returns 0 unchanged —
+// payloadclient.New's own <=0 → DefaultRetainChunkSize semantics apply, the
+// same as an unconfigured Config.RetainChunkSize; pipelineconfig.
+// LoadPipelineConfig already fails startup on a non-positive value, so this
+// path is defensive-only in production (relevant only to a directly
+// constructed test factory).
+func retainChunkSizeFor(maxRetainChunkSize int) int {
+	if maxRetainChunkSize <= 0 {
+		return 0
+	}
+	size := maxRetainChunkSize - retainFrameOverhead
+	if size < 1 {
+		size = 1
+	}
+	return size
+}
+
+func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, bearer string, httpClient connect.HTTPClient, maxRetainChunkSize int) *payloadClientFactory {
+	return &payloadClientFactory{
+		signer:          signer,
+		storeEndpoint:   storeEndpoint,
+		bearer:          bearer,
+		httpClient:      httpClient,
+		retainChunkSize: retainChunkSizeFor(maxRetainChunkSize),
+		clients:         map[string]*payloadclient.Resolver{},
+	}
 }
 
 // For returns the cached client signing as signerDID, building and caching
@@ -527,11 +588,12 @@ func (f *payloadClientFactory) For(signerDID string) *payloadclient.Resolver {
 		return c
 	}
 	c := payloadclient.New(payloadclient.Config{
-		Signer:        f.signer,
-		SignerDID:     signerDID,
-		HTTPClient:    f.httpClient,
-		StoreEndpoint: f.storeEndpoint,
-		Bearer:        f.bearer,
+		Signer:          f.signer,
+		SignerDID:       signerDID,
+		HTTPClient:      f.httpClient,
+		StoreEndpoint:   f.storeEndpoint,
+		Bearer:          f.bearer,
+		RetainChunkSize: f.retainChunkSize,
 	})
 	f.clients[signerDID] = c
 	return c
@@ -580,7 +642,7 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		Bearer:     pipeCfg.VCStoreBearer,
 	})
 
-	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient)
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient, pipeCfg.MaxRetainChunkSize)
 
 	return pipelineruntime.Deps{
 		Resolver:            didResolver,
@@ -624,6 +686,61 @@ func preflightPayloadRetainKeys(keyStore crypto.Signer, loops []pipelineconfig.L
 				return fmt.Errorf("producing loop %q: no signing key for output subject %s — by-reference retain signs as the owner", ref.Name, ref.OutputSubject)
 			}
 			return fmt.Errorf("producing loop %q: checking signing key for output subject %s: %w", ref.Name, ref.OutputSubject, err)
+		}
+	}
+	return nil
+}
+
+// preflightWireOnlySignerKeys extends the D9 boot preflight (above) to the
+// OTHER two wire-only signing identities this binary needs before it ever
+// runs a loop (branch review, Important finding):
+//
+//  1. nodeDID — the identity wireAuditRegistrar.Add signs RegisterAuditHead
+//     as (buildDeps: AuditQueue: wireAuditRegistrar{client: factory.
+//     For(nodeDID)}) and PayloadResolver's ResolvePayload identity
+//     (payloadFactory.For(nodeDID)). Previously this surfaced only at the
+//     FIRST consuming loop's ingress consume (the first RegisterAuditHead
+//     call) or the first by-reference resolve — well after boot.
+//  2. every DURABLE custody log's checkpoint-signer identity (custodyLogs —
+//     dp.CustodyLogs(), the SAME issuer/receipt-issuer DID the mirror
+//     shipper signs MirrorLogSegment as, tlog-custody spec D-T3). filelog's
+//     own arming does NOT probe the key at boot: WithCheckpointSigner
+//     (tlog/filelog/filelog.go) only STORES the CheckpointSigner value on
+//     the Log struct — it calls Sign nowhere in filelog.New — so a missing
+//     key here previously surfaced only at that log's FIRST Checkpoint call
+//     (the owning shipper's first ship attempt), as a non-fatal logged
+//     shipper error (main.go's run/drainShippers never treat a shipper
+//     error as fatal), not a boot failure.
+//
+// This must run AFTER pipelineruntime.Build (unlike preflightPayloadRetainKeys,
+// which needs only pipeCfg.Loops, computable BEFORE Build): a custody log's
+// checkpoint-signer identity is only fully resolved once tlog construction
+// actually runs, and dp.CustodyLogs() is its one authoritative source — a
+// preflight that instead re-derived the (source/chained/aggregate issuer,
+// sink receipt-issuer) mapping directly from pipeCfg.Loops would duplicate
+// dataplane.go's own internal logic and could silently drift from it.
+// nodeDID is checked once even if it also happens to equal a custody log's
+// signer (no duplicate probe/error for the same identity).
+func preflightWireOnlySignerKeys(keyStore crypto.Signer, nodeDID string, custodyLogs []pipelineruntime.CustodyLog) error {
+	checked := make(map[string]bool, len(custodyLogs)+1)
+	if _, err := keyStore.Sign(nodeDID, string(keystore.KeyIDAuth), preflightProbeData); err != nil {
+		if errors.Is(err, keystore.ErrNotFound) {
+			return fmt.Errorf("node identity %s: no signing key — RegisterAuditHead and PayloadResolver's ResolvePayload sign as this identity", nodeDID)
+		}
+		return fmt.Errorf("node identity %s: checking signing key: %w", nodeDID, err)
+	}
+	checked[nodeDID] = true
+	for _, cl := range custodyLogs {
+		did := cl.Signer.DID
+		if checked[did] {
+			continue
+		}
+		checked[did] = true
+		if _, err := keyStore.Sign(did, string(keystore.KeyIDAuth), preflightProbeData); err != nil {
+			if errors.Is(err, keystore.ErrNotFound) {
+				return fmt.Errorf("custody log %q: no signing key for checkpoint signer %s — the mirror shipper signs MirrorLogSegment as this identity", cl.LogID, did)
+			}
+			return fmt.Errorf("custody log %q: checking signing key for checkpoint signer %s: %w", cl.LogID, did, err)
 		}
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
+	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
@@ -111,7 +112,11 @@ const testLoopName = "src"
 // in cmd/standalone and TestPipeline_ActualBoot already cover the wire path
 // end-to-end). natsHealthy is nil, mirroring the zero-loop-runtime case
 // buildHandler's own doc documents — /readyz is not exercised by any test in
-// this file, so its absence has no effect here.
+// this file, so its absence has no effect here. authCfg is a zero-value
+// &auth.AuthConfig{} (empty Backend, no backend case matches) and
+// hasPushIngress is true (a push binding IS mounted below), but pdpCheck
+// still returns ok=false for the empty Backend, so no PDP check is added
+// regardless — readiness.go's own tests cover the PDP-gating logic directly.
 func newTestPipelineHandler(t *testing.T) http.Handler {
 	t.Helper()
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
@@ -122,7 +127,7 @@ func newTestPipelineHandler(t *testing.T) http.Handler {
 		binding := pipelineruntime.PushBinding{Name: testLoopName, Publisher: fakePublisher{}, Ready: ready}
 		return mountPushRoutes(mux, []pipelineruntime.PushBinding{binding}, verifier, pipeCfg.MaxPushBodySize)
 	}
-	h, err := buildHandler(guard, pipeCfg, mountIngest, nil)
+	h, err := buildHandler(guard, pipeCfg, &auth.AuthConfig{}, mountIngest, nil, true)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}

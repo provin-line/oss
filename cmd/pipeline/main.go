@@ -189,6 +189,20 @@ func main() {
 		log.Fatalf("pipeline: build data plane: %v", err)
 	}
 
+	// Boot guard 6 (fail-closed, named, D9 extension — branch review,
+	// Important finding): nodeDID's own signing key (RegisterAuditHead /
+	// PayloadResolver) and every durable custody log's checkpoint-signer key
+	// — both previously discoverable only at first use, since filelog's own
+	// checkpoint arming never probes the key at construction (see
+	// preflightWireOnlySignerKeys' own doc, wiring.go, for why this guard
+	// must run AFTER Build, unlike guard 5 above). dp.Close() releases the
+	// NATS connection and log handles Build already opened before this
+	// binary exits — nothing has run yet (dp.Run has not been called).
+	if err := preflightWireOnlySignerKeys(keyStore, nodeDID, dp.CustodyLogs()); err != nil {
+		_ = dp.Close()
+		log.Fatalf("pipeline: %v", err)
+	}
+
 	// Mirror shippers (D-T6): one per durable custody log, signed as that
 	// log's own checkpoint-signer identity.
 	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
@@ -200,9 +214,13 @@ func main() {
 	// EmitHealth reporters (Task 10 D4): one per by-reference publisher
 	// (every producing loop — buildDeps always wires a PayloadStore, so
 	// every producing loop dual-emits, D-6), signed/reported as that loop's
-	// pipeline DID.
+	// pipeline DID, each bound to ITS OWN producer's CURRENT stripped-publish
+	// health (P1 fix, branch review — every report used to hardcode
+	// healthy=true regardless of the producer's actual state; see
+	// emitHealthReporterSpecsFor's doc).
 	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
-	reporters := buildEmitHealthReporters(producingLoopPublishers(pipeCfg.Loops), reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
+	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
+	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.PushBindings(), verifier, pipeCfg.MaxPushBodySize)
@@ -211,7 +229,7 @@ func main() {
 	if dp.Conn() != nil {
 		natsHealthy = dp.Conn().Healthy
 	}
-	handler, err := buildHandler(guard, pipeCfg, mountIngest, natsHealthy)
+	handler, err := buildHandler(guard, pipeCfg, authCfg, mountIngest, natsHealthy, len(dp.PushBindings()) > 0)
 	if err != nil {
 		log.Fatalf("pipeline: build http handler: %v", err)
 	}
@@ -234,13 +252,26 @@ func main() {
 }
 
 // buildHandler mounts this binary's minimal HTTP surface: /healthz
-// (liveness), /readyz (NATS + registry reachability), and the configured
-// /ingest/<loop>/... push routes via mountIngest. No ConnectRPC services of
-// its own — this binary is a wire CLIENT to the registry, never a server for
-// it — and no /metrics (see the package doc). natsHealthy is nil for a
-// (guard-1-impossible-but-defensive) zero-loop runtime; the readiness
-// snapshot then reports no nats check rather than a permanently-failing one.
-func buildHandler(guard *core.URLGuard, pipeCfg *pipelineconfig.Config, mountIngest func(*http.ServeMux) error, natsHealthy func() bool) (http.Handler, error) {
+// (liveness), /readyz (NATS + registry reachability + the external PDP when
+// relevant — see below), and the configured /ingest/<loop>/... push routes
+// via mountIngest. No ConnectRPC services of its own — this binary is a wire
+// CLIENT to the registry, never a server for it — and no /metrics (see the
+// package doc). natsHealthy is nil for a (guard-1-impossible-but-defensive)
+// zero-loop runtime; the readiness snapshot then reports no nats check
+// rather than a permanently-failing one.
+//
+// hasPushIngress (branch review, P2 Codex fix) gates an added PDP
+// reachability check: this binary mounts no ConnectRPC services of its own
+// to be ready FOR (unlike cmd/network/cmd/standalone, which unconditionally
+// probe the PDP whenever the backend is external — they always mount
+// PDP-gated RPC surfaces), but a push-ingress route IS PDP-guarded (push.go's
+// pushRoutes calls verifier.Verify, the SAME L1 seam an external PDP
+// backs) — so the check is added only when BOTH at least one loop mounts a
+// push route AND the configured auth backend is external/probeable (pdpCheck,
+// readiness.go, mirrors internal/netcompose.PDPCheck's own backend switch;
+// this binary must not import netcompose). A static backend, or a node with
+// no push-ingress loop, adds nothing.
+func buildHandler(guard *core.URLGuard, pipeCfg *pipelineconfig.Config, authCfg *auth.AuthConfig, mountIngest func(*http.ServeMux) error, natsHealthy func() bool, hasPushIngress bool) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
 
@@ -249,6 +280,11 @@ func buildHandler(guard *core.URLGuard, pipeCfg *pipelineconfig.Config, mountIng
 		checks = append(checks, natsCheck(natsHealthy))
 	}
 	checks = append(checks, registryCheck(guard.HTTPClient(), pipeCfg.VCStoreEndpoint))
+	if hasPushIngress {
+		if check, ok := pdpCheck(authCfg); ok {
+			checks = append(checks, check)
+		}
+	}
 	mux.HandleFunc("/readyz", newCachedReadiness(checks).handler())
 
 	if mountIngest != nil {

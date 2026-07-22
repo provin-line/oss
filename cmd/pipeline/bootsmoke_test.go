@@ -60,6 +60,14 @@ func TestPipeline_ActualBoot(t *testing.T) {
 	// bootreject_test.go's own TestPipeline_BootRejectsMissingPayloadRetainKey
 	// uses.
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
+	// Boot guard 6 (main.go, preflightWireOnlySignerKeys, wiring.go — branch
+	// review): nodeDID's own key (RegisterAuditHead / PayloadResolver) and
+	// the source loop's issuer DID (its emission log's checkpoint-signer
+	// identity, dp.CustodyLogs()) must ALSO already be provisioned, or this
+	// binary now rejects boot before ever reaching readiness.
+	const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	provisionPayloadRetainKey(t, dataDir, nodeDID)
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
 
 	confPath := writeBootConfigFile(t, dir, bootConfig{
 		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
@@ -73,7 +81,7 @@ func TestPipeline_ActualBoot(t *testing.T) {
 		AccSeed:         accSeedFile,
 		TrustSeed:       trustSeedFile,
 		ResolveDir:      filepath.Join(dir, "resolver"),
-		NodeDID:         "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:         nodeDID,
 		PipelineLoops:   validSourceLoopConf,
 		VCStoreEndpoint: registry.URL,
 		VCStoreBearer:   "test-bearer",

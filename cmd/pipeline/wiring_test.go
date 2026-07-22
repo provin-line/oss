@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -513,7 +514,7 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPayloadClientFactory_CachesPerDID(t *testing.T) {
-	f := newPayloadClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newPayloadClientFactory(nil, "http://example.invalid", "", http.DefaultClient, 0)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
 	if a1 != a2 {
@@ -590,7 +591,7 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 // now succeed, each recorded under its OWN owner.
 func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA, payloadOwnerB)
-	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc)
+	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
 	store := wirePayloadStore{factory: factory}
 
 	payloadA := []byte("bytes produced by src1's output subject")
@@ -632,11 +633,119 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 // before it ever reaches this wire call.
 func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA) // payloadOwnerB's key is never provisioned
-	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc)
+	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
 	store := wirePayloadStore{factory: factory}
 
 	if _, err := store.Store(context.Background(), []byte("orphan bytes"), payloadOwnerB); err == nil {
 		t.Fatal("Store with no key for the owner: want error, got nil")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// payloadClientFactory's chunk size (P2 Codex fix, branch review): the
+// factory previously always used payloadclient.DefaultRetainChunkSize (256
+// KiB) regardless of pipeCfg.MaxRetainChunkSize, so a registry configured
+// with a SMALLER cap rejected every frame (ResourceExhausted), aborting the
+// whole emission. newPayloadRetainHarnessWithChunkCap reproduces production's
+// EXACT server-side mount (internal/netcompose/server.go's retainChunkCap :=
+// connect.WithReadMaxBytes(maxRetainChunkSize)) so this is a real end-to-end
+// proof, not just a Config struct-literal assertion.
+// ─────────────────────────────────────────────────────────────────────────
+
+// newPayloadRetainHarnessWithChunkCap is newPayloadRetainHarness's sibling
+// that additionally mounts connect.WithReadMaxBytes(chunkCap) on the
+// PayloadStoreService handler — the server-side per-RPC read cap production
+// applies from pipeCfg.MaxRetainChunkSize.
+func newPayloadRetainHarnessWithChunkCap(t *testing.T, chunkCap int, owners ...string) *payloadRetainHarness {
+	t.Helper()
+	ks := ksfilestore.New(t.TempDir())
+	gen := ed25519.Generator{}
+	resolver := fakeDIDResolver{}
+	for _, owner := range owners {
+		kp, err := gen.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ks.SaveKeyPair(owner, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+			t.Fatal(err)
+		}
+		resolver[owner] = authDoc(owner, kp.PublicKey)
+	}
+
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+		Epoch:    time.Now().Add(-time.Hour),
+		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	store := memstore.New()
+	h := storehandler.New(store, v, 1<<20)
+	path, hh := payloadpbconnect.NewPayloadStoreServiceHandler(h, connect.WithReadMaxBytes(chunkCap))
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &payloadRetainHarness{store: store, ks: ks, url: srv.URL, httpc: srv.Client()}
+}
+
+// TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize proves the
+// fix directly: a factory built with the DEFAULT (unconfigured) chunk size
+// sends 256 KiB frames regardless of a small server cap, tripping
+// ResourceExhausted on the very first chunk (pinning the PRE-FIX bug); a
+// factory built with pipeCfg.MaxRetainChunkSize (here, the same value as the
+// server's cap) keeps every frame under it, and the retain succeeds.
+func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
+	const chunkCap = 2048 // bytes — far below the client's own 256 KiB DefaultRetainChunkSize
+	h := newPayloadRetainHarnessWithChunkCap(t, chunkCap, payloadOwnerA)
+	payload := bytes.Repeat([]byte("x"), 10_000) // spans several chunks under chunkCap
+
+	defaultFactory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
+	_, err := (wirePayloadStore{factory: defaultFactory}).Store(context.Background(), payload, payloadOwnerA)
+	if err == nil {
+		t.Fatal("Store with the default (unconfigured) chunk size against a small server cap: want an error, got nil (this pins the PRE-FIX bug)")
+	}
+	if connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Fatalf("Store with oversized default chunks: code = %v, want ResourceExhausted", connect.CodeOf(err))
+	}
+
+	configuredFactory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, chunkCap)
+	addr, err := (wirePayloadStore{factory: configuredFactory}).Store(context.Background(), payload, payloadOwnerA)
+	if err != nil {
+		t.Fatalf("Store with configured chunk size: %v", err)
+	}
+	got, owners, err := h.store.Get(addr)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != string(payload) || len(owners) != 1 || owners[0] != payloadOwnerA {
+		t.Errorf("retained bytes/owners = (%d bytes, %v), want (%d bytes, [%s])", len(got), owners, len(payload), payloadOwnerA)
+	}
+}
+
+// TestRetainChunkSizeFor pins the headroom derivation directly.
+func TestRetainChunkSizeFor(t *testing.T) {
+	cases := []struct {
+		name string
+		max  int
+		want int
+	}{
+		{"typical config value", 1 << 20, (1 << 20) - retainFrameOverhead},
+		{"unconfigured (<=0) passes through unchanged", 0, 0},
+		{"negative passes through unchanged", -1, 0},
+		{"pathologically tiny cap floors at 1, never <=0", 10, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := retainChunkSizeFor(c.max); got != c.want {
+				t.Errorf("retainChunkSizeFor(%d) = %d, want %d", c.max, got, c.want)
+			}
+		})
 	}
 }
 
@@ -703,5 +812,123 @@ func TestPreflightPayloadRetainKeys_NoProducingLoops_OK(t *testing.T) {
 	}
 	if err := preflightPayloadRetainKeys(ks, loops); err != nil {
 		t.Fatalf("preflightPayloadRetainKeys: %v (a sink loop needs no retain key)", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// preflightWireOnlySignerKeys — the D9 extension (main.go's Boot guard 6,
+// branch review Important finding): nodeDID's own key (RegisterAuditHead /
+// PayloadResolver) and every DURABLE custody log's checkpoint-signer key,
+// both previously discoverable only at first use (see the function's own
+// doc for why filelog's checkpoint arming cannot catch this at boot).
+// ─────────────────────────────────────────────────────────────────────────
+
+const (
+	wireOnlyNodeDID       = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	wireOnlyCustodySigner = "did:dplaax:reg:org:acme:pipeline:pipe:process:src"
+)
+
+func provisionAuthKey(t *testing.T, ks *ksfilestore.Store, subjectDID string) {
+	t.Helper()
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.SaveKeyPair(subjectDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreflightWireOnlySignerKeys_AllKeysPresent_OK(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireOnlyNodeDID)
+	provisionAuthKey(t, ks, wireOnlyCustodySigner)
+	custodyLogs := []pipelineruntime.CustodyLog{
+		{LogID: "did:dplaax:reg:org:acme:pipeline:pipe", Signer: pipelineruntime.IssuerConfig{DID: wireOnlyCustodySigner}},
+	}
+	if err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, custodyLogs); err != nil {
+		t.Fatalf("preflightWireOnlySignerKeys: %v", err)
+	}
+}
+
+func TestPreflightWireOnlySignerKeys_MissingNodeDIDKey_NamesNodeDID(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireOnlyCustodySigner) // nodeDID's own key is deliberately withheld
+	custodyLogs := []pipelineruntime.CustodyLog{
+		{LogID: "did:dplaax:reg:org:acme:pipeline:pipe", Signer: pipelineruntime.IssuerConfig{DID: wireOnlyCustodySigner}},
+	}
+	err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, custodyLogs)
+	if err == nil {
+		t.Fatal("preflightWireOnlySignerKeys: want error for missing nodeDID key, got nil")
+	}
+	for _, want := range []string{"node identity", wireOnlyNodeDID} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestPreflightWireOnlySignerKeys_MissingCustodySignerKey_NamesLogAndSigner(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireOnlyNodeDID) // the custody log's signer key is deliberately withheld
+	custodyLogs := []pipelineruntime.CustodyLog{
+		{LogID: "did:dplaax:reg:org:acme:pipeline:pipe", Signer: pipelineruntime.IssuerConfig{DID: wireOnlyCustodySigner}},
+	}
+	err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, custodyLogs)
+	if err == nil {
+		t.Fatal("preflightWireOnlySignerKeys: want error for missing custody-log signer key, got nil")
+	}
+	for _, want := range []string{`"did:dplaax:reg:org:acme:pipeline:pipe"`, wireOnlyCustodySigner} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// TestPreflightWireOnlySignerKeys_ChecksEveryCustodyLog proves the guard
+// does not stop at the FIRST custody log — it must name whichever one is
+// actually missing, even when an earlier one in the slice is fine.
+func TestPreflightWireOnlySignerKeys_ChecksEveryCustodyLog(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	const okSigner = "did:dplaax:reg:org:acme:pipeline:pipe1:process:src1"
+	provisionAuthKey(t, ks, wireOnlyNodeDID)
+	provisionAuthKey(t, ks, okSigner)
+	// wireOnlyCustodySigner (the SECOND log) is deliberately left unprovisioned.
+	custodyLogs := []pipelineruntime.CustodyLog{
+		{LogID: "log-1", Signer: pipelineruntime.IssuerConfig{DID: okSigner}},
+		{LogID: "log-2", Signer: pipelineruntime.IssuerConfig{DID: wireOnlyCustodySigner}},
+	}
+	err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, custodyLogs)
+	if err == nil {
+		t.Fatal("want error for log-2's missing signer key, got nil")
+	}
+	if !strings.Contains(err.Error(), `"log-2"`) {
+		t.Errorf("error = %q, want it to name log-2 specifically", err)
+	}
+	if strings.Contains(err.Error(), "log-1") {
+		t.Errorf("error = %q, must not name log-1 (its key IS provisioned)", err)
+	}
+}
+
+// TestPreflightWireOnlySignerKeys_NodeDIDSharedWithCustodySigner_NoDoubleProbeFailure
+// proves a custody log whose signer happens to equal nodeDID is checked
+// exactly once (via the nodeDID probe) — no double error, no double Sign call
+// starving a slower KeyStore backend.
+func TestPreflightWireOnlySignerKeys_NodeDIDSharedWithCustodySigner_NoDoubleProbeFailure(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireOnlyNodeDID)
+	custodyLogs := []pipelineruntime.CustodyLog{
+		{LogID: "shared-log", Signer: pipelineruntime.IssuerConfig{DID: wireOnlyNodeDID}},
+	}
+	if err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, custodyLogs); err != nil {
+		t.Fatalf("preflightWireOnlySignerKeys: %v (nodeDID's key IS provisioned, and the custody log shares that same DID)", err)
+	}
+}
+
+func TestPreflightWireOnlySignerKeys_NoCustodyLogs_OnlyChecksNodeDID(t *testing.T) {
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireOnlyNodeDID)
+	if err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, nil); err != nil {
+		t.Fatalf("preflightWireOnlySignerKeys: %v", err)
 	}
 }

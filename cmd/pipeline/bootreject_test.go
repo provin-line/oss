@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,6 +253,67 @@ func TestPipeline_BootRejectsMissingPayloadRetainKey(t *testing.T) {
 	}
 	if strings.Contains(out, `"src1"`) {
 		t.Errorf("boot failure names src1 (which HAD its key provisioned) — want it to name only src2:\n%s", out)
+	}
+}
+
+// TestPipeline_BootRejectsMissingNodeIdentityKey proves boot guard 6
+// (preflightWireOnlySignerKeys, wiring.go): the D9 payload-retain preflight
+// (guard 5) only ever checks each PRODUCING loop's OWN output subject — it
+// says nothing about nodeDID, the identity wireAuditRegistrar.Add signs
+// RegisterAuditHead as (and PayloadResolver's ResolvePayload identity) — a
+// gap that previously surfaced only at the FIRST consuming loop's ingress
+// consume, well after boot. This provisions the source loop's own
+// output-subject key (guard 5) AND its emission log's checkpoint-signer key
+// (the issuer DID, guard 6's OTHER half), but DELIBERATELY withholds
+// nodeDID's key — proving guard 6 rejects boot naming nodeDID specifically.
+// Unlike every earlier guard in this file, guard 6 runs AFTER
+// pipeline/runtime.Build, so this test needs a REAL, reachable NATS broker
+// (runEmbeddedNATS, bootsmoke_test.go's helper) for Build to actually
+// succeed — mirrors TestPipeline_ActualBoot's own setup.
+func TestPipeline_BootRejectsMissingNodeIdentityKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary and starts a broker")
+	}
+	bin := buildPipelineBinary(t)
+	natsURL := runEmbeddedNATS(t)
+	registry := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(registry.Close)
+
+	dir := t.TempDir()
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+	dataDir := filepath.Join(dir, "data")
+
+	// validSourceLoopConf's "src" loop: its own output subject (guard 5) and
+	// its emission log's checkpoint-signer identity (the issuer DID, guard
+	// 6's custody-log half) are both provisioned — ONLY nodeDID is
+	// deliberately withheld.
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
+
+	const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	confPath := writeBootConfigFile(t, dir, bootConfig{
+		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:         dataDir,
+		AllowLoopback:   true,
+		Transport:       "nats",
+		NATSURL:         natsURL,
+		AccSeed:         accSeedFile,
+		TrustSeed:       trustSeedFile,
+		ResolveDir:      filepath.Join(dir, "resolver"),
+		NodeDID:         nodeDID,
+		PipelineLoops:   validSourceLoopConf,
+		VCStoreEndpoint: registry.URL,
+		VCStoreBearer:   "test-bearer",
+	})
+
+	out, err := runPipelineBinary(t, bin, dir, confPath)
+	if err == nil {
+		t.Fatalf("pipeline booted with nodeDID's key missing; want a non-zero exit\noutput:\n%s", out)
+	}
+	for _, want := range []string{"node identity", nodeDID} {
+		if !strings.Contains(out, want) {
+			t.Errorf("boot failure does not name the guard 6 node-identity check (want %q):\n%s", want, out)
+		}
 	}
 }
 
