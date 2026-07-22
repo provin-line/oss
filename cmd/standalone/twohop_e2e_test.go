@@ -117,6 +117,7 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (two-hop): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- dp.Run(ctx) }()

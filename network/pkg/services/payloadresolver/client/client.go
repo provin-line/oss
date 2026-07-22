@@ -11,13 +11,16 @@
 // plane, unlike ResolvePayload's arbitrary per-call target).
 //
 // It imports the generated client, connect, crypto, and the payloadresolver
-// domain package (for the RetainPayload op name + signed-view builder shared
-// with storehandler, so the two derivations cannot drift — mirrors
-// auditor/client importing auditor for the same reason) — never pipeline/
-// (AGENTS.md layer rule: network and pipeline interact only over the wire).
-// The compile-time assertion that *Resolver satisfies pipeline's
-// PayloadResolver seam lives in the consumer (cmd/standalone), exactly as
-// vcresolver/client keeps its chainwalk.CredentialResolver assertion there.
+// service's wirecontract LEAF (for the RetainPayload op name + signed-view
+// builder shared with storehandler, so the two derivations cannot drift —
+// mirrors auditor/client importing auditor's wirecontract leaf for the same
+// reason; PR3b Task 2 moved these out of the payloadresolver service root so
+// this client never pulls in the root's store/handler domain logic) — never
+// the payloadresolver service root itself, and never pipeline/ (AGENTS.md
+// layer rule: network and pipeline interact only over the wire). The
+// compile-time assertion that *Resolver satisfies pipeline's PayloadResolver
+// seam lives in the consumer (cmd/standalone), exactly as vcresolver/client
+// keeps its chainwalk.CredentialResolver assertion there.
 package client
 
 import (
@@ -35,7 +38,7 @@ import (
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
-	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 )
 
 // opResolvePayload MUST match the publisher verifier's signed view.
@@ -114,7 +117,7 @@ type Config struct {
 	RetainChunkSize int
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every Retain call ONLY. RetainPayload is mounted behind L1 authz IN
-	// ADDITION to the L2 wireauth proof (payloadresolver.OpRetainPayload)
+	// ADDITION to the L2 wireauth proof (wirecontract.OpRetainPayload)
 	// Retain already signs. It deliberately does NOT apply to ResolvePayload:
 	// that RPC dials arbitrary publisher-supplied endpoints (upstreamEndpoint
 	// is a per-call argument, never this node's own control plane), so
@@ -361,7 +364,7 @@ func (r *Resolver) mapFetchErr(ctx context.Context, err error) error {
 // wireauth.Proof to the wire AuthProof (issued_at as canonical second-precision
 // UTC RFC 3339 — the exact form the publisher's strict codec accepts). Shared
 // by ResolvePayload (op = opResolvePayload) and Retain (op =
-// payloadresolver.OpRetainPayload).
+// wirecontract.OpRetainPayload).
 func (r *Resolver) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
 	nonce, err := wireauth.NewNonce()
 	if err != nil {
@@ -382,7 +385,7 @@ func (r *Resolver) proof(op string, fields map[string]any) (*chainpb.AuthProof, 
 // Retain streams rd's bytes to THIS node's own PayloadStoreService
 // (Config.StoreEndpoint) as ownerDID, declaring size bytes up front. It signs
 // the metadata frame (owner_did + declared_size) with wireauth via the SAME
-// op + field builder the storehandler verifies (payloadresolver.OpRetainPayload
+// op + field builder the storehandler verifies (wirecontract.OpRetainPayload
 // / RetainPayloadFields — the two derivations cannot drift), splits rd into
 // Config.RetainChunkSize frames, and returns the server-recomputed content
 // address.
@@ -399,7 +402,7 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	if r.storeEndpoint == "" {
 		return "", fmt.Errorf("payloadresolver/client: Retain requires Config.StoreEndpoint")
 	}
-	ap, err := r.proof(payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size))
+	ap, err := r.proof(wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size))
 	if err != nil {
 		return "", err
 	}

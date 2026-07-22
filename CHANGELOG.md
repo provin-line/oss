@@ -453,6 +453,69 @@ closure required, now met with executed evidence rather than review.
 - `wireprofile`: the shared wire-convention leaf (`ByReferenceSubjectPrefix`)
   that lets `network/` and `pipeline/` agree on wire constants without
   importing each other.
+- `hoconconfig.LoadFile(fileEnv string)`: the `CONFIG_FILE` convention for
+  STL (short-lived, per-execution) binaries — a REQUIRED root config file
+  named by an environment variable, whose relative `include` directives
+  resolve against the FILE's own directory rather than the process's
+  working directory (unlike `cmd/network`/`cmd/standalone`'s
+  `./config/application.conf` + `CONFIG_OVERLAY` layering, which assumes a
+  long-lived working directory). `cmd/pipeline` (below) is its first caller.
+- Wire-contract leaf extraction: `auditor`/`tlogservice`/`payloadresolver`
+  op-names and signed-view builders now live in per-service `wirecontract`
+  leaf packages (stdlib + `vc` only, never `gen/`, never a service root), so
+  a wire client can depend on the contract without pulling in server-side
+  store/runner logic transitively; each service root keeps back-compat
+  aliases, so no existing call site changes.
+- `network/pkg/services/schemaregistry/client`: a bounded,
+  bearer-authenticated `GetSchema` wire client, mapping a remote NotFound to
+  a local `ErrNotFound` sentinel (`errors.Is`) so callers whose semantics
+  depend on it (e.g. a full-chain verifier's indeterminate-vs-failed split)
+  can distinguish a definitive miss from a transient transport failure.
+- `cmd/pipeline`: the data-plane deployment root — an STL (short-lived,
+  per-execution) binary that composes `pipeline/runtime` entirely against
+  WIRE clients to a `cmd/network` registry (`VCResolverService.StoreVC`,
+  `AuditService.RegisterAuditHead` / `RegisterEvidence`,
+  `PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`,
+  `SchemaService.GetSchema`), never through an in-process registry of its
+  own and never importing `cmd/network`'s control-plane packages (AGENTS.md
+  layer rule 2). Four named fail-closed boot guards: a zero-loop config is a
+  misconfiguration for this binary (run `cmd/network` instead); loops
+  require the NATS transport; any loop requires BOTH
+  `provin.network.pipeline.vc-store-endpoint` and its bearer, since the
+  endpoint doubles as the ONE registry base URL for every wire dependency
+  this binary composes; and the DID resolver must be constructible
+  (including the F8 private-network posture). Every wire call signs as a
+  specific local identity held in this binary's OWN pipeline-local keystore
+  (`DataDir/keys` — the registry never holds a loop key): the node's own
+  subscriber identity for audit-head registration, each loop's configured
+  issuer for evidence/receipts, and — per OWNING producing loop, since a
+  node can run more than one — its own output-subject identity for
+  by-reference payload retain, because `PayloadStoreService.RetainPayload`
+  enforces `owner_did == the wireauth-proven signer` and a shared
+  node-identity client could satisfy at most one loop's retains before
+  every other loop's emission aborted. A fifth boot guard preflights that
+  every producing loop's retain key is provisioned, turning that gap into a
+  clean boot failure instead of a first-emit surprise. Its HTTP surface is
+  minimal: `/healthz` (liveness), `/readyz` (NATS + registry reachability),
+  and the configured `/ingest/<loop>/...` push routes — no ConnectRPC
+  services of its own, and (unlike `cmd/network`/`cmd/standalone`) no
+  `/metrics` yet (deferred). Shutdown runs in a FIXED order (tlog-custody
+  spec D8): the HTTP server drains in-flight requests, then the data-plane
+  loops drain, then the mirror shippers and emit-health reporters stop,
+  then each shipper gets one final flush attempt on a fresh context, then
+  the shared NATS connection and every durable log's file handle close.
+- The mirror shipper (Tlog mirror custody, above) is now LIVE: `cmd/pipeline`
+  wires one `tlogship.Shipper` per durable custody log
+  (`pipeline/runtime.Runtime.CustodyLogs()` — every local durable log the
+  binary opened, sink-reject logs included), each shipping through a
+  `network/pkg/services/tlogservice/client.Client` signed as that SPECIFIC
+  log's own checkpoint-signer identity, and torn down as part of
+  `cmd/pipeline`'s ordered shutdown above (each shipper's final flush runs
+  on a fresh, never-already-canceled context; a drain that cannot finish
+  within its budget is not a shutdown failure — the tail stays durable
+  locally and the next boot's shipper resumes it from the registry's own
+  acked cursor). `cmd/standalone` still does not ship: it continues to
+  serve TlogService reads from its in-process map and mirrors nothing.
 
 ### Changed
 

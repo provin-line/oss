@@ -20,12 +20,15 @@ Pipeline durable logs can be mirrored to the registry: `MirrorLogSegment`
 segments of a pipeline process's local signed log into registry custody, and
 `GetMirrorState` (a plain L1 read) reports the registry's durable mirror size.
 The registry only ever custodies and serves the verified prefix it is handed
-— it never re-signs. The shipper is not yet wired into any binary; wiring it
-into the pipeline runtime is a later change, and until then TlogService reads
-still come from the in-process map `cmd/standalone` wires today. Once wired:
-a terminal tail not yet mirrored is lost from the registry's view within the
-flush interval, and a process that loses its local volume rolls to a fresh
-log identity rather than resuming the old one.
+— it never re-signs. The shipper now rides `cmd/pipeline`: that binary ships
+every durable custody log it opens (emission, sink-receipt, and sink-reject
+logs alike), each signed as that log's own checkpoint-signer identity, with a
+final flush attempt at ordered shutdown before its log files close.
+`cmd/standalone` still does not ship — TlogService reads there still come
+from its in-process map, and it mirrors nothing. A terminal tail not yet
+mirrored is lost from the registry's view within the flush interval, and a
+process that loses its local volume rolls to a fresh log identity rather than
+resuming the old one.
 
 Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`), `GET /healthz`
 (liveness, static), and `GET /readyz` (readiness — dependency-aware: evidence

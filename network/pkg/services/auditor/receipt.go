@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"sync"
 
+	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -55,37 +55,13 @@ type ReceiptStore interface {
 // reported as a conflict rather than applied as a silent overwrite.
 var ErrReceiptConflict = errors.New("auditor: receipt already recorded with a different consumed set")
 
-// CanonicalizeConsumedSet sorts and deduplicates a receipt's consumed source content addresses
-// into the canonical form ReceiptStore.Put persists and compares against. It rejects a set that
-// is empty after dedup and, per member, enforces the FULL content-address grammar
-// (isContentAddress: "sha256:<64 lowercase hex>") — not merely a non-empty-string check. Both
-// ReceiptStore implementations (MemReceiptStore and filestore.ReceiptStore) call this so
-// canonicalization cannot drift between them, and EvidenceService.Register calls it too, so an
-// authorized RegisterEvidence caller cannot pin an irreversible first-write-wins receipt with a
-// malformed member — every reader downstream (GetConsumedSources, the source-commitment
-// auditor) would otherwise treat it as damage. The grammar's fixed length and hex-only alphabet
-// are also what make the wireauth handler's deterministic "\n" join over this canonical set
-// collision-free: a member that could itself contain "\n" (or vary in length) would let two
-// DIFFERENT consumed sets join to the SAME signed bytes — enforcing the grammar here is what
-// rules that out, not an assumption at the join site.
-func CanonicalizeConsumedSet(hashes []string) ([]string, error) {
-	cp := make([]string, len(hashes))
-	copy(cp, hashes)
-	sort.Strings(cp)
-	out := make([]string, 0, len(cp))
-	for i, addr := range cp {
-		if !isContentAddress(addr) {
-			return nil, fmt.Errorf("auditor: consumed set member %q is not a sha256:<hex> content address", addr)
-		}
-		if i == 0 || addr != cp[i-1] {
-			out = append(out, addr)
-		}
-	}
-	if len(out) == 0 {
-		return nil, errors.New("auditor: consumed set is empty")
-	}
-	return out, nil
-}
+// CanonicalizeConsumedSet points at wirecontract.CanonicalizeConsumedSet —
+// moved into the leaf wirecontract package (PR3b Task 2) so a client-only
+// consumer need not import this service root; this alias keeps existing
+// call sites (MemReceiptStore.Put below, filestore.ReceiptStore,
+// EvidenceService.Register, the handler) unchanged. See
+// wirecontract.CanonicalizeConsumedSet for the full doc.
+var CanonicalizeConsumedSet = wirecontract.CanonicalizeConsumedSet
 
 // isContentAddress delegates to the exported grammar predicate (vc.IsContentAddress) — the ONE
 // definition every content-address check in this package converges on (headHash validation in

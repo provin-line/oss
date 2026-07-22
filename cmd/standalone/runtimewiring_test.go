@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/vc"
 )
@@ -300,5 +304,77 @@ func TestRuntimeConfigFrom_NonNATSTransportNoLoopsOK(t *testing.T) {
 	}
 	if len(got.Loops) != 0 {
 		t.Errorf("Loops = %d, want 0", len(got.Loops))
+	}
+}
+
+// --- adapter tests (task-3: StoredHead threads the wire-variant id through
+// the audit seams) ------------------------------------------------------
+
+// TestIngressStoreAdapter_MapsBodyAddressAndWireVariantID asserts
+// ingressStoreAdapter.StoreVC maps BOTH fields of vcresolver.StoreVCResult
+// into pipelineruntime.StoredHead. Before task-3 the seam returned a bare
+// body-address string, silently dropping the wire variant id a future wire
+// audit adapter (AuditService.RegisterAuditHead) needs to present.
+func TestIngressStoreAdapter_MapsBodyAddressAndWireVariantID(t *testing.T) {
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	a := ingressStoreAdapter{svc: svc}
+
+	cred, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            "did:dplaax:reg:org:acme:pipeline:p1:process:proc1",
+		"credentialSubject": map[string]any{"pipelineId": "p1", "processId": "proc1"},
+	})
+	if err != nil {
+		t.Fatalf("marshal credential: %v", err)
+	}
+
+	got, err := a.StoreVC(context.Background(), cred, "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+	if got.BodyAddress == "" {
+		t.Error("StoredHead.BodyAddress is empty")
+	}
+	if got.WireVariantID == "" {
+		t.Error("StoredHead.WireVariantID is empty")
+	}
+
+	// Cross-check against the raw *vcresolver.Service result directly (a
+	// re-store of the same bytes is idempotent) — the adapter must forward
+	// exactly what the service computed, field for field.
+	want, err := svc.StoreVC(context.Background(), cred, "", 0)
+	if err != nil {
+		t.Fatalf("svc.StoreVC: %v", err)
+	}
+	if got.BodyAddress != want.BodyAddress || got.WireVariantID != want.WireVariantID {
+		t.Errorf("adapter StoredHead = %+v, want {%q, %q}", got, want.BodyAddress, want.WireVariantID)
+	}
+}
+
+// captureHeadQueue is a minimal body-hash-keyed queue double implementing the
+// same narrow shape auditRegistrarAdapter wraps — the production file-backed
+// queue and *auditor.MemQueue both satisfy it structurally.
+type captureHeadQueue struct{ got []string }
+
+func (q *captureHeadQueue) Add(headHash string) error {
+	q.got = append(q.got, headHash)
+	return nil
+}
+
+// TestAuditRegistrarAdapter_ForwardsBodyAddressOnly asserts
+// auditRegistrarAdapter.Add forwards StoredHead.BodyAddress to the wrapped
+// body-keyed queue and discards WireVariantID — the audit queue itself stays
+// body-keyed (P0-1 slices B/C own changing that), so this is NO behavior
+// change from before task-3's seam widening.
+func TestAuditRegistrarAdapter_ForwardsBodyAddressOnly(t *testing.T) {
+	q := &captureHeadQueue{}
+	a := auditRegistrarAdapter{queue: q}
+	head := pipelineruntime.StoredHead{BodyAddress: "sha256:abc", WireVariantID: "wire:v1:jcs-rfc8785:sha256:abc"}
+	if err := a.Add(head); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if len(q.got) != 1 || q.got[0] != head.BodyAddress {
+		t.Errorf("queue.got = %v, want one entry %q", q.got, head.BodyAddress)
 	}
 }

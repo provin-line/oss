@@ -194,6 +194,7 @@ func TestMetrics_RealEmitReachesExposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), netcomposeMetricsFrom(dp.Metrics()), nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics: %v", err)

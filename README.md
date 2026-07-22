@@ -36,8 +36,10 @@ gen/            generated code (committed — buf not required to build)
 network/        registry & coordination services (control-plane library + handlers)
 pipeline/       Pipeline Process peer catalog + shared mechanics
 cmd/network/    network node binary (registry control plane only)
+cmd/pipeline/   pipeline node binary (data plane only; wire-composed against a
+                cmd/network registry — the separated alternative to standalone)
 cmd/standalone/ all-in-one node binary (control plane + data plane) — deprecated;
-                being replaced by cmd/network + the pipeline runtime
+                cmd/network + cmd/pipeline are its separated replacement
 cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did

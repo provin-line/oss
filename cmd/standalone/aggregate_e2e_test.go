@@ -125,6 +125,7 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (aggregate): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- dp.Run(ctx) }()

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -711,5 +712,105 @@ provin.test.urlcomment {
 	}
 	if _, err := cfg.Keys("provin.test.urlcomment.endpoints"); err != nil {
 		t.Errorf("an object under a URL comment vanished: %v", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadFile — the CONFIG_FILE convention for STL (short-lived, per-execution)
+// binaries: a REQUIRED root config file whose relative `include` directives
+// resolve against the file's own directory, not the process's CWD.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// (a) unset env → error naming the env var.
+func TestLoadFile_UnsetEnvIsError(t *testing.T) {
+	os.Unsetenv("TEST_LOADFILE_UNSET")
+
+	_, err := hoconconfig.LoadFile("TEST_LOADFILE_UNSET")
+	if err == nil {
+		t.Fatal("expected error when CONFIG_FILE env is unset")
+	}
+	if !strings.Contains(err.Error(), "TEST_LOADFILE_UNSET") {
+		t.Errorf("error must name the env var, got: %v", err)
+	}
+}
+
+// (a) env set to empty string → error naming the env var.
+func TestLoadFile_EmptyEnvIsError(t *testing.T) {
+	t.Setenv("TEST_LOADFILE_EMPTY", "")
+
+	_, err := hoconconfig.LoadFile("TEST_LOADFILE_EMPTY")
+	if err == nil {
+		t.Fatal("expected error when CONFIG_FILE env is set to empty string")
+	}
+	if !strings.Contains(err.Error(), "TEST_LOADFILE_EMPTY") {
+		t.Errorf("error must name the env var, got: %v", err)
+	}
+}
+
+// (b) env names an unreadable file → error.
+func TestLoadFile_UnreadableFileIsError(t *testing.T) {
+	t.Setenv("TEST_LOADFILE_UNREADABLE", filepath.Join(t.TempDir(), "does-not-exist.conf"))
+
+	_, err := hoconconfig.LoadFile("TEST_LOADFILE_UNREADABLE")
+	if err == nil {
+		t.Fatal("expected error when CONFIG_FILE points to an unreadable file")
+	}
+}
+
+// (c) a relative `include` inside the config file resolves against the
+// FILE's directory, not the process CWD. The file and its include sibling
+// live in dir A; the process CWD is set to an unrelated dir B — a CWD-
+// relative resolution would fail to find the sibling.
+func TestLoadFile_RelativeIncludeResolvesAgainstFileDir(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-loadfile-include"),
+		`provin.test.loadfile-include { placeholder = "ref" }`)
+
+	dirA := t.TempDir()
+	writeFile(t, dirA, "common.conf",
+		`provin.test.loadfile-include { from-common = "sibling" }`)
+	confPath := writeFile(t, dirA, "app.conf",
+		"include \"common.conf\"\nprovin.test.loadfile-include { own = \"root\" }")
+
+	// CWD is elsewhere entirely.
+	t.Chdir(t.TempDir())
+
+	t.Setenv("TEST_LOADFILE_INCLUDE", confPath)
+
+	cfg, err := hoconconfig.LoadFile("TEST_LOADFILE_INCLUDE")
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	if v, err := cfg.String("provin.test.loadfile-include.from-common"); err != nil || v != "sibling" {
+		t.Errorf("from-common: got (%q, %v), want (\"sibling\", nil) — include must resolve against the file's directory", v, err)
+	}
+	if v, err := cfg.String("provin.test.loadfile-include.own"); err != nil || v != "root" {
+		t.Errorf("own: got (%q, %v), want (\"root\", nil)", v, err)
+	}
+}
+
+// (d) registered references still layer FIRST (defaults exist under the
+// file's values) and (e) the file's values override reference defaults.
+func TestLoadFile_ReferenceLayersFirstFileOverrides(t *testing.T) {
+	hoconconfig.RegisterPackageReference(uniq("pkg-loadfile-precedence"),
+		`provin.test.loadfile-precedence { a = 1, b = "ref-b" }`)
+
+	confPath := writeFile(t, t.TempDir(), "app.conf",
+		`provin.test.loadfile-precedence { a = 2 }`)
+
+	t.Setenv("TEST_LOADFILE_PRECEDENCE", confPath)
+
+	cfg, err := hoconconfig.LoadFile("TEST_LOADFILE_PRECEDENCE")
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	// (e) file overrides reference.
+	if a, err := cfg.Int("provin.test.loadfile-precedence.a"); err != nil || a != 2 {
+		t.Errorf("a: got (%d, %v), want (2, nil) — file must override reference", a, err)
+	}
+	// (d) reference default still present (not overridden by the file).
+	if b, err := cfg.String("provin.test.loadfile-precedence.b"); err != nil || b != "ref-b" {
+		t.Errorf("b: got (%q, %v), want (\"ref-b\", nil) — reference must still layer under the file", b, err)
 	}
 }

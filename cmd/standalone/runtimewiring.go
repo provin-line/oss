@@ -167,19 +167,43 @@ func loopConfigFrom(lc pipelineconfig.LoopConfig) pipelineruntime.LoopConfig {
 }
 
 // ingressStoreAdapter adapts *vcresolver.Service (the node's local VC store)
-// to pipeline/runtime's network-agnostic IngressStorer seam: runtime
-// consumes only the stored head's body address (ingressstore.go's sole
-// read), so the adapter unwraps vcresolver.StoreVCResult to that one field.
+// to pipeline/runtime's network-agnostic IngressStorer seam, mapping BOTH
+// fields of vcresolver.StoreVCResult into pipelineruntime.StoredHead (task-3
+// seam widening) — the wire variant id, not just the body address, so a
+// future wire audit adapter has it to present.
 type ingressStoreAdapter struct {
 	svc *vcresolver.Service
 }
 
-func (a ingressStoreAdapter) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (string, error) {
+func (a ingressStoreAdapter) StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (pipelineruntime.StoredHead, error) {
 	res, err := a.svc.StoreVC(ctx, credential, upstreamEndpoint, assemblyDepth)
 	if err != nil {
-		return "", err
+		return pipelineruntime.StoredHead{}, err
 	}
-	return res.BodyAddress, nil
+	return pipelineruntime.StoredHead{BodyAddress: res.BodyAddress, WireVariantID: res.WireVariantID}, nil
+}
+
+// bodyKeyedAuditQueue is the narrow shape auditRegistrarAdapter wraps: any
+// queue keyed by a bare body-hash string. Both the production file-backed
+// *auditor/filestore.Queue and the in-memory *auditor.MemQueue this
+// package's own tests use satisfy it structurally — their Add signature is
+// unchanged by task-3, only pipeline/runtime's AuditRegistrar widened.
+type bodyKeyedAuditQueue interface {
+	Add(headHash string) error
+}
+
+// auditRegistrarAdapter adapts a bodyKeyedAuditQueue to pipeline/runtime's
+// network-agnostic AuditRegistrar seam. The queue itself stays body-keyed
+// (see pipeline/runtime/ingressstore.go's StoreIngressVC doc — P0-1 slices
+// B/C carry the variant on the queue's own side); Add here just forwards the
+// BodyAddress it already understood, discarding StoredHead.WireVariantID —
+// NO behavior change from before the widening (task-3).
+type auditRegistrarAdapter struct {
+	queue bodyKeyedAuditQueue
+}
+
+func (a auditRegistrarAdapter) Add(head pipelineruntime.StoredHead) error {
+	return a.queue.Add(head.BodyAddress)
 }
 
 // schemaGetterAdapter adapts *schemaregistry.Service to pipeline/runtime's

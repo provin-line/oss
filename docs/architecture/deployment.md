@@ -21,31 +21,67 @@ can only describe locally. For what the node *is* (planes, trust layers) see
 data plane (pipeline loops) run in one process under one signal-cancelled
 context.
 
-Two binaries exist today. `cmd/standalone` is the all-in-one composition
-above and remains available, but is **deprecated**. `cmd/network` runs the
-same control plane alone — no data plane: it refuses to boot if its pipeline
-config declares any loop. A pipeline runtime that pairs with `cmd/network`
-is upcoming work; until it lands, `cmd/standalone` is the only way to run
-pipeline loops.
+Three binaries exist today. `cmd/standalone` is the all-in-one composition
+above and remains available, but is **deprecated**: `cmd/network` +
+`cmd/pipeline` now provide the separated alternative it named as its eventual
+replacement. `cmd/network` runs the same control plane alone — no data
+plane: it refuses to boot if its pipeline config declares any loop.
+
+`cmd/pipeline` is that control plane's data-plane counterpart, and the
+separated topology's other half: an STL (short-lived, per-execution) binary
+that carries NO in-process registry of its own, and mirrors `cmd/network`'s
+guard in the opposite direction — it refuses to boot on a zero-loop config
+(run `cmd/network` instead). It loads its HOCON config from a single
+required file named by the `CONFIG_FILE` environment variable
+(`hoconconfig.LoadFile`) rather than `cmd/network`'s
+`./config/application.conf` + `CONFIG_OVERLAY` layering: a per-execution
+binary has no working-directory default to fall back to, and relative
+`include` directives inside that file resolve against the file's own
+directory. It composes `pipeline/runtime` — the network-agnostic data plane
+— entirely against WIRE clients to ONE configured `cmd/network` registry
+(`provin.network.pipeline.vc-store-endpoint` doubles as the base URL for
+every dependency): `VCResolverService.StoreVC`,
+`AuditService.RegisterAuditHead` / `RegisterEvidence`,
+`PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`, and
+`SchemaService.GetSchema`. Every wire
+call signs as a specific LOCAL identity held in a pipeline-local keystore
+(`DataDir/keys` — never the registry's, which holds no loop key at all): the
+node's own subscriber identity for audit-head registration, each loop's
+configured issuer for evidence/receipts, and — per OWNING loop, since a node
+can run more than one producing loop — each producing loop's own
+output-subject identity for by-reference payload retain, because
+`PayloadStoreService.RetainPayload` enforces `owner_did == the
+wireauth-proven signer`; a client signing as one shared node identity could
+satisfy at most one loop's retains before every other loop's emission
+aborted. `cmd/pipeline` and `cmd/network` never import each other (AGENTS.md
+layer rule 2) — they interact over the wire only.
 
 Evidence writes land as ordinary wire RPCs (`AuditService.RegisterEvidence`,
-`PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`), so that
-future pipeline runtime reaches them the same way any other client does — no
+`PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`), so
+`cmd/pipeline` reaches them the same way any other client does — no
 in-process bridge back into the control-plane binary is needed for these. The
 relationship-evidence log (`tlog`) and the archival sink's reject log stay
 in-process: each pipeline process keeps its own durable, signed log locally,
-and a background shipper can asynchronously mirror checkpoint-aligned segments
-to the registry (`MirrorLogSegment`, L1 + in-band wireauth; `GetMirrorState`
-is a plain L1 read), which custodies and serves the verified prefix without
-ever re-signing it. The shipper package is not yet wired into any binary —
-that wiring lands in a later change — so today's `cmd/standalone` still
-serves TlogService reads from its in-process map and mirrors nothing. Once
-wired: a terminal tail not yet mirrored is lost from the registry's view
-within the flush interval; a process that loses its local volume cannot
-resume the old log's identity and rolls to a fresh one instead. The reject
-log would mirror the same way for custody but, as today, is never served over
-TlogService reads. v0 mirrors `filelog`-backed logs only, and never rotates
-an already-mirrored log.
+and a background shipper mirrors checkpoint-aligned segments to the registry
+(`MirrorLogSegment`, L1 + in-band wireauth; `GetMirrorState` is a plain L1
+read), which custodies and serves the verified prefix without ever
+re-signing it. **The shipper now rides `cmd/pipeline`**: that binary ships
+every durable custody log it opens — emission, sink-receipt, and sink-reject
+logs alike — each signed as that log's own checkpoint-signer identity, and
+tears down in a fixed order (tlog-custody spec D8): the data-plane loops
+drain first, then each shipper gets ONE final flush attempt on a FRESH
+context (never the already-canceled shutdown signal's context) before the
+underlying log files close. A drain that cannot finish within its budget is
+not a shutdown failure — the unmirrored tail stays durable on the local log,
+and the next boot's shipper resumes it from the registry's own acked cursor,
+never a locally cached one. `cmd/standalone` still does not ship: it
+continues to serve TlogService reads from its in-process map and mirrors
+nothing. Independent of which binary ships: a terminal tail not yet mirrored
+is lost from the registry's view within the flush interval, and a process
+that loses its local volume cannot resume the old log's identity and rolls
+to a fresh one instead. The reject log mirrors the same way for custody but,
+as with the emission log, is never served over TlogService reads. v0 mirrors
+`filelog`-backed logs only, and never rotates an already-mirrored log.
 
 ## Load-bearing configuration
 

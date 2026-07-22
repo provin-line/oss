@@ -73,8 +73,30 @@ func TestServiceIngressStore_RegistersHeadForAudit(t *testing.T) {
 	if err := store.StoreIngressVC(context.Background(), cred, ""); err != nil {
 		t.Fatalf("StoreIngressVC: %v", err)
 	}
-	if len(queue.heads) != 1 || queue.heads[0] != want {
+	if len(queue.heads) != 1 || queue.heads[0].BodyAddress != want {
 		t.Errorf("audit queue = %+v, want one entry for %q", queue.heads, want)
+	}
+}
+
+// TestServiceIngressStore_RegistersWireVariantID asserts the seam widening
+// (task-3): the audit registrar receives the FULL StoredHead the store
+// returned, not just the body address — a future wire audit registration
+// needs the variant id, and this is where it would otherwise silently be
+// dropped.
+func TestServiceIngressStore_RegistersWireVariantID(t *testing.T) {
+	store, queue := newTestIngressSetup()
+
+	cred := makeIngressCred(t, nil)
+	want, err := cred.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if err := store.StoreIngressVC(context.Background(), cred, ""); err != nil {
+		t.Fatalf("StoreIngressVC: %v", err)
+	}
+	wantVariant := "wire:v1:jcs-rfc8785:" + want
+	if len(queue.heads) != 1 || queue.heads[0].WireVariantID != wantVariant {
+		t.Errorf("audit queue = %+v, want one entry with WireVariantID %q", queue.heads, wantVariant)
 	}
 }
 
@@ -91,6 +113,6 @@ func TestServiceIngressStore_AuditRegisterFailsClosed(t *testing.T) {
 
 type failingRegistrar struct{}
 
-func (failingRegistrar) Add(string) error { return errRegister }
+func (failingRegistrar) Add(StoredHead) error { return errRegister }
 
 var errRegister = fmt.Errorf("register boom")

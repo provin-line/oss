@@ -46,9 +46,14 @@ import (
 // tests.
 type fakeVCStore struct{}
 
-func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int) (string, error) {
+// StoreVC derives a deterministic body address (sha256 of the credential
+// bytes) AND a deterministic, distinguishable wire variant id — distinct
+// from the body address so a test asserting on StoredHead.WireVariantID
+// cannot pass by accident from a copy-paste of the body address.
+func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int) (StoredHead, error) {
 	sum := sha256.Sum256(credential)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	body := "sha256:" + hex.EncodeToString(sum[:])
+	return StoredHead{BodyAddress: body, WireVariantID: "wire:v1:jcs-rfc8785:" + body}, nil
 }
 
 // dpVCStore returns a fresh IngressStorer for data-plane tests that build
@@ -58,18 +63,18 @@ func dpVCStore() IngressStorer {
 }
 
 // memAuditQueue is a minimal AuditRegistrar test double recording every
-// registered head — enough for these tests, which only need audit
-// registration to succeed (no assertions on the queue's own drain/list
-// behavior; network/pkg/services/auditor.MemQueue is the production-shaped
-// one, wired by cmd/standalone). A package-local fake keeps this package
-// free of any network/ import (network/ and pipeline/ never import each
-// other, AGENTS.md rule 2).
-type memAuditQueue struct{ heads []string }
+// registered head (both StoredHead fields) — enough for these tests, which
+// only need audit registration to succeed (no assertions on the queue's own
+// drain/list behavior; network/pkg/services/auditor.MemQueue is the
+// production-shaped one, wired by cmd/standalone through an adapter). A
+// package-local fake keeps this package free of any network/ import
+// (network/ and pipeline/ never import each other, AGENTS.md rule 2).
+type memAuditQueue struct{ heads []StoredHead }
 
 func newMemAuditQueue() *memAuditQueue { return &memAuditQueue{} }
 
-func (q *memAuditQueue) Add(headHash string) error {
-	q.heads = append(q.heads, headHash)
+func (q *memAuditQueue) Add(head StoredHead) error {
+	q.heads = append(q.heads, head)
 	return nil
 }
 
@@ -156,6 +161,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // drain the runner even if the test fails before the explicit cancel below
@@ -265,6 +271,7 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 		t.Fatalf("build bad loop: %v", err)
 	}
 	dp := &Runtime{conn: conn, loops: []*transport.Loop{good, bad}}
+	t.Cleanup(func() { _ = dp.Close() })
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- dp.Run(context.Background()) }()
@@ -288,6 +295,7 @@ func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (zero loops): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if err := dp.Run(context.Background()); err != nil {
 		t.Fatalf("zero-loop Run: %v", err)
 	}
@@ -343,6 +351,7 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (sink): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
 	}
@@ -544,6 +553,7 @@ func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (file sink, no injected writer): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("output file not created at boot: %v", err)
 	}
@@ -602,6 +612,7 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (chained): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
 	}

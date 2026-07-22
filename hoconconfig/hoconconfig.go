@@ -91,6 +91,23 @@ func RegisterPackageReference(name, content string) {
 // Load
 // ─────────────────────────────────────────────────────────────────────────────
 
+// referenceText returns all registered references, concatenated in
+// registration order, as a single HOCON source blob. Shared by Load (which
+// folds it into a larger concatenate-and-parse-once string) and LoadFile
+// (which parses it as its own layer and merges via WithFallback).
+func referenceText() string {
+	registryMu.Lock()
+	refs := make([]referenceEntry, len(registry))
+	copy(refs, registry)
+	registryMu.Unlock()
+
+	parts := make([]string, len(refs))
+	for i, r := range refs {
+		parts[i] = r.content
+	}
+	return strings.Join(parts, "\n")
+}
+
 // Load merges reference + optional config/application.conf (relative to
 // appDir) + optional overlay file named by the overlayEnv environment
 // variable, parses once, and returns the resolved configuration.
@@ -100,14 +117,7 @@ func Load(appDir, overlayEnv string) (*Config, error) {
 	var parts []string
 
 	// Layer 1: all registered references, in registration order.
-	registryMu.Lock()
-	refs := make([]referenceEntry, len(registry))
-	copy(refs, registry)
-	registryMu.Unlock()
-
-	for _, r := range refs {
-		parts = append(parts, r.content)
-	}
+	parts = append(parts, referenceText())
 
 	// Layer 2: optional config/application.conf.
 	appConf := filepath.Join(appDir, "config", "application.conf")
@@ -139,6 +149,64 @@ func Load(appDir, overlayEnv string) (*Config, error) {
 	}
 
 	return &Config{h: hc}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadFile
+// ─────────────────────────────────────────────────────────────────────────────
+
+// LoadFile loads configuration for a short-lived, per-execution binary from a
+// single REQUIRED file named by the fileEnv environment variable (the
+// CONFIG_FILE convention). Unlike Load, there is no default location to fall
+// back to: an unset or empty-string fileEnv is an error naming the variable,
+// because an STL binary has nowhere else to look.
+//
+// Registered references still layer first, exactly as in Load's layer 1, and
+// the file's values take precedence over them. Critically, a relative
+// `include "..."` directive inside the file resolves against the FILE's own
+// directory rather than the process's current working directory: the file is
+// parsed with go.hocon's ParseFileWithOptions, which threads the file's
+// directory through to the resolver as the include base dir during the parse
+// phase (before any include is expanded) — the same mechanism ParseFile uses,
+// so optional includes, `include required(...)`, and nested includes all get
+// the library's real semantics rather than a hand-rolled path rewrite.
+//
+// The reference layer and the file are each parsed with substitution
+// resolution deferred (go.hocon's E12 lifecycle), merged with
+// fileConfig.WithFallback(refConfig) — the file (receiver) wins, references
+// (fallback) fill in what the file doesn't set — and resolved once over the
+// merged tree, matching Load's "layer then resolve once" contract.
+func LoadFile(fileEnv string) (*Config, error) {
+	path := os.Getenv(fileEnv)
+	if path == "" {
+		return nil, fmt.Errorf("hoconconfig: %s must be set to a config file path", fileEnv)
+	}
+
+	deferred := hocon.DefaultParseOptions().WithResolveSubstitutions(false)
+
+	// The file layer: parsed from disk so its directory becomes the include
+	// base dir. Read before the reference layer so an unreadable file fails
+	// with an unambiguous error regardless of registry state.
+	fileConfig, err := hocon.ParseFileWithOptions(path, deferred)
+	if err != nil {
+		// One message for both failure classes the library folds into ParseError
+		// (unreadable file AND HOCON syntax error) — "load", not "reading", so a
+		// parse failure is not misreported as I/O; %w carries the specifics.
+		return nil, fmt.Errorf("hoconconfig: load config file %q (env %s): %w", path, fileEnv, err)
+	}
+
+	// The reference layer, same content Load's layer 1 uses.
+	refConfig, err := hocon.ParseStringWithOptions(referenceText(), deferred)
+	if err != nil {
+		return nil, fmt.Errorf("hoconconfig: parsing references: %w", err)
+	}
+
+	merged, err := fileConfig.WithFallback(refConfig).Resolve(hocon.DefaultResolveOptions())
+	if err != nil {
+		return nil, fmt.Errorf("hoconconfig: resolve error: %w", err)
+	}
+
+	return &Config{h: merged}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

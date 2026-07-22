@@ -174,6 +174,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
+	t.Cleanup(func() { _ = pubDP.Close() })
 
 	res := local.New()
 	res.Add(capProcessDoc(capIssuerDID, capOwnerDID, kp.PublicKey))
@@ -195,6 +196,7 @@ func setupCapstone(t *testing.T, grant bool) capstone {
 	if err != nil {
 		t.Fatalf("build subscriber data plane: %v", err)
 	}
+	t.Cleanup(func() { _ = subDP.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pubDone := make(chan error, 1)

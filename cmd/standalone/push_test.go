@@ -42,6 +42,7 @@ func TestPushIngest_Boot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.PushBindings()) != 1 || dp.PushBindings()[0].Name != "src" {
 		t.Fatalf("pushBindings = %+v, want one binding for loop src", dp.PushBindings())
 	}
