@@ -14,9 +14,17 @@
 // the control-plane-only sibling). It mounts a minimal HTTP surface:
 // /healthz (liveness), /readyz (NATS + registry reachability), and the
 // configured /ingest/<loop>/... push routes — no ConnectRPC services of its
-// own. On SIGINT/SIGTERM the HTTP server shuts down and the data plane
-// drains (the shipper hooks around this sequence are PR3b Task 7's job — see
-// run, below, structured so that task can slot them in).
+// own.
+//
+// On SIGINT/SIGTERM this binary tears down in a FIXED order (tlog-custody
+// spec D8), never all at once: (1) the HTTP server stops accepting and
+// drains in-flight requests; (2) the data-plane loops/aggregates are told to
+// stop and awaited; (3) the mirror shippers' and emit-health reporters'
+// periodic goroutines are told to stop and awaited; (4) each mirror shipper
+// gets ONE final, FRESH-context flush attempt (never the already-canceled
+// signal context — see run, below); (5) the shared NATS connection and every
+// durable log's file handle close. See run's own doc for why this requires
+// splitting one shared context into several independently-cancelled ones.
 package main
 
 import (
@@ -29,6 +37,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/internal/httpserve"
@@ -38,6 +47,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
+	"github.com/provin-line/oss/pipeline/transport/tlogship"
 )
 
 // /metrics is deliberately NOT mounted by this binary in PR3b:
@@ -143,10 +153,17 @@ func main() {
 
 	// The pipeline-local keystore: THIS binary's own DataDir/keys, never the
 	// registry's. It must hold the #auth key for nodeDID (AuditRegistrar,
-	// PayloadResolver/Retain) and the #signing/#auth keys for every
-	// configured loop's issuer identity (source/chained/aggregate issuers,
-	// sink receipt issuers) — provisioning them is an operator/CLI concern,
-	// out of this task's scope, same convention cmd/standalone follows.
+	// PayloadResolver/Retain); the #signing/#auth keys for every configured
+	// loop's issuer identity (source/chained/aggregate issuers, sink receipt
+	// issuers); the #auth key for the checkpoint-signer identity of every
+	// durable log (the SAME issuer/receipt keys above — the mirror shipper
+	// signs MirrorLogSegment as that same identity, tlog-custody spec D-T3);
+	// and (PR3b Task 7) the #auth key for every producing loop's OWN
+	// pipeline DID (its OutputSubject, distinct from its issuer DID) — the
+	// identity the emit-health reporter signs ReportEmitHealth as (see
+	// emithealthwiring.go's package doc for why it must be the pipeline DID,
+	// not the issuer DID). Provisioning them is an operator/CLI concern, out
+	// of this task's scope, same convention cmd/standalone follows.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 
 	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID)
@@ -155,6 +172,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("pipeline: build data plane: %v", err)
 	}
+
+	// Mirror shippers (D-T6): one per durable custody log, signed as that
+	// log's own checkpoint-signer identity.
+	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
+	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
+	if err != nil {
+		log.Fatalf("pipeline: %v", err)
+	}
+
+	// EmitHealth reporters (Task 10 D4): one per by-reference publisher
+	// (every producing loop — buildDeps always wires a PayloadStore, so
+	// every producing loop dual-emits, D-6), signed/reported as that loop's
+	// pipeline DID.
+	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
+	reporters := buildEmitHealthReporters(producingLoopPublishers(pipeCfg.Loops), reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.PushBindings(), verifier, pipeCfg.MaxPushBodySize)
@@ -178,7 +210,7 @@ func main() {
 
 	// A failed boot or a data-plane failure is NOT a clean stop: exit non-zero
 	// so a supervisor restarts the node.
-	if err := run(ctx, srv, listen, dp); err != nil {
+	if err := run(ctx, srv, listen, dp, shippers, reporters, DefaultDrainBudget); err != nil {
 		log.Printf("pipeline: %v", err)
 		os.Exit(1)
 	}
@@ -224,40 +256,159 @@ func outerRequestCapBytes(maxPushBodySize int) int {
 	return maxPushBodySize*2 + 64<<10
 }
 
-// run runs the HTTP server and the data plane concurrently under a shared
-// cancellable context, waits for them to drain, and returns the first
-// non-shutdown error (nil on a clean shutdown). Mirrors cmd/network's
-// runNetwork / cmd/standalone's runServices shape so PR3b Task 7 can slot
-// the shipper drain into this exact sequence (start it alongside dp.Run,
-// order its shutdown between the HTTP drain and dp.Run's own drain) without
-// restructuring main.
-func run(ctx context.Context, srv *http.Server, listen func() error, dp *pipelineruntime.Runtime) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+// DefaultDrainBudget bounds step 4's final mirror-shipper flush (tlog-custody
+// spec D8): each shipper gets this long, on a FRESH context independent of
+// the already-canceled signal context, to ship its local tail before this
+// binary closes the underlying log/NATS handles. A shipper that cannot fully
+// catch up within the budget (registry down, or an unusually large backlog)
+// is NOT a shutdown failure — the unmirrored tail is still durable on the
+// LOCAL log and gets re-shipped the moment this node starts again
+// (tlogship.Shipper.Drain always resumes from the registry's own acked
+// cursor, never a locally cached one) — see drainShippers' doc.
+const DefaultDrainBudget = 10 * time.Second
 
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	wg.Add(2)
+// dataPlane is run's narrow dependency on pipeline/runtime.Runtime: Run
+// drains every loop/aggregate on ctx cancellation; Close (called only after
+// Run returns) releases the shared NATS connection and every durable custody
+// log's file handle — see pipeline/runtime.Runtime.Close's own doc for why
+// these are two separate calls as of PR3b Task 7. A local interface (rather
+// than the concrete *pipelineruntime.Runtime) lets the ordering test drive
+// run's shutdown sequence without booting a real NATS broker.
+type dataPlane interface {
+	Run(ctx context.Context) error
+	Close() error
+}
+
+// run executes this binary's D8 ordered shutdown. Unlike the concurrent
+// single-shared-context shape this function used to have (every stage
+// cancelled at once), an ORDERED sequence needs a CONTEXT SPLIT: the
+// data-plane loops (loopCtx) and the mirror shippers/emit-health reporters
+// (shipCtx) each get their OWN cancellable context, independent of ctx (the
+// signal context) and of each other, so cancelling one stage never also
+// cancels a later stage that has not been told to stop yet. All three run
+// concurrently the whole time this binary is up — what is ordered is only
+// the SHUTDOWN, driven step by step below:
+//
+//  1. HTTP stops accepting and drains in-flight requests
+//     (httpserve.ServeHTTP already gives its own drain a fresh bounded
+//     context internally; see its doc).
+//  2. loopCtx is cancelled and dp.Run is awaited (every loop/aggregate
+//     drains).
+//  3. shipCtx is cancelled and every shipper's Run / reporter's run goroutine
+//     is awaited (their periodic ticking stops).
+//  4. Each shipper gets ONE final flush attempt on a FRESH context
+//     (drainShippers — never loopCtx/shipCtx/ctx, all already cancelled by
+//     this point: reusing one of them would make Drain's very first attempt
+//     fail instantly, defeating the whole point of a final flush at
+//     shutdown).
+//  5. dp.Close() releases the shared NATS connection and every durable log's
+//     file handle, now that the shippers are done reading from them.
+//
+// An unprompted data-plane failure (dp.Run returning a non-nil error before
+// any external signal — e.g. a boot-time Subscribe error) cancels httpCtx
+// early, bringing the HTTP surface down too and proceeding through the same
+// ordered teardown below it; mirrors the old single-context run()'s "first
+// error cancels everyone" posture, just re-anchored at the front of the
+// sequence instead of firing every stage at once. Likewise, if ServeHTTP
+// itself returns for a reason OTHER than the signal (e.g. a bind failure),
+// the sequence still proceeds through steps 2-5 — whatever HTTP stopped for,
+// whatever was started still gets torn down in order.
+func run(ctx context.Context, srv *http.Server, listen func() error, dp dataPlane, shippers []*tlogship.Shipper, reporters []*emitHealthReporter, drainBudget time.Duration) error {
+	loopCtx, cancelLoops := context.WithCancel(context.Background())
+	defer cancelLoops()
+	shipCtx, cancelShip := context.WithCancel(context.Background())
+	defer cancelShip()
+	httpCtx, cancelHTTP := context.WithCancel(ctx)
+	defer cancelHTTP()
+
+	loopErrCh := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		defer cancel()
-		if err := httpserve.ServeHTTP(runCtx, srv, listen); err != nil {
-			errs <- fmt.Errorf("http server: %w", err)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		if err := dp.Run(runCtx); err != nil {
-			cancel()
-			errs <- fmt.Errorf("data plane: %w", err)
-		}
-	}()
-	wg.Wait()
-	close(errs)
-	for err := range errs {
+		err := dp.Run(loopCtx)
 		if err != nil {
-			return err
+			cancelHTTP()
 		}
+		loopErrCh <- err
+	}()
+
+	var bgWG sync.WaitGroup
+	for _, sh := range shippers {
+		bgWG.Add(1)
+		go func(sh *tlogship.Shipper) {
+			defer bgWG.Done()
+			_ = sh.Run(shipCtx) // never returns a real error; see tlogship.Shipper.Run's doc
+		}(sh)
+	}
+	for _, rp := range reporters {
+		bgWG.Add(1)
+		go func(rp *emitHealthReporter) {
+			defer bgWG.Done()
+			rp.run(shipCtx)
+		}(rp)
+	}
+
+	// Step 1.
+	httpErr := httpserve.ServeHTTP(httpCtx, srv, listen)
+
+	// Step 2.
+	cancelLoops()
+	loopErr := <-loopErrCh
+
+	// Step 3.
+	cancelShip()
+	bgWG.Wait()
+
+	// Step 4.
+	drainShippers(shippers, drainBudget)
+
+	// Step 5.
+	closeErr := dp.Close()
+
+	// Precedence is httpErr > loopErr > closeErr (the switch below): only the
+	// highest-priority non-nil error is returned. A lower-priority error is
+	// still real (a leaked conn, an unflushed log) — it must not vanish
+	// silently just because a higher one is reported first, so log any
+	// masked error here before the switch decides what to return.
+	if httpErr != nil {
+		if loopErr != nil {
+			log.Printf("pipeline: data plane error masked by http server error: %v", loopErr)
+		}
+		if closeErr != nil {
+			log.Printf("pipeline: data plane close error masked by http server error: %v", closeErr)
+		}
+	} else if loopErr != nil && closeErr != nil {
+		log.Printf("pipeline: data plane close error masked by data plane error: %v", closeErr)
+	}
+
+	switch {
+	case httpErr != nil:
+		return fmt.Errorf("http server: %w", httpErr)
+	case loopErr != nil:
+		return fmt.Errorf("data plane: %w", loopErr)
+	case closeErr != nil:
+		return fmt.Errorf("data plane: close: %w", closeErr)
 	}
 	return nil
+}
+
+// drainShippers gives every mirror shipper one FRESH, bounded (budget)
+// attempt to flush its local tail to the registry (D8 step 4) —
+// concurrently, so N shippers cost at most ~budget total, not N×budget. A
+// shipper that cannot finish within budget is logged, never treated as a
+// shutdown failure: the tail stays durable on the local log and the next
+// boot's shipper resumes it from the registry's own acked cursor (see
+// DefaultDrainBudget's doc) — this binary still exits zero.
+func drainShippers(shippers []*tlogship.Shipper, budget time.Duration) {
+	var wg sync.WaitGroup
+	for _, sh := range shippers {
+		wg.Add(1)
+		go func(sh *tlogship.Shipper) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
+			defer cancel()
+			if err := sh.Drain(ctx); err != nil {
+				log.Printf("pipeline: local durable tail remains unmirrored (resume re-ships it): %v", err)
+			}
+		}(sh)
+	}
+	wg.Wait()
 }

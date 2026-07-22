@@ -101,6 +101,7 @@ func TestAggregate_SelfAudit_RecordsSourceCommitmentVerified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (aggregate self-audit): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	runner, err := buildAuditRunner(queue, status, receipts, localSvc, localPool, res, nil, cfg)
 	if err != nil || runner == nil {
 		t.Fatalf("buildAuditRunner: r=%v err=%v", runner, err)

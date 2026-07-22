@@ -163,9 +163,23 @@ func parseDelivery(s string) contract.PayloadDelivery {
 }
 
 // Runtime is the node's set of running pipeline loops over one shared nats
-// connection. It owns the connection's lifecycle: Run starts the loops, waits for
-// them to drain on context cancellation, then closes the shared connection (the 17a
-// Conn-owns-teardown contract realized at node level).
+// connection. It owns the connection's lifecycle, split across two calls
+// (PR3b Task 7): Run starts the loops, waits for them to drain on context
+// cancellation, and returns — it no longer closes anything itself. Close
+// (called ONLY after Run has returned) then releases the shared connection
+// and every durable custody log's file handle (the 17a Conn-owns-teardown
+// contract, realized at node level, now a caller-driven step instead of
+// Run's own tail).
+//
+// Why the split: a composition root that custodies durable logs to a
+// mirror registry (cmd/pipeline's shipper — see pipeline/transport/
+// tlogship) needs a window AFTER every loop/aggregate has drained but
+// BEFORE the logs' file handles close, to flush each log's tail one last
+// time. Run used to close the logs the instant loops drained, leaving no
+// such window; Close gives a caller that window by making log/conn teardown
+// an explicit, separately-timed step. cmd/standalone, which has no
+// post-drain step of its own, calls Close immediately after Run returns —
+// identical timing to Run's old self-closing behavior.
 type Runtime struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
@@ -838,10 +852,14 @@ func sinkKind(k string) (contract.SinkKind, error) {
 	}
 }
 
-// Run runs every loop until ctx is cancelled, waits for all of them to drain and
-// return, then closes the shared connection. A zero-loop runner returns immediately.
-// It returns the first loop error, or the connection close error if the loops were
-// clean.
+// Run runs every loop until ctx is cancelled and waits for all of them to
+// drain and return. A zero-loop runner returns immediately. It returns the
+// first loop error, or nil on a clean drain — Run itself no longer touches
+// the shared connection or any log handle; see Close and the Runtime doc for
+// why that teardown moved out to a separate, caller-driven step (PR3b Task
+// 7). Every caller MUST call Close after Run returns (whether cleanly or
+// with an error) — Run's own drain is not a complete shutdown by itself
+// anymore.
 //
 // Loops share a child context derived from ctx, so the first loop to fail (e.g. a
 // boot-time Subscribe error) cancels its siblings and Run returns promptly — it does
@@ -876,20 +894,44 @@ func (r *Runtime) Run(ctx context.Context) error {
 	wg.Wait()
 	close(errs)
 
-	// All processes have drained (Subscriber.Drain + Publisher.Close); only now tear the
-	// shared connection down and release the emission logs' file handles.
+	for err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Close releases the shared nats connection and every durable custody log's
+// file handle. Callers MUST NOT call Close until Run has returned (every
+// loop and aggregate has drained) — closing earlier would race whichever
+// loop is still consuming/producing through the connection or a log. A
+// zero-loop runtime (conn is nil — see the conn field's doc) is a no-op.
+//
+// Close is safe to call more than once (including concurrently with itself
+// only in the trivial sense of repeated sequential calls — it is not
+// goroutine-safe against a concurrent first call): only the first call
+// releases the connection and logs; every subsequent call is a no-op that
+// returns nil. This lets independent teardown paths (e.g. a test's
+// t.Cleanup alongside the production shutdown sequence) both call Close
+// without racing on a double-close of the underlying conn/handles.
+//
+// See the Runtime doc for why this is a separate call from Run rather than
+// Run's own tail: it gives a composition root with a post-drain step of its
+// own (cmd/pipeline's mirror-shipper final flush) a window, between Run
+// returning and Close being called, where every log handle is still open.
+func (r *Runtime) Close() error {
+	if r.conn == nil {
+		return nil
+	}
 	closeErr := r.conn.Close()
 	for _, c := range r.tlogClosers {
 		if err := c.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 	}
-
-	for err := range errs {
-		if err != nil {
-			return err
-		}
-	}
+	r.conn = nil
+	r.tlogClosers = nil
 	return closeErr
 }
 

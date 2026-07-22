@@ -161,6 +161,7 @@ func TestDataPlane_SourceLoopBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // drain the runner even if the test fails before the explicit cancel below
@@ -270,6 +271,7 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 		t.Fatalf("build bad loop: %v", err)
 	}
 	dp := &Runtime{conn: conn, loops: []*transport.Loop{good, bad}}
+	t.Cleanup(func() { _ = dp.Close() })
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- dp.Run(context.Background()) }()
@@ -293,6 +295,7 @@ func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (zero loops): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if err := dp.Run(context.Background()); err != nil {
 		t.Fatalf("zero-loop Run: %v", err)
 	}
@@ -348,6 +351,7 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (sink): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
 	}
@@ -549,6 +553,7 @@ func TestBuildDataPlane_SinkFileOutputAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (file sink, no injected writer): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("output file not created at boot: %v", err)
 	}
@@ -607,6 +612,7 @@ func TestBuildDataPlane_ChainedLoopAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (chained): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.loops) != 1 {
 		t.Fatalf("loops: got %d want 1", len(dp.loops))
 	}

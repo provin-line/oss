@@ -351,7 +351,17 @@ func runServices(ctx context.Context, srv *http.Server, listen func() error, dp 
 	}()
 	go func() {
 		defer wg.Done()
-		if err := dp.Run(runCtx); err != nil {
+		// pipeline/runtime.Runtime.Run no longer closes the shared connection
+		// or log handles itself (PR3b Task 7 — see its own doc): this binary
+		// has no post-drain step of its own, so Close is called immediately
+		// after Run returns, reproducing Run's old self-closing timing
+		// exactly. A Run error takes precedence over a Close error, same
+		// precedence Run used to apply internally.
+		err := dp.Run(runCtx)
+		if closeErr := dp.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
 			cancel()
 			errs <- fmt.Errorf("data plane: %w", err)
 		}

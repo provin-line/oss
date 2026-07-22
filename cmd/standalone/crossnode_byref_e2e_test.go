@@ -250,6 +250,7 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build publisher data plane: %v", err)
 	}
+	t.Cleanup(func() { _ = pubDP.Close() })
 
 	// --- subscriber data plane: sink loop, by-reference, in-process resolver
 	res := local.New()
@@ -273,6 +274,7 @@ func TestCapstone_ByReferenceCrossNodeDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build subscriber data plane: %v", err)
 	}
+	t.Cleanup(func() { _ = subDP.Close() })
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	pubDone := make(chan error, 1)

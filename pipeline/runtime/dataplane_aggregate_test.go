@@ -76,6 +76,7 @@ func TestBuildDataPlane_AggregateProcessAssembles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build (aggregate): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	if len(dp.aggregates) != 1 {
 		t.Fatalf("aggregates: got %d want 1", len(dp.aggregates))
 	}

@@ -106,6 +106,7 @@ func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build (full chain): %v", err)
 	}
+	t.Cleanup(func() { _ = dp.Close() })
 	// The async audit runner walks the full chain from localSvc and records the verdict —
 	// the coverage that replaces real-time full (slice-17j). It resolves issuer DIDs via res.
 	auditRunner, err := buildAuditRunner(auditQueue, auditStatus, auditor.NewMemReceiptStore(), localSvc, localPool, res, nil, cfg)
