@@ -100,7 +100,7 @@ func setupFullChain(t *testing.T, store *vcresolver.VariantStore, wrap func(http
 		Resolver:            res,
 		SinkWriter:          writer,
 		VCStore:             ingressStoreAdapter{svc: localSvc},
-		AuditQueue:          auditQueue,
+		AuditQueue:          auditRegistrarAdapter{queue: auditQueue},
 		CredentialPublisher: credentialPublisherFrom(cfg, srv.Client()),
 	})
 	if err != nil {

@@ -63,23 +63,24 @@ const (
 	// pipeCfg.HasConsumingLoop(), which is always false for that binary — can
 	// name the exact key in its own fatal message without duplicating the
 	// literal (this package already uses it below for the same reason).
-	VCStoreBearerKey        = pipelineKey + ".vc-store-bearer"
-	maxCredentialSizeKey    = pipelineKey + ".max-credential-size"
-	maxPushBodySizeKey      = pipelineKey + ".max-push-body-size"
-	maxRetainChunkSizeKey   = pipelineKey + ".max-retain-chunk-size"
-	maxRetainPayloadSizeKey = pipelineKey + ".max-retain-payload-size"
-	tlogMirrorKey           = pipelineKey + ".tlog-mirror"
-	tlogMirrorMaxRecordsKey = tlogMirrorKey + ".max-batch-records"
-	tlogMirrorMaxBytesKey   = tlogMirrorKey + ".max-batch-bytes"
-	batchResolverKey        = pipelineKey + ".batch-resolver"
-	brIntervalKey           = batchResolverKey + ".interval"
-	brBatchSizeKey          = batchResolverKey + ".batch-size"
-	brMaxRetriesKey         = batchResolverKey + ".max-retries"
-	brMaxDepthKey           = batchResolverKey + ".max-depth"
-	auditRunnerKey          = pipelineKey + ".audit-runner"
-	arIntervalKey           = auditRunnerKey + ".interval"
-	arBatchSizeKey          = auditRunnerKey + ".batch-size"
-	arMaxAttemptsKey        = auditRunnerKey + ".max-attempts"
+	VCStoreBearerKey           = pipelineKey + ".vc-store-bearer"
+	maxCredentialSizeKey       = pipelineKey + ".max-credential-size"
+	maxPushBodySizeKey         = pipelineKey + ".max-push-body-size"
+	maxRetainChunkSizeKey      = pipelineKey + ".max-retain-chunk-size"
+	maxRetainPayloadSizeKey    = pipelineKey + ".max-retain-payload-size"
+	tlogMirrorKey              = pipelineKey + ".tlog-mirror"
+	tlogMirrorMaxRecordsKey    = tlogMirrorKey + ".max-batch-records"
+	tlogMirrorMaxBytesKey      = tlogMirrorKey + ".max-batch-bytes"
+	tlogMirrorFlushIntervalKey = tlogMirrorKey + ".flush-interval"
+	batchResolverKey           = pipelineKey + ".batch-resolver"
+	brIntervalKey              = batchResolverKey + ".interval"
+	brBatchSizeKey             = batchResolverKey + ".batch-size"
+	brMaxRetriesKey            = batchResolverKey + ".max-retries"
+	brMaxDepthKey              = batchResolverKey + ".max-depth"
+	auditRunnerKey             = pipelineKey + ".audit-runner"
+	arIntervalKey              = auditRunnerKey + ".interval"
+	arBatchSizeKey             = auditRunnerKey + ".batch-size"
+	arMaxAttemptsKey           = auditRunnerKey + ".max-attempts"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -166,11 +167,12 @@ type AuditRunnerConfig struct {
 	MaxAttempts int
 }
 
-// TlogMirrorConfig is the node-level tuning for MirrorLogSegment's D-T2 rule
-// 5 caps (tlog-custody spec). Both values come from reference.conf (no Go
-// defaults) and must be positive; they are read by BOTH binaries (unlike
-// most quotas here, which are consumed by the client-shipper side too — the
-// registry-side handler enforcing MirrorLogSegment is the primary reader).
+// TlogMirrorConfig is the node-level tlog-mirror tuning (tlog-custody spec).
+// All values come from reference.conf (no Go defaults) and must be positive.
+// The two caps are D-T2 rule 5: read by BOTH sides (the registry-side
+// MirrorLogSegment handler is the primary enforcer; the client-side shipper
+// bounds its batches to the same values). FlushInterval is client-side only —
+// the mirror shipper's ticking cadence; no handler reads it.
 type TlogMirrorConfig struct {
 	// MaxBatchRecords bounds the number of records framed into
 	// record_payloads_framed in one MirrorLogSegment call. A batch over this
@@ -180,6 +182,12 @@ type TlogMirrorConfig struct {
 	// record_payloads_framed in one MirrorLogSegment call. A batch over this
 	// cap is ResourceExhausted.
 	MaxBatchBytes int
+	// FlushInterval is the ticking cadence the client-side shipper
+	// (pipeline/transport/tlogship) uses to flush buffered records via
+	// MirrorLogSegment, independent of the two caps above (a flush also
+	// fires early once a cap is hit). Comes from reference.conf (no Go-side
+	// default) and must be positive.
+	FlushInterval time.Duration
 }
 
 // BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
@@ -491,9 +499,10 @@ func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
 	return ar, nil
 }
 
-// loadTlogMirror reads the D-T2 MirrorLogSegment caps from the (layered)
-// config. Both values live in reference.conf (always present); each must be
-// positive — a non-positive override fails startup (no Go-side defaults).
+// loadTlogMirror reads the D-T2 MirrorLogSegment caps plus the client-side
+// shipper's flush cadence from the (layered) config. All three values live in
+// reference.conf (always present); each must be positive — a non-positive
+// override fails startup (no Go-side defaults).
 func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
 	var tm TlogMirrorConfig
 	var err error
@@ -503,6 +512,14 @@ func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
 	if tm.MaxBatchBytes, err = loadPositiveInt(cfg, tlogMirrorMaxBytesKey); err != nil {
 		return TlogMirrorConfig{}, err
 	}
+	flushInterval, err := cfg.Duration(tlogMirrorFlushIntervalKey)
+	if err != nil {
+		return TlogMirrorConfig{}, fmt.Errorf("pipeline: config %s: %w", tlogMirrorFlushIntervalKey, err)
+	}
+	if flushInterval <= 0 {
+		return TlogMirrorConfig{}, fmt.Errorf("pipeline: config %s must be positive, got %s", tlogMirrorFlushIntervalKey, flushInterval)
+	}
+	tm.FlushInterval = flushInterval
 	return tm, nil
 }
 

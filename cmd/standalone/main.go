@@ -191,7 +191,7 @@ func main() {
 	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, pipelineruntime.Deps{
 		Resolver:            resolver,
 		VCStore:             ingressStoreAdapter{svc: vcSvc},
-		AuditQueue:          auditQueue,
+		AuditQueue:          auditRegistrarAdapter{queue: auditQueue},
 		Receipts:            auditReceipts,
 		SchemaResolver:      schemaBridge,
 		SchemaGetter:        schemaGetterAdapter{svc: schemaSvc},

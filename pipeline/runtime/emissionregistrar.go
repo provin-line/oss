@@ -51,12 +51,13 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 		return fmt.Errorf("emissionRegistrar: marshal emitted credential: %w", err)
 	}
 	// An aggregate FirstDrop has no predecessor → no upstream hint, assembly depth 0. StoreVC
-	// returns the server-recomputed body address, the authoritative head hash used as both
-	// the receipt key and the audit-queue key (so all three agree). Keying on the admitted
-	// variant instead is P0-1 slices B/C: it is the verdict that has to name the exact bytes
-	// evaluated (invariants 6 and 12), and neither the receipt store nor the audit queue can
-	// carry that yet.
-	bodyAddress, err := r.local.StoreVC(ctx, b, "", 0)
+	// returns the server-recomputed StoredHead; its BodyAddress is the authoritative head hash
+	// used as both the receipt key and the audit-queue key (so all three agree). Keying the
+	// RECEIPT and QUEUE on the admitted variant instead is P0-1 slices B/C: it is the verdict
+	// that has to name the exact bytes evaluated (invariants 6 and 12), and neither the receipt
+	// store nor the audit queue can carry that yet — the WireVariantID travels through
+	// r.audit.Add(head) regardless (task-3 seam widening), for a future wire adapter to use.
+	head, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("emissionRegistrar: local store emitted head: %w", err)
 	}
@@ -65,10 +66,10 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 	// (there is no wire caller here to prove one). Recorded as the receipt's registrant, an
 	// audit-trail fact only (see auditor.ReceiptStore.Put's doc): this is NOT an ownership
 	// check, and RegisterEmission never validates it against anything else.
-	if err := r.receipts.Put(bodyAddress, cred.Issuer(), consumedHashes); err != nil {
+	if err := r.receipts.Put(head.BodyAddress, cred.Issuer(), consumedHashes); err != nil {
 		return fmt.Errorf("emissionRegistrar: write consumed-set receipt: %w", err)
 	}
-	if err := r.audit.Add(bodyAddress); err != nil {
+	if err := r.audit.Add(head); err != nil {
 		return fmt.Errorf("emissionRegistrar: enqueue head for self-audit: %w", err)
 	}
 	if r.publisher != nil {

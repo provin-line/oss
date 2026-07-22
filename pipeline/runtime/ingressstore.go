@@ -8,21 +8,49 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// IngressStorer is the StoreVC seam the consuming loops' ingress store writes
-// through. StoreIngressVC's only read of the result is the stored head's
-// body address (see below), so the seam returns that string directly rather
-// than network/pkg/services/vcresolver.StoreVCResult — this package stays
-// network-agnostic (network/ and pipeline/ never import each other,
-// AGENTS.md rule 2). cmd/standalone adapts *vcresolver.Service to this
-// interface.
-type IngressStorer interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (bodyAddress string, err error)
+// StoredHead identifies one locally stored credential both ways the audit
+// substrate needs: the BODY content address (the audit queue's key today)
+// and the WIRE VARIANT id (what a future wire audit registration — see
+// AuditService.RegisterAuditHead — must present for admission). It mirrors
+// network/pkg/services/vcresolver.StoreVCResult so this package stays
+// network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
+// rule 2); cmd/standalone's ingressStoreAdapter maps both fields from the
+// real *vcresolver.Service.
+//
+// StoredHead is deliberately NOT the same type as StoredCredential
+// (publishingsigner.go), even though the two share this exact shape today.
+// StoredCredential is what a REMOTE publish (CredentialPublisher, this
+// node's own signed output) round-trips against; StoredHead is what a LOCAL
+// store call (IngressStorer, any consumed-or-emitted head, not necessarily
+// signed by this node) hands to the audit substrate (AuditRegistrar). Their
+// callers, lifecycles, and evolution paths differ — collapsing them would
+// couple the publish round-trip check to the audit-registration seam for no
+// reason beyond a coincidental field match.
+type StoredHead struct {
+	// BodyAddress is the server-recomputed content address ("sha256:<hex>") —
+	// the audit queue's key today.
+	BodyAddress string
+	// WireVariantID names the exact wire bytes the store admitted
+	// ("wire:v1:jcs-rfc8785:sha256:<hex>") — not yet consumed by the audit
+	// queue (body-keyed, see StoreIngressVC's doc), carried here so a future
+	// wire audit registration can present it.
+	WireVariantID string
 }
 
-// AuditRegistrar registers a consumed head's content address for async audit (slice-17h).
-// cmd/standalone owns this local interface; *auditor.MemQueue satisfies it.
+// IngressStorer is the StoreVC seam the consuming loops' ingress store writes
+// through. It returns the full StoredHead rather than
+// network/pkg/services/vcresolver.StoreVCResult directly — this package stays
+// network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
+// rule 2). cmd/standalone adapts *vcresolver.Service to this interface.
+type IngressStorer interface {
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (StoredHead, error)
+}
+
+// AuditRegistrar registers a consumed head for async audit (slice-17h). cmd/standalone
+// owns this local interface; an adapter over *auditor.MemQueue (or the file-backed
+// audit queue) satisfies it.
 type AuditRegistrar interface {
-	Add(headHash string) error
+	Add(head StoredHead) error
 }
 
 // Compile-time assertion: serviceIngressStore satisfies contract.IngressVCStore.
@@ -61,7 +89,7 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	}
 	// A consumed ingress credential is directly received — assembly depth 0; its
 	// missing predecessor enqueues at depth 1.
-	bodyAddress, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
+	head, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
 	if err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
 	}
@@ -69,13 +97,14 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	// store above: losing the registration would drop this credential from the audit trail,
 	// the failure 17f's "never continue without the audit trail" contract guards against.
 	//
-	// The head is registered by BODY address: the audit queue is body-keyed
-	// today, which is exactly what P0-1 invariants 6 and 12 rule out — a verdict
-	// must name the variant it evaluated. Slice B carries that; naming the
-	// variant here would only move the mismatch, since nothing downstream can
-	// yet receive it.
+	// AuditRegistrar.Add receives the full StoredHead now (task-3 seam widening), but the
+	// audit queue itself is STILL body-keyed today — that is exactly what P0-1 invariants 6
+	// and 12 rule out, a verdict must name the variant it evaluated. Slice B carries that on
+	// the queue's own side; this widening only ensures the variant id is no longer dropped
+	// on the way there, so a future wire adapter (AuditService.RegisterAuditHead) can recover
+	// it — it does not itself change what the in-process queue keys by.
 	if s.audit != nil {
-		if err := s.audit.Add(bodyAddress); err != nil {
+		if err := s.audit.Add(head); err != nil {
 			return fmt.Errorf("ingressstore: register audit head: %w", err)
 		}
 	}

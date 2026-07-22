@@ -77,7 +77,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 	receipts := auditor.NewMemReceiptStore()
 
 	verifier := vc.NewVerifier(res, ed25519.Verifier{})
-	ingressStore := pipelineruntime.NewServiceIngressStore(ingressStoreAdapter{svc: localSvc}, queue)
+	ingressStore := pipelineruntime.NewServiceIngressStore(ingressStoreAdapter{svc: localSvc}, auditRegistrarAdapter{queue: queue})
 
 	receiptSigner, err := vcdid.NewSigner(vcdid.Config{
 		Builder: builder, IssuerDID: srSinkIss, KeyID: string(keystore.KeyIDSigning),
@@ -87,7 +87,7 @@ func TestSinkReceipt_AuditReachableVerified_AndAllowList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receipt signer: %v", err)
 	}
-	registrar := pipelineruntime.NewSinkReceiptRegistrar(receiptSigner, ingressStoreAdapter{svc: localSvc}, memlog.New(), queue, nil)
+	registrar := pipelineruntime.NewSinkReceiptRegistrar(receiptSigner, ingressStoreAdapter{svc: localSvc}, memlog.New(), auditRegistrarAdapter{queue: queue}, nil)
 
 	writer := &captureWriter{}
 	proc, err := sink.New(sink.Config{

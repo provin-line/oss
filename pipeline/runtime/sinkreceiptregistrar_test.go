@@ -31,18 +31,22 @@ func (f *fakeChainSigner) SignChainPreserving(_ context.Context, _ []byte, input
 }
 
 type fakeLocalStore struct {
-	calls int
-	head  string
-	err   error
-	order *[]string
+	calls   int
+	head    string
+	variant string
+	err     error
+	order   *[]string
 }
 
-func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (string, error) {
+func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (StoredHead, error) {
 	f.calls++
 	if f.order != nil {
 		*f.order = append(*f.order, "local")
 	}
-	return f.head, f.err
+	if f.err != nil {
+		return StoredHead{}, f.err
+	}
+	return StoredHead{BodyAddress: f.head, WireVariantID: f.variant}, nil
 }
 
 type fakeReceiptLog struct {
@@ -68,13 +72,13 @@ func (f *fakeReceiptLog) Checkpoint(context.Context) (*tlog.Checkpoint, error) {
 }
 
 type fakeAuditReg struct {
-	added []string
+	added []StoredHead
 	err   error
 	order *[]string
 }
 
-func (f *fakeAuditReg) Add(headHash string) error {
-	f.added = append(f.added, headHash)
+func (f *fakeAuditReg) Add(head StoredHead) error {
+	f.added = append(f.added, head)
 	if f.order != nil {
 		*f.order = append(*f.order, "audit")
 	}
@@ -125,7 +129,7 @@ func TestSinkReceiptRegistrar_IssueReceipt(t *testing.T) {
 
 	var order []string
 	signer := &fakeChainSigner{receipt: receipt}
-	local := &fakeLocalStore{head: "sha256:receipthead", order: &order}
+	local := &fakeLocalStore{head: "sha256:receipthead", variant: "wire:v1:jcs-rfc8785:sha256:receipthead", order: &order}
 	rl := &fakeReceiptLog{order: &order}
 	audit := &fakeAuditReg{order: &order}
 	remote := &fakeRemotePublisher{order: &order}
@@ -147,8 +151,12 @@ func TestSinkReceiptRegistrar_IssueReceipt(t *testing.T) {
 	if local.calls != 1 || rl.calls != 1 || len(audit.added) != 1 || remote.calls != 1 {
 		t.Errorf("calls: local=%d tlog=%d audit=%d remote=%d, want 1/1/1/1", local.calls, rl.calls, len(audit.added), remote.calls)
 	}
-	if audit.added[0] != "sha256:receipthead" {
-		t.Errorf("audit head = %q, want the local store head", audit.added[0])
+	if audit.added[0].BodyAddress != "sha256:receipthead" {
+		t.Errorf("audit head = %+v, want BodyAddress %q", audit.added[0], "sha256:receipthead")
+	}
+	// task-3: the wire variant id travels through the seam untouched, not just the body address.
+	if audit.added[0].WireVariantID != "wire:v1:jcs-rfc8785:sha256:receipthead" {
+		t.Errorf("audit head WireVariantID = %q, want %q", audit.added[0].WireVariantID, "wire:v1:jcs-rfc8785:sha256:receipthead")
 	}
 	// Ordering is load-bearing: local audit trail BEFORE remote visibility.
 	want := []string{"local", "tlog", "audit", "remote"}

@@ -113,7 +113,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
-	reg := pipelineruntime.NewEmissionRegistrar(ingressStoreAdapter{svc: localSvc}, receipts, queue, nil)
+	reg := pipelineruntime.NewEmissionRegistrar(ingressStoreAdapter{svc: localSvc}, receipts, auditRegistrarAdapter{queue: queue}, nil)
 	srcAHash, _ := srcA.Hash()
 	srcBHash, _ := srcB.Hash()
 	if err := reg.RegisterEmission(ctx, aggCred, []string{srcAHash, srcBHash}); err != nil {

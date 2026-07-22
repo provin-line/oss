@@ -36,6 +36,14 @@ func TestLoad_BatchResolverAndSizeDefaults(t *testing.T) {
 	if cfg.TlogMirror.MaxBatchBytes != 4<<20 {
 		t.Errorf("tlog-mirror.max-batch-bytes = %d, want %d", cfg.TlogMirror.MaxBatchBytes, 4<<20)
 	}
+	// The shipped default must stay consistent with
+	// pipeline/transport/tlogship.DefaultFlushInterval (this package cannot
+	// import pipeline/ to assert equality directly — network/ and pipeline/
+	// never import each other, AGENTS.md rule 2 — so 5s is duplicated here by
+	// convention; TestLoad_TlogMirrorFlushIntervalDefault pins the value).
+	if cfg.TlogMirror.FlushInterval != 5*time.Second {
+		t.Errorf("tlog-mirror.flush-interval = %s, want %s", cfg.TlogMirror.FlushInterval, 5*time.Second)
+	}
 }
 
 func TestLoad_TlogMirrorNonPositiveOverrideFails(t *testing.T) {
@@ -44,6 +52,36 @@ func TestLoad_TlogMirrorNonPositiveOverrideFails(t *testing.T) {
 	}
 	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.max-batch-bytes = -1`)); err == nil {
 		t.Fatal("max-batch-bytes = -1: want a boot error")
+	}
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.flush-interval = 0s`)); err == nil {
+		t.Fatal("flush-interval = 0s: want a boot error")
+	}
+	if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.flush-interval = -1s`)); err == nil {
+		t.Fatal("flush-interval = -1s: want a boot error")
+	}
+}
+
+// TestLoad_TlogMirrorFlushIntervalDefault pins the shipped default (5s) — the
+// value pipeline/transport/tlogship.DefaultFlushInterval must also carry (a
+// name-it-in-a-comment convention, not an import, per AGENTS.md rule 2).
+func TestLoad_TlogMirrorFlushIntervalDefault(t *testing.T) {
+	cfg, err := pipelineconfig.LoadPipelineConfig(loadWith(t, ""))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if cfg.TlogMirror.FlushInterval != 5*time.Second {
+		t.Errorf("tlog-mirror.flush-interval default = %s, want %s", cfg.TlogMirror.FlushInterval, 5*time.Second)
+	}
+}
+
+// TestLoad_TlogMirrorFlushIntervalOverride asserts an explicit override is honored.
+func TestLoad_TlogMirrorFlushIntervalOverride(t *testing.T) {
+	cfg, err := pipelineconfig.LoadPipelineConfig(loadWith(t, `provin.network.pipeline.tlog-mirror.flush-interval = 10s`))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if cfg.TlogMirror.FlushInterval != 10*time.Second {
+		t.Errorf("tlog-mirror.flush-interval = %s, want %s", cfg.TlogMirror.FlushInterval, 10*time.Second)
 	}
 }
 

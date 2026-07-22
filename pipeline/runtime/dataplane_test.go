@@ -46,9 +46,14 @@ import (
 // tests.
 type fakeVCStore struct{}
 
-func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int) (string, error) {
+// StoreVC derives a deterministic body address (sha256 of the credential
+// bytes) AND a deterministic, distinguishable wire variant id — distinct
+// from the body address so a test asserting on StoredHead.WireVariantID
+// cannot pass by accident from a copy-paste of the body address.
+func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int) (StoredHead, error) {
 	sum := sha256.Sum256(credential)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	body := "sha256:" + hex.EncodeToString(sum[:])
+	return StoredHead{BodyAddress: body, WireVariantID: "wire:v1:jcs-rfc8785:" + body}, nil
 }
 
 // dpVCStore returns a fresh IngressStorer for data-plane tests that build
@@ -58,18 +63,18 @@ func dpVCStore() IngressStorer {
 }
 
 // memAuditQueue is a minimal AuditRegistrar test double recording every
-// registered head — enough for these tests, which only need audit
-// registration to succeed (no assertions on the queue's own drain/list
-// behavior; network/pkg/services/auditor.MemQueue is the production-shaped
-// one, wired by cmd/standalone). A package-local fake keeps this package
-// free of any network/ import (network/ and pipeline/ never import each
-// other, AGENTS.md rule 2).
-type memAuditQueue struct{ heads []string }
+// registered head (both StoredHead fields) — enough for these tests, which
+// only need audit registration to succeed (no assertions on the queue's own
+// drain/list behavior; network/pkg/services/auditor.MemQueue is the
+// production-shaped one, wired by cmd/standalone through an adapter). A
+// package-local fake keeps this package free of any network/ import
+// (network/ and pipeline/ never import each other, AGENTS.md rule 2).
+type memAuditQueue struct{ heads []StoredHead }
 
 func newMemAuditQueue() *memAuditQueue { return &memAuditQueue{} }
 
-func (q *memAuditQueue) Add(headHash string) error {
-	q.heads = append(q.heads, headHash)
+func (q *memAuditQueue) Add(head StoredHead) error {
+	q.heads = append(q.heads, head)
 	return nil
 }
 
