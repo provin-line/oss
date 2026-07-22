@@ -15,12 +15,10 @@ import (
 // report for the full accounting.
 type (
 	readinessCheck = netcompose.ReadinessCheck
-	// schemaGetter: dataplane.go's dataPlaneDeps.SchemaGetter field keeps this
-	// exact (unqualified) type name — aliasing here avoids touching that
-	// field's declaration.
-	schemaGetter = netcompose.SchemaGetter
-	// loopMetrics: dataplane.go's per-loop metrics bookkeeping keeps this
-	// exact (unqualified) type name.
+	// loopMetrics: metrics_test.go's handler-family assertions keep this exact
+	// (unqualified) type name. pipeline/runtime defines its own equivalent
+	// alias (LoopMetrics) for the moved dataplane.go — the two are independent
+	// aliases onto the same netcompose type, not a shared symbol.
 	loopMetrics = netcompose.LoopMetrics
 	// strippedPublishHealthSource: main.go's byRefSources slice keeps this
 	// exact (unqualified) type name.
@@ -51,14 +49,6 @@ var (
 	// maxDocumentRequestBytes, which stay unexported/internal to that file);
 	// main.go and main_test.go keep calling it under the old name.
 	outerRequestCapBytes = netcompose.OuterRequestCapBytes
-	// bearerInterceptor: relocated from cmd/standalone/dataplane.go into
-	// internal/netcompose/batchresolver.go (its other caller, peerFetcher.Fetch,
-	// lives there); dataplane.go's VC-store client wiring keeps calling it
-	// under the old name.
-	bearerInterceptor = netcompose.BearerInterceptor
-	// resolveSchemaRefAtBoot: dataplane.go's resolveSchema closure calls it
-	// under the old name.
-	resolveSchemaRefAtBoot = netcompose.ResolveSchemaRefAtBoot
 
 	// internal/httpserve (shared HTTP/2 serving plumbing).
 	buildServer = httpserve.BuildServer

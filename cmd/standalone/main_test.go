@@ -12,17 +12,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"github.com/provin-line/oss/pipeline/transport"
-	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
-	"github.com/provin-line/oss/tlog/memlog"
-	"github.com/provin-line/oss/vc"
+
 	"golang.org/x/net/http2"
 
-	"github.com/provin-line/oss/network/pkg/core"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+
+	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/core"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 )
 
 // TestRunServices_DataPlaneErrorPropagates is the regression guard for the silent
@@ -32,18 +32,24 @@ import (
 // Before the fix the failing goroutine only logged and main exited 0.
 func TestRunServices_DataPlaneErrorPropagates(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
-	conn, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
-	if err != nil {
-		t.Fatalf("connect: %v", err)
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	builder := vc.NewBuilder(dpKeyStore(t))
-	badLC := dpPipelineCfg().Loops[0]
-	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
+	// A source loop's IngressSubject is not validated at build time (that is the
+	// config layer's job — see pipeline/runtime's buildSourceLoop doc): it builds
+	// fine and only fails at Subscribe, inside Run. That is exactly the shape this
+	// test needs — a runtime that assembles successfully but fails during Run.
+	badCfg := dpPipelineCfg()
+	badCfg.Loops[0].IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
+	rtCfg, err := runtimeConfigFrom(chainCfg, badCfg, "")
 	if err != nil {
-		t.Fatalf("build bad loop: %v", err)
+		t.Fatalf("runtimeConfigFrom: %v", err)
 	}
-	dp := &dataPlane{conn: conn, loops: []*transport.Loop{bad}}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
 
 	// A healthy server on an ephemeral port; the failed loop cancels runCtx, which
 	// shuts the server down gracefully (no error from its side).

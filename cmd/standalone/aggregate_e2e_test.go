@@ -17,6 +17,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 	"github.com/provin-line/oss/resolver/local"
@@ -116,9 +117,13 @@ func TestAggregate_TwoSource_VerifiedCommitment(t *testing.T) {
 			},
 		},
 	}}}
-	dp, err := buildDataPlane(context.Background(), chainCfg, cfg, ks, dataPlaneDeps{Resolver: res, VCStore: dpVCStore()})
+	rtCfg, err := runtimeConfigFrom(chainCfg, cfg, "")
 	if err != nil {
-		t.Fatalf("buildDataPlane (aggregate): %v", err)
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{Resolver: res, VCStore: dpVCStore()})
+	if err != nil {
+		t.Fatalf("pipelineruntime.Build (aggregate): %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

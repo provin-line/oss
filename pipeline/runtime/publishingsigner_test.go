@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -44,13 +43,13 @@ type fakePublisher struct {
 	retErr     error
 }
 
-func (p *fakePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (vcresolverclient.StoredCredential, error) {
+func (p *fakePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (StoredCredential, error) {
 	p.calls++
 	p.gotEnd = upstreamEndpoint
 	if p.retErr != nil {
-		return vcresolverclient.StoredCredential{}, p.retErr
+		return StoredCredential{}, p.retErr
 	}
-	out := vcresolverclient.StoredCredential{BodyAddress: p.retAddr, WireVariantID: p.retVariant}
+	out := StoredCredential{BodyAddress: p.retAddr, WireVariantID: p.retVariant}
 	if out.BodyAddress == "" {
 		out.BodyAddress, _ = cred.Hash()
 	}

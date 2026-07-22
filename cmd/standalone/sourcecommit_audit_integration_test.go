@@ -16,6 +16,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
@@ -112,7 +113,7 @@ func TestSourceCommitmentSelfAudit_Integration_RecordsVerified(t *testing.T) {
 	queue := auditor.NewMemQueue()
 	status := auditor.NewMemStatusStore()
 	receipts := auditor.NewMemReceiptStore()
-	reg := &emissionRegistrar{local: localSvc, receipts: receipts, audit: queue}
+	reg := pipelineruntime.NewEmissionRegistrar(ingressStoreAdapter{svc: localSvc}, receipts, queue, nil)
 	srcAHash, _ := srcA.Hash()
 	srcBHash, _ := srcB.Hash()
 	if err := reg.RegisterEmission(ctx, aggCred, []string{srcAHash, srcBHash}); err != nil {

@@ -1,41 +1,53 @@
-package main
+package runtime
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/vc"
 )
 
-// ingressStorer is the StoreVC seam the consuming loops' ingress store writes through —
-// satisfied by *vcresolver.Service. cmd/standalone owns this local interface so the data
-// plane depends on the capability, not the concrete service.
-type ingressStorer interface {
-	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (vcresolver.StoreVCResult, error)
+// IngressStorer is the StoreVC seam the consuming loops' ingress store writes
+// through. StoreIngressVC's only read of the result is the stored head's
+// body address (see below), so the seam returns that string directly rather
+// than network/pkg/services/vcresolver.StoreVCResult — this package stays
+// network-agnostic (network/ and pipeline/ never import each other,
+// AGENTS.md rule 2). cmd/standalone adapts *vcresolver.Service to this
+// interface.
+type IngressStorer interface {
+	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (bodyAddress string, err error)
 }
 
-// auditRegistrar registers a consumed head's content address for async audit (slice-17h).
+// AuditRegistrar registers a consumed head's content address for async audit (slice-17h).
 // cmd/standalone owns this local interface; *auditor.MemQueue satisfies it.
-type auditRegistrar interface {
+type AuditRegistrar interface {
 	Add(headHash string) error
 }
 
 // Compile-time assertion: serviceIngressStore satisfies contract.IngressVCStore.
 var _ contract.IngressVCStore = (*serviceIngressStore)(nil)
 
-// serviceIngressStore implements contract.IngressVCStore over an ingressStorer
+// NewServiceIngressStore builds the composition-root contract.IngressVCStore
+// over an ingress storer and an optional audit registrar (nil disables
+// registration). Exported for composition-level tests that wire a sink or
+// chained processor directly, outside Build's own assembly path — Build uses
+// the equivalent unexported literal internally.
+func NewServiceIngressStore(store IngressStorer, audit AuditRegistrar) contract.IngressVCStore {
+	return &serviceIngressStore{store: store, audit: audit}
+}
+
+// serviceIngressStore implements contract.IngressVCStore over an IngressStorer
 // (the node's local *vcresolver.Service). StoreIngressVC marshals the credential
 // using its JCS-canonical MarshalJSON bytes (D-17f-3) and calls StoreVC, which
 // stores the credential at its content address and enqueues any missing predecessor
 // into the unresolved pool (D-17f-1).
 type serviceIngressStore struct {
-	store ingressStorer
+	store IngressStorer
 	// audit registers the stored head for async audit (slice-17h, D-17h-2). When nil, no
 	// registration happens (a node without the audit runner — e.g. a unit test that does not
 	// exercise the audit path).
-	audit auditRegistrar
+	audit AuditRegistrar
 }
 
 // StoreIngressVC implements contract.IngressVCStore. It marshals cred using
@@ -49,7 +61,7 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	}
 	// A consumed ingress credential is directly received — assembly depth 0; its
 	// missing predecessor enqueues at depth 1.
-	res, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
+	bodyAddress, err := s.store.StoreVC(ctx, b, upstreamEndpoint, 0)
 	if err != nil {
 		return fmt.Errorf("ingressstore: store vc: %w", err)
 	}
@@ -63,7 +75,7 @@ func (s *serviceIngressStore) StoreIngressVC(ctx context.Context, cred *vc.Pipel
 	// variant here would only move the mismatch, since nothing downstream can
 	// yet receive it.
 	if s.audit != nil {
-		if err := s.audit.Add(res.BodyAddress); err != nil {
+		if err := s.audit.Add(bodyAddress); err != nil {
 			return fmt.Errorf("ingressstore: register audit head: %w", err)
 		}
 	}

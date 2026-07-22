@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/chainconfig"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 )
 
@@ -185,11 +186,15 @@ func TestMetrics_RealEmitReachesExposition(t *testing.T) {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, dpPipelineCfg(), dpKeyStore(t), dataPlaneDeps{})
+	rtCfg, err := runtimeConfigFrom(chainCfg, dpPipelineCfg(), "")
 	if err != nil {
-		t.Fatalf("buildDataPlane: %v", err)
+		t.Fatalf("runtimeConfigFrom: %v", err)
 	}
-	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), dp.metrics, nil)
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
+	if err != nil {
+		t.Fatalf("pipelineruntime.Build: %v", err)
+	}
+	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), netcomposeMetricsFrom(dp.Metrics()), nil)
 	if err != nil {
 		t.Fatalf("maybeMountMetrics: %v", err)
 	}

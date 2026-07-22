@@ -3,6 +3,8 @@ package chainmanager
 import (
 	"errors"
 	"testing"
+
+	"github.com/provin-line/oss/wireprofile"
 )
 
 // A realistic dotted-registry DID (poc.dplaax.dev), as used throughout the
@@ -66,6 +68,19 @@ func TestSubjectForMode_UnsafeSubject(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// chainmanager.ByReferenceSubjectPrefix is a const alias of
+// wireprofile.ByReferenceSubjectPrefix (see subject.go) — network/ and
+// pipeline/ never import each other, so wireprofile is the one place both
+// sides can agree on this literal. This test lives here (not in
+// wireprofile's own test package) so wireprofile stays a pure leaf even in
+// its tests, importing nothing from network/.
+func TestByReferenceSubjectPrefix_MatchesWireprofile(t *testing.T) {
+	if ByReferenceSubjectPrefix != wireprofile.ByReferenceSubjectPrefix {
+		t.Fatalf("chainmanager.ByReferenceSubjectPrefix = %q, wireprofile.ByReferenceSubjectPrefix = %q — must match",
+			ByReferenceSubjectPrefix, wireprofile.ByReferenceSubjectPrefix)
 	}
 }
 

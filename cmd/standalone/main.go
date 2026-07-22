@@ -47,6 +47,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/batchresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	"github.com/provin-line/oss/pipeline/contract"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 )
 
 // meterScope is this binary's OTel instrumentation-scope name — the metrics
@@ -116,8 +117,8 @@ func main() {
 	evidenceDir := filepath.Join(coreCfg.DataDir, "evidence")
 
 	// The VC store is built once in main and shared across both planes (D-17f-5):
-	// BuildHandler mounts it under the VCResolverService RPC; buildDataPlane threads it
-	// into consuming loops' ingress store so every verified ingress credential is
+	// BuildHandler mounts it under the VCResolverService RPC; pipelineruntime.Build
+	// threads it into consuming loops' ingress store so every verified ingress credential is
 	// immediately resolvable and its predecessor is enqueued in the one shared pool. The
 	// pool is a named var so the batch resolver drains exactly the pool StoreVC feeds (D-17g-1).
 	credBackend, err := vcfilestore.NewBackend(filepath.Join(evidenceDir, "credentials"))
@@ -183,17 +184,20 @@ func main() {
 	if nodeDID := nodeDIDOf(chainCfg); nodeDID != "" {
 		payloadClient = payloadclient.New(payloadclient.Config{Signer: keyStore, SignerDID: nodeDID, HTTPClient: guard.HTTPClient()})
 	}
-	dp, err := buildDataPlane(ctx, chainCfg, pipeCfg, keyStore, dataPlaneDeps{
-		Resolver:        resolver,
-		VCStore:         vcSvc,
-		AuditQueue:      auditQueue,
-		Receipts:        auditReceipts,
-		TlogDir:         filepath.Join(coreCfg.DataDir, "tlog"),
-		RejectLogDir:    filepath.Join(evidenceDir, "sink-rejects"),
-		SchemaResolver:  schemaBridge,
-		SchemaGetter:    schemaSvc,
-		PayloadStore:    payloadSvc,
-		PayloadResolver: payloadClient,
+	rtCfg, err := runtimeConfigFrom(chainCfg, pipeCfg, coreCfg.DataDir)
+	if err != nil {
+		log.Fatalf("standalone: %v", err)
+	}
+	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, pipelineruntime.Deps{
+		Resolver:            resolver,
+		VCStore:             ingressStoreAdapter{svc: vcSvc},
+		AuditQueue:          auditQueue,
+		Receipts:            auditReceipts,
+		SchemaResolver:      schemaBridge,
+		SchemaGetter:        schemaGetterAdapter{svc: schemaSvc},
+		PayloadStore:        payloadSvc,
+		PayloadResolver:     payloadClient,
+		CredentialPublisher: credentialPublisherFrom(pipeCfg, nil),
 	})
 	if err != nil {
 		log.Fatalf("standalone: build data plane: %v", err)
@@ -203,8 +207,8 @@ func main() {
 	// evidence substrate always, the shared broker connection when a data plane
 	// runs, and the external PDP when one is configured (static has no probe).
 	readiness := []readinessCheck{evidenceStoreCheck(evidenceDir)}
-	if dp.conn != nil {
-		readiness = append(readiness, natsCheck(dp.conn.Healthy))
+	if dp.Conn() != nil {
+		readiness = append(readiness, natsCheck(dp.Conn().Healthy))
 	}
 	if check, ok := pdpCheck(authCfg); ok {
 		readiness = append(readiness, check)
@@ -214,10 +218,10 @@ func main() {
 	// aggregate is a stripped-publish health source, so the control-plane
 	// advertiser degrades by-reference when any of them is failing (D-5).
 	var byRefSources []strippedPublishHealthSource
-	for _, lp := range dp.loops {
+	for _, lp := range dp.Loops() {
 		byRefSources = append(byRefSources, lp)
 	}
-	for _, ag := range dp.aggregates {
+	for _, ag := range dp.Aggregates() {
 		byRefSources = append(byRefSources, ag)
 	}
 	byRefGate := newByRefHealthGate(byRefSources)
@@ -225,19 +229,20 @@ func main() {
 	// mountIngest is the callback seam BuildHandler mounts the data plane's HTTP
 	// push-ingest routes through (nil would mount nothing) — it replaces the old
 	// ingestMounts{bindings, maxBodySize} value now that BuildHandler lives in
-	// internal/netcompose, which must stay free of the data-plane pushBinding type.
+	// internal/netcompose, which must stay free of the pipeline/runtime
+	// PushBinding type.
 	mountIngest := func(mux *http.ServeMux) error {
-		return mountPushRoutes(mux, dp.pushBindings, verifier, pipeCfg.MaxPushBodySize)
+		return mountPushRoutes(mux, dp.PushBindings(), verifier, pipeCfg.MaxPushBodySize)
 	}
 	// emitHealth is nil: cmd/standalone gates by-reference advertisement with
 	// its own in-process byRefGate above (the global model), never the
 	// per-publisher report-mode gate (chainmanager.New would panic if both
 	// were wired on the same Service).
 	// mirror is nil: cmd/standalone stays on the map-only path (D-T4) — it
-	// runs no registry-side mirror store, only the local producing logs in
-	// dp.tlogs.
+	// runs no registry-side mirror store, only the local producing logs
+	// dp.Tlogs() returns.
 	handler, err := BuildHandler(coreCfg, regCfg, chainCfg, chainOp, verifier, guard, resolver, vcSvc, auditStatus, auditReceipts, auditQueue,
-		schemaSvc, payloadSvc, payloadStore, dp.tlogs, nil, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
+		schemaSvc, payloadSvc, payloadStore, dp.Tlogs(), nil, pipeCfg.MaxCredentialSize, pipeCfg.MaxRetainChunkSize, pipeCfg.MaxRetainPayloadSize, mountIngest, readiness, byRefGate.Healthy, nil)
 	if err != nil {
 		log.Fatalf("standalone: build server: %v", err)
 	}
@@ -265,7 +270,7 @@ func main() {
 	if auditRunner != nil {
 		verdicts = auditRunner.VerdictCounts
 	}
-	handler, err = maybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, dp.metrics, verdicts)
+	handler, err = maybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, netcomposeMetricsFrom(dp.Metrics()), verdicts)
 	if err != nil {
 		log.Fatalf("standalone: build metrics: %v", err)
 	}
@@ -330,7 +335,7 @@ func gateConsumingLoopRunners(pipeCfg *pipelineconfig.Config, batchRunner *batch
 // HTTP server down. Both background runners are degraded-tolerant (log-and-continue,
 // D-17g-9 / D-17h-8): they never cancel their siblings and return nil on shutdown; each is
 // nil for a source-only node (no consuming loop).
-func runServices(ctx context.Context, srv *http.Server, listen func() error, dp *dataPlane, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {
+func runServices(ctx context.Context, srv *http.Server, listen func() error, dp *pipelineruntime.Runtime, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

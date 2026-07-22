@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/network/pkg/services/vcresolver"
-	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -39,12 +37,12 @@ type fakeLocalStore struct {
 	order *[]string
 }
 
-func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (vcresolver.StoreVCResult, error) {
+func (f *fakeLocalStore) StoreVC(_ context.Context, _ []byte, _ string, _ int) (string, error) {
 	f.calls++
 	if f.order != nil {
 		*f.order = append(*f.order, "local")
 	}
-	return vcresolver.StoreVCResult{BodyAddress: f.head}, f.err
+	return f.head, f.err
 }
 
 type fakeReceiptLog struct {
@@ -88,14 +86,14 @@ type fakeRemotePublisher struct {
 	order *[]string
 }
 
-func (f *fakeRemotePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, _ string) (vcresolverclient.StoredCredential, error) {
+func (f *fakeRemotePublisher) StoreCredential(_ context.Context, cred *vc.PipelinePassCredential, _ string) (StoredCredential, error) {
 	f.calls++
 	if f.order != nil {
 		*f.order = append(*f.order, "remote")
 	}
 	body, _ := cred.Hash()
 	variant, _ := cred.WireVariantID()
-	return vcresolverclient.StoredCredential{BodyAddress: body, WireVariantID: variant}, nil
+	return StoredCredential{BodyAddress: body, WireVariantID: variant}, nil
 }
 
 // --- fixtures ---------------------------------------------------------------

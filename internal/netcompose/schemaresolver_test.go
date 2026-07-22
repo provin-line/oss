@@ -2,8 +2,6 @@ package netcompose
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"testing"
 
@@ -22,44 +20,6 @@ func (f fakeSchemaGetter) Get(_ context.Context, name, version string) (*store.S
 		return s, nil
 	}
 	return nil, store.ErrNotFound
-}
-
-func hashOf(body []byte) string {
-	sum := sha256.Sum256(body)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func TestResolveSchemaRefAtBoot(t *testing.T) {
-	body := []byte(`{"type":"object"}`)
-	getter := fakeSchemaGetter{schemas: map[string]*store.Schema{
-		"orders@2026-07-10-abcdef0123456789": {Name: "orders", Version: "2026-07-10-abcdef0123456789", SchemaFormat: "JsonSchema", SchemaBody: body},
-		"legacy@2026-01-01-deadbeefdeadbeef": {Name: "legacy", Version: "2026-01-01-deadbeefdeadbeef", SchemaFormat: "JsonSchema", SchemaBody: body, Deprecated: true},
-	}}
-
-	// Registered, current: full signed reference with canonical URI + content hash.
-	ref, err := ResolveSchemaRefAtBoot(context.Background(), getter, "orders@2026-07-10-abcdef0123456789")
-	if err != nil {
-		t.Fatalf("ResolveSchemaRefAtBoot: %v", err)
-	}
-	want := vc.SchemaRef{ID: "dplaax:schema/orders@2026-07-10-abcdef0123456789", Type: "JsonSchema", ContentHash: hashOf(body)}
-	if ref != want {
-		t.Errorf("ref = %+v, want %+v", ref, want)
-	}
-
-	// Not registered: boot error (fail-closed).
-	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "missing@2026-07-10-abcdef0123456789"); err == nil {
-		t.Error("unregistered schema-ref: want boot error, got nil")
-	}
-
-	// Deprecated: boot error (must advance to a current version).
-	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "legacy@2026-01-01-deadbeefdeadbeef"); err == nil {
-		t.Error("deprecated schema-ref: want boot error, got nil")
-	}
-
-	// Malformed short-form: boot error.
-	if _, err := ResolveSchemaRefAtBoot(context.Background(), getter, "noversion"); err == nil {
-		t.Error("malformed schema-ref: want boot error, got nil")
-	}
 }
 
 func TestSchemaResolver_ResolveSchema(t *testing.T) {

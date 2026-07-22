@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
@@ -104,13 +105,17 @@ func setupTwoHop(t *testing.T, converter string, filters []string) twoHop {
 		Transport: chainconfig.TransportNATS,
 		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
 	}
-	dp, err := buildDataPlane(context.Background(), chainCfg, twoHopCfg(converter, filters), ks, dataPlaneDeps{
+	rtCfg, err := runtimeConfigFrom(chainCfg, twoHopCfg(converter, filters), "")
+	if err != nil {
+		t.Fatalf("runtimeConfigFrom: %v", err)
+	}
+	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, pipelineruntime.Deps{
 		Resolver:   res,
 		SinkWriter: writer,
 		VCStore:    dpVCStore(),
 	})
 	if err != nil {
-		t.Fatalf("buildDataPlane (two-hop): %v", err)
+		t.Fatalf("pipelineruntime.Build (two-hop): %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
