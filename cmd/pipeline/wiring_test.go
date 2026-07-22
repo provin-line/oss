@@ -1,0 +1,499 @@
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+
+	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
+	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/keystore"
+	ksfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	"github.com/provin-line/oss/network/pkg/services/auditor"
+	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
+	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
+	schemaclient "github.com/provin-line/oss/network/pkg/services/schemaregistry/client"
+	schemahandler "github.com/provin-line/oss/network/pkg/services/schemaregistry/handler"
+	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver"
+	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
+	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
+	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
+	"github.com/provin-line/oss/vc"
+)
+
+// ─────────────────────────────────────────────────────────────────────────
+// pipelineRuntimeConfigFrom — the transport guard + a basic field-level
+// round-trip (the full per-role field mapping mirrors cmd/standalone's own
+// runtimewiring_test.go golden test; this is a lighter pin, not a
+// re-derivation of that fixture).
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestPipelineRuntimeConfigFrom_NonNATSTransportWithLoopsErrors(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNoop}
+	pipeCfg := &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{Name: "src", Role: pipelineconfig.RoleSource}}}
+	_, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "")
+	if err == nil {
+		t.Fatal("want error for loops on a non-nats transport, got nil")
+	}
+	if got := err.Error(); got != `data-plane loops require the nats transport, got "noop"` {
+		t.Errorf("err = %q, want the exact transport-guard message", got)
+	}
+}
+
+func TestPipelineRuntimeConfigFrom_NonNATSTransportZeroLoopsOK(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNoop}
+	pipeCfg := &pipelineconfig.Config{}
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "")
+	if err != nil {
+		t.Fatalf("zero loops on a non-nats transport: %v", err)
+	}
+	if len(cfg.Loops) != 0 {
+		t.Errorf("Loops = %+v, want empty", cfg.Loops)
+	}
+}
+
+func TestPipelineRuntimeConfigFrom_MapsNATSAndDataDirDerivedPaths(t *testing.T) {
+	chainCfg := &chainconfig.Config{
+		Transport: chainconfig.TransportNATS,
+		NATS: chainconfig.NATSConfig{
+			URL:         "nats://broker.example:4222",
+			AccountSeed: "SAAAACCOUNTSEED",
+			ConnectWait: 7 * time.Second,
+		},
+	}
+	pipeCfg := &pipelineconfig.Config{Loops: []pipelineconfig.LoopConfig{{
+		Name:           "src",
+		Role:           pipelineconfig.RoleSource,
+		IngressSubject: "ingest.src",
+		Source: pipelineconfig.SourceConfig{
+			OutputSubject: "did:dplaax:reg:org:acme:pipeline:src",
+			Issuer: pipelineconfig.IssuerConfig{
+				DID: "did:dplaax:reg:org:acme:pipeline:src:process:s1", KeyID: "signing",
+				VerificationMethod: "did:dplaax:reg:org:acme:pipeline:src:process:s1#signing",
+			},
+			PipelineID: "src", ProcessID: "s1", TransformationClaim: vc.ClaimConvert,
+		},
+	}}}
+
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "/data")
+	if err != nil {
+		t.Fatalf("pipelineRuntimeConfigFrom: %v", err)
+	}
+	if cfg.NATS != (pipelineruntime.NATSConfig{URL: "nats://broker.example:4222", AccountSeed: "SAAAACCOUNTSEED", ConnectWait: 7 * time.Second}) {
+		t.Errorf("NATS = %+v", cfg.NATS)
+	}
+	if cfg.TlogDir != "/data/tlog" {
+		t.Errorf("TlogDir = %q, want /data/tlog", cfg.TlogDir)
+	}
+	if cfg.RejectLogDir != "/data/evidence/sink-rejects" {
+		t.Errorf("RejectLogDir = %q, want /data/evidence/sink-rejects", cfg.RejectLogDir)
+	}
+	if len(cfg.Loops) != 1 || cfg.Loops[0].Name != "src" || cfg.Loops[0].Source.OutputSubject != "did:dplaax:reg:org:acme:pipeline:src" {
+		t.Errorf("Loops = %+v", cfg.Loops)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// auditClientFactory — cache-per-DID (pure, no network).
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestAuditClientFactory_CachesPerDID(t *testing.T) {
+	f := newAuditClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
+	if a1 != a2 {
+		t.Error("For(sameDID) returned two different clients, want the cached one")
+	}
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:b1")
+	if a1 == b1 {
+		t.Error("For(differentDID) returned the SAME client as another DID")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// wireSchemaGetter / wireSchemaBridge — real SchemaService over httptest,
+// mirroring network/pkg/services/schemaregistry/client/client_test.go's own
+// harness and internal/netcompose/schemaresolver_test.go's assertions (the
+// bridge this type must mirror EXACTLY).
+// ─────────────────────────────────────────────────────────────────────────
+
+func schemaRegistryServer(t *testing.T) (url string, httpc *http.Client, seed schemapbconnect.SchemaServiceClient) {
+	t.Helper()
+	clock := func() time.Time { return time.Date(2026, 6, 20, 9, 0, 0, 0, time.UTC) }
+	svc := schemaregistry.New(yamlstore.New(t.TempDir()), schemaregistry.WithClock(clock))
+	_, h := schemapbconnect.NewSchemaServiceHandler(schemahandler.New(svc))
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv.URL, srv.Client(), schemapbconnect.NewSchemaServiceClient(srv.Client(), srv.URL)
+}
+
+func TestWireSchemaGetter_Get(t *testing.T) {
+	url, httpc, seed := schemaRegistryServer(t)
+	body := []byte(`{"type":"object"}`)
+	resp, err := seed.RegisterSchema(context.Background(), connect.NewRequest(&schemapb.RegisterSchemaRequest{
+		Name: "reading", SchemaFormat: "JsonSchema", SchemaBody: body,
+	}))
+	if err != nil {
+		t.Fatalf("RegisterSchema: %v", err)
+	}
+	version := resp.Msg.GetSchema().GetVersion()
+
+	g := wireSchemaGetter{client: schemaclient.New(schemaclient.Config{BaseURL: url, HTTPClient: httpc})}
+
+	got, err := g.Get(context.Background(), "reading", version)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Format != "JsonSchema" || string(got.Body) != string(body) || got.Deprecated {
+		t.Errorf("Get = %+v", got)
+	}
+
+	if _, err := g.Get(context.Background(), "reading", "2026-06-14-deadbeefdeadbeef"); !errors.Is(err, pipelineruntime.ErrSchemaNotFound) {
+		t.Errorf("Get(unknown) err = %v, want pipelineruntime.ErrSchemaNotFound", err)
+	}
+}
+
+func TestWireSchemaBridge_ResolveSchema(t *testing.T) {
+	url, httpc, seed := schemaRegistryServer(t)
+	body := []byte(`{"type":"object"}`)
+	resp, err := seed.RegisterSchema(context.Background(), connect.NewRequest(&schemapb.RegisterSchemaRequest{
+		Name: "orders", SchemaFormat: "JsonSchema", SchemaBody: body,
+	}))
+	if err != nil {
+		t.Fatalf("RegisterSchema: %v", err)
+	}
+	version := resp.Msg.GetSchema().GetVersion()
+
+	r := wireSchemaBridge{client: schemaclient.New(schemaclient.Config{BaseURL: url, HTTPClient: httpc})}
+
+	// Valid canonical URI resolves to body + format.
+	got, err := r.ResolveSchema(context.Background(), vc.SchemaRef{ID: "dplaax:schema/orders@" + version})
+	if err != nil {
+		t.Fatalf("ResolveSchema: %v", err)
+	}
+	if got.Format != "JsonSchema" || string(got.Body) != string(body) {
+		t.Errorf("resolved = %+v, want JsonSchema + body", got)
+	}
+
+	// Malformed IDs -> ErrSchemaInvalidRef (deterministic, mapped to failed).
+	for _, bad := range []string{"not-a-schema-uri", "dplaax:schema/.@" + version, "dplaax:schema/..@" + version} {
+		if _, err := r.ResolveSchema(context.Background(), vc.SchemaRef{ID: bad}); !errors.Is(err, vc.ErrSchemaInvalidRef) {
+			t.Errorf("ResolveSchema(%q) err = %v, want ErrSchemaInvalidRef", bad, err)
+		}
+	}
+
+	// Well-formed but unregistered -> ErrSchemaNotFound (definitive).
+	if _, err := r.ResolveSchema(context.Background(), vc.SchemaRef{ID: "dplaax:schema/gone@" + version}); !errors.Is(err, vc.ErrSchemaNotFound) {
+		t.Errorf("missing schema err = %v, want ErrSchemaNotFound", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// vcStoreAdapter — real VCResolverService over httptest, mirroring
+// network/pkg/services/vcresolver/client/client_test.go's own harness.
+// ─────────────────────────────────────────────────────────────────────────
+
+func newVCStoreAdapter(t *testing.T) (vcStoreAdapter, string, *http.Client) {
+	t.Helper()
+	svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	_, h := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(svc))
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	client := vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL))
+	return vcStoreAdapter{client: client}, srv.URL, srv.Client()
+}
+
+func minimalCredentialBytes(t *testing.T, issuer string, prev any) []byte {
+	t.Helper()
+	subject := map[string]any{"pipelineId": "p1", "processId": "proc1"}
+	if prev != nil {
+		subject["previousCredential"] = prev
+	}
+	b, err := json.Marshal(map[string]any{
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            issuer,
+		"credentialSubject": subject,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestVCStoreAdapter_StoreVC_RoundTrip(t *testing.T) {
+	adapter, _, _ := newVCStoreAdapter(t)
+	credBytes := minimalCredentialBytes(t, "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1", nil)
+
+	head, err := adapter.StoreVC(context.Background(), credBytes, "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+	if head.BodyAddress == "" || head.WireVariantID == "" {
+		t.Errorf("StoreVC head = %+v, want both fields populated", head)
+	}
+
+	// The wire StoreVC RPC has no assembly-depth field: a non-zero value must
+	// fail loud, never be silently dropped.
+	if _, err := adapter.StoreVC(context.Background(), credBytes, "", 1); err == nil {
+		t.Error("StoreVC with assemblyDepth=1: want error, got nil")
+	}
+}
+
+func TestVCStoreAdapter_StoreCredential_RoundTrip(t *testing.T) {
+	adapter, _, _ := newVCStoreAdapter(t)
+	var cred vc.PipelinePassCredential
+	if err := json.Unmarshal(minimalCredentialBytes(t, "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1", nil), &cred); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := cred.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := adapter.StoreCredential(context.Background(), &cred, "")
+	if err != nil {
+		t.Fatalf("StoreCredential: %v", err)
+	}
+	if sc.BodyAddress != want {
+		t.Errorf("BodyAddress = %q, want %q", sc.BodyAddress, want)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// wireAuditRegistrar + wireReceiptWriter — a combined VCResolverService +
+// AuditService harness over ONE httptest server (the "ONE registry base
+// URL" this binary always assumes), a real wireauth.Verifier, and the
+// production auditClientFactory/vcresolverclient this file's own adapters
+// wrap. Mirrors network/pkg/services/auditor/client/client_test.go's own
+// harness shape.
+// ─────────────────────────────────────────────────────────────────────────
+
+const wireNodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:node:process:n1"
+const wireAggregateIssuerDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:agg:process:a1"
+
+func addr(hexDigit string) string { return "sha256:" + strings.Repeat(hexDigit, 64) }
+
+type fakeDIDResolver map[string]*did.DIDDocument
+
+func (m fakeDIDResolver) Resolve(_ context.Context, d string) (*did.DIDDocument, error) {
+	doc, ok := m[d]
+	if !ok {
+		return nil, wireauth.ErrKeyResolution
+	}
+	return doc, nil
+}
+
+func jwk(pub []byte) map[string]any {
+	return map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)}
+}
+
+func authDoc(subject string, pub []byte) *did.DIDDocument {
+	return did.New(did.DocumentFields{
+		ID: subject, Controller: subject,
+		VerificationMethod: []did.VerificationMethod{{
+			ID: subject + "#auth", Type: "JsonWebKey2020", Controller: subject,
+			PublicKeyJWK: jwk(pub),
+		}},
+		Authentication: []string{subject + "#auth"},
+	})
+}
+
+// wireHarness stands up a real VCResolverService + AuditService (evidence
+// write surface) on ONE httptest server, backed by a real vcresolver.Service
+// and a real file-backed auditor.ReceiptStore (so the test can read the raw
+// on-disk envelope, mirroring auditor/client's own round-trip test — the
+// registrant DID has no public Go reader).
+type wireHarness struct {
+	vcSvc      *vcresolver.Service
+	receipts   auditor.ReceiptStore
+	receiptDir string
+	queue      *auditor.MemQueue
+	url        string
+	httpc      *http.Client
+	signer     crypto.Signer
+}
+
+func newWireHarness(t *testing.T) *wireHarness {
+	t.Helper()
+	ks := ksfilestore.New(t.TempDir())
+	gen := ed25519.Generator{}
+
+	resolver := fakeDIDResolver{}
+	sign := func(subject string) {
+		kp, err := gen.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ks.SaveKeyPair(subject, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+			t.Fatal(err)
+		}
+		resolver[subject] = authDoc(subject, kp.PublicKey)
+	}
+	sign(wireNodeDID)
+	sign(wireAggregateIssuerDID)
+
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: resolver,
+		Crypto:   ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(),
+		Epoch:    time.Now().Add(-time.Hour),
+		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	receiptDir := t.TempDir()
+	receipts, err := auditorfilestore.NewReceiptStore(receiptDir)
+	if err != nil {
+		t.Fatalf("NewReceiptStore: %v", err)
+	}
+	queue := auditor.NewMemQueue()
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+	admitted := func(ctx context.Context, headVariantID string) (string, bool, error) {
+		bodyAddress, err := vcSvc.ResolveVariantBody(ctx, headVariantID)
+		if err != nil {
+			if errors.Is(err, vcresolver.ErrNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return bodyAddress, true, nil
+	}
+	evidence := auditor.NewEvidenceService(receipts, queue, admitted)
+
+	mux := http.NewServeMux()
+	vcPath, vcHandler := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc))
+	mux.Handle(vcPath, vcHandler)
+	auditPath, auditHandler := auditpbconnect.NewAuditServiceHandler(audithandler.New(nil, evidence, v))
+	mux.Handle(auditPath, auditHandler)
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &wireHarness{
+		vcSvc:      vcSvc,
+		receipts:   receipts,
+		receiptDir: receiptDir,
+		queue:      queue,
+		url:        srv.URL,
+		httpc:      srv.Client(),
+		signer:     ks,
+	}
+}
+
+func (h *wireHarness) vcClient() *vcresolverclient.Resolver {
+	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(h.httpc, h.url))
+}
+
+func TestWireAuditRegistrar_Add_RoundTrip(t *testing.T) {
+	h := newWireHarness(t)
+	store := vcStoreAdapter{client: h.vcClient()}
+	head, err := store.StoreVC(context.Background(), minimalCredentialBytes(t, wireNodeDID, nil), "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+
+	factory := newAuditClientFactory(h.signer, h.url, "", h.httpc)
+	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
+	if err := registrar.Add(head); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cands, err := h.queue.ListNewest(10)
+	if err != nil {
+		t.Fatalf("ListNewest: %v", err)
+	}
+	if len(cands) != 1 || cands[0].HeadHash != head.BodyAddress {
+		t.Errorf("queue = %+v, want exactly one candidate for %q", cands, head.BodyAddress)
+	}
+}
+
+// receiptEnvelope mirrors the on-disk shape auditor/filestore.ReceiptStore
+// writes — registrant_did has no public Go reader (see
+// auditor.ReceiptStore.Put's own doc), so reading the raw file is the only
+// way to assert who a registration recorded as registrant, exactly as
+// auditor/client/client_test.go's own round-trip test does.
+type receiptEnvelope struct {
+	RegistrantDID string `json:"registrant_did"`
+}
+
+func readReceiptEnvelope(t *testing.T, dir, bodyAddress string) receiptEnvelope {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(bodyAddress, "sha256:")+".json"))
+	if err != nil {
+		t.Fatalf("read receipt envelope: %v", err)
+	}
+	var env receiptEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("unmarshal receipt envelope: %v", err)
+	}
+	return env
+}
+
+// TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant proves the
+// resolve round-trip this adapter's doc comment describes: Put receives only
+// a BODY address (headHash), re-resolves the credential over the wire,
+// recomputes the wire variant, and registers evidence signed as
+// registrantDID — read back via the raw receipt envelope's registrant_did
+// field, the same verification auditor/client's own round-trip test uses.
+func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T) {
+	h := newWireHarness(t)
+	vcClient := h.vcClient()
+	store := vcStoreAdapter{client: vcClient}
+
+	head, err := store.StoreVC(context.Background(), minimalCredentialBytes(t, wireAggregateIssuerDID, nil), "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+
+	factory := newAuditClientFactory(h.signer, h.url, "", h.httpc)
+	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
+	consumed := []string{addr("c"), addr("b")}
+	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, consumed); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := h.receipts.Get(head.BodyAddress)
+	if err != nil {
+		t.Fatalf("receipts.Get: %v", err)
+	}
+	if len(got) != 2 || got[0] != addr("b") || got[1] != addr("c") {
+		t.Errorf("receipt consumed set = %v, want canonical [%s %s]", got, addr("b"), addr("c"))
+	}
+
+	env := readReceiptEnvelope(t, h.receiptDir, head.BodyAddress)
+	if env.RegistrantDID != wireAggregateIssuerDID {
+		t.Errorf("registrant_did = %q, want %q", env.RegistrantDID, wireAggregateIssuerDID)
+	}
+
+	cands, err := h.queue.ListNewest(10)
+	if err != nil {
+		t.Fatalf("ListNewest: %v", err)
+	}
+	if len(cands) != 1 || cands[0].HeadHash != head.BodyAddress {
+		t.Errorf("queue = %+v, want exactly one candidate for %q", cands, head.BodyAddress)
+	}
+}
