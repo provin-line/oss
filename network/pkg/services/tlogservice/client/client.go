@@ -4,15 +4,19 @@
 // durable resume cursor via GetMirrorState.
 //
 // It reproduces the EXACT signed view the handler verifies by calling the
-// SAME shared builders the handler does — tlogservice.OpMirrorLogSegment,
-// tlogservice.MirrorLogSegmentFields, and tlogservice.SegmentDigest
-// (network/pkg/services/tlogservice/wireview.go) — so the two derivations
-// cannot drift (mirrors auditor/client's own rationale for reusing
-// auditor.OpRegisterEvidence/RegisterEvidenceFields).
+// SAME shared builders the handler does — wirecontract.OpMirrorLogSegment,
+// wirecontract.MirrorLogSegmentFields, and wirecontract.SegmentDigest
+// (network/pkg/services/tlogservice/wirecontract/wireview.go) — so the two
+// derivations cannot drift (mirrors auditor/client's own rationale for
+// reusing wirecontract.OpRegisterEvidence/RegisterEvidenceFields).
 //
 // It imports only the generated client, connect, crypto, and the
-// tlogservice package's shared wire-view builders — never pipeline/
-// (AGENTS.md layer rule: network and pipeline interact only over the wire).
+// tlogservice service's wirecontract LEAF (op name + signed-view builders +
+// the record_payloads_framed codec; PR3b Task 2 moved these out of the
+// tlogservice service root so this client never pulls in the root's
+// mirrorstore/logident domain logic) — never the tlogservice service root
+// itself, and never pipeline/ (AGENTS.md layer rule: network and pipeline
+// interact only over the wire).
 package client
 
 import (
@@ -28,7 +32,7 @@ import (
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
-	"github.com/provin-line/oss/network/pkg/services/tlogservice"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -104,9 +108,9 @@ func bearerInterceptor(token string) connect.Interceptor {
 // callers — the tlogship shipper — obtain it from the live tlog.Log's own
 // Checkpoint(), never synthesized here). It:
 //
-//  1. Builds segment_digest via the SAME tlogservice.SegmentDigest the
-//     handler recomputes, and signs tlogservice.OpMirrorLogSegment over
-//     tlogservice.MirrorLogSegmentFields(logID, fromIndex, cp.Head, digest)
+//  1. Builds segment_digest via the SAME wirecontract.SegmentDigest the
+//     handler recomputes, and signs wirecontract.OpMirrorLogSegment over
+//     wirecontract.MirrorLogSegmentFields(logID, fromIndex, cp.Head, digest)
 //     — the exact view the handler reconstructs to verify.
 //  2. Sends logID, fromIndex, payloads, and cp (wire-shaped identically to
 //     GetLogCheckpointResponse) on the wire.
@@ -122,16 +126,16 @@ func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex u
 	if cp == nil {
 		return 0, fmt.Errorf("tlogservice/client: MirrorLogSegment: nil checkpoint")
 	}
-	digest := tlogservice.SegmentDigest(payloads)
-	fields := tlogservice.MirrorLogSegmentFields(logID, fromIndex, cp.Head, digest)
-	ap, err := c.proof(tlogservice.OpMirrorLogSegment, fields)
+	digest := wirecontract.SegmentDigest(payloads)
+	fields := wirecontract.MirrorLogSegmentFields(logID, fromIndex, cp.Head, digest)
+	ap, err := c.proof(wirecontract.OpMirrorLogSegment, fields)
 	if err != nil {
 		return 0, err
 	}
 	resp, err := c.svc.MirrorLogSegment(ctx, connect.NewRequest(&tlogpb.MirrorLogSegmentRequest{
 		LogId:                logID,
 		FromIndex:            fromIndex,
-		RecordPayloadsFramed: tlogservice.FrameRecordPayloads(payloads),
+		RecordPayloadsFramed: wirecontract.FrameRecordPayloads(payloads),
 		Checkpoint:           checkpointToWire(cp),
 		AuthProof:            ap,
 	}))

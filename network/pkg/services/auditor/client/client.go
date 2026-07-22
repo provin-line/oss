@@ -7,14 +7,18 @@
 // (the wire form of the data plane's in-process AuditRegistrar.Add).
 //
 // Both reproduce the EXACT signed view the handler verifies by calling the
-// SAME shared builders the handler does — auditor.OpRegisterEvidence /
-// auditor.RegisterEvidenceFields and auditor.OpRegisterAuditHead /
-// auditor.RegisterAuditHeadFields (network/pkg/services/auditor/wireview.go)
-// — so the two derivations cannot drift.
+// SAME shared builders the handler does — wirecontract.OpRegisterEvidence /
+// wirecontract.RegisterEvidenceFields and wirecontract.OpRegisterAuditHead /
+// wirecontract.RegisterAuditHeadFields
+// (network/pkg/services/auditor/wirecontract/wireview.go) — so the two
+// derivations cannot drift.
 //
-// It imports only the generated client, connect, and crypto — never
-// pipeline/ (AGENTS.md layer rule: network and pipeline interact only over
-// the wire).
+// It imports only the generated client, connect, crypto, and the auditor
+// service's wirecontract LEAF (op names + signed-view builders; PR3b Task 2
+// moved these out of the auditor service root so this client never pulls in
+// the root's store/runner/handler domain logic) — never the auditor service
+// root itself, and never pipeline/ (AGENTS.md layer rule: network and
+// pipeline interact only over the wire).
 package client
 
 import (
@@ -28,7 +32,7 @@ import (
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
-	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
@@ -54,7 +58,7 @@ type Config struct {
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call. Both RegisterEvidence and RegisterAuditHead are mounted
 	// behind L1 authz IN ADDITION to the L2 wireauth proof
-	// (auditor.OpRegisterEvidence / auditor.OpRegisterAuditHead) this client
+	// (wirecontract.OpRegisterEvidence / wirecontract.OpRegisterAuditHead) this client
 	// already signs — L2 proves WHO is registering, L1 decides whether the
 	// caller may reach the RPC at all, and this client previously had no way
 	// to present anything for the latter, so a real L1 deployment rejected
@@ -110,26 +114,27 @@ func bearerInterceptor(token string) connect.Interceptor {
 // and derives the body address it actually records evidence against (P1-A).
 // It:
 //
-//  1. Canonicalizes consumed via auditor.CanonicalizeConsumedSet BEFORE any
-//     signing or network call — a malformed set (empty after dedup, or a
+//  1. Canonicalizes consumed via wirecontract.CanonicalizeConsumedSet BEFORE
+//     any signing or network call — a malformed set (empty after dedup, or a
 //     member that is not a well-formed sha256:<hex> content address) is
 //     rejected client-side, in the SAME error class the handler enforces,
 //     with no proof minted and no RPC sent.
-//  2. Signs auditor.OpRegisterEvidence over auditor.RegisterEvidenceFields
-//     built from the canonical set — the exact bytes the handler
-//     reconstructs to verify, so a caller resubmitting the same set in a
-//     different order signs and verifies identically.
+//  2. Signs wirecontract.OpRegisterEvidence over
+//     wirecontract.RegisterEvidenceFields built from the canonical set — the
+//     exact bytes the handler reconstructs to verify, so a caller
+//     resubmitting the same set in a different order signs and verifies
+//     identically.
 //  3. Sends the canonical set on the wire (what was signed is what is sent)
 //     and returns any Connect error as-is (no swallowing) — the caller sees
 //     the real Connect code (e.g. Unauthenticated, InvalidArgument for a
 //     malformed variant id, FailedPrecondition for one this node never
 //     admitted).
 func (c *Client) RegisterEvidence(ctx context.Context, headVariantID string, consumed []string) error {
-	canonical, err := auditor.CanonicalizeConsumedSet(consumed)
+	canonical, err := wirecontract.CanonicalizeConsumedSet(consumed)
 	if err != nil {
 		return fmt.Errorf("auditor/client: %w", err)
 	}
-	ap, err := c.proof(auditor.OpRegisterEvidence, auditor.RegisterEvidenceFields(headVariantID, canonical))
+	ap, err := c.proof(wirecontract.OpRegisterEvidence, wirecontract.RegisterEvidenceFields(headVariantID, canonical))
 	if err != nil {
 		return err
 	}
@@ -149,11 +154,12 @@ func (c *Client) RegisterEvidence(ctx context.Context, headVariantID string, con
 // admission and enqueue by the body address it derives (see
 // AuditServiceHandler.RegisterAuditHead's own wire doc for exactly when to
 // use this RPC instead of RegisterEvidence). It signs
-// auditor.OpRegisterAuditHead over auditor.RegisterAuditHeadFields — the
-// exact bytes the handler reconstructs to verify — and returns any Connect
-// error as-is (no swallowing), the same convention RegisterEvidence follows.
+// wirecontract.OpRegisterAuditHead over wirecontract.RegisterAuditHeadFields
+// — the exact bytes the handler reconstructs to verify — and returns any
+// Connect error as-is (no swallowing), the same convention RegisterEvidence
+// follows.
 func (c *Client) RegisterAuditHead(ctx context.Context, headVariantID string) error {
-	ap, err := c.proof(auditor.OpRegisterAuditHead, auditor.RegisterAuditHeadFields(headVariantID))
+	ap, err := c.proof(wirecontract.OpRegisterAuditHead, wirecontract.RegisterAuditHeadFields(headVariantID))
 	if err != nil {
 		return err
 	}

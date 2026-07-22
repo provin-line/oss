@@ -17,6 +17,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -26,10 +27,15 @@ var (
 	// ErrNotFound is a log id no producing loop on this node owns, and (once
 	// a mirror store is wired) no mirror has ever heard of either.
 	ErrNotFound = errors.New("tlogservice: no emission log with that id")
-	// ErrInvalidArgument is a malformed range parameter, an unparseable log
-	// id, or a structurally invalid MirrorLogSegment request (nil
-	// checkpoint, checkpoint.size misaligned, or a from_index/len overflow).
-	ErrInvalidArgument = errors.New("tlogservice: invalid argument")
+	// ErrInvalidArgument points at wirecontract.ErrInvalidArgument — moved
+	// into the leaf wirecontract package (PR3b Task 2) because
+	// UnframeRecordPayloads (the wire framing codec, now in that leaf) must
+	// return the SAME sentinel value this package's own validation uses (a
+	// malformed range parameter, an unparseable log id, or a structurally
+	// invalid MirrorLogSegment request); this alias keeps errors.Is intact
+	// and existing call sites unchanged. See wirecontract.ErrInvalidArgument
+	// for the full doc.
+	ErrInvalidArgument = wirecontract.ErrInvalidArgument
 	// ErrMirrorNotConfigured is MirrorSegment/MirrorState's error when this
 	// Service was built with a nil MirrorConfig (New's mirror param) — this
 	// node never wired a mirror store, mirroring
@@ -44,9 +50,12 @@ var (
 	// signer. One sentinel for the whole D-T3 bucket — every sub-case maps
 	// to the same connect code (PermissionDenied).
 	ErrIdentityMismatch = errors.New("tlogservice: mirror segment: caller identity does not satisfy the log's writer binding")
-	// ErrCapExceeded is MirrorSegment's D-T2 rule 5 cap failure: the batch's
-	// record count or summed byte length exceeds the configured maximum.
-	ErrCapExceeded = errors.New("tlogservice: mirror segment: batch exceeds the configured cap")
+	// ErrCapExceeded points at wirecontract.ErrCapExceeded — see
+	// ErrInvalidArgument's alias doc for why this sentinel moved (the SAME
+	// rationale: UnframeRecordPayloads must raise the SAME cap-exceeded
+	// value CheckBatchCaps does). See wirecontract.ErrCapExceeded for the
+	// full doc.
+	ErrCapExceeded = wirecontract.ErrCapExceeded
 	// ErrMirrorConflict is MirrorSegment's D-T2 rule 1/2 failure that is NOT
 	// a malformed-request error: a gap ahead of the acked size, a partial
 	// overlap with already-mirrored records (a replay whose payloads do not

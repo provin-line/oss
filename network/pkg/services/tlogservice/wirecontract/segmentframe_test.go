@@ -1,4 +1,4 @@
-package tlogservice
+package wirecontract
 
 import (
 	"bytes"
