@@ -37,6 +37,7 @@
 package main
 
 import (
+	"bytes"
 	stded25519 "crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -361,10 +362,26 @@ func provisionPipelineIdentity(cfg config) error {
 	keysDir := filepath.Join(cfg.pipelineDataDir, "keys")
 	ks := filestore.New(keysDir)
 
+	// The export lives in cfg.outDir (the `provisioned` volume); the private
+	// keys live in cfg.pipelineDataDir (the separate `pipeline-data` volume).
+	// A `docker compose down -v` that drops only ONE of the two — or any
+	// other hand-edit — can leave a still self-consistent private keyset that
+	// no longer matches the public halves already handed to the registry via
+	// `provin pipeline/process create --external-key`. ensureSubjectKeys
+	// cross-checks each subject's freshly-derived export against this prior
+	// record (below) and fails closed on a mismatch, rather than silently
+	// re-publishing a export that has quietly drifted from what a running
+	// pipeline actually signs with.
+	priorExported, err := readPriorExport(filepath.Join(cfg.outDir, "pipeline-external-keys.json"))
+	if err != nil {
+		return fmt.Errorf("provision pipeline identity: %w", err)
+	}
+
 	subjects := []string{cfg.pipelineDID, cfg.processDID}
 	exported := make(map[string]externalKeysExport, len(subjects))
 	for _, subject := range subjects {
-		pub, err := ensureSubjectKeys(ks, subject)
+		prior, hasPrior := priorExported[subject]
+		pub, err := ensureSubjectKeys(ks, subject, prior, hasPrior)
 		if err != nil {
 			return fmt.Errorf("provision pipeline identity %s: %w", subject, err)
 		}
@@ -391,25 +408,41 @@ func provisionPipelineIdentity(cfg config) error {
 
 // ensureSubjectKeys returns subject's exported public halves, minting a
 // fresh #auth/#signing keypair pair into ks on first provisioning and
-// reusing (deriving the public halves back from the stored private keys)
-// on every later re-run — filestore.SaveKeyPair is create-only (it errors
-// on an existing keyset), so a re-run must detect completeness itself
-// rather than call it unconditionally. A HALF-present keyset (one of the two
-// keys written, the other missing — impossible via this function's own
-// atomic SaveKeyPair call, but possible if the volume were hand-edited or a
-// process was killed mid-chown) fails closed rather than silently minting a
-// mismatched second key.
-func ensureSubjectKeys(ks *filestore.Store, subject string) (externalKeysExport, error) {
+// reusing (deriving the public halves back from the stored private keys,
+// validated below) on every later re-run — filestore.SaveKeyPair is
+// create-only (it errors on an existing keyset), so a re-run must detect
+// completeness itself rather than call it unconditionally. A HALF-present
+// keyset (one of the two keys written, the other missing — impossible via
+// this function's own atomic SaveKeyPair call, but possible if the volume
+// were hand-edited or a process was killed mid-chown) fails closed rather
+// than silently minting a mismatched second key.
+//
+// prior/hasPrior is that same subject's entry from an earlier run's
+// pipeline-external-keys.json, when one exists (see provisionPipelineIdentity):
+// on the reuse path, the freshly re-derived export must match it exactly, or
+// the two volumes backing this deployment (`pipeline-data` for the private
+// keys, `provisioned` for the export) have drifted out of sync.
+func ensureSubjectKeys(ks *filestore.Store, subject string, prior externalKeysExport, hasPrior bool) (externalKeysExport, error) {
 	authPriv, authErr := ks.GetPrivateKey(subject, keystore.KeyIDAuth)
 	signPriv, signErr := ks.GetPrivateKey(subject, keystore.KeyIDSigning)
 	switch {
 	case authErr == nil && signErr == nil:
-		authPub := stded25519.PrivateKey(authPriv).Public().(stded25519.PublicKey)
-		signPub := stded25519.PrivateKey(signPriv).Public().(stded25519.PublicKey)
-		return externalKeysExport{
+		authPub, err := validatedPublicKey(authPriv)
+		if err != nil {
+			return externalKeysExport{}, resetPipelineIdentity(fmt.Sprintf("%s#%s key material is invalid: %v", subject, keystore.KeyIDAuth, err))
+		}
+		signPub, err := validatedPublicKey(signPriv)
+		if err != nil {
+			return externalKeysExport{}, resetPipelineIdentity(fmt.Sprintf("%s#%s key material is invalid: %v", subject, keystore.KeyIDSigning, err))
+		}
+		out := externalKeysExport{
 			AuthPublicKey:    base64.StdEncoding.EncodeToString(authPub),
 			SigningPublicKey: base64.StdEncoding.EncodeToString(signPub),
-		}, nil
+		}
+		if hasPrior && (prior.AuthPublicKey != out.AuthPublicKey || prior.SigningPublicKey != out.SigningPublicKey) {
+			return externalKeysExport{}, resetPipelineIdentity(fmt.Sprintf("%s's previously exported public keys no longer match its locally-held private keys (mixed generations)", subject))
+		}
+		return out, nil
 	case errors.Is(authErr, keystore.ErrNotFound) && errors.Is(signErr, keystore.ErrNotFound):
 		authKP, err := (ed25519.Generator{}).Generate()
 		if err != nil {
@@ -430,8 +463,66 @@ func ensureSubjectKeys(ks *filestore.Store, subject string) (externalKeysExport,
 			SigningPublicKey: base64.StdEncoding.EncodeToString(signKP.PublicKey),
 		}, nil
 	default:
-		return externalKeysExport{}, fmt.Errorf("partial keyset (auth: %v, signing: %v) — reset the quickstart volume (docker compose down -v) and re-run", authErr, signErr)
+		return externalKeysExport{}, resetPipelineIdentity(fmt.Sprintf("partial keyset (auth: %v, signing: %v)", authErr, signErr))
 	}
+}
+
+// validatedPublicKey validates priv as a well-formed 64-byte Ed25519 private
+// key (seed ‖ embedded public half, the stded25519.PrivateKey layout) and
+// returns the embedded public half — after confirming it actually DERIVES
+// from the embedded seed. A wrong-size file is rejected before any indexing
+// into it (stded25519.PrivateKey.Public() slices priv[32:] unconditionally
+// and panics on a too-short key); a right-size-but-corrupted file (e.g. a
+// hand-edited or truncated-then-padded public suffix) slices cleanly but
+// would not derive from its own seed, so re-deriving and comparing catches
+// what a bare length check cannot.
+func validatedPublicKey(priv []byte) (stded25519.PublicKey, error) {
+	if len(priv) != stded25519.PrivateKeySize {
+		return nil, fmt.Errorf("private key is %d bytes, want %d", len(priv), stded25519.PrivateKeySize)
+	}
+	stored := stded25519.PrivateKey(priv)
+	embedded := append(stded25519.PublicKey(nil), stored.Public().(stded25519.PublicKey)...)
+	derived := stded25519.NewKeyFromSeed(stored.Seed()).Public().(stded25519.PublicKey)
+	if !bytes.Equal(embedded, derived) {
+		return nil, errors.New("embedded public half does not derive from the private key's own seed (corrupted key material)")
+	}
+	return embedded, nil
+}
+
+// resetPipelineIdentity formats the reset guidance shared by every
+// ensureSubjectKeys failure mode (partial keyset, malformed key material, a
+// mismatched export) — the fix is always the same: the local pipeline-data
+// keys and the exported public halves (two independent volumes) have
+// diverged and must be regenerated together.
+func resetPipelineIdentity(detail string) error {
+	return fmt.Errorf("%s — reset the quickstart volume (docker compose down -v) and re-run", detail)
+}
+
+// readPriorExport best-effort reads an earlier run's pipeline-external-keys.json.
+// A fresh volume (no file yet) returns a nil map, not an error — there is
+// nothing to cross-check the first time a subject is provisioned. A PRESENT
+// but undecodable file, however, fails closed like every other malformed
+// artifact in this tool: a corrupt export is exactly the kind of drift
+// ensureSubjectKeys' cross-check exists to catch, so silently ignoring it
+// here would defeat that check for every subject in the same run.
+func readPriorExport(path string) (map[string]externalKeysExport, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read existing export %s: %w", path, err)
+	}
+	var prior map[string]externalKeysExport
+	// This is a local dev-provisioning artifact this same tool wrote
+	// (cfg.outDir/pipeline-external-keys.json), read back only to cross-check
+	// against freshly-derived key material below — never a wire/protocol
+	// payload or a signing scope, so canon.StrictDecoder's duplicate-key/
+	// precision guarantees have no bearing here. decoder-hygiene-exempt
+	if err := json.Unmarshal(raw, &prior); err != nil {
+		return nil, resetPipelineIdentity(fmt.Sprintf("existing export %s does not decode as JSON: %v", path, err))
+	}
+	return prior, nil
 }
 
 // hasCompleteMaterial reports whether cfg.outDir already holds a complete,

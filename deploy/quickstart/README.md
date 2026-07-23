@@ -225,9 +225,12 @@ source-commitment axis offline.
   trust material (operator + account seeds, the account claims JWTs in the
   resolver directory, a system account with a **claims-push user narrowed to
   this deployment's account**, and `nats-server.conf` running the directory
-  resolver over that same directory), mints `pipeline`'s **service token** —
-  an HS256 JWT it uses to authenticate its *own* L1-gated calls (publishing
-  issued VCs, resolving references, fetching adjacent evidence) — and mints
+  resolver over that same directory), mints the deployment's **service
+  token** — an HS256 JWT both `network` and `pipeline` load (via
+  `CONFIG_OVERLAY` and the config file's `include`, respectively) to
+  authenticate their *own* L1-gated calls (`network`'s batch-resolver
+  fetching peer credentials; `pipeline` publishing issued VCs, resolving
+  references, fetching adjacent evidence) — and mints
   `pipeline`'s own local `#auth`/`#signing` keys (the external-key
   provisioning story, step 2c above; see `provision/main.go`'s
   `provisionPipelineIdentity`). Everything is written to shared volumes;
@@ -246,7 +249,10 @@ source-commitment axis offline.
   registry RPCs, the background batch-resolver + audit-runner, and public DID
   resolution. It carries no data plane — see `network/config/application.conf`.
   Its authorization backend is the default `o3co` — it calls the real
-  policy-verifier.
+  policy-verifier. Its own batch-resolver presents the service-token overlay
+  (above) against peer `ResolveVC` calls — `CONFIG_OVERLAY` in
+  docker-compose.yml points it at the same `/provisioned/overlay.conf`
+  `pipeline` loads.
 - **`pipeline`** (`cmd/pipeline`) is the data plane: the configured transport
   loops (`src` push-ingress, `archive` an observation-only sink), wired to
   `network` over the wire — it carries NO in-process registry of its own. Its

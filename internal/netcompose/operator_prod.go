@@ -18,6 +18,6 @@ func ChainOperator(c *chainconfig.Config) (infra.Operator, error) {
 	case chainconfig.TransportNATS:
 		return natsOperator(c)
 	default:
-		return nil, fmt.Errorf("standalone: transport %q requires a `dev` build (noop is excluded from production builds)", c.Transport)
+		return nil, fmt.Errorf("netcompose: transport %q requires a `dev` build (noop is excluded from production builds)", c.Transport)
 	}
 }

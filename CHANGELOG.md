@@ -635,7 +635,7 @@ closure required, now met with executed evidence rather than review.
 
 ### Removed
 
-- `pipeline/chained/cmd/` placeholder (the standalone runtime is the one
+- `pipeline/chained/cmd/` placeholder (the standalone runtime was the one
   chained-loop binary).
 - `cmd/standalone` — the all-in-one node binary (control plane + data plane
   in one process), deprecated since `cmd/network`'s addition earlier in this

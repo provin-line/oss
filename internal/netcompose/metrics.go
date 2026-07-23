@@ -87,7 +87,7 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 	registry := prometheus.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics exporter: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics exporter: %w", err)
 	}
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)).
 		Meter(scope)
@@ -95,22 +95,22 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 	emitAttempts, err := meter.Int64ObservableCounter("provin.pipeline.emit.attempts",
 		metric.WithDescription("Emit outcomes per producing loop, keyed on the Emit call's return (success = primary form delivered)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.emit.attempts: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.emit.attempts: %w", err)
 	}
 	strippedFailures, err := meter.Int64ObservableCounter("provin.pipeline.emit.stripped_failures",
 		metric.WithDescription("Stripped-publish (dual-emit) failures per dual-emitting loop; the primary delivery already succeeded."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.emit.stripped_failures: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.emit.stripped_failures: %w", err)
 	}
 	verifyResults, err := meter.Int64ObservableCounter("provin.pipeline.verify.results",
 		metric.WithDescription("Per-credential verifier API outcomes per consuming loop (the seam below the loop's accept/reject policy)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.verify.results: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.verify.results: %w", err)
 	}
 	auditVerdicts, err := meter.Int64ObservableCounter("provin.audit.verdicts",
 		metric.WithDescription("Durably recorded audit verdict writes by linear-chain overall verdict (writes, not audited heads)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.audit.verdicts: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.audit.verdicts: %w", err)
 	}
 
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
@@ -142,7 +142,7 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 		return nil
 	}, emitAttempts, strippedFailures, verifyResults, auditVerdicts)
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics callback: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics callback: %w", err)
 	}
 
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), nil

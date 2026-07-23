@@ -48,7 +48,7 @@ func BuildAuditRunner(
 	verifier := vc.NewVerifier(didResolver, ed25519.Verifier{}, vopts...)
 	cv, err := chainwalk.New(localChainResolver{svc: vcSvc}, verifier, chainwalk.WithMaxDepth(pipeCfg.BatchResolver.MaxDepth))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: audit chain verifier: %w", err)
+		return nil, fmt.Errorf("netcompose: audit chain verifier: %w", err)
 	}
 	// WithSourceCommitment enables emit-locus consumed-set self-audit (slice-17o): for an
 	// aggregate head with a local receipt, the runner gathers the consumed sources from the

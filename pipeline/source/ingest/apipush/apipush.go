@@ -20,8 +20,8 @@
 // Delivery semantics are the broker's: the adapter does not buffer or retry,
 // and a 202 means "published", not "signed" — FirstDrop issuance is
 // asynchronous. Authentication is deliberately out of scope: the deployment
-// mounts this handler behind its own middleware (the standalone node wraps it
-// with the L1 PDP check).
+// mounts this handler behind its own middleware (`cmd/pipeline` wraps it with
+// the L1 PDP check).
 package apipush
 
 import (

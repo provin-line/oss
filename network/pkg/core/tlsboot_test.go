@@ -128,8 +128,8 @@ func TestLoadServerTLS_EnforcesTheFloorOnTheWire(t *testing.T) {
 	}
 }
 
-// writeSelfSignedCertCore mirrors the standalone test helper: a minimal
-// self-signed Ed25519 server certificate for 127.0.0.1.
+// writeSelfSignedCertCore mirrors the (now-retired) cmd/standalone test
+// helper: a minimal self-signed Ed25519 server certificate for 127.0.0.1.
 func writeSelfSignedCertCore(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

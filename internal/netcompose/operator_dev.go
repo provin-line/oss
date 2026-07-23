@@ -19,10 +19,10 @@ func ChainOperator(c *chainconfig.Config) (infra.Operator, error) {
 		return natsOperator(c)
 	case chainconfig.TransportNoop:
 		if !c.AllowNoopTransport {
-			return nil, fmt.Errorf("standalone: noop transport requires chain.dev.allow-noop-transport=true")
+			return nil, fmt.Errorf("netcompose: noop transport requires chain.dev.allow-noop-transport=true")
 		}
 		return noop.New(), nil
 	default:
-		return nil, fmt.Errorf("standalone: unknown transport %q", c.Transport)
+		return nil, fmt.Errorf("netcompose: unknown transport %q", c.Transport)
 	}
 }

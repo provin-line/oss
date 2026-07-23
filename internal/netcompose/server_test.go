@@ -145,7 +145,7 @@ func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, cr
 	return h, ownerKS, ownerKP.PublicKey
 }
 
-// The standalone peer surface must record relationship evidence
+// The network node's peer surface must record relationship evidence
 // (transfer.relationship.record): BuildHandler wires a durable filelog under the
 // chain root into the peer handler. This guards that composition — without it,
 // NewPeerWithEvidence has no production caller and the behavior never runs.

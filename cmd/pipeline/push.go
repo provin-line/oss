@@ -1,10 +1,11 @@
 package main
 
-// Copied from cmd/standalone/push.go (PR3b Task 6): the HTTP push-ingest
-// mount + per-route policy, unchanged. Duplicated rather than imported —
-// standalone's copy is unexported to package main of a DIFFERENT binary, and
-// this binary must not import cmd/standalone. Keep in lockstep by
-// inspection until a shared home lands (PR3c).
+// Copied from cmd/standalone/push.go (PR3b Task 6, since retired — PR3c): the
+// HTTP push-ingest mount + per-route policy, unchanged. Duplicated rather
+// than imported — the retired cmd/standalone's copy was unexported to
+// package main of a DIFFERENT binary, and this binary could not import
+// cmd/standalone. cmd/standalone no longer exists, so this is now the only
+// copy.
 
 import (
 	"fmt"

@@ -10,8 +10,8 @@
 
 package main
 
-// The /metrics bridge for cmd/pipeline (PR3c follow-up — see main.go's own
-// meterScope doc): copied and adapted from internal/netcompose/metrics.go's
+// The /metrics bridge for cmd/pipeline (see main.go's own meterScope doc):
+// copied and adapted from internal/netcompose/metrics.go's
 // OTel/Prometheus composition-root bridge. This binary may not import
 // internal/netcompose at all (depsguard_test.go's
 // TestProdDeps_NoRegistryServerCodeInPipelineBinary pins the ban), so the

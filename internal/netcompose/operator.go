@@ -34,7 +34,7 @@ func natsOperator(c *chainconfig.Config) (infra.Operator, error) {
 			Timeout:     c.NATS.ConnectWait,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("standalone: live claims publisher: %w", err)
+			return nil, fmt.Errorf("netcompose: live claims publisher: %w", err)
 		}
 		publisher = live
 	}
@@ -52,7 +52,7 @@ func natsOperator(c *chainconfig.Config) (infra.Operator, error) {
 	// hydrate has already absorbed any previously published grant set, so this
 	// never clobbers live grants.
 	if err := op.PublishClaims(); err != nil {
-		return nil, fmt.Errorf("standalone: publish account claims: %w", err)
+		return nil, fmt.Errorf("netcompose: publish account claims: %w", err)
 	}
 	return op, nil
 }

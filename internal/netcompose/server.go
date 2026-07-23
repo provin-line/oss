@@ -327,7 +327,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		Nonces:   wireauth.NewMemoryNonceStore(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("standalone: chain peer verifier: %w", err)
+		return nil, fmt.Errorf("netcompose: chain peer verifier: %w", err)
 	}
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
@@ -479,7 +479,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// counterparty signature, not a signed log head).
 	evFilelog, err := filelog.New(filepath.Join(chainRoot, "relationship-evidence"))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: chain relationship evidence log: %w", err)
+		return nil, fmt.Errorf("netcompose: chain relationship evidence log: %w", err)
 	}
 	evLog := evidence.New(evFilelog)
 

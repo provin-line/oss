@@ -40,14 +40,14 @@ import (
 
 // pipelineRuntimeConfigFrom maps this binary's own loaded config trees into
 // pipeline/runtime's network-agnostic Config. dataDir is coreCfg.DataDir;
-// TlogDir/RejectLogDir derive from it exactly as standalone's
-// runtimeConfigFrom does (data-dir/tlog, data-dir/evidence/sink-rejects). A
+// TlogDir/RejectLogDir derive from it exactly as the retired cmd/standalone's
+// runtimeConfigFrom did (data-dir/tlog, data-dir/evidence/sink-rejects). A
 // non-NATS transport WITH configured loops is a boot error naming the
 // offending transport — this binary exists ONLY to run loops (main's
 // zero-loop guard runs first), so by the time this is called len(cfg.Loops)
-// is always > 0 and a non-NATS transport is always fatal here (unlike
-// standalone, which tolerates a source-only... no, ANY zero-loop config on a
-// non-NATS transport, since standalone also serves a pure control plane).
+// is always > 0 and a non-NATS transport is always fatal here (unlike the
+// retired cmd/standalone, which tolerated a source-only... no, ANY zero-loop
+// config on a non-NATS transport, since it also served a pure control plane).
 func pipelineRuntimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, dataDir string) (pipelineruntime.Config, error) {
 	cfg := pipelineruntime.Config{
 		NATS: pipelineruntime.NATSConfig{
@@ -124,9 +124,9 @@ func chainedConfigFrom(cc pipelineconfig.ChainedConfig) pipelineruntime.ChainedC
 }
 
 // aggregateConfigFrom maps AggregateConfig. VerificationStrategy is
-// deliberately NOT copied, mirroring standalone's own mapping: the aggregate
-// runtime declares VerificationAdjacent intrinsically, so
-// runtime.AggregateConfig has no field for it.
+// deliberately NOT copied, mirroring the retired cmd/standalone's own
+// mapping: the aggregate runtime declares VerificationAdjacent intrinsically,
+// so runtime.AggregateConfig has no field for it.
 func aggregateConfigFrom(ac pipelineconfig.AggregateConfig) pipelineruntime.AggregateConfig {
 	out := pipelineruntime.AggregateConfig{
 		OutputSubject: ac.OutputSubject,
@@ -258,8 +258,8 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // newVCStoreClient builds the shared vcresolver/client.Resolver every
 // CredentialPublisher/IngressStorer/ReceiptWriter adapter below wraps,
-// bounding a resolved/stored credential's read size the same way
-// standalone's credentialPublisherFrom does (D-17g-13).
+// bounding a resolved/stored credential's read size the same way the
+// retired cmd/standalone's credentialPublisherFrom did (D-17g-13).
 func newVCStoreClient(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient) *vcresolverclient.Resolver {
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		httpClient, pipeCfg.VCStoreEndpoint,

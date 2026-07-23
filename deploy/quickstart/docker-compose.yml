@@ -121,6 +121,15 @@ services:
     build:
       context: ../..
       dockerfile: cmd/network/Dockerfile
+    environment:
+      # cmd/network's own peer-fetching batch resolver (BuildBatchResolver)
+      # always runs and always presents provin.network.pipeline.vc-store-bearer
+      # against L1-protected peer ResolveVC endpoints — the SAME service token
+      # `provision` mints for `pipeline`. Without this overlay the placeholder
+      # in network/config/application.conf stands, and every peer fetch is
+      # rejected 401/403 (see hoconconfig.Load's CONFIG_OVERLAY layer, and
+      # cmd/network's own boot guard on an empty bearer).
+      CONFIG_OVERLAY: /provisioned/overlay.conf
     volumes:
       - ./network/config:/app/config:ro
       - provisioned:/provisioned

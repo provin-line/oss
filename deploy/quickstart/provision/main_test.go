@@ -552,3 +552,134 @@ func filestoreDIDDir(keysRoot, subjectDID string) (string, error) {
 	parts := append([]string{keysRoot}, strings.Split(subjectDID, ":")...)
 	return filepath.Join(parts...), nil
 }
+
+// A both-files-present keyset that is nonetheless MALFORMED must fail closed
+// with reset guidance rather than export a public key that either panics to
+// derive (too short) or does not actually correspond to the private key
+// (a corrupted public suffix) — the two shapes validatedPublicKey (main.go)
+// rejects before ensureSubjectKeys ever hands a value to base64-encode.
+func TestProvision_PipelineIdentity_MalformedKey_FailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, keyPath string)
+	}{
+		{
+			name: "short private key file",
+			mutate: func(t *testing.T, keyPath string) {
+				t.Helper()
+				if err := os.WriteFile(keyPath, []byte{1, 2, 3}, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "corrupted public suffix",
+			mutate: func(t *testing.T, keyPath string) {
+				t.Helper()
+				raw, err := os.ReadFile(keyPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(raw) != stded25519.PrivateKeySize {
+					t.Fatalf("fixture key is %d bytes, want %d", len(raw), stded25519.PrivateKeySize)
+				}
+				corrupted := append([]byte(nil), raw...)
+				corrupted[32] ^= 0xFF // flip a bit in the embedded public half (bytes 32:64), not the seed
+				if err := os.WriteFile(keyPath, corrupted, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := testConfig(dir)
+			if err := provision(cfg); err != nil {
+				t.Fatalf("first provision: %v", err)
+			}
+			keysDir := filepath.Join(cfg.pipelineDataDir, "keys")
+			subjectDir, err := filestoreDIDDir(keysDir, cfg.pipelineDID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(t, filepath.Join(subjectDir, "auth.key"))
+
+			err = provision(cfg)
+			if err == nil || !strings.Contains(err.Error(), "key material is invalid") {
+				t.Fatalf("want fail-closed with an invalid-key-material error, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "reset the quickstart volume") {
+				t.Errorf("want reset guidance in the error, got: %v", err)
+			}
+		})
+	}
+}
+
+// A private keyset that is itself well-formed but no longer matches the
+// public halves already exported (pipeline-external-keys.json, a DIFFERENT
+// volume than the private keys) must fail closed rather than silently
+// re-publish an export a running pipeline's local keystore no longer backs —
+// the "mixed generations" case a `docker compose down -v` on just one of the
+// two volumes could produce.
+func TestProvision_PipelineIdentity_MismatchedExport_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+
+	exportPath := filepath.Join(cfg.outDir, "pipeline-external-keys.json")
+	raw, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var export map[string]externalKeysExport
+	if err := json.Unmarshal(raw, &export); err != nil {
+		t.Fatal(err)
+	}
+	entry := export[cfg.pipelineDID]
+	entry.AuthPublicKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, stded25519.PublicKeySize))
+	export[cfg.pipelineDID] = entry
+	out, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exportPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = provision(cfg)
+	if err == nil || !strings.Contains(err.Error(), "mixed generations") {
+		t.Fatalf("want fail-closed with a mismatched-export error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reset the quickstart volume") {
+		t.Errorf("want reset guidance in the error, got: %v", err)
+	}
+}
+
+// An existing pipeline-external-keys.json that does not even decode as JSON
+// (a hand-edited or truncated `provisioned` volume) must fail closed too —
+// silently ignoring it would skip the mismatched-export cross-check above
+// for every subject in the same run.
+func TestProvision_PipelineIdentity_UndecodablePriorExport_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+
+	exportPath := filepath.Join(cfg.outDir, "pipeline-external-keys.json")
+	if err := os.WriteFile(exportPath, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := provision(cfg)
+	if err == nil || !strings.Contains(err.Error(), "does not decode as JSON") {
+		t.Fatalf("want fail-closed with an undecodable-export error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reset the quickstart volume") {
+		t.Errorf("want reset guidance in the error, got: %v", err)
+	}
+}
