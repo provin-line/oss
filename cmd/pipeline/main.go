@@ -50,15 +50,11 @@ import (
 	"github.com/provin-line/oss/pipeline/transport/tlogship"
 )
 
-// /metrics is deliberately NOT mounted by this binary in PR3b:
-// internal/netcompose.MaybeMountMetrics/BuildMetricsHandler are off-limits
-// (netcompose is banned here — PR3b Task 8's depsguard pins it), and
-// duplicating the ~65-line otel/prometheus bridge is scoped out of this task
-// in favor of Deps wiring + guards + HTTP surface + lifecycle correctness.
-// PR3c follow-up: build the bridge directly over pipeline/runtime's own
-// LoopMetrics (this binary would not even need to convert to
-// netcompose.LoopMetrics the way cmd/standalone's field-copy once did,
-// since it never imports netcompose).
+// meterScope is this binary's OTel instrumentation-scope name — the metrics
+// bridge's (metrics.go) self-identification. Every node binary reports
+// under its own import path rather than borrowing another's (cmd/network's
+// own meterScope, main.go there, is this constant's sibling).
+const meterScope = "github.com/provin-line/oss/cmd/pipeline"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -233,6 +229,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("pipeline: build http handler: %v", err)
 	}
+	// The /metrics bridge (metrics.go) composes OUTSIDE buildHandler, same as
+	// cmd/network's own composition (netcompose.WithMetrics's doc): the
+	// control-plane-shaped HTTP wiring above stays metrics-agnostic, and the
+	// endpoint exists only when config enables it (default off).
+	handler, err = MaybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, dp.Metrics())
+	if err != nil {
+		log.Fatalf("pipeline: build metrics: %v", err)
+	}
+	if coreCfg.MetricsEnabled {
+		log.Printf("pipeline: metrics exposition mounted at /metrics")
+	}
 
 	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxPushBodySize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
@@ -255,10 +262,13 @@ func main() {
 // (liveness), /readyz (NATS + registry reachability + the external PDP when
 // relevant — see below), and the configured /ingest/<loop>/... push routes
 // via mountIngest. No ConnectRPC services of its own — this binary is a wire
-// CLIENT to the registry, never a server for it — and no /metrics (see the
-// package doc). natsHealthy is nil for a (guard-1-impossible-but-defensive)
-// zero-loop runtime; the readiness snapshot then reports no nats check
-// rather than a permanently-failing one.
+// CLIENT to the registry, never a server for it. /metrics is NOT mounted
+// here — main composes it OUTSIDE this function, over dp.Metrics(), the
+// same way cmd/network composes its own bridge outside ITS buildHandler
+// (see metrics.go's MaybeMountMetrics and its call site in main). natsHealthy
+// is nil for a (guard-1-impossible-but-defensive) zero-loop runtime; the
+// readiness snapshot then reports no nats check rather than a
+// permanently-failing one.
 //
 // hasPushIngress (branch review, P2 Codex fix) gates an added PDP
 // reachability check: this binary mounts no ConnectRPC services of its own

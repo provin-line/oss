@@ -599,6 +599,18 @@ closure required, now met with executed evidence rather than review.
   `cmd/provin` and every other consumer drive the generated
   `didpbconnect.DIDServiceClient` directly, so the regenerated surface is
   immediately usable with no further client-side change.
+- `cmd/pipeline` `/metrics`: the OTel/Prometheus exposition bridge, gated
+  behind `provin.network.core.metrics.enabled` (default off, same as
+  `cmd/network`'s). A dedicated copy of `internal/netcompose`'s
+  `BuildMetricsHandler`/`WithMetrics`/`MaybeMountMetrics` (that package stays
+  banned in this binary's production import graph —
+  `depsguard_test.go` pins it) built directly over `pipeline/runtime`'s own
+  `LoopMetrics` (`dp.Metrics()`): the three data-plane counter families
+  (`provin_pipeline_emit_attempts_total`,
+  `provin_pipeline_emit_stripped_failures_total`,
+  `provin_pipeline_verify_results_total`) per configured loop, with no
+  `provin_audit_verdicts_total` family — this binary runs no audit runner
+  (that remains `cmd/network`'s own `/metrics` concern).
 - `provin` CLI: `pipeline create`/`process create` gain an optional
   `--external-key <path>` flag switching issuance to the external-key path
   (`didpb.ExternalPublicKeys`, `#20` above) — the registry registers the
