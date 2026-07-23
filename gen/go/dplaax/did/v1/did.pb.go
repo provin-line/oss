@@ -138,20 +138,90 @@ func (x *RegisterOwnerResponse) GetDidDocument() []byte {
 	return nil
 }
 
+// ExternalPublicKeys carries the caller's LOCALLY-minted #auth/#signing public
+// keys for the external-key issuance path (see IssuePipelineRequest /
+// IssueProcessRequest field 3). Both fields are RAW 32-byte Ed25519 public
+// keys, unencoded — the registry itself performs the Multikey
+// (publicKeyMultibase) encoding when it assembles the DID Document, the same
+// encoding it uses for a server-generated key; the caller sends no encoding of
+// its own and holds no private key material in common with the registry.
+type ExternalPublicKeys struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// auth_public_key is the raw Ed25519 public key for the #auth verification
+	// method (authentication relationship).
+	AuthPublicKey []byte `protobuf:"bytes,1,opt,name=auth_public_key,json=authPublicKey,proto3" json:"auth_public_key,omitempty"`
+	// signing_public_key is the raw Ed25519 public key for the #signing
+	// verification method (assertionMethod relationship).
+	SigningPublicKey []byte `protobuf:"bytes,2,opt,name=signing_public_key,json=signingPublicKey,proto3" json:"signing_public_key,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ExternalPublicKeys) Reset() {
+	*x = ExternalPublicKeys{}
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExternalPublicKeys) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExternalPublicKeys) ProtoMessage() {}
+
+func (x *ExternalPublicKeys) ProtoReflect() protoreflect.Message {
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExternalPublicKeys.ProtoReflect.Descriptor instead.
+func (*ExternalPublicKeys) Descriptor() ([]byte, []int) {
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ExternalPublicKeys) GetAuthPublicKey() []byte {
+	if x != nil {
+		return x.AuthPublicKey
+	}
+	return nil
+}
+
+func (x *ExternalPublicKeys) GetSigningPublicKey() []byte {
+	if x != nil {
+		return x.SigningPublicKey
+	}
+	return nil
+}
+
 type IssuePipelineRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// target_did is the Pipeline DID to mint (structurally under the owner).
 	TargetDid string `protobuf:"bytes,1,opt,name=target_did,json=targetDid,proto3" json:"target_did,omitempty"`
 	// delegation is the owner-signed DelegationCredential over target_did
 	// (canonical JSON).
-	Delegation    []byte `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Delegation []byte `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"`
+	// external_public_keys, when present, selects the external-key path: the
+	// registry assembles and registers the document over these LOCALLY-minted
+	// public keys and never mints or stores a private key for target_did.
+	// Absent (the default) selects today's server-side mint, unchanged —
+	// back-compat. Delegation verification and every other authorization check
+	// are identical in both modes; only key custody differs.
+	ExternalPublicKeys *ExternalPublicKeys `protobuf:"bytes,3,opt,name=external_public_keys,json=externalPublicKeys,proto3" json:"external_public_keys,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *IssuePipelineRequest) Reset() {
 	*x = IssuePipelineRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[2]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -163,7 +233,7 @@ func (x *IssuePipelineRequest) String() string {
 func (*IssuePipelineRequest) ProtoMessage() {}
 
 func (x *IssuePipelineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[2]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -176,7 +246,7 @@ func (x *IssuePipelineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssuePipelineRequest.ProtoReflect.Descriptor instead.
 func (*IssuePipelineRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{2}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *IssuePipelineRequest) GetTargetDid() string {
@@ -193,10 +263,18 @@ func (x *IssuePipelineRequest) GetDelegation() []byte {
 	return nil
 }
 
+func (x *IssuePipelineRequest) GetExternalPublicKeys() *ExternalPublicKeys {
+	if x != nil {
+		return x.ExternalPublicKeys
+	}
+	return nil
+}
+
 type IssuePipelineResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// did_document is the registry-assembled Pipeline document (canonical JSON),
-	// carrying the generated #auth/#signing keys.
+	// carrying either the generated #auth/#signing keys (server-mint) or the
+	// caller-supplied public keys (external-key path) — never a private key.
 	DidDocument []byte `protobuf:"bytes,1,opt,name=did_document,json=didDocument,proto3" json:"did_document,omitempty"`
 	// delegation is the persisted delegation as stored (canonical JSON).
 	Delegation    []byte `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"`
@@ -206,7 +284,7 @@ type IssuePipelineResponse struct {
 
 func (x *IssuePipelineResponse) Reset() {
 	*x = IssuePipelineResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[3]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +296,7 @@ func (x *IssuePipelineResponse) String() string {
 func (*IssuePipelineResponse) ProtoMessage() {}
 
 func (x *IssuePipelineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[3]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +309,7 @@ func (x *IssuePipelineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssuePipelineResponse.ProtoReflect.Descriptor instead.
 func (*IssuePipelineResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{3}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *IssuePipelineResponse) GetDidDocument() []byte {
@@ -251,15 +329,18 @@ func (x *IssuePipelineResponse) GetDelegation() []byte {
 type IssueProcessRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// target_did is the Process DID to mint (structurally under parent_pipeline).
-	TargetDid     string `protobuf:"bytes,1,opt,name=target_did,json=targetDid,proto3" json:"target_did,omitempty"`
-	Delegation    []byte `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TargetDid  string `protobuf:"bytes,1,opt,name=target_did,json=targetDid,proto3" json:"target_did,omitempty"`
+	Delegation []byte `protobuf:"bytes,2,opt,name=delegation,proto3" json:"delegation,omitempty"`
+	// external_public_keys: see IssuePipelineRequest.external_public_keys — same
+	// contract, same absent/present default.
+	ExternalPublicKeys *ExternalPublicKeys `protobuf:"bytes,3,opt,name=external_public_keys,json=externalPublicKeys,proto3" json:"external_public_keys,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *IssueProcessRequest) Reset() {
 	*x = IssueProcessRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[4]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +352,7 @@ func (x *IssueProcessRequest) String() string {
 func (*IssueProcessRequest) ProtoMessage() {}
 
 func (x *IssueProcessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[4]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +365,7 @@ func (x *IssueProcessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueProcessRequest.ProtoReflect.Descriptor instead.
 func (*IssueProcessRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{4}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *IssueProcessRequest) GetTargetDid() string {
@@ -301,6 +382,13 @@ func (x *IssueProcessRequest) GetDelegation() []byte {
 	return nil
 }
 
+func (x *IssueProcessRequest) GetExternalPublicKeys() *ExternalPublicKeys {
+	if x != nil {
+		return x.ExternalPublicKeys
+	}
+	return nil
+}
+
 type IssueProcessResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DidDocument   []byte                 `protobuf:"bytes,1,opt,name=did_document,json=didDocument,proto3" json:"did_document,omitempty"`
@@ -311,7 +399,7 @@ type IssueProcessResponse struct {
 
 func (x *IssueProcessResponse) Reset() {
 	*x = IssueProcessResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[5]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -323,7 +411,7 @@ func (x *IssueProcessResponse) String() string {
 func (*IssueProcessResponse) ProtoMessage() {}
 
 func (x *IssueProcessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[5]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -336,7 +424,7 @@ func (x *IssueProcessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueProcessResponse.ProtoReflect.Descriptor instead.
 func (*IssueProcessResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{5}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *IssueProcessResponse) GetDidDocument() []byte {
@@ -362,7 +450,7 @@ type ResolveDIDRequest struct {
 
 func (x *ResolveDIDRequest) Reset() {
 	*x = ResolveDIDRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[6]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -374,7 +462,7 @@ func (x *ResolveDIDRequest) String() string {
 func (*ResolveDIDRequest) ProtoMessage() {}
 
 func (x *ResolveDIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[6]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -387,7 +475,7 @@ func (x *ResolveDIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDIDRequest.ProtoReflect.Descriptor instead.
 func (*ResolveDIDRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{6}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ResolveDIDRequest) GetDid() string {
@@ -406,7 +494,7 @@ type ResolveDIDResponse struct {
 
 func (x *ResolveDIDResponse) Reset() {
 	*x = ResolveDIDResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[7]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +506,7 @@ func (x *ResolveDIDResponse) String() string {
 func (*ResolveDIDResponse) ProtoMessage() {}
 
 func (x *ResolveDIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[7]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +519,7 @@ func (x *ResolveDIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDIDResponse.ProtoReflect.Descriptor instead.
 func (*ResolveDIDResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{7}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ResolveDIDResponse) GetDidDocument() []byte {
@@ -451,7 +539,7 @@ type ResolveDelegationRequest struct {
 
 func (x *ResolveDelegationRequest) Reset() {
 	*x = ResolveDelegationRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[8]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +551,7 @@ func (x *ResolveDelegationRequest) String() string {
 func (*ResolveDelegationRequest) ProtoMessage() {}
 
 func (x *ResolveDelegationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[8]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +564,7 @@ func (x *ResolveDelegationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDelegationRequest.ProtoReflect.Descriptor instead.
 func (*ResolveDelegationRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{8}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ResolveDelegationRequest) GetDid() string {
@@ -495,7 +583,7 @@ type ResolveDelegationResponse struct {
 
 func (x *ResolveDelegationResponse) Reset() {
 	*x = ResolveDelegationResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[9]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -507,7 +595,7 @@ func (x *ResolveDelegationResponse) String() string {
 func (*ResolveDelegationResponse) ProtoMessage() {}
 
 func (x *ResolveDelegationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[9]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -520,7 +608,7 @@ func (x *ResolveDelegationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDelegationResponse.ProtoReflect.Descriptor instead.
 func (*ResolveDelegationResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{9}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ResolveDelegationResponse) GetDelegation() []byte {
@@ -541,7 +629,7 @@ type UpdateStatusRequest struct {
 
 func (x *UpdateStatusRequest) Reset() {
 	*x = UpdateStatusRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[10]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -553,7 +641,7 @@ func (x *UpdateStatusRequest) String() string {
 func (*UpdateStatusRequest) ProtoMessage() {}
 
 func (x *UpdateStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[10]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -566,7 +654,7 @@ func (x *UpdateStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdateStatusRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{10}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UpdateStatusRequest) GetDid() string {
@@ -592,7 +680,7 @@ type UpdateStatusResponse struct {
 
 func (x *UpdateStatusResponse) Reset() {
 	*x = UpdateStatusResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[11]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -604,7 +692,7 @@ func (x *UpdateStatusResponse) String() string {
 func (*UpdateStatusResponse) ProtoMessage() {}
 
 func (x *UpdateStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[11]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -617,7 +705,7 @@ func (x *UpdateStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStatusResponse.ProtoReflect.Descriptor instead.
 func (*UpdateStatusResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{11}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UpdateStatusResponse) GetDidDocument() []byte {
@@ -636,7 +724,7 @@ type ListPipelinesRequest struct {
 
 func (x *ListPipelinesRequest) Reset() {
 	*x = ListPipelinesRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[12]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -648,7 +736,7 @@ func (x *ListPipelinesRequest) String() string {
 func (*ListPipelinesRequest) ProtoMessage() {}
 
 func (x *ListPipelinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[12]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -661,7 +749,7 @@ func (x *ListPipelinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPipelinesRequest.ProtoReflect.Descriptor instead.
 func (*ListPipelinesRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{12}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListPipelinesRequest) GetOwnerDid() string {
@@ -680,7 +768,7 @@ type ListPipelinesResponse struct {
 
 func (x *ListPipelinesResponse) Reset() {
 	*x = ListPipelinesResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[13]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +780,7 @@ func (x *ListPipelinesResponse) String() string {
 func (*ListPipelinesResponse) ProtoMessage() {}
 
 func (x *ListPipelinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[13]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +793,7 @@ func (x *ListPipelinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPipelinesResponse.ProtoReflect.Descriptor instead.
 func (*ListPipelinesResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{13}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListPipelinesResponse) GetDids() []string {
@@ -724,7 +812,7 @@ type ListProcessesRequest struct {
 
 func (x *ListProcessesRequest) Reset() {
 	*x = ListProcessesRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[14]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -736,7 +824,7 @@ func (x *ListProcessesRequest) String() string {
 func (*ListProcessesRequest) ProtoMessage() {}
 
 func (x *ListProcessesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[14]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -749,7 +837,7 @@ func (x *ListProcessesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProcessesRequest.ProtoReflect.Descriptor instead.
 func (*ListProcessesRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{14}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListProcessesRequest) GetPipelineDid() string {
@@ -768,7 +856,7 @@ type ListProcessesResponse struct {
 
 func (x *ListProcessesResponse) Reset() {
 	*x = ListProcessesResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[15]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -780,7 +868,7 @@ func (x *ListProcessesResponse) String() string {
 func (*ListProcessesResponse) ProtoMessage() {}
 
 func (x *ListProcessesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[15]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -793,7 +881,7 @@ func (x *ListProcessesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProcessesResponse.ProtoReflect.Descriptor instead.
 func (*ListProcessesResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{15}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListProcessesResponse) GetDids() []string {
@@ -812,7 +900,7 @@ type ReadLifecycleLogRequest struct {
 
 func (x *ReadLifecycleLogRequest) Reset() {
 	*x = ReadLifecycleLogRequest{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[16]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -824,7 +912,7 @@ func (x *ReadLifecycleLogRequest) String() string {
 func (*ReadLifecycleLogRequest) ProtoMessage() {}
 
 func (x *ReadLifecycleLogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[16]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -837,7 +925,7 @@ func (x *ReadLifecycleLogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadLifecycleLogRequest.ProtoReflect.Descriptor instead.
 func (*ReadLifecycleLogRequest) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{16}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ReadLifecycleLogRequest) GetDid() string {
@@ -858,7 +946,7 @@ type ReadLifecycleLogResponse struct {
 
 func (x *ReadLifecycleLogResponse) Reset() {
 	*x = ReadLifecycleLogResponse{}
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[17]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -870,7 +958,7 @@ func (x *ReadLifecycleLogResponse) String() string {
 func (*ReadLifecycleLogResponse) ProtoMessage() {}
 
 func (x *ReadLifecycleLogResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dplaax_did_v1_did_proto_msgTypes[17]
+	mi := &file_dplaax_did_v1_did_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,7 +971,7 @@ func (x *ReadLifecycleLogResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadLifecycleLogResponse.ProtoReflect.Descriptor instead.
 func (*ReadLifecycleLogResponse) Descriptor() ([]byte, []int) {
-	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{17}
+	return file_dplaax_did_v1_did_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ReadLifecycleLogResponse) GetEvents() [][]byte {
@@ -902,24 +990,29 @@ const file_dplaax_did_v1_did_proto_rawDesc = "" +
 	"\fdid_document\x18\x01 \x01(\fR\vdidDocument\x12)\n" +
 	"\x10outward_snapshot\x18\x02 \x01(\fR\x0foutwardSnapshot\":\n" +
 	"\x15RegisterOwnerResponse\x12!\n" +
-	"\fdid_document\x18\x01 \x01(\fR\vdidDocument\"U\n" +
+	"\fdid_document\x18\x01 \x01(\fR\vdidDocument\"j\n" +
+	"\x12ExternalPublicKeys\x12&\n" +
+	"\x0fauth_public_key\x18\x01 \x01(\fR\rauthPublicKey\x12,\n" +
+	"\x12signing_public_key\x18\x02 \x01(\fR\x10signingPublicKey\"\xaa\x01\n" +
 	"\x14IssuePipelineRequest\x12\x1d\n" +
 	"\n" +
 	"target_did\x18\x01 \x01(\tR\ttargetDid\x12\x1e\n" +
 	"\n" +
 	"delegation\x18\x02 \x01(\fR\n" +
-	"delegation\"Z\n" +
+	"delegation\x12S\n" +
+	"\x14external_public_keys\x18\x03 \x01(\v2!.dplaax.did.v1.ExternalPublicKeysR\x12externalPublicKeys\"Z\n" +
 	"\x15IssuePipelineResponse\x12!\n" +
 	"\fdid_document\x18\x01 \x01(\fR\vdidDocument\x12\x1e\n" +
 	"\n" +
 	"delegation\x18\x02 \x01(\fR\n" +
-	"delegation\"T\n" +
+	"delegation\"\xa9\x01\n" +
 	"\x13IssueProcessRequest\x12\x1d\n" +
 	"\n" +
 	"target_did\x18\x01 \x01(\tR\ttargetDid\x12\x1e\n" +
 	"\n" +
 	"delegation\x18\x02 \x01(\fR\n" +
-	"delegation\"Y\n" +
+	"delegation\x12S\n" +
+	"\x14external_public_keys\x18\x03 \x01(\v2!.dplaax.did.v1.ExternalPublicKeysR\x12externalPublicKeys\"Y\n" +
 	"\x14IssueProcessResponse\x12!\n" +
 	"\fdid_document\x18\x01 \x01(\fR\vdidDocument\x12\x1e\n" +
 	"\n" +
@@ -986,51 +1079,54 @@ func file_dplaax_did_v1_did_proto_rawDescGZIP() []byte {
 	return file_dplaax_did_v1_did_proto_rawDescData
 }
 
-var file_dplaax_did_v1_did_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_dplaax_did_v1_did_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_dplaax_did_v1_did_proto_goTypes = []any{
 	(*RegisterOwnerRequest)(nil),      // 0: dplaax.did.v1.RegisterOwnerRequest
 	(*RegisterOwnerResponse)(nil),     // 1: dplaax.did.v1.RegisterOwnerResponse
-	(*IssuePipelineRequest)(nil),      // 2: dplaax.did.v1.IssuePipelineRequest
-	(*IssuePipelineResponse)(nil),     // 3: dplaax.did.v1.IssuePipelineResponse
-	(*IssueProcessRequest)(nil),       // 4: dplaax.did.v1.IssueProcessRequest
-	(*IssueProcessResponse)(nil),      // 5: dplaax.did.v1.IssueProcessResponse
-	(*ResolveDIDRequest)(nil),         // 6: dplaax.did.v1.ResolveDIDRequest
-	(*ResolveDIDResponse)(nil),        // 7: dplaax.did.v1.ResolveDIDResponse
-	(*ResolveDelegationRequest)(nil),  // 8: dplaax.did.v1.ResolveDelegationRequest
-	(*ResolveDelegationResponse)(nil), // 9: dplaax.did.v1.ResolveDelegationResponse
-	(*UpdateStatusRequest)(nil),       // 10: dplaax.did.v1.UpdateStatusRequest
-	(*UpdateStatusResponse)(nil),      // 11: dplaax.did.v1.UpdateStatusResponse
-	(*ListPipelinesRequest)(nil),      // 12: dplaax.did.v1.ListPipelinesRequest
-	(*ListPipelinesResponse)(nil),     // 13: dplaax.did.v1.ListPipelinesResponse
-	(*ListProcessesRequest)(nil),      // 14: dplaax.did.v1.ListProcessesRequest
-	(*ListProcessesResponse)(nil),     // 15: dplaax.did.v1.ListProcessesResponse
-	(*ReadLifecycleLogRequest)(nil),   // 16: dplaax.did.v1.ReadLifecycleLogRequest
-	(*ReadLifecycleLogResponse)(nil),  // 17: dplaax.did.v1.ReadLifecycleLogResponse
+	(*ExternalPublicKeys)(nil),        // 2: dplaax.did.v1.ExternalPublicKeys
+	(*IssuePipelineRequest)(nil),      // 3: dplaax.did.v1.IssuePipelineRequest
+	(*IssuePipelineResponse)(nil),     // 4: dplaax.did.v1.IssuePipelineResponse
+	(*IssueProcessRequest)(nil),       // 5: dplaax.did.v1.IssueProcessRequest
+	(*IssueProcessResponse)(nil),      // 6: dplaax.did.v1.IssueProcessResponse
+	(*ResolveDIDRequest)(nil),         // 7: dplaax.did.v1.ResolveDIDRequest
+	(*ResolveDIDResponse)(nil),        // 8: dplaax.did.v1.ResolveDIDResponse
+	(*ResolveDelegationRequest)(nil),  // 9: dplaax.did.v1.ResolveDelegationRequest
+	(*ResolveDelegationResponse)(nil), // 10: dplaax.did.v1.ResolveDelegationResponse
+	(*UpdateStatusRequest)(nil),       // 11: dplaax.did.v1.UpdateStatusRequest
+	(*UpdateStatusResponse)(nil),      // 12: dplaax.did.v1.UpdateStatusResponse
+	(*ListPipelinesRequest)(nil),      // 13: dplaax.did.v1.ListPipelinesRequest
+	(*ListPipelinesResponse)(nil),     // 14: dplaax.did.v1.ListPipelinesResponse
+	(*ListProcessesRequest)(nil),      // 15: dplaax.did.v1.ListProcessesRequest
+	(*ListProcessesResponse)(nil),     // 16: dplaax.did.v1.ListProcessesResponse
+	(*ReadLifecycleLogRequest)(nil),   // 17: dplaax.did.v1.ReadLifecycleLogRequest
+	(*ReadLifecycleLogResponse)(nil),  // 18: dplaax.did.v1.ReadLifecycleLogResponse
 }
 var file_dplaax_did_v1_did_proto_depIdxs = []int32{
-	0,  // 0: dplaax.did.v1.DIDService.RegisterOwner:input_type -> dplaax.did.v1.RegisterOwnerRequest
-	2,  // 1: dplaax.did.v1.DIDService.IssuePipeline:input_type -> dplaax.did.v1.IssuePipelineRequest
-	4,  // 2: dplaax.did.v1.DIDService.IssueProcess:input_type -> dplaax.did.v1.IssueProcessRequest
-	6,  // 3: dplaax.did.v1.DIDService.ResolveDID:input_type -> dplaax.did.v1.ResolveDIDRequest
-	8,  // 4: dplaax.did.v1.DIDService.ResolveDelegation:input_type -> dplaax.did.v1.ResolveDelegationRequest
-	10, // 5: dplaax.did.v1.DIDService.UpdateStatus:input_type -> dplaax.did.v1.UpdateStatusRequest
-	12, // 6: dplaax.did.v1.DIDService.ListPipelines:input_type -> dplaax.did.v1.ListPipelinesRequest
-	14, // 7: dplaax.did.v1.DIDService.ListProcesses:input_type -> dplaax.did.v1.ListProcessesRequest
-	16, // 8: dplaax.did.v1.DIDService.ReadLifecycleLog:input_type -> dplaax.did.v1.ReadLifecycleLogRequest
-	1,  // 9: dplaax.did.v1.DIDService.RegisterOwner:output_type -> dplaax.did.v1.RegisterOwnerResponse
-	3,  // 10: dplaax.did.v1.DIDService.IssuePipeline:output_type -> dplaax.did.v1.IssuePipelineResponse
-	5,  // 11: dplaax.did.v1.DIDService.IssueProcess:output_type -> dplaax.did.v1.IssueProcessResponse
-	7,  // 12: dplaax.did.v1.DIDService.ResolveDID:output_type -> dplaax.did.v1.ResolveDIDResponse
-	9,  // 13: dplaax.did.v1.DIDService.ResolveDelegation:output_type -> dplaax.did.v1.ResolveDelegationResponse
-	11, // 14: dplaax.did.v1.DIDService.UpdateStatus:output_type -> dplaax.did.v1.UpdateStatusResponse
-	13, // 15: dplaax.did.v1.DIDService.ListPipelines:output_type -> dplaax.did.v1.ListPipelinesResponse
-	15, // 16: dplaax.did.v1.DIDService.ListProcesses:output_type -> dplaax.did.v1.ListProcessesResponse
-	17, // 17: dplaax.did.v1.DIDService.ReadLifecycleLog:output_type -> dplaax.did.v1.ReadLifecycleLogResponse
-	9,  // [9:18] is the sub-list for method output_type
-	0,  // [0:9] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	2,  // 0: dplaax.did.v1.IssuePipelineRequest.external_public_keys:type_name -> dplaax.did.v1.ExternalPublicKeys
+	2,  // 1: dplaax.did.v1.IssueProcessRequest.external_public_keys:type_name -> dplaax.did.v1.ExternalPublicKeys
+	0,  // 2: dplaax.did.v1.DIDService.RegisterOwner:input_type -> dplaax.did.v1.RegisterOwnerRequest
+	3,  // 3: dplaax.did.v1.DIDService.IssuePipeline:input_type -> dplaax.did.v1.IssuePipelineRequest
+	5,  // 4: dplaax.did.v1.DIDService.IssueProcess:input_type -> dplaax.did.v1.IssueProcessRequest
+	7,  // 5: dplaax.did.v1.DIDService.ResolveDID:input_type -> dplaax.did.v1.ResolveDIDRequest
+	9,  // 6: dplaax.did.v1.DIDService.ResolveDelegation:input_type -> dplaax.did.v1.ResolveDelegationRequest
+	11, // 7: dplaax.did.v1.DIDService.UpdateStatus:input_type -> dplaax.did.v1.UpdateStatusRequest
+	13, // 8: dplaax.did.v1.DIDService.ListPipelines:input_type -> dplaax.did.v1.ListPipelinesRequest
+	15, // 9: dplaax.did.v1.DIDService.ListProcesses:input_type -> dplaax.did.v1.ListProcessesRequest
+	17, // 10: dplaax.did.v1.DIDService.ReadLifecycleLog:input_type -> dplaax.did.v1.ReadLifecycleLogRequest
+	1,  // 11: dplaax.did.v1.DIDService.RegisterOwner:output_type -> dplaax.did.v1.RegisterOwnerResponse
+	4,  // 12: dplaax.did.v1.DIDService.IssuePipeline:output_type -> dplaax.did.v1.IssuePipelineResponse
+	6,  // 13: dplaax.did.v1.DIDService.IssueProcess:output_type -> dplaax.did.v1.IssueProcessResponse
+	8,  // 14: dplaax.did.v1.DIDService.ResolveDID:output_type -> dplaax.did.v1.ResolveDIDResponse
+	10, // 15: dplaax.did.v1.DIDService.ResolveDelegation:output_type -> dplaax.did.v1.ResolveDelegationResponse
+	12, // 16: dplaax.did.v1.DIDService.UpdateStatus:output_type -> dplaax.did.v1.UpdateStatusResponse
+	14, // 17: dplaax.did.v1.DIDService.ListPipelines:output_type -> dplaax.did.v1.ListPipelinesResponse
+	16, // 18: dplaax.did.v1.DIDService.ListProcesses:output_type -> dplaax.did.v1.ListProcessesResponse
+	18, // 19: dplaax.did.v1.DIDService.ReadLifecycleLog:output_type -> dplaax.did.v1.ReadLifecycleLogResponse
+	11, // [11:20] is the sub-list for method output_type
+	2,  // [2:11] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_dplaax_did_v1_did_proto_init() }
@@ -1044,7 +1140,7 @@ func file_dplaax_did_v1_did_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dplaax_did_v1_did_proto_rawDesc), len(file_dplaax_did_v1_did_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

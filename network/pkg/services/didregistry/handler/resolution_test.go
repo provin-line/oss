@@ -24,7 +24,7 @@ func resolutionServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatalf("delegation: %v", err)
 	}
-	if _, _, err := svc.IssuePipeline(ctx, pipelineDID, dlg); err != nil {
+	if _, _, err := svc.IssuePipeline(ctx, pipelineDID, dlg, nil); err != nil {
 		t.Fatalf("IssuePipeline: %v", err)
 	}
 	srv := httptest.NewServer(handler.NewResolutionHandler(svc, registry))

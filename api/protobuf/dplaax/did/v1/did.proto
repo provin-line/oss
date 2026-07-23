@@ -24,10 +24,17 @@ import "o3co/authz/v1/policy.proto";
 // disable the check, so all RPCs carry one — asserted by a descriptor test.
 //
 // The trust model is owner-whitelist: an Owner is the self-sovereign root whose
-// keys are caller-supplied (the registry never holds the owner private key);
-// Pipeline/Process keys are registry-generated at issuance. Issuance authority
-// is proven by an owner-signed DelegationCredential whose subject is
-// structurally under the owner on the did:dplaax issuance plane.
+// keys are caller-supplied (the registry never holds the owner private key).
+// Pipeline/Process keys default to registry-generated at issuance (the
+// server-side mint, unchanged), or the caller may instead supply its own
+// LOCALLY-minted public keys (IssuePipelineRequest/IssueProcessRequest field
+// 3, ExternalPublicKeys) — in that mode the registry assembles and registers
+// the document over the supplied public halves and never mints or stores a
+// private key for the DID, matching the tlog-custody trust model's "the
+// registry has no loop key" for pipeline/process signing keys, not just the
+// owner's. Delegation/authorization semantics are identical in both modes.
+// Issuance authority is proven by an owner-signed DelegationCredential whose
+// subject is structurally under the owner on the did:dplaax issuance plane.
 service DIDService {
   // RegisterOwner records a self-sovereign Owner DID. The caller submits the
   // owner DID Document self-signed (eddsa-jcs-2022) over its entire body —
@@ -45,16 +52,22 @@ service DIDService {
   // signs a minimal DelegationCredential over the target DID (its identifier is
   // structurally predictable, so it is signed before it exists). The registry
   // verifies the delegation (issuer = owner, subject structurally under owner,
-  // signature valid), checks the namespace slot is free, generates the subject
-  // keypair (#auth/#signing), assembles the DID Document, persists document +
-  // delegation, and appends a register lifecycle event on the subject DID.
+  // signature valid), checks the namespace slot is free, then obtains the
+  // subject's #auth/#signing public keys one of two ways: request field 3
+  // (external_public_keys) absent mints the keypair server-side (today's
+  // behavior, unchanged); present, the registry uses exactly the supplied
+  // LOCALLY-minted public keys and never generates or stores a private key for
+  // this DID. Either way it assembles the DID Document, persists document +
+  // delegation, and appends a register lifecycle event on the subject DID. The
+  // delegation/authorization checks above are identical in both modes.
   rpc IssuePipeline(IssuePipelineRequest) returns (IssuePipelineResponse) {
     option (o3co.authz.v1.policy) = {resource: "dids", action: "issue"};
   }
 
   // IssueProcess mints a Process DID under a Pipeline of the authenticated
-  // owner. Same flow as IssuePipeline; the delegation subject must additionally
-  // be structurally under the named parent pipeline.
+  // owner. Same flow as IssuePipeline, including the external-key choice (field
+  // 3); the delegation subject must additionally be structurally under the
+  // named parent pipeline.
   rpc IssueProcess(IssueProcessRequest) returns (IssueProcessResponse) {
     option (o3co.authz.v1.policy) = {resource: "dids", action: "issue"};
   }
@@ -118,16 +131,40 @@ message RegisterOwnerResponse {
   bytes did_document = 1;
 }
 
+// ExternalPublicKeys carries the caller's LOCALLY-minted #auth/#signing public
+// keys for the external-key issuance path (see IssuePipelineRequest /
+// IssueProcessRequest field 3). Both fields are RAW 32-byte Ed25519 public
+// keys, unencoded — the registry itself performs the Multikey
+// (publicKeyMultibase) encoding when it assembles the DID Document, the same
+// encoding it uses for a server-generated key; the caller sends no encoding of
+// its own and holds no private key material in common with the registry.
+message ExternalPublicKeys {
+  // auth_public_key is the raw Ed25519 public key for the #auth verification
+  // method (authentication relationship).
+  bytes auth_public_key = 1;
+  // signing_public_key is the raw Ed25519 public key for the #signing
+  // verification method (assertionMethod relationship).
+  bytes signing_public_key = 2;
+}
+
 message IssuePipelineRequest {
   // target_did is the Pipeline DID to mint (structurally under the owner).
   string target_did = 1;
   // delegation is the owner-signed DelegationCredential over target_did
   // (canonical JSON).
   bytes delegation = 2;
+  // external_public_keys, when present, selects the external-key path: the
+  // registry assembles and registers the document over these LOCALLY-minted
+  // public keys and never mints or stores a private key for target_did.
+  // Absent (the default) selects today's server-side mint, unchanged —
+  // back-compat. Delegation verification and every other authorization check
+  // are identical in both modes; only key custody differs.
+  ExternalPublicKeys external_public_keys = 3;
 }
 message IssuePipelineResponse {
   // did_document is the registry-assembled Pipeline document (canonical JSON),
-  // carrying the generated #auth/#signing keys.
+  // carrying either the generated #auth/#signing keys (server-mint) or the
+  // caller-supplied public keys (external-key path) — never a private key.
   bytes did_document = 1;
   // delegation is the persisted delegation as stored (canonical JSON).
   bytes delegation = 2;
@@ -137,6 +174,9 @@ message IssueProcessRequest {
   // target_did is the Process DID to mint (structurally under parent_pipeline).
   string target_did = 1;
   bytes delegation = 2;
+  // external_public_keys: see IssuePipelineRequest.external_public_keys — same
+  // contract, same absent/present default.
+  ExternalPublicKeys external_public_keys = 3;
 }
 message IssueProcessResponse {
   bytes did_document = 1;

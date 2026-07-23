@@ -198,12 +198,12 @@ func newMirrorFixture(t *testing.T, maxRecords, maxBytes int) *mirrorFixture {
 		t.Fatalf("RegisterOwner: %v", err)
 	}
 	for _, pipeline := range []string{mirrorPipelineA, mirrorPipelineB} {
-		if _, _, err := didSvc.IssuePipeline(ctx, pipeline, mirrorMustDelegate(t, ks, pipeline)); err != nil {
+		if _, _, err := didSvc.IssuePipeline(ctx, pipeline, mirrorMustDelegate(t, ks, pipeline), nil); err != nil {
 			t.Fatalf("IssuePipeline(%s): %v", pipeline, err)
 		}
 	}
 	for _, process := range []string{mirrorProcessA1, mirrorProcessA2, mirrorProcessB1} {
-		if _, _, err := didSvc.IssueProcess(ctx, process, mirrorMustDelegate(t, ks, process)); err != nil {
+		if _, _, err := didSvc.IssueProcess(ctx, process, mirrorMustDelegate(t, ks, process), nil); err != nil {
 			t.Fatalf("IssueProcess(%s): %v", process, err)
 		}
 	}

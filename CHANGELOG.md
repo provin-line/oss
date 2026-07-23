@@ -578,6 +578,27 @@ closure required, now met with executed evidence rather than review.
   `chain.emit-health.advertise-without-reports` is set (default `false`).
   `cmd/standalone`'s existing node-global `WithByReferenceHealth` gate is
   unchanged.
+- `dplaax.did.v1` external-key issuance: `IssuePipelineRequest` /
+  `IssueProcessRequest` gain an optional field 3, `ExternalPublicKeys` (raw
+  32-byte Ed25519 `auth_public_key` / `signing_public_key`), letting the
+  caller mint its own Pipeline/Process `#auth`/`#signing` keypair LOCALLY and
+  hand the registry only the public halves. Present, `didregistry` assembles
+  and registers the document over exactly those public keys (the same
+  Multikey encoding a server-generated key gets) and never mints or stores a
+  private key for the DID; absent, today's server-side mint is unchanged —
+  the back-compat default every existing caller keeps using. This closes the
+  hole the all-in-one `cmd/standalone` masked once the topology separated:
+  the tlog-custody trust model's premise is "the registry has no loop key,"
+  but `IssuePipeline`/`IssueProcess` minted BOTH keypairs server-side
+  regardless of deployment shape, so a `cmd/pipeline` data-plane node had no
+  way to keep its own signing key off the `cmd/network` registry that mints
+  it. Delegation verification and every other authorization check are
+  identical in both modes; no PDP/policy change — the RPC-level `dids:issue`
+  grant already covers both, since it gates the method, not the request
+  shape. No dedicated didregistry client wrapper package exists to extend:
+  `cmd/provin` and every other consumer drive the generated
+  `didpbconnect.DIDServiceClient` directly, so the regenerated surface is
+  immediately usable with no further client-side change.
 
 ### Removed
 

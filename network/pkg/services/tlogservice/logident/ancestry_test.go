@@ -167,16 +167,16 @@ func issuedTwoPipelinesWithProcesses(t *testing.T) *didregistry.Service {
 	if _, err := svc.RegisterOwner(ctx, ancestrySignedOwnerDoc(t, signer, signPub), nil); err != nil {
 		t.Fatalf("RegisterOwner: %v", err)
 	}
-	if _, _, err := svc.IssuePipeline(ctx, ancestryPipelineID, ancestryMustDelegate(t, signer, ancestryPipelineID)); err != nil {
+	if _, _, err := svc.IssuePipeline(ctx, ancestryPipelineID, ancestryMustDelegate(t, signer, ancestryPipelineID), nil); err != nil {
 		t.Fatalf("IssuePipeline(%s): %v", ancestryPipelineID, err)
 	}
-	if _, _, err := svc.IssueProcess(ctx, ancestryProcessID, ancestryMustDelegate(t, signer, ancestryProcessID)); err != nil {
+	if _, _, err := svc.IssueProcess(ctx, ancestryProcessID, ancestryMustDelegate(t, signer, ancestryProcessID), nil); err != nil {
 		t.Fatalf("IssueProcess(%s): %v", ancestryProcessID, err)
 	}
-	if _, _, err := svc.IssuePipeline(ctx, ancestryPipelineID2, ancestryMustDelegate(t, signer, ancestryPipelineID2)); err != nil {
+	if _, _, err := svc.IssuePipeline(ctx, ancestryPipelineID2, ancestryMustDelegate(t, signer, ancestryPipelineID2), nil); err != nil {
 		t.Fatalf("IssuePipeline(%s): %v", ancestryPipelineID2, err)
 	}
-	if _, _, err := svc.IssueProcess(ctx, ancestryProcessID2, ancestryMustDelegate(t, signer, ancestryProcessID2)); err != nil {
+	if _, _, err := svc.IssueProcess(ctx, ancestryProcessID2, ancestryMustDelegate(t, signer, ancestryProcessID2), nil); err != nil {
 		t.Fatalf("IssueProcess(%s): %v", ancestryProcessID2, err)
 	}
 	return svc

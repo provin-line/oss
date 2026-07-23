@@ -161,10 +161,10 @@ func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 	if _, err := didSvc.RegisterOwner(ctx, signedOwnerDoc(t, ks, ownerKP.PublicKey), nil); err != nil {
 		t.Fatalf("RegisterOwner: %v", err)
 	}
-	if _, _, err := didSvc.IssuePipeline(ctx, clientPipeline, mustDelegate(t, ks, clientPipeline)); err != nil {
+	if _, _, err := didSvc.IssuePipeline(ctx, clientPipeline, mustDelegate(t, ks, clientPipeline), nil); err != nil {
 		t.Fatalf("IssuePipeline: %v", err)
 	}
-	if _, _, err := didSvc.IssueProcess(ctx, clientProcessA1, mustDelegate(t, ks, clientProcessA1)); err != nil {
+	if _, _, err := didSvc.IssueProcess(ctx, clientProcessA1, mustDelegate(t, ks, clientProcessA1), nil); err != nil {
 		t.Fatalf("IssueProcess: %v", err)
 	}
 

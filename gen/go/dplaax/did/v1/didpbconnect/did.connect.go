@@ -87,13 +87,19 @@ type DIDServiceClient interface {
 	// signs a minimal DelegationCredential over the target DID (its identifier is
 	// structurally predictable, so it is signed before it exists). The registry
 	// verifies the delegation (issuer = owner, subject structurally under owner,
-	// signature valid), checks the namespace slot is free, generates the subject
-	// keypair (#auth/#signing), assembles the DID Document, persists document +
-	// delegation, and appends a register lifecycle event on the subject DID.
+	// signature valid), checks the namespace slot is free, then obtains the
+	// subject's #auth/#signing public keys one of two ways: request field 3
+	// (external_public_keys) absent mints the keypair server-side (today's
+	// behavior, unchanged); present, the registry uses exactly the supplied
+	// LOCALLY-minted public keys and never generates or stores a private key for
+	// this DID. Either way it assembles the DID Document, persists document +
+	// delegation, and appends a register lifecycle event on the subject DID. The
+	// delegation/authorization checks above are identical in both modes.
 	IssuePipeline(context.Context, *connect.Request[v1.IssuePipelineRequest]) (*connect.Response[v1.IssuePipelineResponse], error)
 	// IssueProcess mints a Process DID under a Pipeline of the authenticated
-	// owner. Same flow as IssuePipeline; the delegation subject must additionally
-	// be structurally under the named parent pipeline.
+	// owner. Same flow as IssuePipeline, including the external-key choice (field
+	// 3); the delegation subject must additionally be structurally under the
+	// named parent pipeline.
 	IssueProcess(context.Context, *connect.Request[v1.IssueProcessRequest]) (*connect.Response[v1.IssueProcessResponse], error)
 	// ResolveDID returns the DID Document for a did:dplaax identifier. The
 	// returned document's id equals the requested DID (registry-substitution
@@ -263,13 +269,19 @@ type DIDServiceHandler interface {
 	// signs a minimal DelegationCredential over the target DID (its identifier is
 	// structurally predictable, so it is signed before it exists). The registry
 	// verifies the delegation (issuer = owner, subject structurally under owner,
-	// signature valid), checks the namespace slot is free, generates the subject
-	// keypair (#auth/#signing), assembles the DID Document, persists document +
-	// delegation, and appends a register lifecycle event on the subject DID.
+	// signature valid), checks the namespace slot is free, then obtains the
+	// subject's #auth/#signing public keys one of two ways: request field 3
+	// (external_public_keys) absent mints the keypair server-side (today's
+	// behavior, unchanged); present, the registry uses exactly the supplied
+	// LOCALLY-minted public keys and never generates or stores a private key for
+	// this DID. Either way it assembles the DID Document, persists document +
+	// delegation, and appends a register lifecycle event on the subject DID. The
+	// delegation/authorization checks above are identical in both modes.
 	IssuePipeline(context.Context, *connect.Request[v1.IssuePipelineRequest]) (*connect.Response[v1.IssuePipelineResponse], error)
 	// IssueProcess mints a Process DID under a Pipeline of the authenticated
-	// owner. Same flow as IssuePipeline; the delegation subject must additionally
-	// be structurally under the named parent pipeline.
+	// owner. Same flow as IssuePipeline, including the external-key choice (field
+	// 3); the delegation subject must additionally be structurally under the
+	// named parent pipeline.
 	IssueProcess(context.Context, *connect.Request[v1.IssueProcessRequest]) (*connect.Response[v1.IssueProcessResponse], error)
 	// ResolveDID returns the DID Document for a did:dplaax identifier. The
 	// returned document's id equals the requested DID (registry-substitution
