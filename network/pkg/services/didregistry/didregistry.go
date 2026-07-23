@@ -7,13 +7,21 @@
 //
 // Trust model (owner-whitelist): an Owner is a self-sovereign root whose keys
 // are caller-supplied — registration proves key control with a self-signed
-// document proof, not prior authorization. Pipeline/Process keys are generated
-// here at issuance and the authority to mint them is an owner-signed delegation
-// whose subject is structurally under the owner on the did:dplaax plane.
+// document proof, not prior authorization. Pipeline/Process keys default to
+// generated here at issuance (server-side mint); a caller may instead supply
+// its own LOCALLY-minted public keys (ExternalPublicKeys), in which case this
+// service never generates or holds a private key for that DID — matching the
+// tlog-custody trust model's "the registry has no loop key" for pipeline/
+// process signing keys, not just the owner's. Either way, the authority to
+// mint is an owner-signed delegation whose subject is structurally under the
+// owner on the did:dplaax plane — delegation verification is identical in
+// both modes.
 package didregistry
 
 import (
+	"bytes"
 	"context"
+	stded25519 "crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -199,14 +207,85 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 	return doc, nil
 }
 
-// IssuePipeline mints a Pipeline DID under the delegation's owner. See issue.
-func (s *Service) IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential) (*did.DIDDocument, *delegation.DelegationCredential, error) {
-	return s.issue(ctx, targetDID, dlg, kindPipeline)
+// ExternalPublicKeys carries the caller's LOCALLY-minted #auth/#signing public
+// keys for the external-key issuance path (the wire counterpart is
+// dplaax.did.v1 IssuePipelineRequest/IssueProcessRequest field 3, of the same
+// name). Both fields are raw 32-byte Ed25519 public keys, unencoded — this
+// service performs the Multikey (publicKeyMultibase) encoding when it
+// assembles the DID Document, exactly as it does for a server-generated key;
+// the caller sends no encoding of its own.
+//
+// Passed to IssuePipeline/IssueProcess: non-nil selects the external-key path
+// — the document is assembled and registered over exactly these public
+// halves, and this service never generates or stores a private key for the
+// target DID (no keystore write). nil selects today's server-side mint,
+// unchanged. Delegation verification and every other authorization check are
+// identical in both modes; only key custody differs — this is the loop-side
+// minting path the tlog-custody trust model requires ("the registry has no
+// loop key") extended from the owner to pipeline/process keys.
+type ExternalPublicKeys struct {
+	// AuthPublicKey is the raw Ed25519 public key for the #auth verification
+	// method (authentication relationship).
+	AuthPublicKey []byte
+	// SigningPublicKey is the raw Ed25519 public key for the #signing
+	// verification method (assertionMethod relationship).
+	SigningPublicKey []byte
+}
+
+// validate confirms both public keys are correctly-sized raw Ed25519 keys.
+// Fail-closed: a short, long, or absent key is rejected as InvalidArgument
+// rather than silently encoded into a DID document whose verification method
+// no one holds a matching private key for.
+func (e *ExternalPublicKeys) validate() error {
+	if n := len(e.AuthPublicKey); n != stded25519.PublicKeySize {
+		return fmt.Errorf("%w: external auth_public_key length %d, want %d (raw Ed25519)", ErrInvalidArgument, n, stded25519.PublicKeySize)
+	}
+	if n := len(e.SigningPublicKey); n != stded25519.PublicKeySize {
+		return fmt.Errorf("%w: external signing_public_key length %d, want %d (raw Ed25519)", ErrInvalidArgument, n, stded25519.PublicKeySize)
+	}
+	// An all-zeros key is a small-order point no real private key matches —
+	// signatures over it are forgeable by anyone, so a registry-issued document
+	// carrying it would brand a verification method nobody controls. The mint
+	// path can never produce it; the external path must reject it (this
+	// function's own fail-closed rationale).
+	if isAllZeros(e.AuthPublicKey) {
+		return fmt.Errorf("%w: external auth_public_key is all zeros — no matching private key can exist", ErrInvalidArgument)
+	}
+	if isAllZeros(e.SigningPublicKey) {
+		return fmt.Errorf("%w: external signing_public_key is all zeros — no matching private key can exist", ErrInvalidArgument)
+	}
+	// The mint path always produces DISTINCT #auth and #signing keys (two
+	// independent generations); the external path preserves that separation —
+	// collapsing authentication and assertion onto one key silently weakens
+	// the very property the two-key document shape encodes.
+	if bytes.Equal(e.AuthPublicKey, e.SigningPublicKey) {
+		return fmt.Errorf("%w: external auth_public_key and signing_public_key are identical — supply distinct keys", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// isAllZeros reports whether b is entirely zero bytes.
+func isAllZeros(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// IssuePipeline mints a Pipeline DID under the delegation's owner. ext selects
+// key custody: nil mints the #auth/#signing keypair server-side (unchanged);
+// non-nil uses the supplied ExternalPublicKeys and never touches the keystore
+// for this DID. See issue.
+func (s *Service) IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error) {
+	return s.issue(ctx, targetDID, dlg, kindPipeline, ext)
 }
 
 // IssueProcess mints a Process DID under a Pipeline of the delegation's owner.
-func (s *Service) IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential) (*did.DIDDocument, *delegation.DelegationCredential, error) {
-	return s.issue(ctx, targetDID, dlg, kindProcess)
+// Same flow as IssuePipeline, including the ext key-custody choice.
+func (s *Service) IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error) {
+	return s.issue(ctx, targetDID, dlg, kindProcess, ext)
 }
 
 type didKind int
@@ -217,23 +296,27 @@ const (
 )
 
 // issue mints a Pipeline/Process DID. It verifies the owner-signed delegation
-// authorizes exactly this target, checks the parent is active, generates the
-// #auth/#signing keypair, assembles and persists the document, then records the
-// register lifecycle event. The document is committed (store.Save*) before the
-// keys are persisted, so the store is the single linearization point: a
-// concurrent duplicate loses at Save (ErrExists) before touching the keystore.
-// Keys-before-document is deliberately NOT used — under a concurrent same-target
-// race it would leave the document's embedded public key and the keystore's
-// private key mismatched (a silent signing failure), which is worse than the
-// failure this ordering admits.
+// authorizes exactly this target, checks the parent is active, obtains the
+// #auth/#signing public keys (server-generated when ext is nil, or the
+// supplied ExternalPublicKeys when non-nil), assembles and persists the
+// document, then records the register lifecycle event. The document is
+// committed (store.Save*) before the mint path's keys are persisted, so the
+// store is the single linearization point: a concurrent duplicate loses at
+// Save (ErrExists) before touching the keystore. Keys-before-document is
+// deliberately NOT used — under a concurrent same-target race it would leave
+// the document's embedded public key and the keystore's private key
+// mismatched (a silent signing failure), which is worse than the failure this
+// ordering admits. The external-key path never writes to the keystore at all
+// — there is no private key here to mismatch.
 //
 // Known PoC partial-failure windows (the store has no delete, so cross-store
 // atomicity is out of scope for this staged substrate — see the store package's
-// durability note): if SaveKeyPair fails after the document is committed, a
-// resolvable but keyless DID exists; if appendEvent fails after Save, a DID
-// exists with no lifecycle snapshot. A retry hits ErrExists and cannot self-heal
-// these. The durable tlog substrate is where transactional issuance lands.
-func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, kind didKind) (*did.DIDDocument, *delegation.DelegationCredential, error) {
+// durability note): on the mint path, if SaveKeyPair fails after the document
+// is committed, a resolvable but keyless DID exists; if appendEvent fails
+// after Save, a DID exists with no lifecycle snapshot (either mode). A retry
+// hits ErrExists and cannot self-heal these. The durable tlog substrate is
+// where transactional issuance lands.
+func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, kind didKind, ext *ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -283,15 +366,28 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 		}
 	}
 
-	authKP, err := s.keygen.Generate()
-	if err != nil {
-		return nil, nil, fmt.Errorf("didregistry: generate auth key: %w", err)
+	// Key custody diverges here: the external path validates and reuses the
+	// caller-supplied public keys and mints nothing; the mint path (ext == nil,
+	// unchanged) generates a fresh keypair the registry will persist below.
+	var authPub, signPub []byte
+	var mintedAuth, mintedSign *crypto.KeyPair
+	if ext != nil {
+		if err := ext.validate(); err != nil {
+			return nil, nil, err
+		}
+		authPub, signPub = ext.AuthPublicKey, ext.SigningPublicKey
+	} else {
+		mintedAuth, err = s.keygen.Generate()
+		if err != nil {
+			return nil, nil, fmt.Errorf("didregistry: generate auth key: %w", err)
+		}
+		mintedSign, err = s.keygen.Generate()
+		if err != nil {
+			return nil, nil, fmt.Errorf("didregistry: generate signing key: %w", err)
+		}
+		authPub, signPub = mintedAuth.PublicKey, mintedSign.PublicKey
 	}
-	signKP, err := s.keygen.Generate()
-	if err != nil {
-		return nil, nil, fmt.Errorf("didregistry: generate signing key: %w", err)
-	}
-	doc, err := s.assembleDoc(target, parent.String(), authKP.PublicKey, signKP.PublicKey)
+	doc, err := s.assembleDoc(target, parent.String(), authPub, signPub)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -305,12 +401,16 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	if err != nil {
 		return nil, nil, err // ErrExists when the namespace slot is taken
 	}
-	// The document is committed; persist the keys for the winner only.
-	if err := s.keys.SaveKeyPair(targetDID, map[keystore.KeyID]*crypto.KeyPair{
-		keystore.KeyIDAuth:    authKP,
-		keystore.KeyIDSigning: signKP,
-	}); err != nil {
-		return nil, nil, fmt.Errorf("didregistry: persist keys: %w", err)
+	// The document is committed; persist the keys for the winner only — mint
+	// path only. The external path never writes to the keystore: this service
+	// holds no private key for the DID, by construction (the whole point).
+	if mintedAuth != nil {
+		if err := s.keys.SaveKeyPair(targetDID, map[keystore.KeyID]*crypto.KeyPair{
+			keystore.KeyIDAuth:    mintedAuth,
+			keystore.KeyIDSigning: mintedSign,
+		}); err != nil {
+			return nil, nil, fmt.Errorf("didregistry: persist keys: %w", err)
+		}
 	}
 	snap, err := doc.Hash()
 	if err != nil {

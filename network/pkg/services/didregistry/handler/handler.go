@@ -31,8 +31,8 @@ import (
 // pointing inward). *didregistry.Service satisfies it.
 type Service interface {
 	RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwardSnapshot []byte) (*did.DIDDocument, error)
-	IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential) (*did.DIDDocument, *delegation.DelegationCredential, error)
-	IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential) (*did.DIDDocument, *delegation.DelegationCredential, error)
+	IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
+	IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
 	ResolveDelegation(ctx context.Context, didStr string) (*delegation.DelegationCredential, error)
 	UpdateStatus(ctx context.Context, didStr, status string) (*did.DIDDocument, error)
@@ -74,7 +74,8 @@ func (h *Handler) IssuePipeline(ctx context.Context, req *connect.Request[didpb.
 	if err != nil {
 		return nil, err
 	}
-	doc, savedDlg, err := h.svc.IssuePipeline(ctx, req.Msg.GetTargetDid(), dlg)
+	ext := externalPublicKeysFromProto(req.Msg.GetExternalPublicKeys())
+	doc, savedDlg, err := h.svc.IssuePipeline(ctx, req.Msg.GetTargetDid(), dlg, ext)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -90,7 +91,8 @@ func (h *Handler) IssueProcess(ctx context.Context, req *connect.Request[didpb.I
 	if err != nil {
 		return nil, err
 	}
-	doc, savedDlg, err := h.svc.IssueProcess(ctx, req.Msg.GetTargetDid(), dlg)
+	ext := externalPublicKeysFromProto(req.Msg.GetExternalPublicKeys())
+	doc, savedDlg, err := h.svc.IssueProcess(ctx, req.Msg.GetTargetDid(), dlg, ext)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -167,6 +169,20 @@ func (h *Handler) ReadLifecycleLog(ctx context.Context, req *connect.Request[did
 		out = append(out, b)
 	}
 	return connect.NewResponse(&didpb.ReadLifecycleLogResponse{Events: out}), nil
+}
+
+// externalPublicKeysFromProto converts the wire ExternalPublicKeys (field 3 of
+// IssuePipelineRequest/IssueProcessRequest) to the domain type. Nil-safe: an
+// absent field is nil in, nil out — the service's mint path (unchanged),
+// selected implicitly by every caller that has never heard of this field.
+func externalPublicKeysFromProto(pb *didpb.ExternalPublicKeys) *didregistry.ExternalPublicKeys {
+	if pb == nil {
+		return nil
+	}
+	return &didregistry.ExternalPublicKeys{
+		AuthPublicKey:    pb.GetAuthPublicKey(),
+		SigningPublicKey: pb.GetSigningPublicKey(),
+	}
 }
 
 // --- marshalling ------------------------------------------------------------

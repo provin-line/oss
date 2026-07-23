@@ -82,17 +82,26 @@ func (m *memKeyStore) DeleteKeys(d string) error {
 
 func newSvc(t *testing.T) (*didregistry.Service, crypto.Signer, []byte) {
 	t.Helper()
+	svc, signer, pub, _ := newSvcWithKeys(t)
+	return svc, signer, pub
+}
+
+// newSvcWithKeys is newSvc but also returns the Service's own keystore, so a
+// wire-level external-key test can confirm no entry landed for the issued DID.
+func newSvcWithKeys(t *testing.T) (*didregistry.Service, crypto.Signer, []byte, *memKeyStore) {
+	t.Helper()
 	ownerKP, err := (ed25519.Generator{}).Generate()
 	if err != nil {
 		t.Fatalf("generate owner key: %v", err)
 	}
 	ownerKS := newMemKS()
 	ownerKS.SaveKeyPair(ownerDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: ownerKP})
+	keys := newMemKS()
 	svc := didregistry.New(
-		yamlstore.New(t.TempDir()), newMemKS(), ed25519.Generator{}, ed25519.Verifier{}, registry,
+		yamlstore.New(t.TempDir()), keys, ed25519.Generator{}, ed25519.Verifier{}, registry,
 		didregistry.WithClock(func() time.Time { return time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC) }),
 	)
-	return svc, ownerKS, ownerKP.PublicKey
+	return svc, ownerKS, ownerKP.PublicKey, keys
 }
 
 func authClient(t *testing.T, svc *didregistry.Service, rules []endpoint.StaticRule) didpbconnect.DIDServiceClient {
@@ -253,6 +262,87 @@ func TestE2E_RegisterIssueResolve(t *testing.T) {
 	}
 	if len(logResp.Msg.GetEvents()) != 1 {
 		t.Errorf("process lifecycle log has %d events, want 1 (register)", len(logResp.Msg.GetEvents()))
+	}
+}
+
+// Wire round-trip for both IssuePipeline/IssueProcess key-custody modes: the
+// pipeline goes through the (unset field 3) server-side mint, unchanged; the
+// process under it goes through the external-key path (field 3 populated with
+// the caller's locally-minted public keys). The handler must map field 3
+// nil-safely in both directions and the service must honor the distinction
+// end to end, over the actual Connect wire.
+func TestIssuePipelineProcess_ExternalKeys_WireRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	svc, signer, pub, keys := newSvcWithKeys(t)
+	c := authClient(t, svc, []endpoint.StaticRule{
+		{Resource: "dids", Action: "register"},
+		{Resource: "dids", Action: "issue"},
+		{Resource: "dids", Action: "read"},
+	})
+	auth := func(r interface{ Header() http.Header }) { r.Header().Set("Authorization", "Bearer dummy") }
+
+	reg := connect.NewRequest(&didpb.RegisterOwnerRequest{DidDocument: signedOwnerDocBytes(t, signer, pub)})
+	auth(reg)
+	if _, err := c.RegisterOwner(ctx, reg); err != nil {
+		t.Fatalf("RegisterOwner: %v", err)
+	}
+
+	// Pipeline: no external_public_keys — mint mode, unchanged.
+	pipeReq := connect.NewRequest(&didpb.IssuePipelineRequest{TargetDid: pipelineDID, Delegation: delegationBytes(t, signer, pipelineDID)})
+	auth(pipeReq)
+	if _, err := c.IssuePipeline(ctx, pipeReq); err != nil {
+		t.Fatalf("IssuePipeline (mint mode): %v (code %v)", err, connect.CodeOf(err))
+	}
+	if _, err := keys.GetPrivateKey(pipelineDID, keystore.KeyIDSigning); err != nil {
+		t.Errorf("mint-mode pipeline: keystore has no #signing entry: %v", err)
+	}
+
+	// Process: external_public_keys set — the caller's locally-minted public
+	// keys, over the wire.
+	authKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate local auth key: %v", err)
+	}
+	signKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate local signing key: %v", err)
+	}
+	procReq := connect.NewRequest(&didpb.IssueProcessRequest{
+		TargetDid:  processDID,
+		Delegation: delegationBytes(t, signer, processDID),
+		ExternalPublicKeys: &didpb.ExternalPublicKeys{
+			AuthPublicKey:    authKP.PublicKey,
+			SigningPublicKey: signKP.PublicKey,
+		},
+	})
+	auth(procReq)
+	procResp, err := c.IssueProcess(ctx, procReq)
+	if err != nil {
+		t.Fatalf("IssueProcess (external-key mode): %v (code %v)", err, connect.CodeOf(err))
+	}
+
+	var procDoc did.DIDDocument
+	if err := json.Unmarshal(procResp.Msg.GetDidDocument(), &procDoc); err != nil {
+		t.Fatalf("unmarshal issued process doc: %v", err)
+	}
+	gotAuth, err := did.ExtractPublicKey(&procDoc, processDID+"#auth", did.RelationshipAuthentication)
+	if err != nil {
+		t.Fatalf("ExtractPublicKey(#auth): %v", err)
+	}
+	if string(gotAuth) != string(authKP.PublicKey) {
+		t.Errorf("#auth key over the wire = %x, want the supplied %x", gotAuth, authKP.PublicKey)
+	}
+	gotSign, err := did.ExtractPublicKey(&procDoc, processDID+"#signing", did.RelationshipAssertionMethod)
+	if err != nil {
+		t.Fatalf("ExtractPublicKey(#signing): %v", err)
+	}
+	if string(gotSign) != string(signKP.PublicKey) {
+		t.Errorf("#signing key over the wire = %x, want the supplied %x", gotSign, signKP.PublicKey)
+	}
+	// The distinguishing property, asserted over the same wire flow: no
+	// keystore entry for the externally-keyed process.
+	if _, err := keys.GetPrivateKey(processDID, keystore.KeyIDAuth); err == nil {
+		t.Error("external-key process: keystore unexpectedly holds a #auth entry")
 	}
 }
 
