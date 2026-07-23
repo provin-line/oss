@@ -2,40 +2,45 @@
 #
 #   docker compose up --build
 #
-# Topology: a standalone provin node behind the REAL three-layer auth stack —
-# an auth.provider (JWT issuance) and an o3co policy-verifier (the PDP: JWT
-# verification + policy), over a NATS broker. The `provision` init container
-# generates the NATS operator-mode trust material first; nothing cryptographic
-# is committed to the repo.
+# Topology: the separated dplaax topology (cmd/network control plane +
+# cmd/pipeline data plane, PR3c — the retired cmd/standalone combined both)
+# behind the REAL three-layer auth stack — an auth.provider (JWT issuance)
+# and an o3co policy-verifier (the PDP: JWT verification + policy), over a
+# NATS broker. The `provision` init container generates the NATS
+# operator-mode trust material AND the pipeline's own local signing keys
+# first; nothing cryptographic is committed to the repo.
 #
-# Dev/evaluation only — NOT a production reference. It shares one HS256 secret
-# across the auth layer and runs everything on one host; see the README.
+# Dev/evaluation only — NOT a production reference. It shares one HS256
+# secret across the auth layer and runs everything on one host; see the
+# README.
 
 name: dplaax-quickstart
 
 services:
-  # One-shot: generate NATS trust material + the node's service-token overlay
-  # into the shared volume, then exit.
+  # One-shot: generate NATS trust material, the pipeline's service-token
+  # overlay, and the pipeline's local #auth/#signing keys (the external-key
+  # provisioning story — see README) into the shared volumes, then exit.
   provision:
     build:
       context: ../..
       dockerfile: deploy/quickstart/provision.Dockerfile
     environment:
-      # The node's service token is HS256-signed with the same shared secret the
-      # provider/verifier use, so it mints against the same value.
+      # The pipeline's service token is HS256-signed with the same shared
+      # secret the provider/verifier use, so it mints against the same value.
       OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
       OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
     volumes:
       - provisioned:/provisioned
+      - pipeline-data:/pipeline-data
 
   nats:
     # Pinned to the same server line the repo's broker-contract tests run
-    # against (the claims-update API the node's live push depends on).
+    # against (the claims-update API the pipeline's live push depends on).
     image: nats:2.12.6
-    # Same uid as the standalone node (cmd/standalone/Dockerfile): the broker's
-    # directory resolver and the node's DirPublisher both rewrite account JWTs
-    # in the shared resolver dir, so they must share ownership (provision
-    # chowns the dir to this uid).
+    # Same uid as the network/pipeline images (their Dockerfiles): the
+    # broker's directory resolver and each node's DirPublisher both rewrite
+    # account JWTs in the shared resolver dir, so they must share ownership
+    # (provision chowns the dir to this uid).
     user: "10001"
     command: ["-c", "/provisioned/nats/nats-server.conf"]
     volumes:
@@ -87,11 +92,11 @@ services:
       OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
       OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
       HTTP_PORT: "3000"
-      # The provider resolves the owner DID against the node during a DID grant.
-      # Reach the node at its registry-id alias so the DID's {registry} segment
-      # ("poc.dplaax.dev") matches the base URL host — no allowedRegistries
-      # override needed (that env override injects a string where the config
-      # schema wants an array).
+      # The provider resolves the owner DID against the network (registry)
+      # during a DID grant. Reach it at its registry-id alias so the DID's
+      # {registry} segment ("poc.dplaax.dev") matches the base URL host — no
+      # allowedRegistries override needed (that env override injects a
+      # string where the config schema wants an array).
       DPLAAX_REGISTRY_BASE_URL: http://poc.dplaax.dev:8443
       # Custom DID grant is not OIDC; allow the non-OIDC token path.
       OAUTH_OIDC_MODE: dual
@@ -100,7 +105,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      node:
+      network:
         condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/_healthcheck"]
@@ -108,36 +113,36 @@ services:
       timeout: 3s
       retries: 20
 
-  # The provin node: control plane (registry RPCs) + data plane (pipeline loops).
-  node:
+  # Control plane: DID/Schema/Signer/VC/Audit/Chain registry RPCs, the
+  # background batch-resolver + audit-runner, and public DID resolution. No
+  # data plane — see cmd/network's own package doc (it refuses to boot with
+  # any loop configured).
+  network:
     build:
       context: ../..
-      dockerfile: cmd/standalone/Dockerfile
-    environment:
-      # Layer the provision step's service-token overlay over the base config
-      # (sets pipeline.vc-store-bearer to the node's minted service token).
-      CONFIG_OVERLAY: /provisioned/overlay.conf
+      dockerfile: cmd/network/Dockerfile
     volumes:
-      - ./node/config:/app/config:ro
+      - ./network/config:/app/config:ro
       - provisioned:/provisioned
     networks:
       default:
         # The provider resolves owner DIDs at http://poc.dplaax.dev:8443; that
-        # host must equal the DID's {registry} segment, so alias the node to it.
+        # host must equal the DID's {registry} segment, so alias this
+        # service to it.
         aliases:
           - poc.dplaax.dev
     ports:
       # Loopback-only publish: every documented flow talks to localhost, and
-      # the node serves the unauthenticated /metrics endpoint (enabled in this
-      # stack's application.conf) — publishing on all host interfaces would
-      # leak it to the host's network.
+      # this service serves the unauthenticated /metrics endpoint (enabled
+      # in this stack's application.conf) — publishing on all host
+      # interfaces would leak it to the host's network.
       - "127.0.0.1:8443:8443"
     # Without this, `up --wait` cannot tell a serving node from one that is
     # crash-looping behind `restart: on-failure` — a restarting container is
     # still "running", so the stack reported ready while the node had never
-    # booted at all (found by the P0-6 actual-boot condition). /readyz is the
-    # node's own readiness verdict, so waiting on it is waiting on the thing
-    # that matters.
+    # booted at all (found by the P0-6 actual-boot condition, cmd/standalone
+    # era). /readyz is this service's own readiness verdict, so waiting on it
+    # is waiting on the thing that matters.
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8443/readyz"]
       interval: 5s
@@ -153,8 +158,48 @@ services:
       policy-verifier:
         condition: service_healthy
 
+  # Data plane: the configured transport loops (src push-ingress, archive
+  # observation-only sink), wire-composed against `network` — it carries NO
+  # in-process registry of its own (cmd/pipeline's own package doc). Its
+  # local signing keys (external-key provisioning) come from the
+  # `pipeline-data` volume `provision` wrote them into BEFORE this service's
+  # first boot; its NATS trust material and service-token overlay come from
+  # the shared `provisioned` volume, same as `network`.
+  pipeline:
+    build:
+      context: ../..
+      dockerfile: cmd/pipeline/Dockerfile
+    environment:
+      CONFIG_FILE: /app/config/application.conf
+    volumes:
+      - ./pipeline/config:/app/config:ro
+      - provisioned:/provisioned
+      - pipeline-data:/app/data
+    ports:
+      # A SEPARATE host port from network's 8443: these are two independent
+      # processes now, each with its own :8443 internal listener. Loopback-
+      # only publish, same rationale as network's port above (this service
+      # also serves /metrics, and /ingest/src/push is L1-gated but still not
+      # meant for the open host network in a dev stack).
+      - "127.0.0.1:8444:8443"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8443/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: on-failure
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+      network:
+        condition: service_healthy
+
 volumes:
   provisioned:
+  pipeline-data:
 
 # GitHub token for cloning the (currently private) provin.auth — only needed
 # when building policy-verifier / auth-provider FROM SOURCE (the commented

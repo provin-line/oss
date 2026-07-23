@@ -70,7 +70,7 @@ relying party が依存してよい構造的事実 2 つ:
 - **Bundle export（`provin bundle export`）** — credential: `--vc-resolver-base <registry>=<url>` override → advertisement（**必須**: 0 件は error）。audit receipt: `--audit-base <registry>=<url>` override → advertisement → legacy fallback（`--did-base` map、無ければ `https://{registry}`）。非対称は意図的: receipt routing は advertisement より古く、advertisement 以前に発行された document も export し続けられなければならない。
 - **Batch chain assembly（node 内の predecessor 解決）** — 消費 credential の upstream hint が先。issuer の `#vc-resolver` advertisement（exactly-one 必須。CLI override も registry fallback も無い）へ進むのは**接続エラーのみ**。hint 先の store が NotFound を*答えた*場合は miss — entry は retry され、reroute されない。解決不能な issuer の hole は queue に残り、audit runner が bound する。
 
-override は **split-horizon の seam**: advertised URL は emitting network 内で canonical であり、外からは到達不能でありうる（quickstart は `http://node:8443` を advertise し、host で走る CLI は `--vc-resolver-base` / `--audit-base` で `http://localhost:8443` に override する）。
+override は **split-horizon の seam**: advertised URL は emitting network 内で canonical であり、外からは到達不能でありうる（quickstart は `http://network:8443` を advertise し、host で走る CLI は `--vc-resolver-base` / `--audit-base` で `http://localhost:8443` に override する）。
 
 ## 凍結境界
 

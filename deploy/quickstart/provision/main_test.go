@@ -12,6 +12,7 @@ package main
 
 import (
 	"bytes"
+	stded25519 "crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -24,7 +25,29 @@ import (
 
 	jwt "github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
+
+	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/keystore/filestore"
 )
+
+// testConfig returns a config with every field provision() requires filled
+// in with fixed dev values: outDir under dir (the NATS material), a sibling
+// pipeline-data directory, and the quickstart's own fixed pipeline/process
+// DIDs. provisionPipelineIdentity (main.go) requires a non-empty
+// pipelineDataDir/pipelineDID/processDID — a bare config{outDir: ...} literal
+// (this file's shape before that function existed) leaves those zero, which
+// fails closed as an "empty did". Every provision() call in this file goes
+// through this constructor (or one built from it) rather than a bare
+// literal, so the tests exercise the same complete shape main() itself
+// assembles from flag defaults.
+func testConfig(dir string) config {
+	return config{
+		outDir: dir, account: "acme", natsURL: "nats://nats:4222",
+		pipelineDataDir: filepath.Join(dir, "pipeline-data"),
+		pipelineDID:     "did:dplaax:poc.dplaax.dev:org:acme:pipeline:readings",
+		processDID:      "did:dplaax:poc.dplaax.dev:org:acme:pipeline:readings:process:s1",
+	}
+}
 
 // provision must lay down exactly the operator-mode NATS artifacts the
 // quickstart's broker and node consume, mirroring a production deployment's
@@ -34,7 +57,7 @@ import (
 // what we verify here is that this glue writes coherent, cross-consistent files.
 func TestProvision(t *testing.T) {
 	dir := t.TempDir()
-	if err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}); err != nil {
+	if err := provision(testConfig(dir)); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 
@@ -169,11 +192,10 @@ func TestProvision(t *testing.T) {
 func TestProvision_ServiceOverlay(t *testing.T) {
 	dir := t.TempDir()
 	const secret = "shared-secret"
-	if err := provision(config{
-		outDir: dir, account: "acme", natsURL: "nats://nats:4222",
-		jwtSecret: secret, jwtIssuer: "http://auth-provider:3000",
-		serviceSubject: "did:dplaax:poc.dplaax.dev:org:acme", serviceTTL: time.Hour,
-	}); err != nil {
+	cfg := testConfig(dir)
+	cfg.jwtSecret, cfg.jwtIssuer = secret, "http://auth-provider:3000"
+	cfg.serviceSubject, cfg.serviceTTL = "did:dplaax:poc.dplaax.dev:org:acme", time.Hour
+	if err := provision(cfg); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 
@@ -214,7 +236,7 @@ func TestProvision_ServiceOverlay(t *testing.T) {
 // base config — no service token forced on a deployment that didn't ask for one).
 func TestProvision_NoSecretNoOverlay(t *testing.T) {
 	dir := t.TempDir()
-	if err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}); err != nil {
+	if err := provision(testConfig(dir)); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err == nil {
@@ -230,7 +252,7 @@ func TestProvision_NoSecretNoOverlay(t *testing.T) {
 // `down -v`).
 func TestProvision_Idempotent_ReusesExistingMaterial(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+	cfg := testConfig(dir)
 	if err := provision(cfg); err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
@@ -281,17 +303,16 @@ func TestProvision_Idempotent_ReusesExistingMaterial(t *testing.T) {
 // working vc-store-bearer without a volume reset.
 func TestProvision_Idempotent_StillMintsServiceOverlay(t *testing.T) {
 	dir := t.TempDir()
-	if err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}); err != nil {
+	if err := provision(testConfig(dir)); err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err == nil {
 		t.Fatal("overlay.conf written despite no jwt-secret")
 	}
-	if err := provision(config{
-		outDir: dir, account: "acme", natsURL: "nats://nats:4222",
-		jwtSecret: "shared-secret", jwtIssuer: "http://auth-provider:3000",
-		serviceSubject: "did:dplaax:poc.dplaax.dev:org:acme", serviceTTL: time.Hour,
-	}); err != nil {
+	cfg := testConfig(dir)
+	cfg.jwtSecret, cfg.jwtIssuer = "shared-secret", "http://auth-provider:3000"
+	cfg.serviceSubject, cfg.serviceTTL = "did:dplaax:poc.dplaax.dev:org:acme", time.Hour
+	if err := provision(cfg); err != nil {
 		t.Fatalf("second provision: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "overlay.conf")); err != nil {
@@ -305,7 +326,7 @@ func TestProvision_Idempotent_StillMintsServiceOverlay(t *testing.T) {
 // (Codex review P1).
 func TestProvision_Idempotent_RestoresSharedPermissions(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+	cfg := testConfig(dir)
 	if err := provision(cfg); err != nil {
 		t.Fatalf("first provision: %v", err)
 	}
@@ -344,7 +365,7 @@ func TestProvision_PartialMaterial_FailsClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "operator.seed"), []byte("SOOPERATORSEED"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := provision(config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"})
+	err := provision(testConfig(dir))
 	if err == nil {
 		t.Fatal("provision succeeded over partial trust material")
 	}
@@ -361,7 +382,7 @@ func TestProvision_PartialMaterial_FailsClosed(t *testing.T) {
 // broker silently without operator mode (b). Both must fail closed.
 func TestProvision_BrokenCrossReference_FailsClosed(t *testing.T) {
 	cfg := func(dir string) config {
-		return config{outDir: dir, account: "acme", natsURL: "nats://nats:4222"}
+		return testConfig(dir)
 	}
 	accPubOf := func(t *testing.T, dir string) string {
 		t.Helper()
@@ -409,4 +430,125 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return b
+}
+
+// provision must mint LOCAL #auth/#signing keypairs for both the pipeline
+// DID and the process DID directly into cfg.pipelineDataDir/keys — the
+// separated-topology provisioning cmd/pipeline's own boot preflights need
+// (main.go's package doc; wiring.go's preflightPayloadRetainKeys/
+// preflightWireOnlySignerKeys) — and export ONLY the public halves to
+// <outDir>/pipeline-external-keys.json, world-readable, for
+// `provin pipeline/process create --external-key` to submit over the wire.
+func TestProvision_PipelineIdentity_WritesLocalKeysAndExport(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	if err := provision(cfg); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	ks := filestore.New(filepath.Join(cfg.pipelineDataDir, "keys"))
+	exportPath := filepath.Join(cfg.outDir, "pipeline-external-keys.json")
+	raw, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	info, err := os.Stat(exportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o044 == 0 {
+		t.Errorf("export mode %v is not world-readable", info.Mode().Perm())
+	}
+
+	var export map[string]struct {
+		AuthPublicKey    string `json:"auth_public_key"`
+		SigningPublicKey string `json:"signing_public_key"`
+	}
+	if err := json.Unmarshal(raw, &export); err != nil {
+		t.Fatalf("export is not valid JSON: %v", err)
+	}
+
+	for _, subject := range []string{cfg.pipelineDID, cfg.processDID} {
+		entry, ok := export[subject]
+		if !ok {
+			t.Fatalf("export has no entry for %s", subject)
+		}
+		for keyID, wantB64 := range map[keystore.KeyID]string{
+			keystore.KeyIDAuth:    entry.AuthPublicKey,
+			keystore.KeyIDSigning: entry.SigningPublicKey,
+		} {
+			priv, err := ks.GetPrivateKey(subject, keyID)
+			if err != nil {
+				t.Fatalf("%s#%s: local private key not found: %v", subject, keyID, err)
+			}
+			wantPub, err := base64.StdEncoding.DecodeString(wantB64)
+			if err != nil {
+				t.Fatalf("%s#%s: export value not base64: %v", subject, keyID, err)
+			}
+			gotPub := stded25519.PrivateKey(priv).Public().(stded25519.PublicKey)
+			if !bytes.Equal(gotPub, wantPub) {
+				t.Errorf("%s#%s: exported public key does not match the locally-held private key", subject, keyID)
+			}
+		}
+	}
+}
+
+// Idempotency (same rationale as the NATS material above): a `docker compose
+// up` re-run must REUSE the pipeline's already-provisioned keys — a running
+// pipeline container would otherwise have its local keystore silently
+// diverge from what the registry was told about, or provision would just
+// error on filestore's create-only SaveKeyPair.
+func TestProvision_PipelineIdentity_Idempotent_ReusesKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	first := mustRead(t, filepath.Join(cfg.outDir, "pipeline-external-keys.json"))
+
+	if err := provision(cfg); err != nil {
+		t.Fatalf("second provision: %v", err)
+	}
+	second := mustRead(t, filepath.Join(cfg.outDir, "pipeline-external-keys.json"))
+
+	if !bytes.Equal(first, second) {
+		t.Errorf("pipeline-external-keys.json changed across an idempotent re-run:\nfirst:  %s\nsecond: %s", first, second)
+	}
+}
+
+// A half-present keyset (one of #auth/#signing written, the other missing —
+// unreachable via provision's own atomic SaveKeyPair call, but possible from
+// a hand-edited volume or a process killed mid-chown) must fail closed with
+// reset guidance, matching the NATS material's own broken-cross-reference
+// posture, rather than silently minting a mismatched second key.
+func TestProvision_PipelineIdentity_PartialKeyset_FailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir)
+	if err := provision(cfg); err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	keysDir := filepath.Join(cfg.pipelineDataDir, "keys")
+	// Remove only the #signing half for one subject, simulating an
+	// interrupted or tampered volume.
+	subjectDir, err := filestoreDIDDir(keysDir, cfg.pipelineDID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(subjectDir, "signing.key")); err != nil {
+		t.Fatal(err)
+	}
+
+	err = provision(cfg)
+	if err == nil || !strings.Contains(err.Error(), "partial keyset") {
+		t.Fatalf("want fail-closed with a partial-keyset error, got: %v", err)
+	}
+}
+
+// filestoreDIDDir mirrors filestore's own (unexported) Store.didDir mapping
+// exactly (filestore.go: `filepath.Join(append([]string{root}, colon-split
+// segments...)...)`) — only used to locate a key file to delete for
+// TestProvision_PipelineIdentity_PartialKeyset_FailsClosed.
+func filestoreDIDDir(keysRoot, subjectDID string) (string, error) {
+	parts := append([]string{keysRoot}, strings.Split(subjectDID, ":")...)
+	return filepath.Join(parts...), nil
 }

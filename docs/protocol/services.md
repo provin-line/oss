@@ -133,7 +133,7 @@ usable — no silent fallback past it).
 
 The overrides are the **split-horizon seam**: an advertised URL is
 canonical inside the emitting network and may be unreachable from
-outside (the quickstart advertises `http://node:8443`; a host-run CLI
+outside (the quickstart advertises `http://network:8443`; a host-run CLI
 overrides with `--vc-resolver-base`/`--audit-base` to
 `http://localhost:8443`).
 

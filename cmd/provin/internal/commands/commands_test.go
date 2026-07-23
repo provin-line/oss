@@ -12,9 +12,11 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/cmd/provin/internal/commands"
 	"github.com/provin-line/oss/cmd/provin/internal/keyfile"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	"github.com/provin-line/oss/keystore/filestore"
@@ -197,13 +199,13 @@ func TestPipelineAndProcessCreate(t *testing.T) {
 	if err := commands.OwnerInit(ctx, env(srv, &out), ownerDID, keyPath); err != nil {
 		t.Fatalf("OwnerInit: %v", err)
 	}
-	if err := commands.PipelineCreate(ctx, env(srv, &out), pipelineDID, keyPath); err != nil {
+	if err := commands.PipelineCreate(ctx, env(srv, &out), pipelineDID, keyPath, nil); err != nil {
 		t.Fatalf("PipelineCreate: %v", err)
 	}
 	if doc := resolve(t, srv, pipelineDID); !strings.Contains(string(doc), pipelineDID) {
 		t.Errorf("resolved pipeline doc does not name the pipeline: %s", doc)
 	}
-	if err := commands.ProcessCreate(ctx, env(srv, &out), processDID, keyPath); err != nil {
+	if err := commands.ProcessCreate(ctx, env(srv, &out), processDID, keyPath, nil); err != nil {
 		t.Fatalf("ProcessCreate: %v", err)
 	}
 	if doc := resolve(t, srv, processDID); !strings.Contains(string(doc), processDID) {
@@ -227,8 +229,76 @@ func TestPipelineCreate_UnregisteredOwnerFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err = commands.PipelineCreate(context.Background(), env(srv, &out), pipelineDID, keyPath)
+	err = commands.PipelineCreate(context.Background(), env(srv, &out), pipelineDID, keyPath, nil)
 	if err == nil || !strings.Contains(err.Error(), "pipeline create: issue") {
 		t.Fatalf("issuance with unregistered owner: want a server-side issue error, got %v", err)
+	}
+}
+
+// The external-key path (deploy/quickstart's separated-topology provisioning
+// story): PipelineCreate/ProcessCreate given a non-nil ExternalKeys register
+// THOSE public halves — the resolved document's #auth/#signing verification
+// methods carry exactly the caller-supplied bytes, not a registry-minted
+// key — and the CLI's own success message names the mode.
+func TestPipelineAndProcessCreate_ExternalKey(t *testing.T) {
+	srv := newRegistry(t)
+	var out bytes.Buffer
+	keyPath := filepath.Join(t.TempDir(), "acme-owner.jwk")
+	ctx := context.Background()
+
+	if err := commands.OwnerInit(ctx, env(srv, &out), ownerDID, keyPath); err != nil {
+		t.Fatalf("OwnerInit: %v", err)
+	}
+
+	pipelineKeys := mustExternalKeys(t)
+	if err := commands.PipelineCreate(ctx, env(srv, &out), pipelineDID, keyPath, pipelineKeys); err != nil {
+		t.Fatalf("PipelineCreate (external key): %v", err)
+	}
+	assertExternalKeysRegistered(t, srv, pipelineDID, pipelineKeys)
+
+	processKeys := mustExternalKeys(t)
+	if err := commands.ProcessCreate(ctx, env(srv, &out), processDID, keyPath, processKeys); err != nil {
+		t.Fatalf("ProcessCreate (external key): %v", err)
+	}
+	assertExternalKeysRegistered(t, srv, processDID, processKeys)
+
+	if !strings.Contains(out.String(), "held locally") {
+		t.Errorf("output should name the external-key mode, got %q", out.String())
+	}
+}
+
+func mustExternalKeys(t *testing.T) *commands.ExternalKeys {
+	t.Helper()
+	authKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signKP, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &commands.ExternalKeys{AuthPublicKey: authKP.PublicKey, SigningPublicKey: signKP.PublicKey}
+}
+
+func assertExternalKeysRegistered(t *testing.T, srv *httptest.Server, subjectDID string, want *commands.ExternalKeys) {
+	t.Helper()
+	docBytes := resolve(t, srv, subjectDID)
+	var doc did.DIDDocument
+	if err := canon.NewStrictDecoder(docBytes).Decode(&doc); err != nil {
+		t.Fatalf("parse resolved document for %s: %v", subjectDID, err)
+	}
+	authPub, _, err := did.ExtractPublicKeyAndEncoding(&doc, subjectDID+"#auth", did.RelationshipAuthentication)
+	if err != nil {
+		t.Fatalf("extract #auth key for %s: %v", subjectDID, err)
+	}
+	if !bytes.Equal(authPub, want.AuthPublicKey) {
+		t.Errorf("%s #auth key does not match the externally-supplied key", subjectDID)
+	}
+	signPub, _, err := did.ExtractPublicKeyAndEncoding(&doc, subjectDID+"#signing", did.RelationshipAssertionMethod)
+	if err != nil {
+		t.Fatalf("extract #signing key for %s: %v", subjectDID, err)
+	}
+	if !bytes.Equal(signPub, want.SigningPublicKey) {
+		t.Errorf("%s #signing key does not match the externally-supplied key", subjectDID)
 	}
 }

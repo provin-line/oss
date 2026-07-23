@@ -7,17 +7,26 @@ end-to-end — from HTTP push ingest to a `VERIFIED` audit verdict — through t
 ```text
 ┌── auth.provider ──┐   issues JWTs from a DID-signed assertion (token issuance)
 │  policy-verifier  │   verifies the JWT + evaluates policy         (the PDP)
-│      node         │   enforces policy per RPC (the PEP) + runs the pipeline
+│      network      │   registry (control plane): DID/VC/Audit RPCs + the PEP
+│      pipeline     │   data plane: the transport loops, wired to `network` over the wire
 │      nats         │   chain transport
 └───────────────────┘
 ```
 
+The stack is the separated dplaax topology: `network` (control plane,
+`cmd/network`) and `pipeline` (data plane, `cmd/pipeline`) are two independent
+processes, each with its own port, talking only over the wire — the shape
+production deployments use. The retired all-in-one `cmd/standalone` binary
+used to run both halves in one process; this quickstart mirrors the same
+separated topology provin.e2e's own compose-runtime scenarios (e.g.
+`scenarios/httpingest`) already exercise.
+
 > **Not a production reference.** This stack takes deliberate dev shortcuts: one
 > HS256 secret shared across the auth layer, freshly-generated NATS seeds, a
-> long-lived node service token, and **cleartext h2c** (`tls.allow-cleartext =
-> true`) on the compose bridge with the node port published loopback-only. In
-> production the node must serve TLS (`tls.cert-file`/`key-file`) or sit behind
-> a TLS terminator with an isolated backend — see
+> long-lived pipeline service token, and **cleartext h2c** (`tls.allow-cleartext =
+> true`) on the compose bridge with both node ports published loopback-only. In
+> production every node must serve TLS (`tls.cert-file`/`key-file`) or sit
+> behind a TLS terminator with an isolated backend — see
 > [deployment.md → TLS termination](../../docs/architecture/deployment.md#tls-termination)
 > and [Going to production](#going-to-production).
 
@@ -46,12 +55,12 @@ end-to-end — from HTTP push ingest to a `VERIFIED` audit verdict — through t
 
 ```sh
 cd deploy/quickstart
-docker compose up --build      # provisions NATS trust material, then boots all four services
+docker compose up --build      # provisions NATS trust material + pipeline keys, then boots every service
 ```
 
-Wait until `policy-verifier` and `auth-provider` are healthy and the node logs
-`listening on :8443`. Published ports: node `8443`, policy-verifier `3001`,
-auth-provider `3000`.
+Wait until `policy-verifier`, `auth-provider`, `network`, and `pipeline` are
+healthy. Published ports: `network` (the registry) `8443`, `pipeline` (the
+data plane) `8444`, policy-verifier `3001`, auth-provider `3000`.
 
 ## 2. Walk a record to VERIFIED
 
@@ -61,7 +70,8 @@ CLI; build it once:
 ```sh
 go build -o /tmp/provin ./cmd/provin
 PROVIN=/tmp/provin
-REGISTRY=http://localhost:8443
+REGISTRY=http://localhost:8443        # network — DID/VC/Audit RPCs
+PIPELINE_URL=http://localhost:8444    # pipeline — /ingest/<loop>/push, /metrics
 OWNER=did:dplaax:poc.dplaax.dev:org:acme
 PIPELINE=$OWNER:pipeline:readings
 PROCESS=$PIPELINE:process:s1
@@ -96,19 +106,39 @@ TOKEN=$(node deploy/quickstart/bin/did-token.mjs \
   --provider http://localhost:3000 --client quickstart)
 ```
 
-### 2c. Create the pipeline + process, then push a record
+### 2c. Create the pipeline + process (external-key mode), then push a record
+
+The separated topology's `pipeline` service carries its OWN local keystore
+(`cmd/pipeline`'s boot preflights fail closed if a needed signing key is
+missing) — unlike the retired `cmd/standalone`, the registry can no longer
+mint the pipeline's loop keys itself and have them land somewhere the data
+plane can read (`network` and `pipeline` are different processes with
+different data volumes). So `provision` (the init container from step 1)
+already minted the pipeline's and process's `#auth`/`#signing` keys directly
+into the `pipeline-data` volume, and exported ONLY the public halves to
+`pipeline-external-keys.json` inside the shared `provisioned` volume. Pull
+that file out and pass it to `--external-key`: the registry then registers
+those public keys and never generates or holds a private key for either DID.
 
 ```sh
-$PROVIN pipeline create --did "$PIPELINE" --owner-key /tmp/acme-owner.jwk \
-  --registry "$REGISTRY" --token "$TOKEN"
-$PROVIN process  create --did "$PROCESS"  --owner-key /tmp/acme-owner.jwk \
-  --registry "$REGISTRY" --token "$TOKEN"
+docker compose cp network:/provisioned/pipeline-external-keys.json /tmp/pipeline-external-keys.json
 
-curl -X POST "$REGISTRY/ingest/src/push" \
+$PROVIN pipeline create --did "$PIPELINE" --owner-key /tmp/acme-owner.jwk \
+  --registry "$REGISTRY" --token "$TOKEN" \
+  --external-key /tmp/pipeline-external-keys.json
+$PROVIN process  create --did "$PROCESS"  --owner-key /tmp/acme-owner.jwk \
+  --registry "$REGISTRY" --token "$TOKEN" \
+  --external-key /tmp/pipeline-external-keys.json
+
+curl -X POST "$PIPELINE_URL/ingest/src/push" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"sensor":"temp-01","celsius":21.5}'
 # → 202 {"payload_hash":"sha256:..."}
 ```
+
+Push ingest is served by `pipeline` (`$PIPELINE_URL`), never `network`
+(`$REGISTRY`) — `network` carries no data plane at all (`cmd/network`'s own
+package doc: it refuses to boot with any loop configured).
 
 ### 2d. Read the audit verdict
 
@@ -131,16 +161,35 @@ curl -s -X POST "$REGISTRY/dplaax.audit.v1.AuditService/ListAuditStatuses" \
 `CONFIDENCE_VERIFIED` on all three axes — the record was authenticated, signed,
 chained, and audited entirely through the real provider + real verifier path.
 
+> **Known gap (separated topology + the published policy-verifier image):**
+> `pipeline`'s emit path makes wire calls that never existed before the
+> network/pipeline split (`ReportEmitHealth`, `RetainPayload` —
+> `cmd/standalone` made the equivalent calls in-process, with no L1 gate at
+> all). The published `ghcr.io/provin-line/auth-policy-verifier:v0.1.0`
+> image's declared authorization surface predates those calls, so it
+> `403`s them with `undeclared_resource_action` (`chain:report-health`,
+> `payloads:retain`) — visible in `docker compose logs network`/`pipeline`.
+> `RetainPayload`'s denial aborts the whole emission (every producing loop
+> dual-emits by design), so the record above never reaches the sink and this
+> step's query returns `{}` today. This is a `provin.auth` (private repo)
+> policy-declaration gap, not a `provin.oss` bug — fixing it means
+> republishing that image with the two new resource/actions declared. Track
+> it there; nothing in this repo can work around it.
+
 ### 2e. Watch the counters (optional)
 
-The quickstart node enables the `/metrics` endpoint (OpenTelemetry counters,
-Prometheus exposition; **default-off** in the reference config — enabled here
-because the compose publishes the node port loopback-only):
+Both nodes enable `/metrics` (OpenTelemetry counters, Prometheus exposition;
+**default-off** in the reference config — enabled here because the compose
+publishes both node ports loopback-only). `network` reports audit verdicts
+(its own background audit-runner); `pipeline` reports the data-plane loop
+families (emit/verify — it runs no audit runner of its own):
 
 ```sh
-curl -s http://localhost:8443/metrics | grep '^provin_'
+curl -s http://localhost:8444/metrics | grep '^provin_'
 # provin_pipeline_emit_attempts_total{loop="src",outcome="success",...} 1
-# provin_pipeline_verify_results_total{loop="observer",outcome="verified",...} 1
+# provin_pipeline_verify_results_total{loop="archive",outcome="verified",...} 1
+
+curl -s http://localhost:8443/metrics | grep '^provin_'
 # provin_audit_verdicts_total{verdict="verified",...} 1
 ```
 
@@ -162,36 +211,48 @@ $PROVIN --registry "$REGISTRY" --token "$TOKEN" \
   --audit-base       "poc.dplaax.dev=$REGISTRY"
 ```
 
-The `--*-base` overrides are required from the host: the node's DID documents
-advertise the compose-internal `http://node:8443` (reachable only inside the
-compose network), while the host reaches the same services at `$REGISTRY`
-(`http://localhost:8443`). `--audit-base` is a separate override from
-`--did-base` because export defaults to `--aggregate-complete`, which fetches
-each issuer's `#audit` receipts to re-verify the source-commitment axis offline.
+The `--*-base` overrides are required from the host: `network`'s DID
+documents advertise the compose-internal `http://network:8443` (reachable
+only inside the compose network), while the host reaches the same services
+at `$REGISTRY` (`http://localhost:8443`). `--audit-base` is a separate
+override from `--did-base` because export defaults to `--aggregate-complete`,
+which fetches each issuer's `#audit` receipts to re-verify the
+source-commitment axis offline.
 
 ## How it fits together
 
 - **`provision`** (one-shot init container) generates the NATS operator-mode
   trust material (operator + account seeds, the account claims JWTs in the
   resolver directory, a system account with a **claims-push user narrowed to
-  this node's account**, and `nats-server.conf` running the directory
-  resolver over that same directory) and mints the node's **service token** —
-  an HS256 JWT the node uses to authenticate its *own* L1-gated calls
-  (publishing issued VCs, resolving references, fetching adjacent evidence).
-  Everything is written to a shared volume; nothing cryptographic is
-  committed to the repo. The sys-user files are trust material — in anything
-  beyond this dev stack, guard them like signing keys. Re-running
-  `docker compose up` **reuses** existing trust material (only the service
-  token is re-minted — it carries an expiry); partial material from an
-  interrupted run — or material from a pre-directory-resolver quickstart —
-  fails closed with a pointer to the reset below.
+  this deployment's account**, and `nats-server.conf` running the directory
+  resolver over that same directory), mints `pipeline`'s **service token** —
+  an HS256 JWT it uses to authenticate its *own* L1-gated calls (publishing
+  issued VCs, resolving references, fetching adjacent evidence) — and mints
+  `pipeline`'s own local `#auth`/`#signing` keys (the external-key
+  provisioning story, step 2c above; see `provision/main.go`'s
+  `provisionPipelineIdentity`). Everything is written to shared volumes;
+  nothing cryptographic is committed to the repo. The sys-user files and the
+  pipeline keys are trust material — in anything beyond this dev stack, guard
+  them like signing keys. Re-running `docker compose up` **reuses** existing
+  trust material and keys (only the service token is re-minted — it carries
+  an expiry); partial material from an interrupted run — or material from a
+  pre-directory-resolver or pre-separated-topology quickstart — fails closed
+  with a pointer to the reset below.
 - **`policy-verifier`** and **`auth-provider`** are *generated* by
   `provin.auth`'s `create-*` CLIs at build time (there is no committed instance
   to build) — see `policy-verifier.Dockerfile` / `auth-provider.Dockerfile`. Both
   are pinned to a `provin.auth` ref via `AUTH_REF`.
-- **`node`** is the `standalone` binary (built from this repo). Its authorization
-  backend is the default `o3co` — it calls the real policy-verifier. Its NATS
-  seeds and its service-token overlay come from the `provision` volume.
+- **`network`** (`cmd/network`) is the control plane: DID/Schema/Signer/VC/Audit
+  registry RPCs, the background batch-resolver + audit-runner, and public DID
+  resolution. It carries no data plane — see `network/config/application.conf`.
+  Its authorization backend is the default `o3co` — it calls the real
+  policy-verifier.
+- **`pipeline`** (`cmd/pipeline`) is the data plane: the configured transport
+  loops (`src` push-ingress, `archive` an observation-only sink), wired to
+  `network` over the wire — it carries NO in-process registry of its own. Its
+  NATS seeds and service-token overlay come from the shared `provisioned`
+  volume (same as `network`'s); its own signing keys come from the
+  `pipeline-data` volume `provision` wrote them into.
 
 ### First-owner bootstrap
 
@@ -207,7 +268,7 @@ nothing to mint against. Production options for seeding the first owner:
 
 ### Authorization backends
 
-The node's PDP backend is configurable (`provin.network.auth.backend`):
+Each node's PDP backend is configurable (`provin.network.auth.backend`):
 `o3co` (this quickstart), `opa`, `cedar`, or `static`. `static` is an in-process
 allow-list and is **not authentication** — see the network `reference.conf` and
 the deployment note in the repo README. This quickstart uses `o3co` precisely to
@@ -217,12 +278,12 @@ exercise real JWT verification end-to-end.
 
 Replace, at minimum: the shared HS256 secret with an asymmetric provider key
 (JWKS); the generated dev NATS seeds with operator-managed trust material; the
-long-lived node service token with a properly issued service credential; and the
-loopback-friendly node networking with real network policy. The bootstrap-token
-step does not apply to a JWKS/RS256 provider (see above).
+long-lived pipeline service token with a properly issued service credential; and
+the loopback-friendly node networking with real network policy. The
+bootstrap-token step does not apply to a JWKS/RS256 provider (see above).
 
 ## Reset
 
 ```sh
-docker compose down -v      # also drops the provisioned volume
+docker compose down -v      # also drops the provisioned and pipeline-data volumes
 ```

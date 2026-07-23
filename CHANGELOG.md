@@ -599,6 +599,27 @@ closure required, now met with executed evidence rather than review.
   `cmd/provin` and every other consumer drive the generated
   `didpbconnect.DIDServiceClient` directly, so the regenerated surface is
   immediately usable with no further client-side change.
+- `provin` CLI: `pipeline create`/`process create` gain an optional
+  `--external-key <path>` flag switching issuance to the external-key path
+  (`didpb.ExternalPublicKeys`, `#20` above) — the registry registers the
+  caller's own locally-minted public halves instead of minting a keypair
+  server-side. The flag reads a small JSON file (keyed by subject DID,
+  `auth_public_key`/`signing_public_key` base64) that the separated
+  topology's own key holder exports; `deploy/quickstart/provision` is
+  today's one producer of that file.
+- `deploy/quickstart`: migrated from the retired `cmd/standalone` single-node
+  compose service to the separated topology — a `network` service
+  (`cmd/network`, `CONFIG_OVERLAY` convention) and a `pipeline` service
+  (`cmd/pipeline`, `CONFIG_FILE` convention, `depends_on: network: condition:
+  service_healthy`), each with its own `/readyz` healthcheck and published
+  host port (`8443`/`8444`). `provision` (the one-shot init container) now
+  also mints the pipeline's own local `#auth`/`#signing` keypairs directly
+  into a new `pipeline-data` volume — cmd/pipeline's boot preflights need
+  them present before its first boot, unlike the retired all-in-one binary's
+  in-process "loop idles until issued" model — and exports the public halves
+  to `pipeline-external-keys.json` for the external-key CLI flag above to
+  consume. `TestShippedConfigsParse` covers both new split `application.conf`
+  files under the real HOCON parser.
 
 ### Removed
 

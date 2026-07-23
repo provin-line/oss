@@ -48,8 +48,9 @@ const usage = `usage: provin <group> <operation> [flags]
 
 Implemented:
   owner    init       --did <owner-did> --key <jwk-path>     register a pipeline owner
-  pipeline create     --did <target-did> --owner-key <path>  issue a pipeline DID
-  process  create     --did <target-did> --owner-key <path>  issue a process DID
+  pipeline create     --did <target-did> --owner-key <path> [--external-key <path>]  issue a pipeline DID
+  process  create     --did <target-did> --owner-key <path> [--external-key <path>]  issue a process DID
+                      (--external-key: register locally-minted public keys instead of the registry's own KMS mint — see deploy/quickstart)
   bundle   export     --head <sha256:hex> --out <dir>        archive a chain + its authority documents
                       [--aggregate-complete=false] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]... [--audit-base <registry>=<url>]...
                       [--allow-loopback] [--allow-private] [--max-depth <n>]
@@ -185,11 +186,12 @@ func ownerInit(ctx context.Context, args []string, stdout io.Writer) error {
 	return commands.OwnerInit(ctx, env, *did, *key)
 }
 
-func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(context.Context, commands.Env, string, string) error) error {
+func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(context.Context, commands.Env, string, string, *commands.ExternalKeys) error) error {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	registry, token := globalFlags(fs)
 	did := fs.String("did", "", "DID to issue (required)")
 	ownerKey := fs.String("owner-key", "", "path to the owner's JWK key file (required)")
+	externalKey := fs.String("external-key", "", "path to a JSON file of locally-minted public keys keyed by DID (external-key mode: the registry registers these public halves and never holds this DID's private keys — see deploy/quickstart's provisioner for a generator)")
 	if err := parse(fs, args, stdout); err != nil {
 		if errors.Is(err, errHelp) {
 			return nil
@@ -199,8 +201,16 @@ func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(
 	if *did == "" || *ownerKey == "" {
 		return fmt.Errorf("create: --did and --owner-key are required")
 	}
+	var external *commands.ExternalKeys
+	if *externalKey != "" {
+		var err error
+		external, err = commands.LoadExternalKeys(*externalKey, *did)
+		if err != nil {
+			return err
+		}
+	}
 	env := commands.Env{Registry: *registry, Token: *token, Stdout: stdout}
-	return create(ctx, env, *did, *ownerKey)
+	return create(ctx, env, *did, *ownerKey, external)
 }
 
 // bundleExportOpts carries bundle export's parsed flags. Split from
