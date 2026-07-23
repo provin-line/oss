@@ -61,8 +61,7 @@ type OperatorHandler struct {
 
 	// ReportEmitHealth wiring (WithEmitHealth). emitHealth is nil unless
 	// wired, in which case ReportEmitHealth reports Unimplemented — mirrors
-	// allow's nil posture above (production always wires it on cmd/network;
-	// cmd/standalone never does).
+	// allow's nil posture above (production always wires it on cmd/network).
 	emitHealth         EmitHealthReporter
 	emitHealthVerifier Verifier
 	emitHealthTTL      time.Duration
@@ -95,9 +94,8 @@ func WithAllowListReader(r AllowListReader) OperatorOption {
 // internal/netcompose's cmd/network wiring), v verifies the caller's in-band
 // wireauth proof (ReportEmitHealth is "L1 + wireauth", per the proto's own
 // doc), and ttl is the freshness window echoed back in every response.
-// Without this option ReportEmitHealth reports Unimplemented (production
-// wires it on cmd/network; cmd/standalone never does — it has no
-// report-mode consumer for this RPC).
+// Without this option ReportEmitHealth reports Unimplemented; production
+// wires it on cmd/network.
 func WithEmitHealth(reporter EmitHealthReporter, v Verifier, ttl time.Duration) OperatorOption {
 	return func(h *OperatorHandler) {
 		h.emitHealth = reporter

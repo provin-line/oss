@@ -15,14 +15,12 @@ help:
 	@echo "  make clean        — remove $(DIST)/"
 
 # Binaries land here as their packages materialize:
-#   cmd/standalone                → $(DIST)/standalone   [built]
 #   cmd/network                   → $(DIST)/network      [built]
 #   cmd/pipeline                  → $(DIST)/pipeline     [built]
 #   cmd/provin                    → $(DIST)/provin       [built]
 #   pipeline/sink/console         → $(DIST)/console-sink
 build:
 	mkdir -p $(DIST)
-	go build -o $(DIST)/standalone ./cmd/standalone
 	go build -o $(DIST)/network ./cmd/network
 	go build -o $(DIST)/pipeline ./cmd/pipeline
 	go build -o $(DIST)/provin ./cmd/provin

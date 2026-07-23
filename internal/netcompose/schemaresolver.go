@@ -12,9 +12,9 @@ import (
 // SchemaGetter is the narrow read seam the schema wiring needs from the schema
 // registry — *schemaregistry.Service satisfies it. Kept consumer-defined so the
 // bridge depends on Get alone, not the whole service. Exported because
-// SchemaBridge.Svc is of this type and the composition roots construct the
+// SchemaBridge.Svc is of this type and the composition root constructs the
 // bridge directly (netcompose.SchemaBridge{Svc: schemaSvc} in cmd/network's
-// and cmd/standalone's mains). The data plane's boot-time schema-ref
+// main). The data plane's boot-time schema-ref
 // resolution has its OWN getter seam (pipeline/runtime.SchemaGetter, over a
 // runtime-owned Schema type) — two layers, two owners, never an import
 // between them (AGENTS.md rule 2).
@@ -28,7 +28,7 @@ type SchemaGetter interface {
 // verifier recomputes the content hash over the body itself, so this bridge is
 // trusted only for retrieval, never for integrity. Named SchemaBridge (not
 // SchemaResolver) to avoid a name clash with vc.SchemaResolver, the interface
-// it implements; Svc is exported so the composition root (cmd/standalone's
+// it implements; Svc is exported so the composition root (cmd/network's
 // main) can construct it directly (netcompose.SchemaBridge{Svc: schemaSvc}).
 type SchemaBridge struct {
 	Svc SchemaGetter

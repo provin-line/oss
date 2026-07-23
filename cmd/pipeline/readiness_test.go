@@ -87,7 +87,7 @@ func TestPDPCheck_UnreachablePDP_ReportsError(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────
 // buildHandler's /readyz PDP gating — added exactly when hasPushIngress AND
 // the backend is external, mirroring netcompose's own gating (which instead
-// adds it unconditionally, since cmd/network/cmd/standalone always mount
+// adds it unconditionally, since cmd/network always mounts
 // PDP-gated ConnectRPC services; cmd/pipeline's ONLY PDP-gated surface is a
 // push-ingress route).
 // ─────────────────────────────────────────────────────────────────────────

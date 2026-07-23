@@ -22,9 +22,10 @@
 // with a stale snapshot — keep external serialization per account.
 //
 // This package deliberately lives OUTSIDE infra/nats: it needs the nats.go
-// client, which infra/nats's production graph forbids (D-n7). The standalone
-// binary already links the client via the data plane, so wiring this in adds
-// nothing to that graph. The nats-server stays out (see the deps guard).
+// client, which infra/nats's production graph forbids (D-n7) — this is the
+// one place cmd/network's production graph picks up that dependency
+// (cmd/pipeline needs it independently, for its own data-plane transport).
+// The nats-server stays out (see the deps guard).
 package livepublisher
 
 import (
@@ -65,8 +66,8 @@ type Config struct {
 	// Timeout is the TOTAL budget for one push: one absolute deadline spans
 	// every dial attempt and the request. Zero is FAIL-FAST — one immediate
 	// dial attempt and one request, mirroring the chain config's
-	// connect-wait = 0s semantic (the standalone wiring passes connect-wait
-	// through verbatim).
+	// connect-wait = 0s semantic (cmd/network's wiring, netcompose's
+	// natsOperator, passes connect-wait through verbatim).
 	Timeout time.Duration
 }
 
@@ -150,11 +151,11 @@ func (p *Publisher) Publish(accountPub, accountJWT string) error {
 			}
 			return err
 		}
-		// No previous JWT to restore. The standalone wiring publishes at boot
-		// before any grant exists, so the expected first publish carries no
-		// grant delta to diverge over; reaching this with a MUTATION means the
-		// durable JWT vanished mid-run (an ops fault) — say exactly what state
-		// the failure leaves behind.
+		// No previous JWT to restore. cmd/network's wiring (netcompose's
+		// natsOperator) publishes at boot before any grant exists, so the
+		// expected first publish carries no grant delta to diverge over;
+		// reaching this with a MUTATION means the durable JWT vanished mid-run
+		// (an ops fault) — say exactly what state the failure leaves behind.
 		return fmt.Errorf("livepublisher: push failed with no previous JWT to restore (%w) — the durable store now holds the unacknowledged claims; retry the operation, or remove %s.jwt and re-run boot publish to reset", err, accountPub)
 	}
 	return nil

@@ -31,24 +31,23 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────
 // Config mapping: chainconfig.Config + pipelineconfig.Config -> pipeline/
-// runtime.Config. This is a DELIBERATE duplicate of cmd/standalone's
-// runtimewiring.go:runtimeConfigFrom (and its per-role mapping helpers) —
-// that function lives in package main of a DIFFERENT binary, so it cannot be
-// imported. Keep the two in lockstep by inspection until PR3c gives the
-// mapping a shared home (see standalone's own doc comment for the same
-// caveat, mirrored here).
+// runtime.Config. This was originally a DELIBERATE duplicate of
+// cmd/standalone's runtimewiring.go:runtimeConfigFrom (and its per-role
+// mapping helpers), kept in lockstep by inspection because that function
+// lived in package main of a DIFFERENT binary and so could not be imported.
+// cmd/standalone is retired (PR3c); this mapping is now the only copy.
 // ─────────────────────────────────────────────────────────────────────────
 
 // pipelineRuntimeConfigFrom maps this binary's own loaded config trees into
 // pipeline/runtime's network-agnostic Config. dataDir is coreCfg.DataDir;
-// TlogDir/RejectLogDir derive from it exactly as standalone's
-// runtimeConfigFrom does (data-dir/tlog, data-dir/evidence/sink-rejects). A
+// TlogDir/RejectLogDir derive from it exactly as the retired cmd/standalone's
+// runtimeConfigFrom did (data-dir/tlog, data-dir/evidence/sink-rejects). A
 // non-NATS transport WITH configured loops is a boot error naming the
 // offending transport — this binary exists ONLY to run loops (main's
 // zero-loop guard runs first), so by the time this is called len(cfg.Loops)
-// is always > 0 and a non-NATS transport is always fatal here (unlike
-// standalone, which tolerates a source-only... no, ANY zero-loop config on a
-// non-NATS transport, since standalone also serves a pure control plane).
+// is always > 0 and a non-NATS transport is always fatal here (unlike the
+// retired cmd/standalone, which tolerated a source-only... no, ANY zero-loop
+// config on a non-NATS transport, since it also served a pure control plane).
 func pipelineRuntimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineconfig.Config, dataDir string) (pipelineruntime.Config, error) {
 	cfg := pipelineruntime.Config{
 		NATS: pipelineruntime.NATSConfig{
@@ -125,9 +124,9 @@ func chainedConfigFrom(cc pipelineconfig.ChainedConfig) pipelineruntime.ChainedC
 }
 
 // aggregateConfigFrom maps AggregateConfig. VerificationStrategy is
-// deliberately NOT copied, mirroring standalone's own mapping: the aggregate
-// runtime declares VerificationAdjacent intrinsically, so
-// runtime.AggregateConfig has no field for it.
+// deliberately NOT copied, mirroring the retired cmd/standalone's own
+// mapping: the aggregate runtime declares VerificationAdjacent intrinsically,
+// so runtime.AggregateConfig has no field for it.
 func aggregateConfigFrom(ac pipelineconfig.AggregateConfig) pipelineruntime.AggregateConfig {
 	out := pipelineruntime.AggregateConfig{
 		OutputSubject: ac.OutputSubject,
@@ -259,8 +258,8 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // newVCStoreClient builds the shared vcresolver/client.Resolver every
 // CredentialPublisher/IngressStorer/ReceiptWriter adapter below wraps,
-// bounding a resolved/stored credential's read size the same way
-// standalone's credentialPublisherFrom does (D-17g-13).
+// bounding a resolved/stored credential's read size the same way the
+// retired cmd/standalone's credentialPublisherFrom did (D-17g-13).
 func newVCStoreClient(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient) *vcresolverclient.Resolver {
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		httpClient, pipeCfg.VCStoreEndpoint,
@@ -444,8 +443,8 @@ func (w wireReceiptWriter) Put(headHash string, registrantDID string, consumedHa
 // wireSchemaGetter adapts *schemaclient.Client to pipeline/runtime.
 // SchemaGetter (a producing loop's boot-time schema-ref resolution),
 // mapping the client's own ErrNotFound to runtime's ErrSchemaNotFound
-// sentinel — the same translation cmd/standalone's schemaGetterAdapter
-// applies over the LOCAL registry service's store.ErrNotFound.
+// sentinel — analogous to cmd/network's own in-process schema resolution,
+// which maps the same store.ErrNotFound from the LOCAL registry service.
 type wireSchemaGetter struct {
 	client *schemaclient.Client
 }

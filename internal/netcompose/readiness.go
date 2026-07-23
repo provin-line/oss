@@ -120,9 +120,11 @@ func writeSnapshot(w http.ResponseWriter, snap readySnapshot) {
 // decoupled from any single caller's cancellation. No background goroutine, so
 // no lifecycle to manage (BuildHandler receives no context). The type itself
 // stays unexported (only ever named via inference from NewCachedReadiness's
-// return); its Now field and Handler method are exported because
-// cmd/standalone's readiness_test.go reaches across the package boundary to
-// override the clock and to obtain the /readyz http.HandlerFunc.
+// return); its Now field and Handler method are exported so an external test
+// could reach across the package boundary to override the clock and obtain
+// the /readyz http.HandlerFunc — cmd/standalone's readiness_test.go once did
+// (cmd/pipeline now has its own independent, unexported cachedReadiness
+// rather than importing this one).
 type cachedReadiness struct {
 	checks []ReadinessCheck
 	ttl    time.Duration

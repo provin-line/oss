@@ -24,9 +24,7 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 
 // BuildAuditRunner constructs the async audit runner unconditionally from its args.
 // Whether this node needs the runner at all — "does it have a consuming loop" — is a
-// composition-root concern, not this builder's (Task 9): cmd/standalone gates at its call
-// site with pipelineconfig.Config.HasConsumingLoop() (a source-only node nils the runner
-// it gets back, preserving its old zero-loop behavior exactly); cmd/network has no local
+// composition-root concern, not this builder's (Task 9): cmd/network has no local
 // loops to gate on at all (pipeCfg.HasConsumingLoop() is always false there) and instead
 // always runs this runner. The audit chainwalk's MaxDepth equals the batch resolver's
 // max-depth (D-17h-4): neither component rejects a chain the other accepts.
@@ -50,7 +48,7 @@ func BuildAuditRunner(
 	verifier := vc.NewVerifier(didResolver, ed25519.Verifier{}, vopts...)
 	cv, err := chainwalk.New(localChainResolver{svc: vcSvc}, verifier, chainwalk.WithMaxDepth(pipeCfg.BatchResolver.MaxDepth))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: audit chain verifier: %w", err)
+		return nil, fmt.Errorf("netcompose: audit chain verifier: %w", err)
 	}
 	// WithSourceCommitment enables emit-locus consumed-set self-audit (slice-17o): for an
 	// aggregate head with a local receipt, the runner gathers the consumed sources from the

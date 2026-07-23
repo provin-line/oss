@@ -2,8 +2,9 @@
 // ReportEmitHealth reports: a publisher's self-reported stripped-publish
 // health, expiring after a configured TTL. It backs the publisher-scoped
 // by-reference advertisement gate (chainmanager.WithPublisherHealth) on a
-// report-mode network node (cmd/network) — the per-process analogue of
-// cmd/standalone's in-process WithByReferenceHealth gate. TTL and the
+// report-mode network node (cmd/network) — the per-process analogue of the
+// node-global in-process WithByReferenceHealth gate (no current binary
+// wires it; cmd/standalone did before its retirement). TTL and the
 // advertise-without-reports policy are configured via network/pkg/chainconfig
 // (provin.network.chain.emit-health).
 //

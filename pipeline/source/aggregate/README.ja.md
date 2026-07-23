@@ -28,6 +28,6 @@
 → payload↔credential binding → `StoreIngressVC`、いずれも fail-closed）、各 window tick で pluggable
 `Fold` seam（参照実装 `ManifestFold`）により fold → strict-JSON gate → `SignAggregateFirstDrop` +
 共有 `transport.Emitter` で `provin:aggregate` FirstDrop を emit する。dedup は content address 単位、
-空 window は skip。残りは **配線**：config の `aggregate` role + standalone data plane の
-`buildAggregateProcess`、および NATS end-to-end テスト（後続スライス）。`Config` は
-`transport.Subscriber` を注入で受け取るため、ランタイム自体は broker 非依存。
+空 window は skip。**配線も完了済み**：config の `aggregate` role + `pipeline/runtime` の data plane
+（`cmd/pipeline`）の `buildAggregateProcess`、および NATS end-to-end テスト。`Config` は
+`transport.Subscriber` を注入で受け取るため、ランタイム自体は broker 非依存のまま。

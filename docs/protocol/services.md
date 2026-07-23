@@ -7,12 +7,15 @@ truth for **responsibilities and relying-party contracts**: which surfaces
 exist, how each is authenticated, and what a consumer may depend on.
 Authentication layers themselves are specified in [auth.md](auth.md).
 
-## HTTP surface of a standalone node
+## HTTP surface
 
-Everything below is served on the node's single listener
-(`provin.network.core.listen-addr`). Gate legend: **L1** = bearer + PDP
-interceptors; **L2** = per-RPC wireauth proof; **PDP** = L1-style decision
-on a raw-HTTP route; **public** = deliberately unauthenticated.
+A provin node is two separately deployed binaries, each with its own HTTP
+listener (`provin.network.core.listen-addr`); nothing below is ever served
+on a shared listener. Gate legend: **L1** = bearer + PDP interceptors; **L2**
+= per-RPC wireauth proof; **PDP** = L1-style decision on a raw-HTTP route;
+**public** = deliberately unauthenticated.
+
+### `cmd/network` (control plane)
 
 | Surface | Gate | Responsibility |
 | --- | --- | --- |
@@ -26,10 +29,21 @@ on a raw-HTTP route; **public** = deliberately unauthenticated.
 | `dplaax.chain.v1.ChainPeerService` | **L2** | internet-facing peer coordination: publisher info, subscription registration, disconnect |
 | `dplaax.payload.v1.PayloadService` | **L2** | internet-facing by-reference payload serving (`ResolvePayload`, streaming) |
 | `GET /did/{accountType}/{accountId}[/{resourcePath…}]/did.json` | public | W3C-style DID resolution ([did/method.md](../did/method.md)) |
+
+### `cmd/pipeline` (data plane)
+
+| Surface | Gate | Responsibility |
+| --- | --- | --- |
 | `POST /ingest/{loop}/push` | PDP | HTTP push ingest into a push-enabled source loop |
 | `GET /ingest/{loop}/health` | public | per-loop ingest readiness probe |
 | `GET /healthz`, `GET /readyz` | public | liveness / readiness — owned by [deployment.md](../architecture/deployment.md#health-endpoints) |
-| `GET /metrics` | public, **config-gated (default off)** | OpenTelemetry counters; mounted outside the service handler composition — owned by [deployment.md](../architecture/deployment.md#metrics) |
+
+### `cmd/network` also mounts
+
+| Surface | Gate | Responsibility |
+| --- | --- | --- |
+| `GET /healthz`, `GET /readyz` | public | its own independent liveness / readiness instance, on its own listener |
+| `GET /metrics` | public, **config-gated (default off)** | OpenTelemetry counters; mounted outside the service handler composition — owned by [deployment.md](../architecture/deployment.md#metrics). Not yet mounted by `cmd/pipeline` (tracked follow-up) |
 
 Two structural facts a relying party may depend on:
 
@@ -119,7 +133,7 @@ usable — no silent fallback past it).
 
 The overrides are the **split-horizon seam**: an advertised URL is
 canonical inside the emitting network and may be unreachable from
-outside (the quickstart advertises `http://node:8443`; a host-run CLI
+outside (the quickstart advertises `http://network:8443`; a host-run CLI
 overrides with `--vc-resolver-base`/`--audit-base` to
 `http://localhost:8443`).
 

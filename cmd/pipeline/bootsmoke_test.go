@@ -22,8 +22,9 @@ import (
 // one test that exercises buildDeps + pipeline/runtime.Build together
 // end-to-end for this task; a full credential-flow e2e (publish through a
 // loop, observe the emitted event) is PR3b Task 9's job per the task brief —
-// this smoke stays at "the process boots, serves, and drains", mirroring
-// cmd/standalone's own TestStandalone_ActualBootOverTLS scope.
+// this smoke stays at "the process boots, serves, and drains", the same
+// scope cmd/network's own TestNetwork_ActualBootOverTLS covers for that
+// binary.
 //
 // The registry dependency (vc-store-endpoint) is a trivial httptest server
 // that answers ANY request (even 404) — this binary's /readyz registry
@@ -34,10 +35,10 @@ import (
 // observes).
 //
 // No TLS: listen-addr is loopback, so core.LoadCoreConfig's transport-
-// security guard permits cleartext (ListenerIsLoopback) — simpler than
-// standalone's own TLS-carrying smoke, and orthogonal to what this test
+// security guard permits cleartext (ListenerIsLoopback) — simpler than a
+// TLS-carrying smoke, and orthogonal to what this test
 // proves (Deps wiring + lifecycle, not the TLS preflight, already covered by
-// cmd/network/cmd/standalone's own suites).
+// cmd/network's own suite).
 func TestPipeline_ActualBoot(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boot smoke builds a binary and starts a broker")
@@ -156,9 +157,8 @@ func TestPipeline_ActualBoot(t *testing.T) {
 
 // runEmbeddedNATS starts an in-process NATS broker (no auth/operator config,
 // so the account-JWT credentials natstransport.Connect mints are accepted
-// unconditionally — the same posture cmd/standalone's own embedded-NATS
-// helpers rely on) and returns its client URL. Ported from
-// cmd/standalone/bootsmoke_test.go.
+// unconditionally) and returns its client URL. Originally ported from
+// cmd/standalone/bootsmoke_test.go (now retired).
 func runEmbeddedNATS(t *testing.T) string {
 	t.Helper()
 	srv := natstest.RunServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})

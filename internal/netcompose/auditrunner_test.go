@@ -21,14 +21,15 @@ const ingressTestIssuer = "did:dplaax:reg:org:upstream:pipeline:p1:process:proc1
 // makeIngressCred builds a PipelinePassCredential for this file's runner tests.
 // When prevAddr is non-empty it is set as previousCredential in credentialSubject.
 //
-// Duplicated from cmd/standalone/ingressstore_test.go's helper of the same
-// name: Task 4 moved this file into internal/netcompose beside the code it
-// exercises, but cmd/standalone/ingressstore_test.go (whose own tests still
-// need it) stays behind, and identifiers declared in a _test.go file are
-// invisible outside that package's own test binary — there is no alias
-// (compat.go or otherwise) that reaches a _test.go symbol across a package
-// boundary. Kept byte-for-byte equivalent to the original (only the issuer DID
-// constant's name changed, to avoid implying it is ingress-store-specific).
+// Originally duplicated from cmd/standalone/ingressstore_test.go's helper of
+// the same name (Task 4 moved this file into internal/netcompose beside the
+// code it exercises, but that package's own tests still needed a copy too,
+// and identifiers declared in a _test.go file are invisible outside that
+// package's own test binary — there is no alias (compat.go or otherwise)
+// that reaches a _test.go symbol across a package boundary). cmd/standalone
+// is gone (PR3c), but this copy remains this package's own fixture. Kept
+// byte-for-byte equivalent to the original (only the issuer DID constant's
+// name changed, to avoid implying it is ingress-store-specific).
 func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 	t.Helper()
 	subject := map[string]any{"pipelineId": "p1", "processId": "proc1"}
@@ -60,8 +61,8 @@ func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
 }
 
 // BuildAuditRunner builds unconditionally from its args now (Task 9): the "does this node
-// have a consuming loop" gate moved to the composition roots (cmd/standalone gates at its
-// call site; cmd/network always builds, since it never has a local loop to gate on). A
+// have a consuming loop" gate moved to the composition roots (cmd/network always
+// builds, since it never has a local loop to gate on). A
 // source-only or zero-loop config therefore returns a non-nil runner just like a
 // sink/chained config — the builder itself no longer inspects pipeCfg.HasConsumingLoop().
 func TestBuildAuditRunner_BuildsUnconditionally(t *testing.T) {

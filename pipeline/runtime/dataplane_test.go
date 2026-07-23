@@ -41,9 +41,9 @@ import (
 // network/pkg/services/vcresolver's own concern and already covered by its
 // own test suite (vcresolver_test.go); this package no longer imports
 // network/pkg/services/vcresolver at all (network/ and pipeline/ never
-// import each other, AGENTS.md rule 2) — cmd/standalone adapts the real
-// service to IngressStorer for production and its own composition-level e2e
-// tests.
+// import each other, AGENTS.md rule 2) — cmd/pipeline's vcStoreAdapter
+// adapts a wire client to IngressStorer for production and its own
+// composition-level e2e tests.
 type fakeVCStore struct{}
 
 // StoreVC derives a deterministic body address (sha256 of the credential
@@ -66,7 +66,8 @@ func dpVCStore() IngressStorer {
 // registered head (both StoredHead fields) — enough for these tests, which
 // only need audit registration to succeed (no assertions on the queue's own
 // drain/list behavior; network/pkg/services/auditor.MemQueue is the
-// production-shaped one, wired by cmd/standalone through an adapter). A
+// production-shaped one, wired by cmd/network through an adapter, and reached
+// over the wire by cmd/pipeline's own wireAuditRegistrar). A
 // package-local fake keeps this package free of any network/ import
 // (network/ and pipeline/ never import each other, AGENTS.md rule 2).
 type memAuditQueue struct{ heads []StoredHead }
@@ -150,7 +151,7 @@ func dpPipelineCfg() *Config {
 	}}}
 }
 
-// TestDataPlane_SourceLoopBoot is the slice-17b capstone: the standalone assembles a
+// TestDataPlane_SourceLoopBoot is the slice-17b capstone: it assembles a
 // source loop (nats transport + ingest signer + memlog) and runs it; a raw JSON push
 // on the ingress subject yields a signed, correctly-attributed Envelope on the output
 // subject; cancelling the context drains the runner.
@@ -303,7 +304,7 @@ func TestDataPlane_ZeroLoopsNoDial(t *testing.T) {
 
 // TestBuildRequiresNATSConfig asserts Build's own NATS-by-construction guard
 // (the severed replacement for the old chainCfg.Transport != NATS check,
-// which moved out to cmd/standalone's mapping — see runtimeConfigFrom):
+// which moved out to cmd/pipeline's mapping — see pipelineRuntimeConfigFrom):
 // loops configured with an empty NATS URL is a build error naming the
 // problem, not a nil-deref or an opaque dial failure from natstransport.
 func TestBuildRequiresNATSConfig(t *testing.T) {

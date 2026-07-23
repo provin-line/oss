@@ -1,10 +1,11 @@
 package main
 
-// Copied from cmd/standalone/push.go (PR3b Task 6): the HTTP push-ingest
-// mount + per-route policy, unchanged. Duplicated rather than imported —
-// standalone's copy is unexported to package main of a DIFFERENT binary, and
-// this binary must not import cmd/standalone. Keep in lockstep by
-// inspection until a shared home lands (PR3c).
+// Copied from cmd/standalone/push.go (PR3b Task 6, since retired — PR3c): the
+// HTTP push-ingest mount + per-route policy, unchanged. Duplicated rather
+// than imported — the retired cmd/standalone's copy was unexported to
+// package main of a DIFFERENT binary, and this binary could not import
+// cmd/standalone. cmd/standalone no longer exists, so this is now the only
+// copy.
 
 import (
 	"fmt"
@@ -48,9 +49,9 @@ func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding,
 // this module: bearer from the Authorization header into the context, then
 // auth.Verifier.Verify with resource "ingest", action "push" (proto
 // policy-option naming convention). Missing/empty bearer → 401; any Verify
-// failure → 403 (mirrors cmd/standalone's identical posture — this binary
-// mounts no ConnectRPC services of its own, so there is no interceptor chain
-// to share this check with; it is enforced here directly instead).
+// failure → 403 — this binary mounts no ConnectRPC services of its own, so
+// there is no interceptor chain to share this check with; it is enforced
+// here directly instead.
 func pushRoutes(inner http.Handler, verifier auth.Verifier, ready <-chan struct{}) http.Handler {
 	requireReady := func(w http.ResponseWriter) bool {
 		select {

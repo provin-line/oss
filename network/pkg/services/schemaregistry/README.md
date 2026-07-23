@@ -18,5 +18,5 @@ Append-only registry of pipeline data schemas.
   Draft 2020-12, external `$ref` denied) so the registry never holds a schema a
   downstream validator would reject.
 - `store/yamlstore/` lays out `{name}/{version}.yaml` under its root dir, with
-  safe-segment path guards. The standalone binary roots it at `schemas/` under
+  safe-segment path guards. `cmd/network` roots it at `schemas/` under
   the data dir (so the deployed layout is `schemas/{name}/{version}.yaml`).

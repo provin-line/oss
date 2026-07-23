@@ -32,7 +32,7 @@ import (
 
 // EmitCounters is the emit-outcome accessor pair every producing handle
 // (transport.Loop, aggregate.Process) exposes — the metrics bridge's poll
-// seam. Relocated here (from cmd/standalone/dataplane.go) alongside
+// seam. Relocated here (formerly cmd/standalone/dataplane.go) alongside
 // LoopMetrics, the struct it is a field type of.
 type EmitCounters interface {
 	EmitSuccesses() uint64
@@ -57,9 +57,12 @@ type VerifyCounts interface {
 // not a series attribute), and the non-nil accessors decide which metric
 // families the loop participates in (nil = the loop does not have that
 // capability, so no series is registered — family presence is the capability
-// contract). Fields are exported: cmd/standalone/dataplane.go (the data
-// plane, which stays behind) constructs and populates these directly as it
-// builds each loop.
+// contract). Fields are exported so a data-plane composer can construct and
+// populate these directly as it builds each loop. cmd/network's own
+// composition never runs producing/consuming loops, so it always passes nil
+// here; cmd/pipeline (the data-plane composer) does not import netcompose at
+// all (AGENTS.md layer rule 2) and does not yet mount this bridge — see its
+// package doc.
 type LoopMetrics struct {
 	Name string
 	Role string // pipelineconfig.Role* value
@@ -84,7 +87,7 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 	registry := prometheus.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics exporter: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics exporter: %w", err)
 	}
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)).
 		Meter(scope)
@@ -92,22 +95,22 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 	emitAttempts, err := meter.Int64ObservableCounter("provin.pipeline.emit.attempts",
 		metric.WithDescription("Emit outcomes per producing loop, keyed on the Emit call's return (success = primary form delivered)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.emit.attempts: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.emit.attempts: %w", err)
 	}
 	strippedFailures, err := meter.Int64ObservableCounter("provin.pipeline.emit.stripped_failures",
 		metric.WithDescription("Stripped-publish (dual-emit) failures per dual-emitting loop; the primary delivery already succeeded."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.emit.stripped_failures: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.emit.stripped_failures: %w", err)
 	}
 	verifyResults, err := meter.Int64ObservableCounter("provin.pipeline.verify.results",
 		metric.WithDescription("Per-credential verifier API outcomes per consuming loop (the seam below the loop's accept/reject policy)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.pipeline.verify.results: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.pipeline.verify.results: %w", err)
 	}
 	auditVerdicts, err := meter.Int64ObservableCounter("provin.audit.verdicts",
 		metric.WithDescription("Durably recorded audit verdict writes by linear-chain overall verdict (writes, not audited heads)."))
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics instrument provin.audit.verdicts: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics instrument provin.audit.verdicts: %w", err)
 	}
 
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
@@ -139,7 +142,7 @@ func BuildMetricsHandler(scope string, loops []LoopMetrics, verdicts func() map[
 		return nil
 	}, emitAttempts, strippedFailures, verifyResults, auditVerdicts)
 	if err != nil {
-		return nil, fmt.Errorf("standalone: metrics callback: %w", err)
+		return nil, fmt.Errorf("netcompose: metrics callback: %w", err)
 	}
 
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), nil

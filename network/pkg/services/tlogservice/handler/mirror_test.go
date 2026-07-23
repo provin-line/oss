@@ -1027,7 +1027,7 @@ func TestMirrorLogSegment_FullHappyPathRoundTrip(t *testing.T) {
 }
 
 // --- ErrMirrorNotConfigured: a node that never wired a mirror store
-// (cmd/standalone's map-only posture) reports Unimplemented, not a silent
+// (a map-only posture) reports Unimplemented, not a silent
 // zero/empty result.
 
 // stubVerifier always succeeds — used only for the not-configured tests

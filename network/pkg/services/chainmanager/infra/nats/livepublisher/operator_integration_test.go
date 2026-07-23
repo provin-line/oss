@@ -15,7 +15,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/nats/livepublisher"
 )
 
-// newOperator wires a real nats.Operator exactly like cmd/standalone does in
+// newOperator wires a real nats.Operator exactly like cmd/network does in
 // the quickstart shape: DirPublisher over the RESOLVER dir, wrapped by the
 // live publisher.
 func newOperator(t *testing.T, tr trust, dir, url string, timeout time.Duration) *natsop.Operator {

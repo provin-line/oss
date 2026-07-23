@@ -56,7 +56,9 @@ func bridgeDirToResolver(t *testing.T, dir string) *server.MemAccResolver {
 }
 
 // natsClient connects to url as accKP's account (a freshly minted user JWT) —
-// stands in for the pipeline data plane (not yet wired into the standalone).
+// stands in for the pipeline data plane (cmd/pipeline, wired over NATS
+// transport since PR3c's separated topology; this fixture predates that and
+// was never migrated to a real cmd/pipeline instance).
 func natsClient(t *testing.T, url string, accKP nkeys.KeyPair) *natsclient.Conn {
 	t.Helper()
 	u, _ := nkeys.CreateUser()

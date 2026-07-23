@@ -56,7 +56,7 @@ The **signer capability** (slice-17k) and the **pool/window runtime** (slice-17l
 payload↔credential binding → `StoreIngressVC`, all fail-closed), and on each window tick folds the
 pool via a pluggable `Fold` seam (`ManifestFold` is the reference), strict-JSON-gates the output,
 and emits a `provin:aggregate` FirstDrop through `SignAggregateFirstDrop` + the shared
-`transport.Emitter`. Dedup is by content address; empty windows are skipped. The remaining work is
-**wiring**: a config `aggregate` role + `buildAggregateProcess` in the standalone data plane, and a
-NATS end-to-end test — those are follow-up slices; `Config` takes injected `transport.Subscriber`s
-so the runtime itself is broker-free.
+`transport.Emitter`. Dedup is by content address; empty windows are skipped. **Wiring has landed
+too**: a config `aggregate` role + `buildAggregateProcess` in `pipeline/runtime`'s data plane
+(`cmd/pipeline`), plus a NATS end-to-end test; `Config` takes injected `transport.Subscriber`s
+so the runtime itself stays broker-free.

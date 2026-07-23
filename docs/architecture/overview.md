@@ -10,23 +10,28 @@ dependency-direction rule, and the library-package catalog, see the
 [root README](../../README.md); for what runs where, see
 [deployment.md](deployment.md).
 
-## Two planes, one node
+## Two planes, two binaries
 
-The `standalone` binary composes two planes over one configuration:
+A provin node is always two separately deployed binaries, never one:
 
-- **Control plane** — the registry and coordination services (DID registry,
-  schema registry, signer, VC resolver, audit, tlog, chain manager), served
-  as ConnectRPC handlers on one HTTP listener. State is DB-free: YAML
-  records and append-only file logs under the data dir
-  ([deployment.md — durable state](deployment.md#durable-state)).
-- **Data plane** — zero or more **pipeline loops** (the process peer types
-  in [processes.md](processes.md)) running over a shared NATS connection.
-  Loops consume, transform, sign, and emit events; the control plane serves
-  the evidence they produce (credentials, log checkpoints, audit verdicts).
+- **Control plane** (`cmd/network`) — the registry and coordination services
+  (DID registry, schema registry, signer, VC resolver, audit, tlog, chain
+  manager), served as ConnectRPC handlers on one HTTP listener. State is
+  DB-free: YAML records and append-only file logs under the data dir
+  ([deployment.md — durable state](deployment.md#durable-state)). It refuses
+  to boot if its config declares any pipeline loop.
+- **Data plane** (`cmd/pipeline`) — zero or more **pipeline loops** (the
+  process peer types in [processes.md](processes.md)) running over a shared
+  NATS connection. Loops consume, transform, sign, and emit events, reaching
+  the control plane's evidence surfaces (credentials, log checkpoints, audit
+  verdicts) as a WIRE client only — it refuses to boot on a zero-loop
+  config, and it carries no in-process registry of its own.
 
-A node with zero loops is a pure registry; a node with loops and no
-registry role still needs a resolvable registry for verification. The
-composition is config-driven — see the quickstart for a working topology.
+The two binaries never import each other (AGENTS.md layer rule 2); they
+interact exclusively over the wire, and can run on the same host or
+different ones. A registry needs no pipeline node to exist; a pipeline node
+needs a resolvable registry to verify against. See
+[deployment.md](deployment.md) for the full composition.
 
 ## Trust layers
 

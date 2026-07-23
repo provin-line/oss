@@ -1,17 +1,35 @@
+/*
+ * Copyright 2026 1o1 Co. Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ */
+
 package main
 
+// Mirrors internal/netcompose/metrics_test.go's own four tests (see
+// metrics.go's package doc for why this binary carries its own copy rather
+// than importing that package). No audit-verdict coverage here: this
+// binary's BuildMetricsHandler/MaybeMountMetrics have no verdicts parameter
+// at all — TestMetricsHandler_NoAuditFamily below asserts the family can
+// never appear, the structural counterpart to netcompose's
+// TestMetricsHandler_NoAuditRunnerNoAuditFamily (there, the family is
+// merely unregistered for a specific case; here, there is no way to
+// register it in the first place).
+
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/provin-line/oss/network/pkg/chainconfig"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
-	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 )
+
+const metricsTestScope = "github.com/provin-line/oss/cmd/pipeline"
 
 type fakeEmits struct{ ok, fail uint64 }
 
@@ -71,22 +89,18 @@ func findMetric(body, family string, labels ...string) (string, bool) {
 
 // The bridge maps each loop's capabilities to its metric families with the
 // stable names: a producing loop gets emit series (and stripped when it
-// dual-emits), a consuming loop gets verify series, and the audit family
-// appears exactly when a verdict source exists. Families a loop lacks the
-// capability for must not appear for it.
+// dual-emits), a consuming loop gets verify series. Families a loop lacks
+// the capability for must not appear for it.
 func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
-	lms := []loopMetrics{
+	lms := []pipelineruntime.LoopMetrics{
 		{Name: "src-a", Role: "source", Emits: fakeEmits{ok: 3, fail: 1}, Stripped: fakeStripped{n: 2}},
 		{Name: "sink-b", Role: "sink", Verify: fakeVerify{counts: map[string]uint64{
 			"verified": 4, "failed": 0, "indeterminate": 1, "error": 0,
 		}}},
 	}
-	verdicts := func() map[string]uint64 {
-		return map[string]uint64{"verified": 5, "failed": 0, "indeterminate": 1}
-	}
-	h, err := buildMetricsHandler(meterScope, lms, verdicts)
+	h, err := BuildMetricsHandler(metricsTestScope, lms)
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
 	body := scrape(t, h)
 
@@ -106,12 +120,6 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 	if v := metricValue(t, body, "provin_pipeline_verify_results_total", `loop="sink-b"`, `outcome="error"`); v != "0" {
 		t.Errorf("verify error = %s, want 0", v)
 	}
-	if v := metricValue(t, body, "provin_audit_verdicts_total", `verdict="verified"`); v != "5" {
-		t.Errorf("audit verified = %s, want 5", v)
-	}
-	if v := metricValue(t, body, "provin_audit_verdicts_total", `verdict="failed"`); v != "0" {
-		t.Errorf("audit failed = %s, want 0 (present with zero)", v)
-	}
 
 	// Capability absence = series absence: a sink emits nothing, a source
 	// verifies nothing.
@@ -123,18 +131,19 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 	}
 }
 
-// Without a verdict source (no audit runner configured) the audit family is
-// absent entirely — family presence is the capability contract.
-func TestMetricsHandler_NoAuditRunnerNoAuditFamily(t *testing.T) {
-	h, err := buildMetricsHandler(meterScope, []loopMetrics{
+// This binary runs no audit runner and BuildMetricsHandler/MaybeMountMetrics
+// carry no verdicts parameter at all — the audit family can never appear,
+// with or without configured loops.
+func TestMetricsHandler_NoAuditFamily(t *testing.T) {
+	h, err := BuildMetricsHandler(metricsTestScope, []pipelineruntime.LoopMetrics{
 		{Name: "src-a", Role: "source", Emits: fakeEmits{}},
-	}, nil)
+	})
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
 	body := scrape(t, h)
 	if strings.Contains(body, "provin_audit_verdicts") {
-		t.Errorf("audit family present without an audit runner:\n%s", body)
+		t.Errorf("audit family present — this binary runs no audit runner:\n%s", body)
 	}
 	// The configured producing loop's family IS present at zero.
 	if v := metricValue(t, body, "provin_pipeline_emit_attempts_total", `loop="src-a"`, `outcome="success"`); v != "0" {
@@ -148,9 +157,9 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 	inner := http.NewServeMux() // a real mux: unknown routes 404
 	inner.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	disabled, err := maybeMountMetrics(meterScope, false, inner, nil, nil)
+	disabled, err := MaybeMountMetrics(metricsTestScope, false, inner, nil)
 	if err != nil {
-		t.Fatalf("maybeMountMetrics(disabled): %v", err)
+		t.Fatalf("MaybeMountMetrics(disabled): %v", err)
 	}
 	if disabled != http.Handler(inner) {
 		t.Error("disabled gate: handler was wrapped, want the inner handler unchanged")
@@ -161,9 +170,9 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 		t.Errorf("disabled: GET /metrics = %d, want 404", rec.Code)
 	}
 
-	enabled, err := maybeMountMetrics(meterScope, true, inner, nil, nil)
+	enabled, err := MaybeMountMetrics(metricsTestScope, true, inner, nil)
 	if err != nil {
-		t.Fatalf("maybeMountMetrics(enabled): %v", err)
+		t.Fatalf("MaybeMountMetrics(enabled): %v", err)
 	}
 	rec = httptest.NewRecorder()
 	enabled.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -177,88 +186,17 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 	}
 }
 
-// Composed path: a REAL source loop's delivered emit reaches the REAL
-// exposition — dataplane bookkeeping, accessor forwarding, bridge, and
-// exporter working as one.
-func TestMetrics_RealEmitReachesExposition(t *testing.T) {
-	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	rtCfg, err := runtimeConfigFrom(chainCfg, dpPipelineCfg(), "")
-	if err != nil {
-		t.Fatalf("runtimeConfigFrom: %v", err)
-	}
-	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
-	if err != nil {
-		t.Fatalf("pipelineruntime.Build: %v", err)
-	}
-	t.Cleanup(func() { _ = dp.Close() })
-	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), netcomposeMetricsFrom(dp.Metrics()), nil)
-	if err != nil {
-		t.Fatalf("maybeMountMetrics: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	runDone := make(chan error, 1)
-	go func() { runDone <- dp.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-runDone })
-
-	obs, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
-	if err != nil {
-		t.Fatalf("observer connect: %v", err)
-	}
-	defer obs.Close()
-	got := make(chan []byte, 4)
-	if err := obs.Subscriber(dpPipelineDID).Subscribe(func(b []byte) { got <- b }); err != nil {
-		t.Fatalf("observer subscribe: %v", err)
-	}
-	injector := obs.Publisher(dpIngress)
-
-	// Retry the push until the loop subscribes and one envelope lands.
-	deadline := time.After(5 * time.Second)
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	_ = injector.Publish([]byte(`{"hello":"metrics"}`))
-deliver:
-	for {
-		select {
-		case <-got:
-			break deliver
-		case <-tick.C:
-			_ = injector.Publish([]byte(`{"hello":"metrics"}`))
-		case <-deadline:
-			t.Fatal("no envelope delivered on the output subject")
-		}
-	}
-
-	// The observer sees the publish a hair before Emit returns (the counter
-	// moves in the deferred outcome accounting), so poll the exposition.
-	expoDeadline := time.Now().Add(5 * time.Second)
-	for {
-		body := scrape(t, h)
-		if v, ok := findMetric(body, "provin_pipeline_emit_attempts_total", `loop="src"`, `outcome="success"`); ok && v != "0" {
-			break
-		}
-		if time.Now().After(expoDeadline) {
-			t.Fatalf("emit success never reached the exposition:\n%s", scrape(t, h))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// withMetrics mounts /metrics beside the inner handler without disturbing
+// WithMetrics mounts /metrics beside the inner handler without disturbing
 // its routes.
 func TestWithMetrics_RoutesMetricsAndFallsThrough(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot) // distinguishable inner marker
 	})
-	mh, err := buildMetricsHandler(meterScope, nil, nil)
+	mh, err := BuildMetricsHandler(metricsTestScope, nil)
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
-	h := withMetrics(inner, mh)
+	h := WithMetrics(inner, mh)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))

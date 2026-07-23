@@ -19,8 +19,8 @@
 // the payloadresolver service root itself, and never pipeline/ (AGENTS.md
 // layer rule: network and pipeline interact only over the wire). The
 // compile-time assertion that *Resolver satisfies pipeline's PayloadResolver
-// seam lives in the consumer (cmd/standalone), exactly as vcresolver/client
-// keeps its chainwalk.CredentialResolver assertion there.
+// seam lives in the consumer (cmd/pipeline's wiring.go), exactly as
+// vcresolver/client keeps its chainwalk.CredentialResolver assertion there.
 package client
 
 import (

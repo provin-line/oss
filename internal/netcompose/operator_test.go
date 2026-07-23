@@ -46,15 +46,18 @@ func TestChainOperator_NATS(t *testing.T) {
 	}
 }
 
-// The default standalone build must NOT pull in infra/noop — it is dev-build only
-// (slice-11 D-p2). Mirrors the slice-14 infra/nats dependency guard.
+// The default cmd/network build must NOT pull in infra/noop — it is
+// dev-build only (slice-11 D-p2). Mirrors the slice-14 infra/nats dependency
+// guard. cmd/network is netcompose.ChainOperator's only production caller
+// (cmd/pipeline never imports internal/netcompose at all — AGENTS.md layer
+// rule 2 / its own depsguard_test.go).
 func TestProdBuild_ExcludesNoop(t *testing.T) {
 	out, err := exec.Command("go", "list", "-deps",
-		"github.com/provin-line/oss/cmd/standalone").CombinedOutput()
+		"github.com/provin-line/oss/cmd/network").CombinedOutput()
 	if err != nil {
 		t.Skipf("go list unavailable: %v\n%s", err, out)
 	}
 	if strings.Contains(string(out), "chainmanager/infra/noop") {
-		t.Error("default standalone build includes infra/noop — must be dev-build only (slice-11 D-p2)")
+		t.Error("default cmd/network build includes infra/noop — must be dev-build only (slice-11 D-p2)")
 	}
 }

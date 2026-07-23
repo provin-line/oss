@@ -18,8 +18,9 @@ import (
 // grammar proof. A prefix partitions cleanly: the first token is either
 // "byref" or "did:...", never both.
 //
-// Exported so the composition root (cmd/standalone) can bind a producing
-// loop's dual-emit stripped-form publish to the EXACT subject this package
+// Exported so a producing loop's dual-emit stripped-form publish
+// (pipeline/runtime/dataplane.go, via wireprofile's alias of this same
+// constant) can bind to the EXACT subject this package
 // will export for that loop's output under a by-reference subscription
 // (subjectForMode) — the two must never drift independently.
 //

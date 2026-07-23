@@ -22,8 +22,8 @@ gen/            生成コード（コミット済み — ビルドに buf は不
 network/        レジストリ & コーディネーションサービス（コントロールプレーンのライブラリ + ハンドラ）
 pipeline/       Pipeline プロセス ピアカタログ + 共有メカニクス
 cmd/network/    ネットワークノードバイナリ（レジストリのコントロールプレーンのみ）
-cmd/standalone/ オールインワンノードバイナリ（コントロールプレーン + データプレーン）—
-                非推奨; cmd/network + pipeline runtime への移行が進行中
+cmd/pipeline/   パイプラインノードバイナリ（データプレーンのみ; cmd/network の
+                レジストリに対して wire 越しに構成される）
 cmd/provin/     オペレーター CLI
 conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID

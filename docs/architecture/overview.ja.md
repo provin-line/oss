@@ -2,14 +2,14 @@
 
 provin は **dPLaaX プロトコル**の reference implementation（**wire profile `provin`**）— すべてのデータ変換を W3C Verifiable Credential として署名し、どの参加者も独立に検証できる線形 provenance chain を形成する、分散データパイプラインエンジンである。本ページは系の**平面（plane）と信頼層（trust layer）**の正本 — 部品の関係と、信頼がどこから来るかを記述する。naming・リポジトリ layout・依存方向則・library package カタログは[ルート README](../../README.md)、何がどこで動くかは [deployment.ja.md](deployment.ja.md) を参照。
 
-## 2 平面、1 ノード
+## 2 平面、2 バイナリ
 
-`standalone` バイナリは 1 つの設定で 2 平面を合成する:
+provin ノードは常に別々にデプロイされる 2 つのバイナリで構成される。1 つのバイナリにまとまることはない:
 
-- **コントロールプレーン** — registry・調整サービス群（DID registry、schema registry、signer、VC resolver、audit、tlog、chain manager）。1 つの HTTP listener 上の ConnectRPC handler として提供。状態は DB-free: data dir 配下の YAML record と append-only file log（[deployment.ja.md — 永続状態](deployment.ja.md)）。
-- **データプレーン** — 共有 NATS 接続上で動く 0 個以上の**パイプラインループ**（[processes.ja.md](processes.ja.md) の process peer 型）。ループはイベントを消費・変換・署名・emit し、コントロールプレーンはその証拠（credential、log checkpoint、audit verdict）を提供する。
+- **コントロールプレーン**（`cmd/network`） — registry・調整サービス群（DID registry、schema registry、signer、VC resolver、audit、tlog、chain manager）。1 つの HTTP listener 上の ConnectRPC handler として提供。状態は DB-free: data dir 配下の YAML record と append-only file log（[deployment.ja.md — 永続状態](deployment.ja.md)）。設定に pipeline loop が 1 つでも宣言されていれば起動を拒否する。
+- **データプレーン**（`cmd/pipeline`） — 共有 NATS 接続上で動く 0 個以上の**パイプラインループ**（[processes.ja.md](processes.ja.md) の process peer 型）。ループはイベントを消費・変換・署名・emit し、コントロールプレーンの証拠面（credential、log checkpoint、audit verdict）に WIRE client としてのみ到達する。loop がゼロの設定では起動を拒否し、自前の in-process registry は一切持たない。
 
-ループ 0 個のノードは純粋な registry であり、registry 役を持たないループノードも検証には解決可能な registry を必要とする。合成は config 駆動 — 動く topology は quickstart を参照。
+2 つのバイナリは互いに import しない（AGENTS.md レイヤールール 2）— wire 越しにのみやり取りし、同一ホスト上でも別ホスト上でも動く。registry の存在に pipeline ノードは不要であり、pipeline ノードが検証するには解決可能な registry が必要。合成の全体像は [deployment.ja.md](deployment.ja.md) を参照。
 
 ## 信頼層
 

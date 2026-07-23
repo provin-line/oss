@@ -13,12 +13,15 @@ import (
 // pipeline/runtime's depsguard_test.go, which pin the same rule's other two
 // edges), banning:
 //
-//  1. internal/netcompose — the control-plane composition root (main.go's own
-//     /metrics doc comment already names this off-limits).
+//  1. internal/netcompose — the control-plane composition root. This
+//     binary's own /metrics bridge (metrics.go) is a deliberate, separate
+//     copy of internal/netcompose's OTel/Prometheus composition rather than
+//     an import of it, precisely to keep this ban intact (metrics.go's own
+//     package doc explains why).
 //  2. any OTHER cmd/ deployment root — no binary ever links another binary's
-//     package main tree; cmd/network and cmd/standalone are today's concrete
-//     siblings this catches, but the check is general so a future cmd/* added
-//     the same way is caught too.
+//     package main tree; cmd/network is today's concrete sibling this
+//     catches, but the check is general so a future cmd/* added the same
+//     way is caught too.
 //  3. anything under network/pkg/services/... that is not one of the ALLOWED
 //     families isAllowedNetworkPkgDep documents below — in particular every
 //     service's handler package (proto<->domain conversion + the Connect

@@ -14,8 +14,8 @@ import (
 // AuditService.RegisterAuditHead — must present for admission). It mirrors
 // network/pkg/services/vcresolver.StoreVCResult so this package stays
 // network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
-// rule 2); cmd/standalone's ingressStoreAdapter maps both fields from the
-// real *vcresolver.Service.
+// rule 2); cmd/pipeline's vcStoreAdapter maps both fields from its wire
+// client to the registry's VCResolverService.
 //
 // StoredHead is deliberately NOT the same type as StoredCredential
 // (publishingsigner.go), even though the two share this exact shape today.
@@ -41,14 +41,15 @@ type StoredHead struct {
 // through. It returns the full StoredHead rather than
 // network/pkg/services/vcresolver.StoreVCResult directly — this package stays
 // network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
-// rule 2). cmd/standalone adapts *vcresolver.Service to this interface.
+// rule 2). cmd/pipeline's vcStoreAdapter adapts a wire client to this interface.
 type IngressStorer interface {
 	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (StoredHead, error)
 }
 
-// AuditRegistrar registers a consumed head for async audit (slice-17h). cmd/standalone
-// owns this local interface; an adapter over *auditor.MemQueue (or the file-backed
-// audit queue) satisfies it.
+// AuditRegistrar registers a consumed head for async audit (slice-17h). cmd/pipeline
+// owns this local interface; its wireAuditRegistrar (a wire client to
+// AuditService.RegisterAuditHead) satisfies it in production, and an adapter
+// over *auditor.MemQueue (or the file-backed audit queue) satisfies it in tests.
 type AuditRegistrar interface {
 	Add(head StoredHead) error
 }

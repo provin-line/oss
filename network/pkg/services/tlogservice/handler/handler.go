@@ -258,8 +258,8 @@ func mapError(err error) error {
 	// well-formed; it just does not fit the log's current state).
 	case errors.Is(err, tlogservice.ErrMirrorConflict):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	// This node never wired a mirror store (cmd/standalone's map-only
-	// posture) — mirrors ReportEmitHealth's "not wired" Unimplemented.
+	// This node never wired a mirror store (a map-only posture) — mirrors
+	// ReportEmitHealth's "not wired" Unimplemented.
 	case errors.Is(err, tlogservice.ErrMirrorNotConfigured):
 		return connect.NewError(connect.CodeUnimplemented, err)
 	case errors.Is(err, tlogservice.ErrNotFound):

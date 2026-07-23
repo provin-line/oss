@@ -13,9 +13,10 @@ import (
 // severance: IngressStorer's shape (a bare body-address string, not
 // vcresolver.StoreVCResult) means this package can no longer accept a real
 // *vcresolver.Service directly (network/ and pipeline/ never import each
-// other, AGENTS.md rule 2) — cmd/standalone adapts it for production and its
-// own e2e tests. The "assembles with a non-nil VCStore" case is already
-// covered here (and in dataplane_test.go) via the package's fakeVCStore.
+// other, AGENTS.md rule 2) — cmd/pipeline's vcStoreAdapter adapts a wire
+// client to it for production and its own e2e tests. The "assembles with a
+// non-nil VCStore" case is already covered here (and in dataplane_test.go)
+// via the package's fakeVCStore.
 func TestBuildDataPlane_SinkRequiresVCStore(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	// Resolver and SinkWriter are provided, but VCStore is nil — must fail.

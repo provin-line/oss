@@ -65,10 +65,11 @@ func init() {
 	registerProvinSkip(4, 10, "not a library check by design: closure is what the ISSUER warranted and what a CONSUMER may infer; this implementation's claim check is structural and profile-knowledge-free, so there is no closure verdict to drive (the vectors bind issuers, consumers, and any implementation that builds an inference surface)")
 
 	// The sink receipt's identity shape is established by the issuer — the
-	// sink receipt registrar in cmd/standalone, which is package main and
-	// therefore unimportable from here. Its own tests pin the shape; this
-	// harness cannot reach it without inverting the dependency.
-	registerProvinSkip(11, 12, "issuer obligation outside this package: the identity shape is established by cmd/standalone's sink receipt registrar (package main, unimportable here) and pinned by its own tests; vc grammar-validates and stays open-world, exactly as the rule says")
+	// unexported sinkReceiptRegistrar in pipeline/runtime (and the
+	// provenance/vcdid signer it wraps), neither reachable from this
+	// external test package. Their own tests pin the shape; this harness
+	// cannot reach it without inverting the dependency.
+	registerProvinSkip(11, 12, "issuer obligation outside this package: the identity shape is established by pipeline/runtime's unexported sinkReceiptRegistrar and its provenance/vcdid signer (unreachable from this external test package) and pinned by their own tests; vc grammar-validates and stays open-world, exactly as the rule says")
 }
 
 // TestProvinProfileAllVectors is the profile harness's single entry point. It

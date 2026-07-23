@@ -93,6 +93,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/registry"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
+	chainyaml "github.com/provin-line/oss/network/pkg/services/chainmanager/store/yamlstore"
 	didyaml "github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	payloadmemstore "github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
@@ -315,9 +317,20 @@ type sepRegistryHandle struct {
 // resolver sends every DID resolution (every wireauth caller in this file).
 // seedProcesses, when non-empty, pre-seeds the registry's OWN internal DID
 // store directly (see the file doc) BEFORE BuildHandler opens the same
-// directory. wrap, when non-nil, wraps the assembled handler (the shutdown-
-// fault case's slow-registry middleware).
-func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]*did.DIDDocument, wrap func(http.Handler) http.Handler) sepRegistryHandle {
+// directory. seedAllowRules, when non-empty, pre-seeds the registry's OWN
+// chainmanager allow-list store the SAME way — directly, before BuildHandler
+// opens the same chain/ subdir — so a caller that needs a publisher pipeline
+// DID to admit a subscriber before any wire UpdateAllowList call exists (the
+// by-reference cross-node case) can do so without a second RPC round trip.
+// chainCfg is this registry's own chain config (its account/trust-root/
+// resolver-dir identity, used only for chainOp's own JWT publishing and the
+// registry's OWN peer-client identity — see sepChainCfg's doc); callers that
+// need to control it externally (to share a trust root + resolver dir with a
+// second, independently-built account) build their own and pass it in rather
+// than relying on the internally-generated one every existing call site used
+// before this parameter existed. wrap, when non-nil, wraps the assembled
+// handler (the shutdown-fault case's slow-registry middleware).
+func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]*did.DIDDocument, seedAllowRules map[string][]store.AllowRule, chainCfg *chainconfig.Config, wrap func(http.Handler) http.Handler) sepRegistryHandle {
 	t.Helper()
 	dataDir := t.TempDir()
 	if len(seedProcesses) > 0 {
@@ -329,6 +342,14 @@ func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]
 			}
 			if err := st.SaveProcess(d, doc, nil); err != nil {
 				t.Fatalf("buildSepRegistry: seed internal DID store for %q: %v", didStr, err)
+			}
+		}
+	}
+	if len(seedAllowRules) > 0 {
+		st := chainyaml.NewAllowListStore(filepath.Join(dataDir, "chain"))
+		for pipelineDID, rules := range seedAllowRules {
+			if err := st.Save(pipelineDID, rules); err != nil {
+				t.Fatalf("buildSepRegistry: seed allow-list for %q: %v", pipelineDID, err)
 			}
 		}
 	}
@@ -347,7 +368,6 @@ func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]
 		// this scenario's config never declaring payload-delivery.
 		{Resource: "payloads", Action: "retain"},
 	})
-	chainCfg := sepChainCfg(t)
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	resolver := didresolver.New(guard, didresolver.WithRegistryBaseURL(func(reg string) (string, error) {
 		if reg == sepRegistryID {
@@ -618,7 +638,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	reg := buildSepRegistry(t, fakeDIDURL, map[string]*did.DIDDocument{
 		sepSrc1IssuerDID: sepInternalProcessDoc(t, sepSrc1IssuerDID, sepSrc1Pipeline, src1Pub),
 		sepAggIssuerDID:  sepInternalProcessDoc(t, sepAggIssuerDID, sepAggPipeline, aggPub),
-	}, nil)
+	}, nil, sepChainCfg(t), nil)
 
 	// ONE pipeline config, FOUR loops: src1 (source), sink1 (observation-only
 	// consumer), archive (archival sink + receipt issuer), and agg
@@ -951,7 +971,7 @@ func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	}
-	reg := buildSepRegistry(t, fakeDIDURL, nil, slowTlog)
+	reg := buildSepRegistry(t, fakeDIDURL, nil, nil, sepChainCfg(t), slowTlog)
 
 	pipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint:   reg.url,

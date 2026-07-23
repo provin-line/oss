@@ -599,11 +599,60 @@ closure required, now met with executed evidence rather than review.
   `cmd/provin` and every other consumer drive the generated
   `didpbconnect.DIDServiceClient` directly, so the regenerated surface is
   immediately usable with no further client-side change.
+- `cmd/pipeline` `/metrics`: the OTel/Prometheus exposition bridge, gated
+  behind `provin.network.core.metrics.enabled` (default off, same as
+  `cmd/network`'s). A dedicated copy of `internal/netcompose`'s
+  `BuildMetricsHandler`/`WithMetrics`/`MaybeMountMetrics` (that package stays
+  banned in this binary's production import graph —
+  `depsguard_test.go` pins it) built directly over `pipeline/runtime`'s own
+  `LoopMetrics` (`dp.Metrics()`): the three data-plane counter families
+  (`provin_pipeline_emit_attempts_total`,
+  `provin_pipeline_emit_stripped_failures_total`,
+  `provin_pipeline_verify_results_total`) per configured loop, with no
+  `provin_audit_verdicts_total` family — this binary runs no audit runner
+  (that remains `cmd/network`'s own `/metrics` concern).
+- `provin` CLI: `pipeline create`/`process create` gain an optional
+  `--external-key <path>` flag switching issuance to the external-key path
+  (`didpb.ExternalPublicKeys`, `#20` above) — the registry registers the
+  caller's own locally-minted public halves instead of minting a keypair
+  server-side. The flag reads a small JSON file (keyed by subject DID,
+  `auth_public_key`/`signing_public_key` base64) that the separated
+  topology's own key holder exports; `deploy/quickstart/provision` is
+  today's one producer of that file.
+- `deploy/quickstart`: migrated from the retired `cmd/standalone` single-node
+  compose service to the separated topology — a `network` service
+  (`cmd/network`, `CONFIG_OVERLAY` convention) and a `pipeline` service
+  (`cmd/pipeline`, `CONFIG_FILE` convention, `depends_on: network: condition:
+  service_healthy`), each with its own `/readyz` healthcheck and published
+  host port (`8443`/`8444`). `provision` (the one-shot init container) now
+  also mints the pipeline's own local `#auth`/`#signing` keypairs directly
+  into a new `pipeline-data` volume — cmd/pipeline's boot preflights need
+  them present before its first boot, unlike the retired all-in-one binary's
+  in-process "loop idles until issued" model — and exports the public halves
+  to `pipeline-external-keys.json` for the external-key CLI flag above to
+  consume. `TestShippedConfigsParse` covers both new split `application.conf`
+  files under the real HOCON parser.
 
 ### Removed
 
-- `pipeline/chained/cmd/` placeholder (the standalone runtime is the one
+- `pipeline/chained/cmd/` placeholder (the standalone runtime was the one
   chained-loop binary).
+- `cmd/standalone` — the all-in-one node binary (control plane + data plane
+  in one process), deprecated since `cmd/network`'s addition earlier in this
+  line. Production is now `cmd/network` (control plane) + `cmd/pipeline`
+  (data plane) as two separately deployed, wire-composed binaries; no
+  all-in-one binary survives. The separated topology has its own end-to-end
+  proof: this repository's `cmd/pipeline/separated_e2e_test.go` and the
+  `provin.e2e` harness's 11 scenarios, both green against real
+  `cmd/network` + `cmd/pipeline` processes over a real broker. Coverage
+  cmd/standalone's own test suite carried that had no successor was
+  relocated to its honest home rather than dropped: `internal/httpserve` and
+  `internal/netcompose` gained their first direct unit tests for
+  `BuildServer`/`HTTP2Server`/`OuterRequestCapBytes`/`BuildMetricsHandler`/
+  `MaybeMountMetrics`/`WithMetrics` (previously exercised only incidentally,
+  through cmd/standalone), and `cmd/pipeline` gained a direct unit test for
+  its `pushRoutes`' PDP-denial (403) mapping (`push.go` there is cmd/standalone's
+  former copy, now the only one).
 
 ## [0.1.0] - 2026-07-12
 

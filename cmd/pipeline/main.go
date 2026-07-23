@@ -50,22 +50,18 @@ import (
 	"github.com/provin-line/oss/pipeline/transport/tlogship"
 )
 
-// /metrics is deliberately NOT mounted by this binary in PR3b:
-// internal/netcompose.MaybeMountMetrics/BuildMetricsHandler are off-limits
-// (netcompose is banned here — PR3b Task 8's depsguard pins it), and
-// duplicating the ~65-line otel/prometheus bridge is scoped out of this task
-// in favor of Deps wiring + guards + HTTP surface + lifecycle correctness.
-// PR3c follow-up: build the bridge directly over pipeline/runtime's own
-// LoopMetrics (which — unlike cmd/standalone's netcompose.LoopMetrics
-// field-copy — this binary would not even need to convert, since it never
-// imports netcompose).
+// meterScope is this binary's OTel instrumentation-scope name — the metrics
+// bridge's (metrics.go) self-identification. Every node binary reports
+// under its own import path rather than borrowing another's (cmd/network's
+// own meterScope, main.go there, is this constant's sibling).
+const meterScope = "github.com/provin-line/oss/cmd/pipeline"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// The CONFIG_FILE convention (T1): a short-lived, per-execution binary has
-	// no default location to fall back to, unlike cmd/network/cmd/standalone's
+	// no default location to fall back to, unlike cmd/network's
 	// CONFIG_OVERLAY-over-./config/application.conf layering.
 	cfg, err := hoconconfig.LoadFile("CONFIG_FILE")
 	if err != nil {
@@ -166,7 +162,7 @@ func main() {
 	// payloadClientFactory, wiring.go) signs RetainPayload as — guard 5,
 	// below, checks the latter fails closed at boot rather than silently at
 	// first emit. Provisioning them is an operator/CLI concern, out of this
-	// task's scope, same convention cmd/standalone follows.
+	// task's scope.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 
 	// Boot guard 5 (fail-closed, named, D9): by-reference retain
@@ -233,6 +229,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("pipeline: build http handler: %v", err)
 	}
+	// The /metrics bridge (metrics.go) composes OUTSIDE buildHandler, same as
+	// cmd/network's own composition (netcompose.WithMetrics's doc): the
+	// control-plane-shaped HTTP wiring above stays metrics-agnostic, and the
+	// endpoint exists only when config enables it (default off).
+	handler, err = MaybeMountMetrics(meterScope, coreCfg.MetricsEnabled, handler, dp.Metrics())
+	if err != nil {
+		log.Fatalf("pipeline: build metrics: %v", err)
+	}
+	if coreCfg.MetricsEnabled {
+		log.Printf("pipeline: metrics exposition mounted at /metrics")
+	}
 
 	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxPushBodySize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
@@ -255,15 +262,18 @@ func main() {
 // (liveness), /readyz (NATS + registry reachability + the external PDP when
 // relevant — see below), and the configured /ingest/<loop>/... push routes
 // via mountIngest. No ConnectRPC services of its own — this binary is a wire
-// CLIENT to the registry, never a server for it — and no /metrics (see the
-// package doc). natsHealthy is nil for a (guard-1-impossible-but-defensive)
-// zero-loop runtime; the readiness snapshot then reports no nats check
-// rather than a permanently-failing one.
+// CLIENT to the registry, never a server for it. /metrics is NOT mounted
+// here — main composes it OUTSIDE this function, over dp.Metrics(), the
+// same way cmd/network composes its own bridge outside ITS buildHandler
+// (see metrics.go's MaybeMountMetrics and its call site in main). natsHealthy
+// is nil for a (guard-1-impossible-but-defensive) zero-loop runtime; the
+// readiness snapshot then reports no nats check rather than a
+// permanently-failing one.
 //
 // hasPushIngress (branch review, P2 Codex fix) gates an added PDP
 // reachability check: this binary mounts no ConnectRPC services of its own
-// to be ready FOR (unlike cmd/network/cmd/standalone, which unconditionally
-// probe the PDP whenever the backend is external — they always mount
+// to be ready FOR (unlike cmd/network, which unconditionally
+// probes the PDP whenever the backend is external — it always mounts
 // PDP-gated RPC surfaces), but a push-ingress route IS PDP-guarded (push.go's
 // pushRoutes calls verifier.Verify, the SAME L1 seam an external PDP
 // backs) — so the check is added only when BOTH at least one loop mounts a
@@ -298,7 +308,7 @@ func buildHandler(guard *core.URLGuard, pipeCfg *pipelineconfig.Config, authCfg 
 // outerRequestCapBytes sizes the outermost raw-request-body limit. This
 // binary mounts exactly ONE inbound-body-reading HTTP class of its own — the
 // push-ingest route (apipush, bounded by max-push-body-size) — unlike
-// cmd/network/cmd/standalone, which each mount a full set of ConnectRPC
+// cmd/network, which mounts a full set of ConnectRPC
 // services with their own per-RPC read caps (credential, document, proof,
 // retain-chunk classes) that internal/netcompose.OuterRequestCapBytes must
 // cover; this binary is a wire CLIENT to those services, never their server,

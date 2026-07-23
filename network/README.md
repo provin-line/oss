@@ -1,7 +1,8 @@
 # network/ — Registry & Coordination Server
 
-The dplaax network services, exposed over ConnectRPC (h2c) by the node binary
-(`cmd/standalone`, which also runs the pipeline data plane):
+The dplaax network services, exposed over ConnectRPC (h2c) by the network node
+binary (`cmd/network`, control plane only — the data plane is a separate
+binary, `cmd/pipeline`):
 
 | Service | Responsibility |
 |---|---|
@@ -23,12 +24,10 @@ The registry only ever custodies and serves the verified prefix it is handed
 — it never re-signs. The shipper now rides `cmd/pipeline`: that binary ships
 every durable custody log it opens (emission, sink-receipt, and sink-reject
 logs alike), each signed as that log's own checkpoint-signer identity, with a
-final flush attempt at ordered shutdown before its log files close.
-`cmd/standalone` still does not ship — TlogService reads there still come
-from its in-process map, and it mirrors nothing. A terminal tail not yet
-mirrored is lost from the registry's view within the flush interval, and a
-process that loses its local volume rolls to a fresh log identity rather than
-resuming the old one.
+final flush attempt at ordered shutdown before its log files close. A terminal
+tail not yet mirrored is lost from the registry's view within the flush
+interval, and a process that loses its local volume rolls to a fresh log
+identity rather than resuming the old one.
 
 Plus raw HTTP: W3C DID resolution (`GET /did/.../did.json`), `GET /healthz`
 (liveness, static), and `GET /readyz` (readiness — dependency-aware: evidence
@@ -61,7 +60,7 @@ faithful read-back, and exhaustive listing.
 Deployments in the audit-reachable conformance class (source commitments, see
 [pipeline/source](../pipeline/source/README.md)) additionally require a
 **durable** VC store: retrospective audits resolve claimed source credentials long
-after issuance. The file-backed store the standalone node wires satisfies that
+after issuance. The file-backed store `cmd/network` wires satisfies that
 retention (subject to operational backup); the in-memory store
 (`vcresolver/memstore`) is test scaffolding and satisfies only the plain PoC
 posture.
@@ -110,7 +109,7 @@ but the DID grant needs an already-registered owner) and its production options.
 ## Layout
 
 ```
-cmd/standalone/   binary: config load, DI wiring, mux registration
+cmd/network/      binary: config load, DI wiring, mux registration
 config/           application.conf (operator layer)
 pkg/core/         merged config model, secret resolution, SSRF-resistant URL checks
 pkg/auth/         L1 JWT verification + authorization interceptor

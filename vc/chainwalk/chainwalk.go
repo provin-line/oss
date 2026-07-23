@@ -12,9 +12,10 @@
 // invariant, ordering consistency, the origin-has-no-predecessor rule, and
 // source-commitment consistency all live in the injected ChainCore. The real
 // core is vc.Verifier, which additionally resolves issuer DIDs and verifies
-// ed25519 proofs per credential (vc.Verifier.VerifyChain); 17e wires that real
-// core in the standalone, with vcresolver/client as the network resolver. Unit
-// tests still exercise assembly against a fake core. Splitting assembly from
+// ed25519 proofs per credential (vc.Verifier.VerifyChain); 17e wired that real
+// core into cmd/network's audit runner (internal/netcompose), with
+// vcresolver/client as the network resolver. Unit tests still exercise
+// assembly against a fake core. Splitting assembly from
 // semantics keeps the chain-structure rules in their single source of truth
 // (vc) rather than duplicated here.
 //
