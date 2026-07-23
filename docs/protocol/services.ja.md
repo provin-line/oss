@@ -2,9 +2,11 @@
 
 プロトコル定義（`api/protobuf/dplaax/*/v1`）が normative な RPC 契約 — per-RPC の request/response 形と認可 policy option はそこと生成コードにある。本ページは**責務と relying-party 契約**の正本: どの面が存在し、それぞれがどう認証され、consumer が何に依存してよいか。認証層そのものの仕様は [auth.ja.md](auth.ja.md)。
 
-## standalone ノードの HTTP 面
+## HTTP 面
 
-以下はすべてノードの単一 listener（`provin.network.core.listen-addr`）上で提供される。gate 凡例: **L1** = bearer + PDP interceptor / **L2** = per-RPC wireauth proof / **PDP** = raw-HTTP route 上の L1 相当判定 / **public** = 意図的に無認証。
+provin ノードは別々にデプロイされる 2 つのバイナリであり、それぞれが自分の HTTP listener（`provin.network.core.listen-addr`）を持つ — 以下のいずれも共有 listener 上で提供されることはない。gate 凡例: **L1** = bearer + PDP interceptor / **L2** = per-RPC wireauth proof / **PDP** = raw-HTTP route 上の L1 相当判定 / **public** = 意図的に無認証。
+
+### `cmd/network`（コントロールプレーン）
 
 | 面 | Gate | 責務 |
 | --- | --- | --- |
@@ -18,10 +20,21 @@
 | `dplaax.chain.v1.ChainPeerService` | **L2** | internet-facing な peer 協調: publisher 情報、subscription 登録、切断 |
 | `dplaax.payload.v1.PayloadService` | **L2** | internet-facing な by-reference payload 提供（`ResolvePayload`、streaming） |
 | `GET /did/{accountType}/{accountId}[/{resourcePath…}]/did.json` | public | W3C 式 DID resolution（[did/method.ja.md](../did/method.ja.md)） |
+
+### `cmd/pipeline`（データプレーン）
+
+| 面 | Gate | 責務 |
+| --- | --- | --- |
 | `POST /ingest/{loop}/push` | PDP | push 対応 source loop への HTTP ingest |
 | `GET /ingest/{loop}/health` | public | loop 別 ingest readiness probe |
 | `GET /healthz`, `GET /readyz` | public | liveness / readiness — [deployment.ja.md](../architecture/deployment.ja.md) 所有 |
-| `GET /metrics` | public・**config gate（default off）** | OpenTelemetry counter。service handler 合成の**外**で mount — [deployment.ja.md](../architecture/deployment.ja.md) 所有 |
+
+### `cmd/network` も提供する
+
+| 面 | Gate | 責務 |
+| --- | --- | --- |
+| `GET /healthz`, `GET /readyz` | public | 自分自身の独立した liveness / readiness インスタンス（自分の listener 上） |
+| `GET /metrics` | public・**config gate（default off）** | OpenTelemetry counter。service handler 合成の**外**で mount — [deployment.ja.md](../architecture/deployment.ja.md) 所有。`cmd/pipeline` はまだ mount していない（追跡中の follow-up） |
 
 relying party が依存してよい構造的事実 2 つ:
 

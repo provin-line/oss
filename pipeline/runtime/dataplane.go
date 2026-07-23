@@ -81,7 +81,7 @@ type Deps struct {
 	// loops (and receipt/emission registrars) wrap their signer with so each
 	// issued credential is published there (fail-closed round-trip check) before
 	// it is emitted downstream. Nil is the same semantics as an unconfigured
-	// vc-store-endpoint today: no publication. cmd/standalone's runtimewiring.go
+	// vc-store-endpoint today: no publication. cmd/pipeline's wiring.go
 	// constructs the concrete client (moved out of this package — the
 	// construction imports network/pkg/services/vcresolver/client).
 	CredentialPublisher CredentialPublisher
@@ -177,9 +177,9 @@ func parseDelivery(s string) contract.PayloadDelivery {
 // BEFORE the logs' file handles close, to flush each log's tail one last
 // time. Run used to close the logs the instant loops drained, leaving no
 // such window; Close gives a caller that window by making log/conn teardown
-// an explicit, separately-timed step. cmd/standalone, which has no
-// post-drain step of its own, calls Close immediately after Run returns —
-// identical timing to Run's old self-closing behavior.
+// an explicit, separately-timed step. A caller with no post-drain step of
+// its own can simply call Close immediately after Run returns — identical
+// timing to Run's old self-closing behavior.
 type Runtime struct {
 	conn       *natstransport.Conn // nil when there are zero loops
 	loops      []*transport.Loop
@@ -188,7 +188,9 @@ type Runtime struct {
 	// entry per constructed loop/aggregate, in construction order.
 	metrics []LoopMetrics
 	// tlogs is the emission-log registry (log id = producing output subject →
-	// log) that BuildHandler mounts the TlogService over.
+	// log); a control-plane TlogService could mount it for a map-only
+	// (non-mirrored) posture, though no current binary does — the separated
+	// topology mirrors these logs (D-T4) rather than mounting them directly.
 	tlogs map[string]tlog.Log
 	// tlogClosers releases the durable logs' file handles at teardown (the
 	// memlog fallback has nothing to close).
@@ -203,14 +205,16 @@ type Runtime struct {
 	// custodied: nothing durable to ship.
 	custodyLogs []CustodyLog
 	// pushBindings are the HTTP ingest surfaces of push-enabled source loops
-	// (push-ingress = true): cmd/standalone's BuildHandler mounts one apipush
+	// (push-ingress = true): cmd/pipeline's main mounts one apipush
 	// adapter per binding, read through PushBindings(). The bound publishers
 	// ride the shared conn — no separate teardown path.
 	pushBindings []PushBinding
 }
 
 // Tlogs returns the emission-log registry (log id = producing output subject
-// -> log). cmd/standalone's BuildHandler mounts the TlogService over it.
+// -> log). No current binary calls this: the separated topology mirrors
+// these logs to the registry (D-T4, CustodyLogs + the mirror shippers)
+// rather than mounting a map-only TlogService directly over them.
 func (r *Runtime) Tlogs() map[string]tlog.Log { return r.tlogs }
 
 // CustodyLog is one durable local log the mirror shipper custodies to the
@@ -236,27 +240,28 @@ type CustodyLog struct {
 func (r *Runtime) CustodyLogs() []CustodyLog { return r.custodyLogs }
 
 // PushBindings returns the HTTP ingest surfaces of every push-enabled source
-// loop. cmd/standalone's mountPushRoutes mounts one apipush adapter per
+// loop. cmd/pipeline's mountPushRoutes mounts one apipush adapter per
 // binding under /ingest/<name>/.
 func (r *Runtime) PushBindings() []PushBinding { return r.pushBindings }
 
 // Metrics returns the per-loop metrics wiring, one entry per constructed
-// loop/aggregate in construction order. cmd/standalone's /metrics bridge
-// polls these.
+// loop/aggregate in construction order. A /metrics bridge (internal/netcompose's
+// BuildMetricsHandler) polls these; cmd/pipeline does not yet mount one (see
+// its package doc).
 func (r *Runtime) Metrics() []LoopMetrics { return r.metrics }
 
 // Loops returns every constructed transport loop (source, sink, chained), in
-// construction order. cmd/standalone wires these into the by-reference
-// advertisement health gate (D-5) alongside Aggregates.
+// construction order. cmd/pipeline wires these into its own by-reference
+// advertisement health reporting (Task 10 D4) alongside Aggregates.
 func (r *Runtime) Loops() []*transport.Loop { return r.loops }
 
 // Aggregates returns every constructed aggregate process, in construction
-// order. cmd/standalone wires these into the by-reference advertisement
-// health gate (D-5) alongside Loops.
+// order. cmd/pipeline wires these into its own by-reference advertisement
+// health reporting (Task 10 D4) alongside Loops.
 func (r *Runtime) Aggregates() []*aggregate.Process { return r.aggregates }
 
 // Conn returns the runtime's shared NATS connection, or nil for a zero-loop
-// runtime that never dialed. cmd/standalone wires Conn().Healthy into the
+// runtime that never dialed. cmd/pipeline wires Conn().Healthy into the
 // /readyz NATS check.
 func (r *Runtime) Conn() *natstransport.Conn { return r.conn }
 
@@ -264,7 +269,7 @@ func (r *Runtime) Conn() *natstransport.Conn { return r.conn }
 // name (already validated as a URL-safe segment at config load), a Publisher on
 // the loop's ingress subject over the shared data-plane connection, and the
 // loop's subscription-readiness latch. Build produces the bindings;
-// cmd/standalone's BuildHandler mounts one apipush adapter per binding at
+// cmd/pipeline's main mounts one apipush adapter per binding at
 // /ingest/<name>/.
 type PushBinding struct {
 	Name      string
@@ -275,7 +280,7 @@ type PushBinding struct {
 // readySubscriber decorates a transport.Subscriber with a readiness latch that
 // closes when Subscribe returns without error — the Subscriber contract confirms
 // the subscription with the broker before returning, so the latch is exactly
-// "the loop can now receive". cmd/standalone's push route gates on it: core NATS
+// "the loop can now receive". cmd/pipeline's push route gates on it: core NATS
 // silently drops a publish with no subscriber, so a 202 before the latch would be
 // a lie.
 type readySubscriber struct {
@@ -305,8 +310,8 @@ func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
 // empty/absent pipeline config never requires a live broker (it does not
 // regress the HTTP-only deployment). Otherwise it requires cfg.NATS to be
 // populated (a runtime.Config is, by construction, NATS-or-nothing — the
-// caller's transport selection is its own concern; see cmd/standalone's
-// runtimeConfigFrom, which maps a non-NATS transport to zero mapped loops)
+// caller's transport selection is its own concern; see cmd/pipeline's
+// pipelineRuntimeConfigFrom, which maps a non-NATS transport to zero mapped loops)
 // and dials once as the node account, then builds one loop per config entry
 // over that shared connection, dispatching on role: a source loop signs
 // FirstDrop credentials with keyStore; a sink loop verifies upstream
@@ -410,7 +415,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 		return &sinkRejectLog{log: fl}, nil
 	}
 	// publisher is deps.CredentialPublisher verbatim: nil means no
-	// vc-store-endpoint was configured (cmd/standalone's runtimewiring.go
+	// vc-store-endpoint was configured (cmd/pipeline's wiring.go
 	// constructs the concrete client and leaves this nil when
 	// pipeCfg.VCStoreEndpoint is empty) — the same semantics Build enforced
 	// itself before the VC-client construction moved out to the composition

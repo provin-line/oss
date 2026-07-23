@@ -124,8 +124,8 @@ func TestPeer_PublisherInfo_PublisherHealthGate_PerPublisher(t *testing.T) {
 	}
 }
 
-// Composing WithByReferenceHealth (node-global, cmd/standalone) and
-// WithPublisherHealth (per-publisher, cmd/network report-mode) on the SAME
+// Composing WithByReferenceHealth (node-global; no current binary wires it)
+// and WithPublisherHealth (per-publisher, cmd/network report-mode) on the SAME
 // Service is a composition-root error — New panics rather than silently
 // picking one model, regardless of option order.
 func TestNew_BothHealthGates_Panics(t *testing.T) {

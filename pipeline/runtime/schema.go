@@ -16,8 +16,8 @@ import (
 // and Deprecated fields (Name/Version/Prerelease are addressing, not content,
 // and are never read here). A runtime-owned type so this package stays
 // network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
-// rule 2); cmd/standalone's SchemaGetter adapter converts the real registry
-// service's *store.Schema into this shape.
+// rule 2); cmd/pipeline's wireSchemaGetter adapter converts its wire client's
+// response into this shape.
 type Schema struct {
 	Format     string
 	Body       []byte
@@ -29,8 +29,11 @@ type Schema struct {
 // interface shape (method name/params), but returns the runtime-owned Schema
 // above instead of the network-side store.Schema — internal/netcompose keeps
 // its own SchemaGetter for the network-side SchemaBridge (the verify-path
-// bridge to vc.SchemaResolver); two layers, two owners, cmd/standalone
-// adapts the one real schema-registry service to both.
+// bridge to vc.SchemaResolver, used in-process by cmd/network, which holds
+// the real schema-registry service); this package's own SchemaGetter is
+// instead satisfied by cmd/pipeline's wireSchemaGetter, a WIRE client to
+// SchemaService.GetSchema — two layers, two owners, no shared instance
+// (cmd/pipeline never runs the registry itself).
 type SchemaGetter interface {
 	Get(ctx context.Context, name, version string) (*Schema, error)
 }
@@ -39,8 +42,8 @@ type SchemaGetter interface {
 // (directly, or wrapped so errors.Is still matches) when the requested
 // (name, version) pair is not registered. resolveSchemaRefAtBoot maps it to a
 // legible "not registered" boot error, distinct from a transient/backend
-// failure. cmd/standalone's adapter maps the real registry's
-// store.ErrNotFound to this sentinel.
+// failure. cmd/pipeline's wireSchemaGetter maps its wire client's not-found
+// response to this sentinel.
 var ErrSchemaNotFound = errors.New("runtime: schema not registered")
 
 // resolveSchemaRefAtBoot resolves a config schema-ref short-form

@@ -45,7 +45,7 @@ var ErrHeadNotAdmitted = errors.New("auditor: head is not admitted in the local 
 // registering caller is vouching for are what this node actually holds — and
 // is NOT itself persisted: receipts.Put and queue.Add are keyed by the head's
 // BODY address, parity with the in-process aggregate emission path
-// (cmd/standalone's emissionRegistrar) and the audit Runner, both of which
+// (pipeline/runtime's emissionRegistrar) and the audit Runner, both of which
 // already key every read/write by body address. This is a KNOWN, ACCEPTED gap
 // (the pre-existing verdict/variant partition trap, P0-1 slices B/C): a
 // verdict names the body it audited, not which variant proved admission for

@@ -167,13 +167,15 @@ func TestNativeTLS_RouteIntegration(t *testing.T) {
 // writeSelfSignedCert generates an ed25519 self-signed cert for 127.0.0.1 and
 // writes cert.pem / key.pem to a temp dir, returning their paths.
 //
-// Duplicated from cmd/standalone/main_test.go's helper of the same name: Task 4
-// moved this file into internal/netcompose beside the code it exercises, but
-// cmd/standalone/main_test.go and cmd/standalone/bootsmoke_test.go still need
-// their own copy too, and identifiers declared in a _test.go file are invisible
-// outside that package's own test binary — there is no alias (compat.go or
-// otherwise) that reaches a _test.go symbol across a package boundary. Kept
-// byte-for-byte equivalent to the original.
+// Originally duplicated from cmd/standalone/main_test.go's helper of the same
+// name (Task 4 moved this file into internal/netcompose beside the code it
+// exercises, but cmd/standalone/main_test.go and cmd/standalone/bootsmoke_test.go
+// still needed their own copy too, and identifiers declared in a _test.go file
+// are invisible outside that package's own test binary — there is no alias
+// (compat.go or otherwise) that reaches a _test.go symbol across a package
+// boundary). cmd/standalone is gone (PR3c); cmd/network's and cmd/pipeline's
+// own bootsmoke tests carry their own copies today. Kept byte-for-byte
+// equivalent to the original.
 func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)

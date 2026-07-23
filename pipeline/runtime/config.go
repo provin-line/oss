@@ -7,9 +7,9 @@ import (
 )
 
 // Loop roles. String-identical to network/pkg/pipelineconfig's Role* constants
-// (cmd/standalone's runtimeConfigFrom copies the loaded config's Role verbatim)
-// so a loop's metrics-bookkeeping Role label does not shift across the severance
-// that gave this package its own copy of the type.
+// (cmd/pipeline's pipelineRuntimeConfigFrom copies the loaded config's Role
+// verbatim) so a loop's metrics-bookkeeping Role label does not shift across
+// the severance that gave this package its own copy of the type.
 const (
 	RoleSource    = "source"
 	RoleSink      = "sink"
@@ -38,8 +38,8 @@ const (
 )
 
 // NATSConfig holds the nats connection parameters Build dials with — the
-// exact field set natstransport.Config takes. cmd/standalone's
-// runtimeConfigFrom copies these straight out of the loaded chain config.
+// exact field set natstransport.Config takes. cmd/pipeline's
+// pipelineRuntimeConfigFrom copies these straight out of the loaded chain config.
 type NATSConfig struct {
 	URL         string
 	AccountSeed string
@@ -49,10 +49,10 @@ type NATSConfig struct {
 // Config is the runtime-owned data-plane configuration: the loops this node
 // runs, the nats parameters to dial with, and the two durable-log root
 // directories (TlogDir/RejectLogDir — config, not a dependency, so they live
-// here rather than on Deps). cmd/standalone's runtimeConfigFrom maps its own
-// chainconfig.Config + pipelineconfig.Config into this shape — the drift
-// guard between the two config trees is runtimewiring_test.go's golden
-// mapping test.
+// here rather than on Deps). cmd/pipeline's pipelineRuntimeConfigFrom maps
+// its own chainconfig.Config + pipelineconfig.Config into this shape — the
+// drift guard between the two config trees is cmd/pipeline's own
+// wiring_test.go golden mapping test.
 type Config struct {
 	NATS         NATSConfig
 	Loops        []LoopConfig
@@ -91,7 +91,7 @@ type SourceConfig struct {
 	// short-form, resolved against the registry at boot.
 	SchemaRef string
 	// PushIngress exposes this loop's ingress as an HTTP push endpoint —
-	// cmd/standalone mounts one apipush adapter per PushBinding.
+	// cmd/pipeline mounts one apipush adapter per PushBinding.
 	PushIngress bool
 }
 

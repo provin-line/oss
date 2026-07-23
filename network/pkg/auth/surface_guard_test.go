@@ -25,7 +25,7 @@ import (
 // extending this list, the snapshot, AND the provin.auth scaffold surface in
 // the same change.
 var httpOnlySurface = []string{
-	"ingest:push", // cmd/standalone push.go — the /ingest/<name>/ HTTP push surface
+	"ingest:push", // cmd/pipeline push.go — the /ingest/<name>/ HTTP push surface
 }
 
 var policyOption = regexp.MustCompile(`o3co\.authz\.v1\.policy\)\s*=\s*\{\s*resource:\s*"([^"]+)",\s*action:\s*"([^"]+)"\s*\}`)

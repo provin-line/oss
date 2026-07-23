@@ -37,9 +37,7 @@ network/        registry & coordination services (control-plane library + handle
 pipeline/       Pipeline Process peer catalog + shared mechanics
 cmd/network/    network node binary (registry control plane only)
 cmd/pipeline/   pipeline node binary (data plane only; wire-composed against a
-                cmd/network registry — the separated alternative to standalone)
-cmd/standalone/ all-in-one node binary (control plane + data plane) — deprecated;
-                cmd/network + cmd/pipeline are its separated replacement
+                cmd/network registry)
 cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did

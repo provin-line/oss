@@ -111,8 +111,8 @@ func mirrorReadCapBytes(maxBatchBytes int) int {
 // the raw body is larger than the decoded cap. It is deliberately generous —
 // the tight bounds are the per-RPC caps below it; this only closes the
 // pre-Connect (h2c-upgrade) path that no interceptor guards. Relocated here
-// (from cmd/standalone/main.go) alongside the two per-RPC constants it sizes
-// against, which stay unexported/internal to this file.
+// (formerly cmd/standalone/main.go) alongside the two per-RPC constants it
+// sizes against, which stay unexported/internal to this file.
 //
 // maxRetainPayloadSize is RetainPayload's cumulative bound, not a per-frame
 // one: http.MaxBytesHandler counts TOTAL bytes read across the whole HTTP
@@ -123,10 +123,10 @@ func mirrorReadCapBytes(maxBatchBytes int) int {
 // per-RPC connect.WithReadMaxBytes mount option).
 //
 // maxMirrorBatchBytes is tlog-mirror.max-batch-bytes when a mirror store is
-// wired (cmd/network), or 0 when it is not (cmd/standalone never mounts the
-// MirrorLogSegment cap override, so it contributes nothing here — passing
-// the config value anyway would only widen the outer cap for a class this
-// binary never mounts at that width). A non-zero value is run through the
+// wired (cmd/network), or 0 when it is not — a caller with no mirror store
+// never mounts the MirrorLogSegment cap override, so it contributes nothing
+// here (passing the config value anyway would only widen the outer cap for a
+// class that caller never mounts at that width). A non-zero value is run through the
 // SAME mirrorReadCapBytes derivation the mount site uses, never a bare
 // max-batch-bytes, so this function and the mount can never disagree about
 // what MirrorLogSegment's legitimate ceiling is.
@@ -258,7 +258,7 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // maxRetainChunkSize/maxRetainPayloadSize are the max-retain-chunk-size /
 // max-retain-payload-size config quotas (pipelineconfig).
 // mirror is the D-T4 mirror-custody wiring (see MirrorWiring's doc): nil
-// keeps today's map-only TlogService behavior (cmd/standalone); cmd/network
+// keeps the map-only TlogService behavior; cmd/network
 // opens a mirrorstore.Store and passes it here. When non-nil, MirrorLogSegment
 // additionally mounts under a CREDENTIAL-class read cap (sink-receipt
 // records can carry full credentials, exceeding the proof-class cap every
@@ -341,7 +341,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// the arbitrary-hash amplification guard. ResolveVariantBody is the
 	// narrowest local-store read that both proves admission of those exact
 	// bytes AND resolves the body address EvidenceService.Register keys its
-	// receipt/queue writes by (parity with cmd/standalone's
+	// receipt/queue writes by (parity with pipeline/runtime's own
 	// emissionRegistrar and the audit Runner, both already
 	// body-address-keyed) — see its doc for why ResolveVariant's own
 	// (bodyAddress, wireVariantID) signature cannot serve this directly.
@@ -367,8 +367,8 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	proofCap := connect.WithReadMaxBytes(maxProofRequestBytes)
 	docCap := connect.WithReadMaxBytes(maxDocumentRequestBytes)
 	// ReportEmitHealth is mounted on the operator surface only when emitHealth
-	// is wired (cmd/network); cmd/standalone's OperatorHandler leaves it
-	// Unimplemented — it has no report-mode consumer for this RPC. peerVerifier
+	// is wired (cmd/network); a caller with no report-mode consumer for this
+	// RPC leaves OperatorHandler's implementation Unimplemented. peerVerifier
 	// (built above for the L2 surfaces) is reused: ReportEmitHealth is "L1 +
 	// wireauth", so it needs the SAME DID-resolution + nonce-store
 	// infrastructure.
@@ -458,9 +458,9 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// ("…/TlogService/") registered above, REGARDLESS of registration order
 	// (longest/most-specific pattern wins — the documented
 	// net/http.ServeMux precedence rule), so the other three TlogService
-	// RPCs stay on proofCap. cmd/standalone (mirror == nil) registers no
+	// RPCs stay on proofCap. A caller with mirror == nil registers no
 	// override: MirrorLogSegment there still routes through the subtree
-	// handler at proofCap, unchanged from today.
+	// handler at proofCap.
 	if mirror != nil {
 		mirrorMethod := tlogpb.File_dplaax_tlog_v1_tlog_proto.Services().ByName("TlogService").Methods().ByName("MirrorLogSegment")
 		mirrorHandler := connect.NewUnaryHandler(

@@ -5,8 +5,9 @@ package runtime
 // from internal/netcompose/metrics.go's EmitCounters so those same concrete
 // types satisfy both structurally — this package no longer imports
 // internal/netcompose (network/ and pipeline/ never import each other,
-// AGENTS.md rule 2); cmd/standalone converts a []LoopMetrics to
-// []netcompose.LoopMetrics before handing it to the metrics bridge.
+// AGENTS.md rule 2); a composition root converts a []LoopMetrics to
+// []netcompose.LoopMetrics before handing it to the metrics bridge (no
+// current binary does this yet — see Runtime.Metrics()'s doc).
 type EmitCounters interface {
 	EmitSuccesses() uint64
 	EmitFailures() uint64
@@ -32,7 +33,7 @@ type VerifyCounts interface {
 // followed (a Role* constant value), and the non-nil accessors decide which
 // metric families the loop participates in. Field-shape mirrors
 // internal/netcompose's own LoopMetrics (which the metrics bridge — the
-// composition root's OTel/Prometheus wiring — still consumes); cmd/standalone
+// composition root's OTel/Prometheus wiring — consumes); a composition root
 // field-copies between the two so this package never imports the bridge's
 // OTel/Prometheus dependency graph.
 type LoopMetrics struct {

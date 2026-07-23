@@ -2,8 +2,8 @@
 // pub-sub backend (nats in production, noop in debug builds) and carries the nats
 // parameters (endpoint, account/trust-root seeds, resolver directory, node
 // identity). It owns only the config contract (its reference.conf + a fail-closed
-// loader); the values feed the standalone mount's infra.Operator + subscriber
-// wiring. The structural "noop only in a dev build" guarantee lives in the
+// loader); the values feed cmd/network's and cmd/pipeline's infra.Operator +
+// subscriber wiring. The structural "noop only in a dev build" guarantee lives in the
 // build-tagged operator seam, not here — this layer validates shape and reads
 // seeds.
 package chainconfig
@@ -67,9 +67,7 @@ type Config struct {
 	// EmitHealth configures the ReportEmitHealth publisher-scoped by-reference
 	// advertisement gate (Task 10 D4). Loaded unconditionally (it applies
 	// regardless of Transport): cmd/network's emithealth.Store and
-	// chainmanager.WithPublisherHealth read it; cmd/standalone loads it too but
-	// does not consume it (it continues to gate advertisement with its own
-	// in-process WithByReferenceHealth).
+	// chainmanager.WithPublisherHealth read it.
 	EmitHealth EmitHealthConfig
 }
 

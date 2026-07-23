@@ -22,8 +22,8 @@ import (
 // Writer appends NDJSON records to a file. Concurrent Writes never interleave
 // (each line is written whole under the embedded writer's mutex). Two loops
 // delivering to the same path must SHARE one Writer — construct once per
-// cleaned path (cmd/standalone does this) so cross-loop lines cannot
-// interleave either.
+// cleaned path (pipeline/runtime.Build does this, keyed by path, for every
+// composer) so cross-loop lines cannot interleave either.
 type Writer struct {
 	*console.Writer
 }

@@ -66,7 +66,7 @@ func TestNetwork_BootRejectsConfiguredPipelineLoop(t *testing.T) {
 }
 
 // This binary always runs the peer-fetching batch resolver (Task 9): builders build
-// unconditionally now, and unlike cmd/standalone this binary can never gate the runner on
+// unconditionally now, and this binary can never gate the runner on
 // pipeCfg.HasConsumingLoop() (the guard above enforces zero loops here, so that predicate
 // is always false). The resolver's peer fetches present provin.network.pipeline.vc-store-
 // bearer against L1-protected peers regardless of local loops, so an empty bearer must

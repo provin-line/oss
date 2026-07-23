@@ -32,7 +32,8 @@ const (
 // CoreConfig is the server foundation's typed configuration. Every value comes
 // from reference.conf (no Go-side defaults); an invalid value is a boot error.
 type CoreConfig struct {
-	// ListenAddr is the host:port the standalone binary serves on.
+	// ListenAddr is the host:port the node binary (cmd/network or
+	// cmd/pipeline) serves on.
 	ListenAddr string
 	// DataDir roots durable YAML state (stores live under it).
 	DataDir string

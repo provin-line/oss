@@ -604,6 +604,22 @@ closure required, now met with executed evidence rather than review.
 
 - `pipeline/chained/cmd/` placeholder (the standalone runtime is the one
   chained-loop binary).
+- `cmd/standalone` — the all-in-one node binary (control plane + data plane
+  in one process), deprecated since `cmd/network`'s addition earlier in this
+  line. Production is now `cmd/network` (control plane) + `cmd/pipeline`
+  (data plane) as two separately deployed, wire-composed binaries; no
+  all-in-one binary survives. The separated topology has its own end-to-end
+  proof: this repository's `cmd/pipeline/separated_e2e_test.go` and the
+  `provin.e2e` harness's 11 scenarios, both green against real
+  `cmd/network` + `cmd/pipeline` processes over a real broker. Coverage
+  cmd/standalone's own test suite carried that had no successor was
+  relocated to its honest home rather than dropped: `internal/httpserve` and
+  `internal/netcompose` gained their first direct unit tests for
+  `BuildServer`/`HTTP2Server`/`OuterRequestCapBytes`/`BuildMetricsHandler`/
+  `MaybeMountMetrics`/`WithMetrics` (previously exercised only incidentally,
+  through cmd/standalone), and `cmd/pipeline` gained a direct unit test for
+  its `pushRoutes`' PDP-denial (403) mapping (`push.go` there is cmd/standalone's
+  former copy, now the only one).
 
 ## [0.1.0] - 2026-07-12
 

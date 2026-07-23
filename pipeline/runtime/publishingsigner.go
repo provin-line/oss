@@ -23,7 +23,8 @@ type fullSigner interface {
 // stays network-agnostic (network/ and pipeline/ never import each other,
 // AGENTS.md rule 2); a Go interface method's return type must match exactly
 // for structural satisfaction, so CredentialPublisher cannot simply reuse the
-// network-side struct — cmd/standalone's adapter converts between the two.
+// network-side struct — cmd/pipeline's credentialPublisherAdapter (wiring.go)
+// converts between the two.
 type StoredCredential struct {
 	// BodyAddress is the server-recomputed content address ("sha256:<hex>").
 	BodyAddress string
@@ -33,7 +34,7 @@ type StoredCredential struct {
 }
 
 // CredentialPublisher publishes an issued credential to the VC store and
-// returns what the server assigned it. cmd/standalone's runtimewiring.go
+// returns what the server assigned it. cmd/pipeline's wiring.go
 // adapts a *vcresolverclient.Resolver to this interface (the exact method
 // this package's earlier, unexported credentialPublisher named — exported as
 // part of the boundary severance since it is now Deps' field type).

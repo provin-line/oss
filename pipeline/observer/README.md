@@ -16,7 +16,7 @@ field, and observers are invoked fire-and-forget after every outcome.
   adapter. Opt-in: it is not wired into any runtime by default.
 - `vcobserver/` — (planned) a store-backed observer. The audit-critical storage
   paths ship WITHOUT it today: issued credentials are published to the network
-  VC store by the data-plane wiring's VC-store client (`cmd/standalone`,
+  VC store by the data-plane wiring's VC-store client (`cmd/pipeline`,
   `vc-store-endpoint`), and verified ingress credentials are persisted via
   `contract.IngressVCStore` — see below.
 

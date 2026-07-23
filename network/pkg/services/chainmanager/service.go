@@ -66,8 +66,9 @@ type Service struct {
 	// pre-degradation behavior and every existing constructor/test.
 	//
 	// Mutually exclusive with publisherHealthLookup below (enforced in New):
-	// this is the node-global, in-process model (cmd/standalone); that is the
-	// per-publisher, report-mode model (cmd/network).
+	// this is the node-global, in-process model (no current binary wires it;
+	// cmd/standalone did before its retirement); that is the per-publisher,
+	// report-mode model (cmd/network).
 	byRefHealthy func() bool
 
 	// publisherHealthLookup, when non-nil, resolves a PER-PUBLISHER by-reference

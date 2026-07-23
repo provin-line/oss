@@ -7,8 +7,8 @@
 //
 // It imports only the generated client, the vc credential type, and connect —
 // never the vcresolver service domain, and never pipeline/ (the compile-time
-// chainwalk.CredentialResolver assertion lives in the consumer, cmd/standalone,
-// to keep network → pipeline out of this package). The dependency points inward,
+// chainwalk.CredentialResolver assertion lives in the consumer, cmd/pipeline's
+// wiring.go, to keep network → pipeline out of this package). The dependency points inward,
 // so there is no service-to-service or layer cycle. Mirrors signer/client.
 package client
 

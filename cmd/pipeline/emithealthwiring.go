@@ -172,9 +172,11 @@ func cadenceFromReturnedTTL(ttl time.Duration) time.Duration {
 // and pipeline/runtime.LoopMetrics.Stripped's concrete value satisfies
 // structurally whenever a loop dual-emits (D-6 — every producing loop does,
 // since buildDeps always wires a PayloadStore). internal/netcompose.
-// StrippedPublishHealthSource is this binary's counterpart on
-// cmd/standalone's side (this binary must not import internal/netcompose;
-// same method, independent declaration).
+// StrippedPublishHealthSource is this binary's structurally-independent
+// counterpart (this binary must not import internal/netcompose; same
+// method, independent declaration) — no current binary wires that
+// node-global gate (cmd/standalone did before its retirement; cmd/network
+// uses the per-publisher report-mode gate instead).
 type emitHealthSource interface {
 	StrippedPublishHealthy() bool
 }

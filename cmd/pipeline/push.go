@@ -48,9 +48,9 @@ func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding,
 // this module: bearer from the Authorization header into the context, then
 // auth.Verifier.Verify with resource "ingest", action "push" (proto
 // policy-option naming convention). Missing/empty bearer → 401; any Verify
-// failure → 403 (mirrors cmd/standalone's identical posture — this binary
-// mounts no ConnectRPC services of its own, so there is no interceptor chain
-// to share this check with; it is enforced here directly instead).
+// failure → 403 — this binary mounts no ConnectRPC services of its own, so
+// there is no interceptor chain to share this check with; it is enforced
+// here directly instead.
 func pushRoutes(inner http.Handler, verifier auth.Verifier, ready <-chan struct{}) http.Handler {
 	requireReady := func(w http.ResponseWriter) bool {
 		select {

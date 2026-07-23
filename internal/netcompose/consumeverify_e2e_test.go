@@ -20,12 +20,15 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// capProcessDoc and capOwnerDoc are duplicated from cmd/standalone/crossnode_e2e_test.go's
-// helpers of the same name: Task 4 moved this file into internal/netcompose beside the code it
-// exercises, but crossnode_e2e_test.go (whose own capstone tests still need them) stays behind,
-// and identifiers declared in a _test.go file are invisible outside that package's own test
-// binary — there is no alias (compat.go or otherwise) that reaches a _test.go symbol across a
-// package boundary. Kept byte-for-byte equivalent to the originals.
+// capProcessDoc and capOwnerDoc were originally duplicated from
+// cmd/standalone/crossnode_e2e_test.go's helpers of the same name (Task 4
+// moved this file into internal/netcompose beside the code it exercises, but
+// that package's own capstone tests still needed a copy too, and identifiers
+// declared in a _test.go file are invisible outside that package's own test
+// binary — there is no alias (compat.go or otherwise) that reaches a
+// _test.go symbol across a package boundary). cmd/standalone is gone
+// (PR3c), but this copy remains this package's own fixture. Kept
+// byte-for-byte equivalent to the originals.
 func capProcessDoc(processDID, owner string, pub []byte) *did.DIDDocument {
 	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
 	if err != nil {

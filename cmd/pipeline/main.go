@@ -56,16 +56,16 @@ import (
 // duplicating the ~65-line otel/prometheus bridge is scoped out of this task
 // in favor of Deps wiring + guards + HTTP surface + lifecycle correctness.
 // PR3c follow-up: build the bridge directly over pipeline/runtime's own
-// LoopMetrics (which — unlike cmd/standalone's netcompose.LoopMetrics
-// field-copy — this binary would not even need to convert, since it never
-// imports netcompose).
+// LoopMetrics (this binary would not even need to convert to
+// netcompose.LoopMetrics the way cmd/standalone's field-copy once did,
+// since it never imports netcompose).
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// The CONFIG_FILE convention (T1): a short-lived, per-execution binary has
-	// no default location to fall back to, unlike cmd/network/cmd/standalone's
+	// no default location to fall back to, unlike cmd/network's
 	// CONFIG_OVERLAY-over-./config/application.conf layering.
 	cfg, err := hoconconfig.LoadFile("CONFIG_FILE")
 	if err != nil {
@@ -166,7 +166,7 @@ func main() {
 	// payloadClientFactory, wiring.go) signs RetainPayload as — guard 5,
 	// below, checks the latter fails closed at boot rather than silently at
 	// first emit. Provisioning them is an operator/CLI concern, out of this
-	// task's scope, same convention cmd/standalone follows.
+	// task's scope.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 
 	// Boot guard 5 (fail-closed, named, D9): by-reference retain
@@ -262,8 +262,8 @@ func main() {
 //
 // hasPushIngress (branch review, P2 Codex fix) gates an added PDP
 // reachability check: this binary mounts no ConnectRPC services of its own
-// to be ready FOR (unlike cmd/network/cmd/standalone, which unconditionally
-// probe the PDP whenever the backend is external — they always mount
+// to be ready FOR (unlike cmd/network, which unconditionally
+// probes the PDP whenever the backend is external — it always mounts
 // PDP-gated RPC surfaces), but a push-ingress route IS PDP-guarded (push.go's
 // pushRoutes calls verifier.Verify, the SAME L1 seam an external PDP
 // backs) — so the check is added only when BOTH at least one loop mounts a
@@ -298,7 +298,7 @@ func buildHandler(guard *core.URLGuard, pipeCfg *pipelineconfig.Config, authCfg 
 // outerRequestCapBytes sizes the outermost raw-request-body limit. This
 // binary mounts exactly ONE inbound-body-reading HTTP class of its own — the
 // push-ingest route (apipush, bounded by max-push-body-size) — unlike
-// cmd/network/cmd/standalone, which each mount a full set of ConnectRPC
+// cmd/network, which mounts a full set of ConnectRPC
 // services with their own per-RPC read caps (credential, document, proof,
 // retain-chunk classes) that internal/netcompose.OuterRequestCapBytes must
 // cover; this binary is a wire CLIENT to those services, never their server,

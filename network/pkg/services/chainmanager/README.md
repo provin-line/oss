@@ -48,8 +48,9 @@ wire subject:
 
 - `subjectForMode(publisherDID, mode)` (service-internal): `inline` exports
   the plain `publisherDID`; `by-reference` exports `"byref." + publisherDID`
-  (`ByReferenceSubjectPrefix`, exported so a producing loop's composition
-  root — `cmd/standalone` — can bind its dual-emit stripped-form publish to
+  (`ByReferenceSubjectPrefix`, exported so a producing loop
+  (`pipeline/runtime/dataplane.go`, via `wireprofile`'s alias) can bind its
+  dual-emit stripped-form publish to
   the EXACT same subject, without duplicating the prefix convention). Prefix,
   not suffix: a dplaax DID's registry segment may itself contain dots, so a
   suffix scheme cannot rule out colliding with a DID that happens to end in a
@@ -164,7 +165,7 @@ package owns only the retained shape.
 
 The handler wires it in as an optional capability: `NewPeerWithEvidence(svc, v,
 rec)` configures a `RelationshipRecorder` (nil = disabled, `NewPeer`'s
-behavior unchanged), and the standalone server wires a durable filelog under
+behavior unchanged), and `cmd/network` wires a durable filelog under
 `chain/relationship-evidence`. RegisterSubscription and Disconnect each record
 evidence AFTER the domain call succeeds — so a rejected/failed relationship
 change (unknown publisher, ownership failure) is never retained as an

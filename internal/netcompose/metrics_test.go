@@ -1,17 +1,35 @@
-package main
+package netcompose
+
+// Relocated from cmd/standalone/metrics_test.go (PR3c: cmd/standalone
+// retired). BuildMetricsHandler/MaybeMountMetrics/WithMetrics are this
+// package's own exported functions; these tests exercise them directly with
+// fake counters, with no cmd/standalone-specific composition. Before this
+// move, cmd/standalone/metrics_test.go was the ONLY test coverage any of the
+// three had anywhere in the repo — cmd/network calls MaybeMountMetrics from
+// its own main() but carried no unit test of the bridge's own family/gate
+// contract.
+//
+// TestMetrics_RealEmitReachesExposition (a REAL source loop's delivered
+// emit reaching this bridge through pipeline/runtime.Build +
+// netcomposeMetricsFrom-style field copy) was NOT moved: that composition —
+// a data-plane Runtime's LoopMetrics converted and handed to this bridge —
+// has no current caller. cmd/network runs no data-plane loops of its own
+// (always passes nil loops to MaybeMountMetrics); cmd/pipeline is the data
+// -plane composer but does not import this package at all (AGENTS.md layer
+// rule 2) and does not yet mount this bridge (see its main.go's own /metrics
+// doc comment — a named PR3c follow-up). The family-mapping logic that test
+// also exercised is still covered by TestMetricsHandler_FamiliesFollowCapabilities
+// below; only the "a REAL dataplane counter increments and becomes visible
+// through this bridge" property is presently unproven in any binary.
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/provin-line/oss/network/pkg/chainconfig"
-	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
-	natstransport "github.com/provin-line/oss/pipeline/transport/nats"
 )
+
+const metricsTestScope = "github.com/provin-line/oss/internal/netcompose"
 
 type fakeEmits struct{ ok, fail uint64 }
 
@@ -75,7 +93,7 @@ func findMetric(body, family string, labels ...string) (string, bool) {
 // appears exactly when a verdict source exists. Families a loop lacks the
 // capability for must not appear for it.
 func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
-	lms := []loopMetrics{
+	lms := []LoopMetrics{
 		{Name: "src-a", Role: "source", Emits: fakeEmits{ok: 3, fail: 1}, Stripped: fakeStripped{n: 2}},
 		{Name: "sink-b", Role: "sink", Verify: fakeVerify{counts: map[string]uint64{
 			"verified": 4, "failed": 0, "indeterminate": 1, "error": 0,
@@ -84,9 +102,9 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 	verdicts := func() map[string]uint64 {
 		return map[string]uint64{"verified": 5, "failed": 0, "indeterminate": 1}
 	}
-	h, err := buildMetricsHandler(meterScope, lms, verdicts)
+	h, err := BuildMetricsHandler(metricsTestScope, lms, verdicts)
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
 	body := scrape(t, h)
 
@@ -126,11 +144,11 @@ func TestMetricsHandler_FamiliesFollowCapabilities(t *testing.T) {
 // Without a verdict source (no audit runner configured) the audit family is
 // absent entirely — family presence is the capability contract.
 func TestMetricsHandler_NoAuditRunnerNoAuditFamily(t *testing.T) {
-	h, err := buildMetricsHandler(meterScope, []loopMetrics{
+	h, err := BuildMetricsHandler(metricsTestScope, []LoopMetrics{
 		{Name: "src-a", Role: "source", Emits: fakeEmits{}},
 	}, nil)
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
 	body := scrape(t, h)
 	if strings.Contains(body, "provin_audit_verdicts") {
@@ -148,9 +166,9 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 	inner := http.NewServeMux() // a real mux: unknown routes 404
 	inner.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	disabled, err := maybeMountMetrics(meterScope, false, inner, nil, nil)
+	disabled, err := MaybeMountMetrics(metricsTestScope, false, inner, nil, nil)
 	if err != nil {
-		t.Fatalf("maybeMountMetrics(disabled): %v", err)
+		t.Fatalf("MaybeMountMetrics(disabled): %v", err)
 	}
 	if disabled != http.Handler(inner) {
 		t.Error("disabled gate: handler was wrapped, want the inner handler unchanged")
@@ -161,9 +179,9 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 		t.Errorf("disabled: GET /metrics = %d, want 404", rec.Code)
 	}
 
-	enabled, err := maybeMountMetrics(meterScope, true, inner, nil, nil)
+	enabled, err := MaybeMountMetrics(metricsTestScope, true, inner, nil, nil)
 	if err != nil {
-		t.Fatalf("maybeMountMetrics(enabled): %v", err)
+		t.Fatalf("MaybeMountMetrics(enabled): %v", err)
 	}
 	rec = httptest.NewRecorder()
 	enabled.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -177,88 +195,17 @@ func TestMaybeMountMetrics_GateHonored(t *testing.T) {
 	}
 }
 
-// Composed path: a REAL source loop's delivered emit reaches the REAL
-// exposition — dataplane bookkeeping, accessor forwarding, bridge, and
-// exporter working as one.
-func TestMetrics_RealEmitReachesExposition(t *testing.T) {
-	url, accSeed := dpAccountServer(t)
-	chainCfg := &chainconfig.Config{
-		Transport: chainconfig.TransportNATS,
-		NATS:      chainconfig.NATSConfig{URL: url, AccountSeed: accSeed},
-	}
-	rtCfg, err := runtimeConfigFrom(chainCfg, dpPipelineCfg(), "")
-	if err != nil {
-		t.Fatalf("runtimeConfigFrom: %v", err)
-	}
-	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, dpKeyStore(t), pipelineruntime.Deps{})
-	if err != nil {
-		t.Fatalf("pipelineruntime.Build: %v", err)
-	}
-	t.Cleanup(func() { _ = dp.Close() })
-	h, err := maybeMountMetrics(meterScope, true, http.NotFoundHandler(), netcomposeMetricsFrom(dp.Metrics()), nil)
-	if err != nil {
-		t.Fatalf("maybeMountMetrics: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	runDone := make(chan error, 1)
-	go func() { runDone <- dp.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-runDone })
-
-	obs, err := natstransport.Connect(context.Background(), natstransport.Config{URL: url, AccountSeed: accSeed})
-	if err != nil {
-		t.Fatalf("observer connect: %v", err)
-	}
-	defer obs.Close()
-	got := make(chan []byte, 4)
-	if err := obs.Subscriber(dpPipelineDID).Subscribe(func(b []byte) { got <- b }); err != nil {
-		t.Fatalf("observer subscribe: %v", err)
-	}
-	injector := obs.Publisher(dpIngress)
-
-	// Retry the push until the loop subscribes and one envelope lands.
-	deadline := time.After(5 * time.Second)
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	_ = injector.Publish([]byte(`{"hello":"metrics"}`))
-deliver:
-	for {
-		select {
-		case <-got:
-			break deliver
-		case <-tick.C:
-			_ = injector.Publish([]byte(`{"hello":"metrics"}`))
-		case <-deadline:
-			t.Fatal("no envelope delivered on the output subject")
-		}
-	}
-
-	// The observer sees the publish a hair before Emit returns (the counter
-	// moves in the deferred outcome accounting), so poll the exposition.
-	expoDeadline := time.Now().Add(5 * time.Second)
-	for {
-		body := scrape(t, h)
-		if v, ok := findMetric(body, "provin_pipeline_emit_attempts_total", `loop="src"`, `outcome="success"`); ok && v != "0" {
-			break
-		}
-		if time.Now().After(expoDeadline) {
-			t.Fatalf("emit success never reached the exposition:\n%s", scrape(t, h))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
 // withMetrics mounts /metrics beside the inner handler without disturbing
 // its routes.
 func TestWithMetrics_RoutesMetricsAndFallsThrough(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot) // distinguishable inner marker
 	})
-	mh, err := buildMetricsHandler(meterScope, nil, nil)
+	mh, err := BuildMetricsHandler(metricsTestScope, nil, nil)
 	if err != nil {
-		t.Fatalf("buildMetricsHandler: %v", err)
+		t.Fatalf("BuildMetricsHandler: %v", err)
 	}
-	h := withMetrics(inner, mh)
+	h := WithMetrics(inner, mh)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))

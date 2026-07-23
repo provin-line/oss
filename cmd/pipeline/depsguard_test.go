@@ -16,9 +16,9 @@ import (
 //  1. internal/netcompose — the control-plane composition root (main.go's own
 //     /metrics doc comment already names this off-limits).
 //  2. any OTHER cmd/ deployment root — no binary ever links another binary's
-//     package main tree; cmd/network and cmd/standalone are today's concrete
-//     siblings this catches, but the check is general so a future cmd/* added
-//     the same way is caught too.
+//     package main tree; cmd/network is today's concrete sibling this
+//     catches, but the check is general so a future cmd/* added the same
+//     way is caught too.
 //  3. anything under network/pkg/services/... that is not one of the ALLOWED
 //     families isAllowedNetworkPkgDep documents below — in particular every
 //     service's handler package (proto<->domain conversion + the Connect

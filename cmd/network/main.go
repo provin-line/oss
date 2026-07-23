@@ -6,11 +6,11 @@
 // (dependency-aware readiness). Every config value is validated at boot — a
 // misconfigured binary dies at startup, never on first request.
 //
-// It carries NO data plane (recomposition task 5: cmd/standalone's control
-// plane half, extracted): it refuses to boot if its pipeline config declares
-// any transport loop (the guard right after LoadPipelineConfig, below) —
-// loops belong to the pipeline runtime (cmd/standalone until it lands as its
-// own binary), never here. TestProdDeps_NoPipelineInNetworkBinary
+// It carries NO data plane (recomposition task 5: formerly cmd/standalone's
+// control plane half, extracted): it refuses to boot if its pipeline config
+// declares any transport loop (the guard right after LoadPipelineConfig,
+// below) — loops belong to the pipeline runtime (cmd/pipeline), never here.
+// TestProdDeps_NoPipelineInNetworkBinary
 // (depsguard_test.go) pins this on the production import graph. On
 // SIGINT/SIGTERM the HTTP server shuts down gracefully before the process
 // exits.
@@ -50,9 +50,9 @@ import (
 )
 
 // meterScope is this binary's OTel instrumentation-scope name — the metrics
-// bridge's self-identification (see cmd/standalone/main.go's meterScope for
-// the shared rationale). cmd/network reports under its own import path
-// rather than borrowing cmd/standalone's.
+// bridge's self-identification (see cmd/pipeline/main.go's meterScope-style
+// rationale). Every node binary reports under its own import path rather
+// than borrowing another's.
 const meterScope = "github.com/provin-line/oss/cmd/network"
 
 func main() {
@@ -100,12 +100,12 @@ func main() {
 	// pipeline runtime, not this binary, and is an operator error that must
 	// die loudly rather than silently ignore the config.
 	if len(pipeCfg.Loops) > 0 {
-		log.Fatalf("network: %d pipeline loop(s) configured, but this binary runs no data plane — run loops with the pipeline runtime (cmd/standalone until it lands)", len(pipeCfg.Loops))
+		log.Fatalf("network: %d pipeline loop(s) configured, but this binary runs no data plane — run loops with cmd/pipeline", len(pipeCfg.Loops))
 	}
 	// This binary always runs the peer-fetching batch resolver below (Task 9:
-	// BuildBatchResolver builds unconditionally from its args now). Unlike
-	// cmd/standalone, this binary can never gate that runner on
-	// pipeCfg.HasConsumingLoop() — the guard above enforces zero loops here, so
+	// BuildBatchResolver builds unconditionally from its args now). This
+	// binary can never gate that runner on pipeCfg.HasConsumingLoop() — the
+	// guard above enforces zero loops here, so
 	// that predicate is always false — yet the resolver still runs, draining
 	// whatever a peer's StoreVC/RegisterConsumed call registers over the wire.
 	// Its peer fetches present this bearer against L1-protected peers
@@ -122,9 +122,9 @@ func main() {
 	}
 
 	// The SSRF guard + DID resolver back this node's chain manager (peer
-	// client resolution) and public DID resolution route. Unlike standalone
-	// there is no data plane to share them with, but the construction is
-	// otherwise identical.
+	// client resolution) and public DID resolution route. This binary has no
+	// data plane to share them with (unlike cmd/pipeline's own sink-loop
+	// credential verification).
 	guard, resolver, err := netcompose.NewDIDResolution(coreCfg, chainCfg)
 	if err != nil {
 		log.Fatalf("network: %v", err)
@@ -138,9 +138,9 @@ func main() {
 	// evidence must not pretend to.
 	evidenceDir := filepath.Join(coreCfg.DataDir, "evidence")
 
-	// The VC store backs the VCResolverService RPC. Unlike standalone, no
-	// data-plane ingress store threads into it here — this node stores only
-	// what a peer publishes over the wire.
+	// The VC store backs the VCResolverService RPC. No data-plane ingress
+	// store threads into it here — this node stores only what a peer
+	// publishes over the wire.
 	credBackend, err := vcfilestore.NewBackend(filepath.Join(evidenceDir, "credentials"))
 	if err != nil {
 		log.Fatalf("network: %v", err)
@@ -207,8 +207,8 @@ func main() {
 
 	// ReportEmitHealth's publisher-scoped by-reference advertisement gate
 	// (Task 10 D4): this report-mode node has no in-process by-reference
-	// producer of its own — unlike cmd/standalone's byRefGate — so
-	// advertisement is instead gated per publisher by what that publisher has
+	// producer of its own, so advertisement is instead gated per publisher by
+	// what that publisher has
 	// itself reported here. The store backs BOTH the ReportEmitHealth RPC
 	// (mounted via emitHealth below) and chainmanager.WithPublisherHealth's
 	// lookup (wired inside BuildHandler).
@@ -315,9 +315,8 @@ func main() {
 // runNetwork runs the HTTP server and the two async background runners (the
 // batch resolver assembling chains, the audit runner verifying them)
 // concurrently under a shared cancellable context, waits for them to drain,
-// and returns the first non-shutdown error (nil on a clean shutdown). Mirrors
-// standalone's runServices minus the data-plane goroutine: the HTTP server is
-// the sole primary service here (its return cancels the context so the
+// and returns the first non-shutdown error (nil on a clean shutdown). The
+// HTTP server is the sole primary service here (its return cancels the context so the
 // runners drain — there is no data plane whose failure could independently
 // need to bring the node down). Both background runners stay
 // degraded-tolerant (log-and-continue, D-17g-9 / D-17h-8): they never cancel

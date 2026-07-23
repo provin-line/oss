@@ -32,7 +32,7 @@ import (
 
 // EmitCounters is the emit-outcome accessor pair every producing handle
 // (transport.Loop, aggregate.Process) exposes — the metrics bridge's poll
-// seam. Relocated here (from cmd/standalone/dataplane.go) alongside
+// seam. Relocated here (formerly cmd/standalone/dataplane.go) alongside
 // LoopMetrics, the struct it is a field type of.
 type EmitCounters interface {
 	EmitSuccesses() uint64
@@ -57,9 +57,12 @@ type VerifyCounts interface {
 // not a series attribute), and the non-nil accessors decide which metric
 // families the loop participates in (nil = the loop does not have that
 // capability, so no series is registered — family presence is the capability
-// contract). Fields are exported: cmd/standalone/dataplane.go (the data
-// plane, which stays behind) constructs and populates these directly as it
-// builds each loop.
+// contract). Fields are exported so a data-plane composer can construct and
+// populate these directly as it builds each loop. cmd/network's own
+// composition never runs producing/consuming loops, so it always passes nil
+// here; cmd/pipeline (the data-plane composer) does not import netcompose at
+// all (AGENTS.md layer rule 2) and does not yet mount this bridge — see its
+// package doc.
 type LoopMetrics struct {
 	Name string
 	Role string // pipelineconfig.Role* value

@@ -587,3 +587,61 @@ func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
 		t.Errorf("private OFF + no scoping: want boot OK, got %v", err)
 	}
 }
+
+// The outer raw-body cap is the largest legitimate request plus headroom — big
+// enough for the biggest real request (credential or push body), never smaller
+// (which would reject legitimate traffic). Relocated from
+// cmd/standalone/main_test.go (PR3c: cmd/standalone retired) — cmd/network is
+// this function's only remaining caller (cmd/pipeline defines its own,
+// simpler outerRequestCapBytes; see its main.go), and before this move
+// neither carried a unit test for OuterRequestCapBytes itself.
+func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
+	// maxDocumentRequestBytes mirrors this file's own private constant of the
+	// same name/value directly (no cross-package literal pin needed, unlike
+	// cmd/standalone's copy, since this test lives beside the constant now).
+	const cred, push = 1 << 20, 4 << 20
+	got := OuterRequestCapBytes(cred, push, 0, 0)
+	if got <= push {
+		t.Errorf("cap %d not above the largest legit request %d", got, push)
+	}
+	if OuterRequestCapBytes(push, cred, 0, 0) != got {
+		t.Error("cap must not depend on argument order (it takes the max)")
+	}
+	// Even with credential/push configured BELOW the document-class per-RPC cap,
+	// the outer bound must still exceed a document-class request plus its JSON
+	// base64 inflation — otherwise a legit doc request is rejected pre-auth.
+	small := OuterRequestCapBytes(4<<10, 4<<10, 4<<10, 0)
+	if small <= maxDocumentRequestBytes {
+		t.Errorf("outer cap %d does not cover the document class %d when cred/push are tiny", small, maxDocumentRequestBytes)
+	}
+	if small <= maxDocumentRequestBytes*4/3 {
+		t.Errorf("outer cap %d does not cover base64-inflated document request (~4/3 of %d)", small, maxDocumentRequestBytes)
+	}
+	// A full-size RetainPayload stream shares ONE http.Request for its whole
+	// (client-streaming) lifetime, so the outer cap must admit the CUMULATIVE
+	// max-retain-payload-size, not just its largest single chunk — otherwise a
+	// legitimate large retain is truncated mid-stream by the outer
+	// http.MaxBytesHandler, never reaching the per-RPC (per-chunk) read cap.
+	const retain = 64 << 20
+	gotRetain := OuterRequestCapBytes(4<<10, 4<<10, retain, 0)
+	if gotRetain <= retain {
+		t.Errorf("cap %d not above max-retain-payload-size %d", gotRetain, retain)
+	}
+	// A zero mirror-batch-bytes argument (a caller with no mirror store wired)
+	// must not widen the outer cap at all — the class simply does not
+	// participate when that caller's own posture never mounts it.
+	if OuterRequestCapBytes(4<<10, 4<<10, 4<<10, 0) != small {
+		t.Error("mirror-batch-bytes = 0 must not change the outer cap versus omitting the class entirely")
+	}
+	// A non-zero mirror-batch-bytes MUST widen the outer cap to cover
+	// MirrorLogSegment's OWN derived read cap (max-batch-bytes +
+	// maxProofRequestBytes headroom, mirrorReadCapBytes) — not the bare
+	// max-batch-bytes value — or a legitimate batch-cap-sized segment would be
+	// truncated by the outer http.MaxBytesHandler before ever reaching that
+	// per-RPC cap.
+	const maxBatchBytes = 4 << 20
+	gotMirror := OuterRequestCapBytes(4<<10, 4<<10, 4<<10, maxBatchBytes)
+	if gotMirror <= maxBatchBytes+maxProofRequestBytes {
+		t.Errorf("outer cap %d does not cover MirrorLogSegment's derived read cap %d", gotMirror, maxBatchBytes+maxProofRequestBytes)
+	}
+}

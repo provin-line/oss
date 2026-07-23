@@ -12,8 +12,8 @@ package main
 // route IS PDP-guarded (push.go's pushRoutes calls verifier.Verify), so
 // pdpCheck (below, main.go's buildHandler) is added exactly when at least
 // one loop mounts a push route AND the configured backend is external —
-// never unconditionally the way cmd/network/cmd/standalone add it (they
-// always mount PDP-gated RPC surfaces, so it is always relevant there).
+// never unconditionally the way cmd/network adds it (it
+// always mounts PDP-gated RPC surfaces, so it is always relevant there).
 //
 // A tiny TTL cache still guards against turning an unauthenticated /readyz
 // flood into an outbound registry-probe amplifier (the same concern

@@ -13,8 +13,8 @@ import (
 // MirrorLogSegment's own connect mount read cap (mirrorReadCapBytes) — the
 // two are structurally the same knob, never independently configured.
 //
-// A nil *MirrorWiring keeps today's map-only behavior (cmd/standalone):
-// MirrorLogSegment/GetMirrorState both report ErrMirrorNotConfigured
+// A nil *MirrorWiring keeps the map-only behavior: MirrorLogSegment/
+// GetMirrorState both report ErrMirrorNotConfigured
 // (CodeUnimplemented) rather than touching a store this node was never
 // given, and TlogService mounts entirely under the proof-class read cap
 // (no MirrorLogSegment override — see BuildHandler's mounting comment).

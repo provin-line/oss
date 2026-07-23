@@ -1,6 +1,6 @@
 // Package pipelineconfig is the data-plane configuration layer: it declares the
-// pipeline transport loops a standalone node runs. It owns only the config contract
-// (its reference.conf + a fail-closed loader); the values feed the standalone's
+// pipeline transport loops a cmd/pipeline node runs. It owns only the config contract
+// (its reference.conf + a fail-closed loader); the values feed cmd/pipeline's
 // data-plane runner (nats transport + ingest/processor + memlog emission).
 //
 // Loops are a keyed map (key = loop name) because a node runs zero or more loops of

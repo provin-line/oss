@@ -94,9 +94,9 @@ type DIDResolver interface {
 
 // MirrorConfig bundles the D-T4 mirror store and D-T3 identity-enforcement
 // dependencies MirrorSegment/MirrorState need beyond the static log map. A
-// nil *MirrorConfig to New keeps today's map-only behavior (cmd/standalone):
-// MirrorSegment/MirrorState both return ErrMirrorNotConfigured rather than
-// touching dependencies this node was never given.
+// nil *MirrorConfig to New keeps the map-only behavior: MirrorSegment/
+// MirrorState both return ErrMirrorNotConfigured rather than touching
+// dependencies this node was never given.
 type MirrorConfig struct {
 	// Store is the durable mirror (mirrorstore.Store).
 	Store MirrorStore

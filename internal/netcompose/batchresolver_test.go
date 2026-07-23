@@ -79,8 +79,8 @@ func brConfig(loops []pipelineconfig.LoopConfig, interval time.Duration, maxByte
 }
 
 // BuildBatchResolver builds unconditionally from its args now (Task 9): the "does this
-// node have a consuming loop" gate moved to the composition roots (cmd/standalone gates at
-// its call site; cmd/network always builds, since it never has a local loop to gate on).
+// node have a consuming loop" gate moved to the composition roots (cmd/network always
+// builds, since it never has a local loop to gate on).
 // A source-only or zero-loop config therefore returns a non-nil runner just like a
 // sink/chained config — the builder itself no longer inspects pipeCfg.HasConsumingLoop().
 func TestBuildBatchResolver_BuildsUnconditionally(t *testing.T) {

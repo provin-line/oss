@@ -13,10 +13,10 @@ import (
 // (provin.network.chain.emit-health.advertise-without-reports), threaded
 // straight through to WithPublisherHealth.
 //
-// A nil *EmitHealthWiring disables the whole gate — cmd/standalone passes nil
-// and keeps its existing byRefHealthy global gate (BuildHandler's byRefHealthy
-// parameter). The two composition models are mutually exclusive
-// (chainmanager.New panics if both WithPublisherHealth and
+// A nil *EmitHealthWiring disables the whole gate, leaving BuildHandler's
+// byRefHealthy global gate (BuildHandler's byRefHealthy parameter) as the
+// only advertisement gate in effect. The two composition models are mutually
+// exclusive (chainmanager.New panics if both WithPublisherHealth and
 // WithByReferenceHealth are wired on the same Service), so a caller must never
 // pass both a non-nil byRefHealthy AND a non-nil EmitHealthWiring.
 type EmitHealthWiring struct {

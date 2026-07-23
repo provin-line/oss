@@ -1,5 +1,4 @@
 .git
 dist/
-standalone
 docs/
 *.md

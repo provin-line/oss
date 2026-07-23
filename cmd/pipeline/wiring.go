@@ -31,12 +31,11 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────
 // Config mapping: chainconfig.Config + pipelineconfig.Config -> pipeline/
-// runtime.Config. This is a DELIBERATE duplicate of cmd/standalone's
-// runtimewiring.go:runtimeConfigFrom (and its per-role mapping helpers) —
-// that function lives in package main of a DIFFERENT binary, so it cannot be
-// imported. Keep the two in lockstep by inspection until PR3c gives the
-// mapping a shared home (see standalone's own doc comment for the same
-// caveat, mirrored here).
+// runtime.Config. This was originally a DELIBERATE duplicate of
+// cmd/standalone's runtimewiring.go:runtimeConfigFrom (and its per-role
+// mapping helpers), kept in lockstep by inspection because that function
+// lived in package main of a DIFFERENT binary and so could not be imported.
+// cmd/standalone is retired (PR3c); this mapping is now the only copy.
 // ─────────────────────────────────────────────────────────────────────────
 
 // pipelineRuntimeConfigFrom maps this binary's own loaded config trees into
@@ -444,8 +443,8 @@ func (w wireReceiptWriter) Put(headHash string, registrantDID string, consumedHa
 // wireSchemaGetter adapts *schemaclient.Client to pipeline/runtime.
 // SchemaGetter (a producing loop's boot-time schema-ref resolution),
 // mapping the client's own ErrNotFound to runtime's ErrSchemaNotFound
-// sentinel — the same translation cmd/standalone's schemaGetterAdapter
-// applies over the LOCAL registry service's store.ErrNotFound.
+// sentinel — analogous to cmd/network's own in-process schema resolution,
+// which maps the same store.ErrNotFound from the LOCAL registry service.
 type wireSchemaGetter struct {
 	client *schemaclient.Client
 }

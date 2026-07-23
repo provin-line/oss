@@ -11,8 +11,9 @@ import (
 // ReceiptWriter records the emit-time consumed-set receipt for an aggregate head (slice-17o):
 // head content address → the consumed source content addresses, plus the registrant DID
 // recorded alongside them (an audit-trail fact — see auditor.ReceiptStore.Put's doc).
-// cmd/standalone owns this local interface (capability, not concrete);
-// *auditor.MemReceiptStore satisfies it.
+// cmd/pipeline owns this local interface (capability, not concrete); a wire
+// client over AuditService.RegisterEvidence satisfies it in production
+// (*auditor.MemReceiptStore satisfies it in tests).
 type ReceiptWriter interface {
 	Put(headHash string, registrantDID string, consumedHashes []string) error
 }

@@ -30,7 +30,7 @@ func NewByRefHealthGate(sources []StrippedPublishHealthSource) *ByRefHealthGate 
 // Healthy reports whether by-reference should currently be advertised. Pull-
 // evaluated (once per offeredPayloadModes call); no background goroutine, no
 // clock — it reads each producer's last stripped-publish outcome. Exported
-// because the composition root (cmd/standalone's main) reads this as a method
+// because the composition root (cmd/network's main) reads this as a method
 // value (byRefGate.Healthy) across the package boundary.
 func (g *ByRefHealthGate) Healthy() bool {
 	for _, src := range g.sources {

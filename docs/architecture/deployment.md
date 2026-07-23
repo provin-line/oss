@@ -13,19 +13,17 @@ can only describe locally. For what the node *is* (planes, trust layers) see
 | Shape | What runs | Reference |
 | --- | --- | --- |
 | Single-host evaluation | everything on one host via Docker Compose: node + real auth stack (auth.provider, policy-verifier) + NATS, provisioned trust material | [`deploy/quickstart/`](../../deploy/quickstart/README.md) |
-| Single-org production | one `standalone` node per registry, external PDP, operator-managed NATS trust material | this page |
+| Single-org production | one `cmd/network` registry + one or more `cmd/pipeline` data-plane nodes per registry, external PDP, operator-managed NATS trust material | this page |
 | Cross-org federation | one node per organization; NATS account boundaries carry the export/import seam; peers talk over ChainPeerService (L2 wireauth) | [`network/README.md`](../../network/README.md) |
 
-`cmd/standalone` composes the node as one binary: HTTP control plane
-(ConnectRPC services + public DID resolution + health endpoints) and the
-data plane (pipeline loops) run in one process under one signal-cancelled
-context.
+The node is always two separately deployed binaries: `cmd/network` (the
+control plane — ConnectRPC services, public DID resolution, health
+endpoints) and `cmd/pipeline` (the data plane — the transport loops). There
+is no all-in-one binary; the two run as independent processes, on the same
+host or different ones, and interact over the wire only.
 
-Three binaries exist today. `cmd/standalone` is the all-in-one composition
-above and remains available, but is **deprecated**: `cmd/network` +
-`cmd/pipeline` now provide the separated alternative it named as its eventual
-replacement. `cmd/network` runs the same control plane alone — no data
-plane: it refuses to boot if its pipeline config declares any loop.
+`cmd/network` runs the control plane alone — no data plane: it refuses to
+boot if its pipeline config declares any loop.
 
 `cmd/pipeline` is that control plane's data-plane counterpart, and the
 separated topology's other half: an STL (short-lived, per-execution) binary
@@ -74,12 +72,10 @@ context (never the already-canceled shutdown signal's context) before the
 underlying log files close. A drain that cannot finish within its budget is
 not a shutdown failure — the unmirrored tail stays durable on the local log,
 and the next boot's shipper resumes it from the registry's own acked cursor,
-never a locally cached one. `cmd/standalone` still does not ship: it
-continues to serve TlogService reads from its in-process map and mirrors
-nothing. Independent of which binary ships: a terminal tail not yet mirrored
-is lost from the registry's view within the flush interval, and a process
-that loses its local volume cannot resume the old log's identity and rolls
-to a fresh one instead. The reject log mirrors the same way for custody but,
+never a locally cached one. A terminal tail not yet mirrored is lost from the
+registry's view within the flush interval, and a process that loses its
+local volume cannot resume the old log's identity and rolls to a fresh one
+instead. The reject log mirrors the same way for custody but,
 as with the emission log, is never served over TlogService reads. v0 mirrors
 `filelog`-backed logs only, and never rotates an already-mirrored log.
 

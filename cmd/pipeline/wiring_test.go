@@ -48,9 +48,9 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────
 // pipelineRuntimeConfigFrom — the transport guard + a basic field-level
-// round-trip (the full per-role field mapping mirrors cmd/standalone's own
-// runtimewiring_test.go golden test; this is a lighter pin, not a
-// re-derivation of that fixture).
+// round-trip (the full per-role field mapping originally mirrored
+// cmd/standalone's own runtimewiring_test.go golden test, now retired; this
+// remains a lighter pin, not a full golden-mapping fixture).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPipelineRuntimeConfigFrom_NonNATSTransportWithLoopsErrors(t *testing.T) {

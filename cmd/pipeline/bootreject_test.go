@@ -77,8 +77,9 @@ func TestPipeline_BootRejectsZeroLoops(t *testing.T) {
 }
 
 // A configured loop on a non-NATS transport is a boot error: the loop has
-// nothing to dial (pipelineRuntimeConfigFrom's own transport guard, ported
-// verbatim from cmd/standalone's runtimeConfigFrom). transport = "noop"
+// nothing to dial (pipelineRuntimeConfigFrom's own transport guard,
+// originally ported verbatim from cmd/standalone's runtimeConfigFrom, now
+// retired). transport = "noop"
 // needs no NATS fields at all, so this config is deliberately minimal.
 func TestPipeline_BootRejectsNonNATSTransportWithLoops(t *testing.T) {
 	if testing.Short() {
@@ -397,7 +398,7 @@ type bootConfig struct {
 
 // writeBootConfigFile writes dir/pipeline.conf for the actual binary to load
 // via hoconconfig.LoadFile("CONFIG_FILE") and returns its path. Unlike
-// cmd/network/cmd/standalone's writeBootConfig (which writes
+// cmd/network's writeBootConfig (which writes
 // dir/config/application.conf, loaded by the CONFIG_OVERLAY convention),
 // this binary's CONFIG_FILE convention names one file directly with no
 // fixed location.

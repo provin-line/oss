@@ -108,8 +108,8 @@ const testLoopName = "src"
 // buildHandler (main.go) — the same function main() itself calls — with a
 // minimal but real mountIngest: one push binding over a fake
 // transport.Publisher (never actually dials NATS; this test exercises HTTP
-// routing/gating only, not data-plane delivery — TestPushIngest_Boot's sibling
-// in cmd/standalone and TestPipeline_ActualBoot already cover the wire path
+// routing/gating only, not data-plane delivery — the httpingest e2e scenario
+// (provin.e2e) and TestPipeline_ActualBoot already cover the wire path
 // end-to-end). natsHealthy is nil, mirroring the zero-loop-runtime case
 // buildHandler's own doc documents — /readyz is not exercised by any test in
 // this file, so its absence has no effect here. authCfg is a zero-value
@@ -142,3 +142,40 @@ type fakePublisher struct{}
 func (fakePublisher) Publish([]byte) error { return nil }
 func (fakePublisher) Healthy() bool        { return true }
 func (fakePublisher) Close() error         { return nil }
+
+// TestPushRoutes_PDPDenial403 pins pushRoutes' auth mapping directly (unit
+// level, no HTTP handler assembly): a bearer the PDP denies is 403 (any
+// Verify failure — the RPC interceptors elsewhere in this module likewise do
+// not distinguish denial from outage), distinct from the 401 of a missing
+// bearer. Also pins Retry-After on the readiness 503. Relocated from
+// cmd/standalone/push_test.go (PR3c: cmd/standalone retired) — push.go here
+// is a byte-for-byte copy of that binary's own push.go (see its package
+// doc), and this is the only test either copy's pushRoutes ever had for its
+// 403/Retry-After behavior specifically (TestRoutes_PushIngressIsMounted,
+// above, only exercises the 401/503 paths through the full handler).
+func TestPushRoutes_PDPDenial403(t *testing.T) {
+	ready := make(chan struct{})
+	close(ready)
+	denyAll := endpoint.NewStaticEndpoint(nil) // no rules => every Verify fails
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	h := pushRoutes(inner, denyAll, ready)
+
+	req := httptest.NewRequest(http.MethodPost, "/push", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("PDP-denied push: got %d, want 403", rec.Code)
+	}
+
+	// Readiness 503 carries Retry-After (allowed but not ready).
+	allow := endpoint.NewStaticEndpoint([]endpoint.StaticRule{{Resource: "ingest", Action: "push"}})
+	h = pushRoutes(inner, allow, make(chan struct{}))
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/push", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("not-ready push: got %d (Retry-After %q), want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
