@@ -388,10 +388,16 @@ type wireAuditRegistrar struct {
 // re-invokes RegisterAuditHead, which signs a fresh wireauth proof
 // internally on every call (auditor/client.Client.proof) — never a resent
 // cached proof.
+//
+// NOTE: pipeline/runtime.AuditRegistrar carries no caller ctx (see
+// wireRegistrarTimeout's doc above), so there is no caller cancellation for
+// retryOnUnavailable to honor here — this retry's only shutdown bound is the
+// budget deadline (the dctx retryOnUnavailable derives from
+// defaultWireRetryBudget), not caller cancellation.
 func (a wireAuditRegistrar) Add(head pipelineruntime.StoredHead) error {
 	ctx, cancel := context.WithTimeout(context.Background(), wireRegistrarTimeout)
 	defer cancel()
-	return retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func() error {
+	return retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		return a.client.RegisterAuditHead(ctx, head.WireVariantID)
 	})
 }
@@ -445,6 +451,11 @@ type wireReceiptWriter struct {
 // the spec's loss-sensitive retry matrix and is left unwrapped. Each retry
 // re-invokes RegisterEvidence, which signs a fresh wireauth proof internally
 // on every call (auditor/client.Client.proof) — never a resent cached proof.
+//
+// NOTE: pipeline/runtime.ReceiptWriter carries no caller ctx either (same gap
+// as AuditRegistrar.Add above), so this retry's only shutdown bound is the
+// budget deadline (the dctx retryOnUnavailable derives from
+// defaultWireRetryBudget), not caller cancellation.
 func (w wireReceiptWriter) Put(headHash string, registrantDID string, consumedHashes []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), wireRegistrarTimeout)
 	defer cancel()
@@ -457,7 +468,7 @@ func (w wireReceiptWriter) Put(headHash string, registrantDID string, consumedHa
 		return fmt.Errorf("pipeline: derive wire variant for emitted credential %s: %w", headHash, err)
 	}
 	client := w.factory.For(registrantDID)
-	return retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func() error {
+	return retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		return client.RegisterEvidence(ctx, variant, consumedHashes)
 	})
 }
@@ -645,7 +656,7 @@ type wirePayloadStore struct {
 func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID string) (string, error) {
 	client := s.factory.For(ownerDID)
 	var contentAddress string
-	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func() error {
+	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
 		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
 		return attemptErr
@@ -667,7 +678,7 @@ type wireRetryingPayloadResolver struct {
 
 func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
 	var payload []byte
-	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func() error {
+	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
 		payload, attemptErr = r.client.ResolvePayload(ctx, upstreamEndpoint, contentHash)
 		return attemptErr

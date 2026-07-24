@@ -43,7 +43,7 @@ func TestRetryOnUnavailable_RecoversWithinBudget(t *testing.T) {
 	}
 
 	calls := 0
-	attempt := func() error {
+	attempt := func(ctx context.Context) error {
 		calls++
 		if calls <= 2 {
 			return unavailableErr(fmt.Sprintf("boot window, attempt %d", calls))
@@ -76,7 +76,7 @@ func TestRetryOnUnavailable_SucceedsFirstTry_NoBackoffInvoked(t *testing.T) {
 	}
 
 	calls := 0
-	attempt := func() error { calls++; return nil }
+	attempt := func(ctx context.Context) error { calls++; return nil }
 
 	if err := retryOnUnavailable(context.Background(), time.Second, backoff, attempt); err != nil {
 		t.Fatalf("retryOnUnavailable: %v, want nil", err)
@@ -105,7 +105,7 @@ func TestRetryOnUnavailable_NonUnavailable_NoRetry(t *testing.T) {
 
 	calls := 0
 	wantErr := connect.NewError(connect.CodeUnauthenticated, errors.New("identity rejected"))
-	attempt := func() error { calls++; return wantErr }
+	attempt := func(ctx context.Context) error { calls++; return wantErr }
 
 	err := retryOnUnavailable(context.Background(), time.Second, backoff, attempt)
 	if !errors.Is(err, wantErr) {
@@ -131,7 +131,7 @@ func TestRetryOnUnavailable_AlwaysUnavailable_StopsAtBudget(t *testing.T) {
 	}
 
 	calls := 0
-	attempt := func() error {
+	attempt := func(ctx context.Context) error {
 		calls++
 		return unavailableErr(fmt.Sprintf("boot window, attempt %d", calls))
 	}
@@ -171,7 +171,7 @@ func TestRetryOnUnavailable_UsesInjectedBackoffSeam(t *testing.T) {
 	}
 
 	calls := 0
-	attempt := func() error {
+	attempt := func(ctx context.Context) error {
 		calls++
 		if calls <= 2 {
 			return unavailableErr("boot window")
@@ -208,7 +208,7 @@ func TestRetryOnUnavailable_CtxCanceled_StopsRetrying(t *testing.T) {
 	}
 
 	calls := 0
-	attempt := func() error {
+	attempt := func(ctx context.Context) error {
 		calls++
 		return unavailableErr("boot window")
 	}
@@ -219,5 +219,66 @@ func TestRetryOnUnavailable_CtxCanceled_StopsRetrying(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("attempt() called %d times after cancellation, want exactly 1 (no attempt after cancel)", calls)
+	}
+}
+
+// TestRetryOnUnavailable_DeadlineBoundsHangingAttempt is FIX 1's core proof:
+// budget must bound a HANGING attempt() call in real wall-clock time, not
+// merely the retry DECISION between attempts. Before this fix, budget was
+// checked only via the injected clock between calls — an attempt() that
+// itself never returns (a stalled RPC; the guarded HTTP client only bounds
+// dialing, never the full round trip) could block retryOnUnavailable
+// forever. attempt here blocks on <-ctx.Done() and returns ctx.Err(), so the
+// ONLY thing that can make it return is the dctx deadline
+// (context.WithTimeout(ctx, budget)) firing.
+//
+// Deterministic despite using a real timer: budget is a tiny fixed duration
+// (20ms) and the assertion is a generous upper bound (10x budget), not an
+// exact time — this can never flake slow (a hang would time out the whole
+// test binary) and has ample margin against scheduler jitter.
+func TestRetryOnUnavailable_DeadlineBoundsHangingAttempt(t *testing.T) {
+	const budget = 20 * time.Millisecond
+	backoff := wireBackoff{
+		Now: time.Now,
+		Delay: func(attempt int) time.Duration {
+			t.Fatal("Delay must not be called — attempt() never fails with CodeUnavailable")
+			return 0
+		},
+		Sleep: func(ctx context.Context, d time.Duration) {
+			t.Fatal("Sleep must not be called — attempt() never fails with CodeUnavailable")
+		},
+	}
+
+	var gotDeadline time.Time
+	var gotOK bool
+	calls := 0
+	attempt := func(ctx context.Context) error {
+		calls++
+		gotDeadline, gotOK = ctx.Deadline()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	start := time.Now()
+	err := retryOnUnavailable(context.Background(), budget, backoff, attempt)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("want a non-nil error once the hanging attempt's ctx deadline fires, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded (dctx's own deadline expiring, surfaced as attempt()'s return value; not a connect error, so returned immediately with no retry)", err)
+	}
+	if calls != 1 {
+		t.Errorf("attempt() called %d times, want exactly 1 (a non-Unavailable error — CodeUnknown for a plain context.DeadlineExceeded — never retries)", calls)
+	}
+	if elapsed > budget*10 {
+		t.Errorf("retryOnUnavailable took %v to return, want well under %v (budget*10) — dctx must bound the hanging attempt() call itself, per FIX 1", elapsed, budget*10)
+	}
+	if !gotOK {
+		t.Fatal("attempt()'s ctx has no deadline (Deadline() ok=false) — want the dctx from context.WithTimeout(ctx, budget), which always sets one")
+	}
+	if gotDeadline.After(start.Add(budget + time.Second)) {
+		t.Errorf("attempt()'s ctx deadline = %v, want <= start+budget (plus a generous scheduling margin) — the dctx passed to attempt must actually be budget-bounded, not the caller's unbounded ctx", gotDeadline)
 	}
 }

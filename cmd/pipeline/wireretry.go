@@ -107,23 +107,46 @@ func defaultWireBackoff() wireBackoff {
 //     log-and-drop handling is unchanged; this residual boot-window loss is
 //     accepted and documented (spec "Exhaustion posture" section).
 //
-// attempt is called FRESH on every retry and MUST re-sign internally — a
-// wireauth proof's issued-at/nonce are fixed at signing time, so resending a
-// cached proof can never clear the epoch. retryOnUnavailable itself is a
-// pure Connect-code-driven retry loop; it knows nothing about wireauth or
-// proofs.
-func retryOnUnavailable(ctx context.Context, budget time.Duration, backoff wireBackoff, attempt func() error) error {
+// attempt is called FRESH on every retry (with the budget-bounded ctx below,
+// NEVER the caller's original ctx) and MUST re-sign internally — a wireauth
+// proof's issued-at/nonce are fixed at signing time, so resending a cached
+// proof can never clear the epoch. retryOnUnavailable itself is a pure
+// Connect-code-driven retry loop; it knows nothing about wireauth or proofs.
+//
+// budget is enforced TWICE, deliberately, and both mechanisms are load-
+// bearing:
+//
+//  1. A real context.WithTimeout(ctx, budget) (dctx below) bounds attempt()
+//     and backoff.Sleep in WALL-CLOCK time. Without this, budget was only
+//     ever checked BETWEEN attempts (per backoff.Now), so a single hanging
+//     RPC — the guarded HTTP client only bounds dialing, not the full
+//     round trip — could stall far past budget with no enforcement at all.
+//     dctx is what actually bounds an in-flight call in production.
+//  2. The injected-clock loop check (backoff.Now().Sub(start) >= budget)
+//     still decides when to STOP RETRYING. It stays because it is what
+//     makes the exhaustion tests in wireretry_test.go deterministic: dctx's
+//     deadline is a REAL 8s (defaultWireRetryBudget) and stays inert inside
+//     a fast fake-clock test (the test never runs long enough for real time
+//     to elapse), while the fake backoff.Now() advances instantly and drives
+//     the loop to its budget-exhaustion return. In production the two
+//     mechanisms agree (both are keyed off the same budget); dctx is the
+//     one that matters for a hung RPC, the fake clock is the one that
+//     matters for deterministic tests.
+func retryOnUnavailable(ctx context.Context, budget time.Duration, backoff wireBackoff, attempt func(context.Context) error) error {
+	dctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
 	start := backoff.Now()
 	var lastErr error
 	for n := 0; ; n++ {
-		if err := ctx.Err(); err != nil {
+		if err := dctx.Err(); err != nil {
 			if lastErr != nil {
 				return lastErr
 			}
 			return err
 		}
 
-		err := attempt()
+		err := attempt(dctx)
 		if err == nil || connect.CodeOf(err) != connect.CodeUnavailable {
 			return err
 		}
@@ -132,6 +155,6 @@ func retryOnUnavailable(ctx context.Context, budget time.Duration, backoff wireB
 		if backoff.Now().Sub(start) >= budget {
 			return lastErr
 		}
-		backoff.Sleep(ctx, backoff.Delay(n))
+		backoff.Sleep(dctx, backoff.Delay(n))
 	}
 }

@@ -546,6 +546,14 @@ closure required, now met with executed evidence rather than review.
   (was `PermissionDenied`) for a caller not admitted by any owner, collapsing
   the "present but forbidden" and "absent" cases so the serving boundary is no
   longer an existence oracle.
+- **BREAKING (wire)** the L2 wire-auth boot-window rejection (`ErrBeforeEpoch`
+  — a wireauth-signed call racing `cmd/network`'s restart-epoch barrier) now
+  maps to a retryable `Unavailable` (was a permanent `Unauthenticated`) across
+  every wire-auth handler. A conforming peer recovers by re-signing with its
+  current clock and re-calling; `cmd/pipeline`'s own loss-sensitive call sites
+  now do this automatically via a bounded, re-signing retry
+  (`cmd/pipeline/wireretry.go`) instead of dropping on the first rejection
+  (see `docs/protocol/auth.md`).
 - **BREAKING (default)** `provin bundle export` now defaults to
   `--aggregate-complete`: the offline source-commitment axis is complete by
   default (pass `--aggregate-complete=false` for a linear-only bundle).
