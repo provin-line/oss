@@ -15,11 +15,14 @@ across registry boundaries for audit.
 
 ## PoC posture
 
-VC store and unresolved pool are **in-memory** — lost on restart; the chain re-fills
-as new VCs arrive. All batch tuning parameters come from `reference.conf` (no Go-side
-defaults; non-positive overrides fail startup).
+The production wiring (`cmd/network`) backs the VC store and unresolved pool
+with the file-backed `vcfilestore` under the node's data-dir; the in-memory
+implementations remain for tests and embedded use. All batch tuning parameters
+come from `reference.conf` (no Go-side defaults; non-positive overrides fail
+startup).
 
 **Audit obligation**: the post-hoc audit model requires VC bodies to remain
-resolvable for the audit horizon. The persistent store lands on the
-`tlog`-backed substrate; until then, in-memory operation is acceptable for
-development only, never for deployments that claim auditability.
+resolvable for the audit horizon. The file-backed store satisfies this for a
+single node; the transactional guarantees land on the `tlog`-backed substrate.
+In-memory operation is acceptable for development only, never for deployments
+that claim auditability.

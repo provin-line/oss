@@ -21,11 +21,10 @@ import (
 //
 // The issued proof carries the six Data Integrity members
 // (type / cryptosuite / verificationMethod / proofPurpose / created /
-// proofValue). The provin profile deliberately does NOT emit proof.@context:
-// the document @context is bound into the proof config for hashing, and a
-// provin verifier reconstructs the config from the document's @context, so the
-// closed profile is self-consistent. External W3C-DI-verifier interop is a
-// non-goal here, consistent with the int64-preserving JCS deviation.
+// proofValue) plus proof.@context mirroring the document's @context
+// (vc-di-eddsa §3.3.1 step 2 — see proof.go); the verifier enforces the
+// mirror. External W3C-DI-verifier interop is a product goal (Fork W,
+// CHANGELOG "full W3C eddsa-jcs-2022 conformance").
 type Builder struct {
 	signer      crypto.Signer
 	cryptosuite string
