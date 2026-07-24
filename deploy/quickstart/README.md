@@ -35,8 +35,9 @@ separated topology provin.e2e's own compose-runtime scenarios (e.g.
 - **Docker** with Compose v2 (`docker compose`), BuildKit enabled (default).
 - The auth-layer services (`policy-verifier`, `auth-provider`) are **published
   images** (`ghcr.io/provin-line/auth-*`, built by provin.auth's
-  publish-images workflow and pinned by immutable `sha-` tag in the compose
-  file). While `provin.auth` is **private**, pulling them needs a one-time
+  publish-images workflow and pinned to the moving `v0.2` minor tag in the
+  compose file — swap in a `sha-<sha>` tag to pin an exact, reproducible
+  build). While `provin.auth` is **private**, pulling them needs a one-time
   registry login with a token that can read the org's packages:
 
   ```sh
@@ -160,21 +161,6 @@ curl -s -X POST "$REGISTRY/dplaax.audit.v1.AuditService/ListAuditStatuses" \
 
 `CONFIDENCE_VERIFIED` on all three axes — the record was authenticated, signed,
 chained, and audited entirely through the real provider + real verifier path.
-
-> **Known gap (separated topology + the published policy-verifier image):**
-> `pipeline`'s emit path makes wire calls that never existed before the
-> network/pipeline split (`ReportEmitHealth`, `RetainPayload` —
-> `cmd/standalone` made the equivalent calls in-process, with no L1 gate at
-> all). The published `ghcr.io/provin-line/auth-policy-verifier:v0.1.0`
-> image's declared authorization surface predates those calls, so it
-> `403`s them with `undeclared_resource_action` (`chain:report-health`,
-> `payloads:retain`) — visible in `docker compose logs network`/`pipeline`.
-> `RetainPayload`'s denial aborts the whole emission (every producing loop
-> dual-emits by design), so the record above never reaches the sink and this
-> step's query returns `{}` today. This is a `provin.auth` (private repo)
-> policy-declaration gap, not a `provin.oss` bug — fixing it means
-> republishing that image with the two new resource/actions declared. Track
-> it there; nothing in this repo can work around it.
 
 ### 2e. Watch the counters (optional)
 

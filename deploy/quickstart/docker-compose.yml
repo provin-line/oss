@@ -52,13 +52,20 @@ services:
         condition: service_completed_successfully
 
   # PDP: verifies the caller's JWT (HS256, shared secret) and evaluates policy.
-  # Published by provin.auth's publish-images workflow (an immutable sha- tag;
-  # bump deliberately). While provin.auth is private the pull needs
-  # `docker login ghcr.io` with a token that can read the org's packages.
-  # Building from source instead: swap `image:` for the commented build block
-  # (needs $GITHUB_TOKEN as a BuildKit secret; see policy-verifier.Dockerfile).
+  # Published by provin.auth's publish-images workflow. Pinned to the moving
+  # v0.2 minor tag with `pull_policy: always`, so `docker compose up` re-pulls
+  # a 0.2.x patch republish rather than reusing a stale cached layer (a plain
+  # moving pin without this stays on the first-seen digest — Compose's default
+  # pull policy is `missing`). Pin a `sha-<sha>` tag (and drop pull_policy)
+  # instead for an exact, reproducible build. While provin.auth is private the
+  # pull needs `docker login ghcr.io` with a token that can read the org's
+  # packages.
+  # Building from source instead: swap the `image:`/`pull_policy` lines for the
+  # commented build block (needs $GITHUB_TOKEN as a BuildKit secret; see
+  # policy-verifier.Dockerfile).
   policy-verifier:
-    image: ghcr.io/provin-line/auth-policy-verifier:v0.1.0
+    image: ghcr.io/provin-line/auth-policy-verifier:v0.2
+    pull_policy: always
     # build:
     #   context: .
     #   dockerfile: policy-verifier.Dockerfile
@@ -77,11 +84,13 @@ services:
       retries: 20
 
   # JWT issuer: mints tokens from the DID grant (owner-key-signed assertion).
-  # Same image-vs-source choice as policy-verifier above. The image's
-  # scaffold-time --registry-base-url is a placeholder; the env below
-  # overrides it at runtime (the image is deployment-generic).
+  # Same moving-tag pin (`:v0.2` + `pull_policy: always`) and image-vs-source
+  # choice as policy-verifier above. The image's scaffold-time
+  # --registry-base-url is a placeholder; the env below overrides it at runtime
+  # (the image is deployment-generic).
   auth-provider:
-    image: ghcr.io/provin-line/auth-auth-provider:v0.1.0
+    image: ghcr.io/provin-line/auth-auth-provider:v0.2
+    pull_policy: always
     # build:
     #   context: .
     #   dockerfile: auth-provider.Dockerfile
