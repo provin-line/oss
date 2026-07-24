@@ -214,6 +214,11 @@ func TestPeerHandler_VerifyFailure_Mapped(t *testing.T) {
 		{"key resolution", wireauth.ErrKeyResolution, connect.CodeUnauthenticated},
 		{"missing proof", wireauth.ErrMissingProof, connect.CodeInvalidArgument},
 		{"malformed proof", wireauth.ErrMalformedProof, connect.CodeInvalidArgument},
+		// ErrBeforeEpoch is a boot-window rejection, not an identity verdict:
+		// an honest re-signed retry clears it once the verifier is past its
+		// restart epoch, so it maps to Unavailable (retryable), NOT
+		// Unauthenticated.
+		{"before epoch", wireauth.ErrBeforeEpoch, connect.CodeUnavailable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
