@@ -8,7 +8,7 @@ norm.** The sources of truth are:
 
 | Norm | Source of truth |
 |---|---|
-| dPLaaX protocol rules (claim grammar, grounding, open-world default, …) | `dplaax.spec_draft` rule catalog (`rules/` + `schemas/` + `vectors/`) |
+| dPLaaX protocol rules (claim grammar, grounding, open-world default, …) | `dplaax.spec` rule catalog (`rules/` + `schemas/` + `vectors/`) |
 | provin claim registry and per-claim semantics (closed / conformant-closed / open) | [vc/credential.go](../vc/credential.go) (`TransformationClaim` registry, doc comments) + [vc/README.md](../vc/README.md) |
 | provin profile context document (byte-canonical) | [vc/contexts/provin-v1.jsonld](../vc/contexts/provin-v1.jsonld) |
 
@@ -23,7 +23,7 @@ norm.** The sources of truth are:
   Changing the document bytes is a deliberate act; update the ledger in the
   same change or the harness fails.
 
-Vector shape follows the `dplaax.spec_draft` vector conventions. The
+Vector shape follows the `dplaax.spec` vector conventions. The
 `instantiates` field references the protocol rule ids a vector exercises —
 informational, not a claim of membership in the protocol's vector set.
 
@@ -34,7 +34,7 @@ vectors: duplicating them here would create a second source of truth.
 ## dplaax protocol vectors (vendored)
 
 `vectors/dplaax/` vendors the protocol's own conformance vector catalog
-(`dplaax.spec_draft` `vectors/`, 100 vectors) byte-exact, pinned by
+(`dplaax.spec` `vectors/`, whole corpus) byte-exact, pinned by
 `MANIFEST.sha256`. The manifest test fails on any in-place edit — adopting a
 spec change is a deliberate act: run `scripts/sync-spec-vectors.sh` and commit
 the vendored diff.

@@ -5,10 +5,10 @@
 # when adopting a spec change, commit the vendored diff, and let the manifest
 # test prove the copies were not edited in place.
 #
-# Usage: scripts/sync-spec-vectors.sh [path-to-dplaax.spec_draft]
+# Usage: scripts/sync-spec-vectors.sh [path-to-dplaax.spec]
 set -euo pipefail
 
-SPEC="${1:-$(dirname "$0")/../../dplaax.spec_draft}"
+SPEC="${1:-$(dirname "$0")/../../dplaax.spec}"
 DST="$(cd "$(dirname "$0")/.." && pwd)/conformance/vectors/dplaax"
 
 if [ ! -d "$SPEC/vectors" ]; then

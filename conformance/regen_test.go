@@ -19,7 +19,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// specVectorsDir is the source-of-truth vector directory (dplaax.spec_draft
+// specVectorsDir is the source-of-truth vector directory (dplaax.spec
 // vectors/), the canonical set that scripts/sync-spec-vectors.sh vendors into
 // conformance/vectors/dplaax. Overridable via DPLAAX_SPEC_VECTORS_DIR for
 // non-sibling checkouts; the default matches the sibling layout the sync
@@ -28,7 +28,7 @@ func specVectorsDir() string {
 	if d := os.Getenv("DPLAAX_SPEC_VECTORS_DIR"); d != "" {
 		return d
 	}
-	return filepath.Join("..", "..", "dplaax.spec_draft", "vectors")
+	return filepath.Join("..", "..", "dplaax.spec", "vectors")
 }
 
 // TestRegenerateDplaaxDerivedHashes is a golden-update tool, not a conformance
@@ -58,7 +58,7 @@ func specVectorsDir() string {
 // with 005/013, so it is regenerated to keep the corpus internally honest.
 //
 // identity-* is excluded on stronger grounds: those hashes are derived by the
-// CATALOG (dplaax.spec_draft tools/gen_identity_vectors.py) from the rule text
+// CATALOG (dplaax.spec tools/gen_identity_vectors.py) from the rule text
 // alone, and provin.oss agreeing with them is the assertion. Regenerating them
 // through this code path would make the implementation the author of its own
 // exam — the vectors would pass by construction and could never fail. Do not

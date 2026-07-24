@@ -27,7 +27,7 @@ func ContextCredentialsV2Document() []byte {
 }
 
 // contextDplaaxVCV1Document is the vendored byte-exact copy of the dplaax
-// protocol context (canonical: dplaax.spec_draft contexts/v1.jsonld). The
+// protocol context (canonical: dplaax.spec contexts/v1.jsonld). The
 // @context array rides the signing scope as bytes, so any divergence from
 // the canonical document is a cross-implementation hash partition;
 // TestContextDocumentMatchesSpec pins the sha256 recorded in the spec's

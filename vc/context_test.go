@@ -10,7 +10,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// The sha256 pinned in the spec's contexts/README.md (dplaax.spec_draft).
+// The sha256 pinned in the spec's contexts/README.md (dplaax.spec).
 // The @context array is inside the signing scope, so a byte divergence from
 // the canonical document is a cross-implementation hash partition — this
 // test fails on any local drift of the vendored copy. Upstream divergence
@@ -22,7 +22,7 @@ func TestContextDocumentMatchesSpec(t *testing.T) {
 	doc := vc.ContextDplaaxVCV1Document()
 	sum := sha256.Sum256(doc)
 	if got := hex.EncodeToString(sum[:]); got != contextDplaaxVCV1SHA256 {
-		t.Errorf("vendored context sha256 = %s, want %s (sync byte-exact from dplaax.spec_draft contexts/v1.jsonld)", got, contextDplaaxVCV1SHA256)
+		t.Errorf("vendored context sha256 = %s, want %s (sync byte-exact from dplaax.spec contexts/v1.jsonld)", got, contextDplaaxVCV1SHA256)
 	}
 
 	var parsed struct {

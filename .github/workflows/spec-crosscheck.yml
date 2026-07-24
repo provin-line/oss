@@ -6,6 +6,11 @@
 # here means catch-up work HERE (add drivers, update skips, re-vendor), and is
 # an early signal only — the vendored vectors in-tree remain the source the
 # regular CI pins against until a sync is deliberately committed.
+#
+# Scope: this crosscheck covers the VECTOR corpus only. The spec's contexts
+# are vendored and pinned by in-tree tests (vc/context_test.go); its schemas
+# and rule text are not machine-checked here — context/schema/rule drift is
+# adopted by deliberate re-vendor, not detected by this workflow.
 name: spec-crosscheck
 
 on:

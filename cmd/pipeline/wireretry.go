@@ -9,9 +9,9 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────
-// Client boot-window recovery (wireauth-boot-epoch-retryable spec, "Client
-// boot-window recovery" + "Signed-RPC recovery matrix" sections; PR3c-era
-// wireretry.go). During cmd/network's boot window, its restart-epoch
+// Client boot-window recovery — the client half of the restart-epoch
+// contract documented in docs/protocol/auth.md ("replay defense").
+// During cmd/network's boot window, its restart-epoch
 // barrier now returns connect.CodeUnavailable for a wireauth-signed call
 // whose proof was signed before the barrier's epoch (wireautherr.Code maps
 // wireauth.ErrBeforeEpoch there — see network/pkg/wireautherr) instead of
@@ -103,9 +103,10 @@ func defaultWireBackoff() wireBackoff {
 //     other failure is distinguished from the boot-window race, which is the
 //     ONLY condition this loop treats as recoverable;
 //   - the LAST Unavailable error once budget is exhausted or ctx is done —
-//     best-effort exhaustion, per the spec: the caller's existing
-//     log-and-drop handling is unchanged; this residual boot-window loss is
-//     accepted and documented (spec "Exhaustion posture" section).
+//     best-effort exhaustion: the caller's existing log-and-drop handling is
+//     unchanged; this residual boot-window loss is the accepted PoC posture
+//     documented in docs/protocol/auth.md ("replay defense", retry-budget
+//     exhaustion).
 //
 // attempt is called FRESH on every retry (with the budget-bounded ctx below,
 // NEVER the caller's original ctx) and MUST re-sign internally — a wireauth

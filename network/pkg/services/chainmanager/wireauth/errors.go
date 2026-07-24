@@ -18,8 +18,8 @@ var (
 	// or signature.
 	ErrMissingProof = errors.New("wireauth: missing proof")
 	// ErrMalformedProof is a present-but-ill-formed proof: a non-second-precision
-	// or unparseable issuedAt, a bad nonce, an empty op, or an unknown view
-	// version. Distinct from ErrInvalidView (which is about the fields payload).
+	// or unparseable issuedAt, a bad nonce, or an empty op. Distinct from
+	// ErrInvalidView (which is about the fields payload).
 	ErrMalformedProof = errors.New("wireauth: malformed proof")
 	// ErrInvalidView is a fields payload that violates the value grammar (only
 	// string/bool/null and nested objects/arrays of those are allowed; numbers
