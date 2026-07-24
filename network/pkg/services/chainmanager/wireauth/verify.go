@@ -14,14 +14,19 @@ import (
 // isTransientResolverErr reports whether a signer-key resolution error is a
 // transient condition (the signer's authenticity could not be evaluated)
 // rather than a definitive identity failure: a context timeout/cancellation,
-// or the production resolver refusing new work at capacity
-// (didresolver.ErrResolverBusy). It keeps the retry/Unauthenticated
-// distinction in one place; any resolver implementation whose transient
-// failures surface as context errors is covered without coupling.
+// the production resolver refusing new work at capacity
+// (didresolver.ErrResolverBusy), or the owning registry answering 5xx
+// (didresolver.ErrRegistryUnavailable — the registry could not serve the
+// resolution, which is never a verdict about the signer; the dplaax vector
+// did-resolution-unavailable-001 pins this as INDETERMINATE, not FAILED). It
+// keeps the retry/Unauthenticated distinction in one place; any resolver
+// implementation whose transient failures surface as context errors is
+// covered without coupling.
 func isTransientResolverErr(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, context.Canceled) ||
-		errors.Is(err, didresolver.ErrResolverBusy)
+		errors.Is(err, didresolver.ErrResolverBusy) ||
+		errors.Is(err, didresolver.ErrRegistryUnavailable)
 }
 
 // maxNonceLen caps an accepted nonce's length. A nonce is opaque to the
