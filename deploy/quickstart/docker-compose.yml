@@ -46,7 +46,9 @@ services:
     volumes:
       - provisioned:/provisioned
     ports:
-      - "8222:8222" # monitoring (optional)
+      # Loopback-only publish: the monitor is unauthenticated (same rationale
+      # as network's port below).
+      - "127.0.0.1:8222:8222" # monitoring (optional)
     depends_on:
       provision:
         condition: service_completed_successfully
@@ -76,7 +78,10 @@ services:
       OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
       HTTP_PORT: "3001"
     ports:
-      - "3001:3001"
+      # Loopback-only publish: the PDP trusts a shared HS256 dev secret, so it
+      # must not be reachable from the host's network (same rationale as
+      # network's port below).
+      - "127.0.0.1:3001:3001"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3001/healthcheck"]
       interval: 5s
@@ -112,7 +117,9 @@ services:
     volumes:
       - ./auth-provider/clients.yaml:/app/config/clients.yaml:ro
     ports:
-      - "3000:3000"
+      # Loopback-only publish: the issuer mints against the shared HS256 dev
+      # secret (same rationale as network's port below).
+      - "127.0.0.1:3000:3000"
     depends_on:
       network:
         condition: service_started
