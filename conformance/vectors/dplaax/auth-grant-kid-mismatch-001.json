@@ -1,0 +1,31 @@
+{
+  "id": "auth-grant-kid-mismatch-001",
+  "rule": "auth.grant.kid-match",
+  "description": "JWS protected header kid diverges from the signed payload's verification_method — the three-way match (header kid / payload method id / resolver-selected method id) MUST fail closed",
+  "input": {
+    "did": "did:dplaax:registry.test.local:org:kid-mismatch-001",
+    "did_document": {
+      "id": "did:dplaax:registry.test.local:org:kid-mismatch-001",
+      "verificationMethod": [
+        {
+          "id": "did:dplaax:registry.test.local:org:kid-mismatch-001#key-1",
+          "type": "JsonWebKey2020",
+          "controller": "did:dplaax:registry.test.local:org:kid-mismatch-001",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "x": "RQzmvoqzMnBOp2h3DnvWPIuJ2MMwtAz1YCSDcp5aEgM",
+            "kty": "OKP"
+          }
+        }
+      ]
+    },
+    "request": {
+      "did": "did:dplaax:registry.test.local:org:kid-mismatch-001",
+      "jws": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpkcGxhYXg6cmVnaXN0cnkudGVzdC5sb2NhbDpvcmc6a2lkLW1pc21hdGNoLTAwMSNrZXktMSJ9.eyJkaWQiOiJkaWQ6ZHBsYWF4OnJlZ2lzdHJ5LnRlc3QubG9jYWw6b3JnOmtpZC1taXNtYXRjaC0wMDEiLCJ0aW1lc3RhbXAiOiIyMDI2LTA3LTE3VDAwOjAwOjAwLjAwMFoiLCJub25jZSI6ImZpeGVkLW5vbmNlLWtpZC1taXNtYXRjaC0wMDEiLCJ2ZXJpZmljYXRpb25fbWV0aG9kIjoiZGlkOmRwbGFheDpyZWdpc3RyeS50ZXN0LmxvY2FsOm9yZzpraWQtbWlzbWF0Y2gtMDAxI2tleS05LWRvZXMtbm90LWV4aXN0In0.XTK9kjoveANFkUGKp6pos1SHYLartpZCKtCSRE_X_YJeJQp4SGUYzv5-37Djh4MPyJqdOfhLBxBQ7-Oup8uMAA"
+    }
+  },
+  "expect": {
+    "status": 400,
+    "error": "invalid_grant"
+  }
+}

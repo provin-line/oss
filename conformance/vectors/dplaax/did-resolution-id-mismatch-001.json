@@ -1,0 +1,19 @@
+{
+  "id": "did-resolution-id-mismatch-001",
+  "rule": "auth.resolve.id-equality",
+  "description": "Registry returns a DID document whose id does not byte-exactly equal the requested DID — resolution MUST fail (FAILED), not normalize or accept it",
+  "input": {
+    "did": "did:dplaax:registry.test.local:org:id-mismatch-001",
+    "registry_response": {
+      "status": 200,
+      "body": {
+        "id": "did:dplaax:registry.test.local:org:someone-else-001",
+        "verificationMethod": []
+      }
+    }
+  },
+  "expect": {
+    "result": "FAILED",
+    "reason": "id-mismatch"
+  }
+}

@@ -76,6 +76,11 @@ func init() {
 	dplaaxRunners["transfer-003"] = runTransferIngressRetention
 	dplaaxRunners["transfer-004"] = runTransferRelationshipRecord
 
+	// did-resolution family: auth.resolve.* driven against the real outbound
+	// resolver, network/pkg/didresolver (drivers in didresolution_test.go).
+	dplaaxRunners["did-resolution-id-mismatch-001"] = runDidResolutionHTTP
+	dplaaxRunners["did-resolution-unavailable-001"] = runDidResolutionHTTP
+
 	// Not runnable by design — ledgered so the coverage guard keeps the
 	// reasoning visible rather than silently uncovered. Each reason names its
 	// own ground (not a blanket family reason).
@@ -96,6 +101,14 @@ func init() {
 	// obligating one to exist; dplaax.vc.v1 defines none (batchresolver is an
 	// internal async worker, not a lookup surface).
 	dplaaxSkips["resolver-007"] = "reserved: resolver.batch.shape binds a future batch lookup surface; none exists in dplaax.vc.v1 (P0-11; the vector pins the shape such a surface must satisfy)"
+	// auth-grant-kid-mismatch-001 binds the L1 DID-grant JWS path (the
+	// /oauth/token grant's three-way kid match: header kid / payload method id
+	// / resolver-selected method id). This repo has no JWS grant surface —
+	// wireauth is detached Ed25519 proofs, not JWS — so there is nothing here
+	// for the vector to drive. provin-line/auth vendors the vector byte-exact
+	// and runs it in its conformance harness (integration/conformance); this
+	// entry converts to a driver if a JWS grant surface ever lands here.
+	dplaaxSkips["auth-grant-kid-mismatch-001"] = "subject is the L1 DID-grant JWS path (three-way kid match at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
 
 	// Vectors of rules whose SUBJECT does not exist in this implementation

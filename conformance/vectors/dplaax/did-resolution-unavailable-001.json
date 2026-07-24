@@ -1,0 +1,16 @@
+{
+  "id": "did-resolution-unavailable-001",
+  "rule": "auth.resolve.failure-mapping",
+  "description": "Registry returns HTTP 503 — an unavailable lifecycle source MUST be INDETERMINATE, not FAILED, and MUST NOT issue a token",
+  "input": {
+    "did": "did:dplaax:registry.test.local:org:unavailable-001",
+    "registry_response": {
+      "status": 503,
+      "body": { "error": "service unavailable" }
+    }
+  },
+  "expect": {
+    "result": "INDETERMINATE",
+    "reason": "registry-5xx"
+  }
+}
