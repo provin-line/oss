@@ -8,12 +8,6 @@
 # (for pulling the pipeline's external-key export out of the `provisioned`
 # volume — see README §2c).
 #
-# KNOWN GAP (README's own callout): the published policy-verifier image's
-# declared authorization surface predates the separated topology's new wire
-# calls (ReportEmitHealth, RetainPayload), so step ⑤ below currently never
-# observes VERIFIED and this script exits 1 after its poll budget — a
-# provin.auth (private repo) policy-declaration gap, not a bug here.
-#
 # Usage: walkthrough.sh [--provin <path>] [--registry <url>] [--pipeline-url <url>] [--provider <url>]
 
 set -euo pipefail
@@ -80,5 +74,5 @@ for _ in $(seq 1 15); do
 	sleep 1
 done
 
-echo "  ✗ no VERIFIED verdict after 15s — inspect: docker compose logs network pipeline (see this script's KNOWN GAP note, top)" >&2
+echo "  ✗ no VERIFIED verdict after 15s — inspect: docker compose logs network pipeline" >&2
 exit 1
