@@ -26,7 +26,7 @@ L2 の問い: *この名前の peer が本当にこの要求を送ったか？* 
 
 - 正確に `{signerDID, op, v, nonce, issuedAt, fields}` の canonical（JCS）view への **Ed25519 署名** — `v` は凍結された view version（現在 `1`。他の version は拒否）、`issuedAt` は秒精度の RFC 3339、`op` は RPC の view 判別子、`fields` はその business object。`op` と `fields` は verifier が**提供中の要求から**再構成する（proof からは決して読まない）。`signerDID` を署名 bytes に bind するので、鍵を共有する DID の alias が他 DID の署名を再利用することはできない。
 - 署名者の鍵は **署名者の DID document 経由**で解決（`#auth` verification method）— cross-registry、事前共有鍵なし。
-- **replay 防御**: acceptance window 内の single-use nonce（clock-skew 許容は非対称 — 過去向きが未来向きより大きい）+ **restart epoch barrier**（in-memory nonce store のリセットが restart 前の proof を再受理させない）。
+- **replay 防御**: acceptance window 内の single-use nonce（clock-skew 許容は非対称 — 過去向きが未来向きより大きい）+ **restart epoch barrier**（in-memory nonce store のリセットが restart 前の proof を再受理させない）。boot window 中はこの barrier が正当な fresh proof も拒否するが、handler は permanent な `Unauthenticated` ではなく **retryable な `Unavailable`** を返し、conforming peer は bounded な再署名 retry で回復する。retry budget 枯渇時（または budget を超える clock skew の peer）は racing call が drop される — post-v0 の durable nonce store で閉じる、PoC posture の許容された残存 loss。
 - 順序付き検証: 構造チェック → 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造が正規署名者の nonce を焼くことはできない。
 - 任意の per-op **authorizer**（signer-to-actor policy）は署名検証の後にのみ走る — 未認証入力を見ることがない。
 
