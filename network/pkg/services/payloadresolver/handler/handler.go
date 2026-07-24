@@ -15,6 +15,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
 // opResolvePayload is the wireauth op name — it MUST match the client's signed
@@ -97,31 +98,26 @@ func (h *Handler) ResolvePayload(ctx context.Context, req *connect.Request[paylo
 // constant message, the two cases are byte-identical on the wire.
 func mapError(err error) error {
 	switch {
-	// Malformed request / proof shape.
+	// Malformed request (issued_at codec + domain-level argument errors).
+	// Wireauth's own structural sentinels are handled by the wireautherr
+	// delegation below.
 	case errors.Is(err, errMalformedIssuedAt),
-		errors.Is(err, wireauth.ErrMissingProof),
-		errors.Is(err, wireauth.ErrMalformedProof),
-		errors.Is(err, wireauth.ErrInvalidView),
 		errors.Is(err, payloadresolver.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-resolution: CodeCanceled, not a server-side
-	// "unavailable". Precedes ErrResolverUnavailable, which the cancellation
-	// also wraps — order decides the mapping.
+	// "unavailable". Precedes the wireautherr delegation below, which the
+	// cancellation can also wrap (ErrResolverUnavailable) — order decides the
+	// mapping.
 	case errors.Is(err, context.Canceled):
 		return connect.NewError(connect.CodeCanceled, err)
-	// Transient resolver condition (timeout/capacity): retryable, NOT an
-	// identity rejection. Must precede the Unauthenticated cases — the error
-	// also wraps ErrResolverUnavailable, and order decides the mapping.
-	case errors.Is(err, wireauth.ErrResolverUnavailable):
-		return connect.NewError(connect.CodeUnavailable, err)
-	// Failed to prove identity.
-	case errors.Is(err, wireauth.ErrExpired),
-		errors.Is(err, wireauth.ErrFromFuture),
-		errors.Is(err, wireauth.ErrBeforeEpoch),
-		errors.Is(err, wireauth.ErrKeyResolution),
-		errors.Is(err, wireauth.ErrSignatureInvalid),
-		errors.Is(err, wireauth.ErrReplay):
-		return connect.NewError(connect.CodeUnauthenticated, err)
+	}
+	// Wireauth verification (structural, transient-resolver, and identity
+	// sentinels), delegated to the shared classifier so this mapping cannot
+	// drift from the other 5 handlers.
+	if code, ok := wireautherr.Code(err); ok {
+		return connect.NewError(code, err)
+	}
+	switch {
 	// Absent hash OR not-admitted caller (collapsed by the serving boundary):
 	// one code, one constant message.
 	case errors.Is(err, payloadresolver.ErrNotFound):

@@ -60,7 +60,13 @@ Each RPC carries a proof over the request it authenticates:
 - **replay defense**: single-use nonces within an acceptance window
   (asymmetric clock-skew tolerance — larger toward the past than the
   future), plus a **restart epoch barrier** so an in-memory nonce store
-  reset cannot re-admit pre-restart proofs;
+  reset cannot re-admit pre-restart proofs. Inside the boot window this
+  barrier also rejects a *legitimate* fresh proof; the handler returns a
+  **retryable `Unavailable`** (never a permanent `Unauthenticated`), and a
+  conforming peer recovers by a bounded, re-signing retry. On retry-budget
+  exhaustion — or a peer whose clock skew exceeds the budget — the racing
+  call is dropped: an accepted PoC-posture residual loss, closed post-v0
+  alongside a durable nonce store;
 - ordered verification: structural checks → time bounds → key resolution
   → signature → authorization → nonce record **last**, so a forgery can
   never burn a legitimate signer's nonce;

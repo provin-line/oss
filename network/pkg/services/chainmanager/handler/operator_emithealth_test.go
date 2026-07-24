@@ -154,6 +154,11 @@ func TestOperatorHandler_ReportEmitHealth_VerifyFailure_Mapped(t *testing.T) {
 		{"signature invalid", wireauth.ErrSignatureInvalid, connect.CodeUnauthenticated},
 		{"replay", wireauth.ErrReplay, connect.CodeUnauthenticated},
 		{"resolver unavailable", wireauth.ErrResolverUnavailable, connect.CodeUnavailable},
+		// ErrBeforeEpoch is a boot-window rejection, not an identity verdict:
+		// an honest re-signed retry clears it once the verifier is past its
+		// restart epoch, so it maps to Unavailable (retryable), NOT
+		// Unauthenticated.
+		{"before epoch", wireauth.ErrBeforeEpoch, connect.CodeUnavailable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

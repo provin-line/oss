@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +21,9 @@ import (
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
+	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
@@ -931,4 +935,276 @@ func TestPreflightWireOnlySignerKeys_NoCustodyLogs_OnlyChecksNodeDID(t *testing.
 	if err := preflightWireOnlySignerKeys(ks, wireOnlyNodeDID, nil); err != nil {
 		t.Fatalf("preflightWireOnlySignerKeys: %v", err)
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Task 3 (wireauth-boot-epoch-retryable spec): loss-sensitive wiring sites
+// wrapped with retryOnUnavailable — wirePayloadStore.Store (RetainPayload),
+// wireRetryingPayloadResolver.ResolvePayload, wireAuditRegistrar.Add
+// (RegisterAuditHead), and wireReceiptWriter.Put (RegisterEvidence). Each
+// harness below is a "stub server" that returns connect.CodeUnavailable
+// (simulating cmd/network's boot-window barrier — wireautherr.Code's
+// ErrBeforeEpoch mapping, Tasks 1+2 of this branch) for the first N calls to
+// the target RPC, then succeeds — proving the wrapped call recovers AND that
+// every attempt reached the server with a DISTINCT wireauth nonce (re-signed
+// per attempt, never a resent cached proof — the exact recovery mechanism
+// the spec requires).
+// ─────────────────────────────────────────────────────────────────────────
+
+// assertDistinctNonces fails the test if nonces contains fewer than 2
+// entries, an empty entry, or a repeated value — the direct evidence that
+// every retry attempt re-signed (a resent cached proof would repeat the same
+// nonce).
+func assertDistinctNonces(t *testing.T, nonces []string) {
+	t.Helper()
+	if len(nonces) < 2 {
+		t.Fatalf("saw %d attempt(s), want at least 2 (a retry must have happened)", len(nonces))
+	}
+	seen := make(map[string]bool, len(nonces))
+	for i, n := range nonces {
+		if n == "" {
+			t.Errorf("attempt %d carried an empty nonce", i)
+		}
+		if seen[n] {
+			t.Errorf("nonce %q reused across attempts — re-sign must produce a FRESH nonce per attempt", n)
+		}
+		seen[n] = true
+	}
+}
+
+// flakyRetainHandler simulates the boot-window barrier for RetainPayload: the
+// first `fail` calls return CodeUnavailable (recording the metadata frame's
+// nonce first); later calls drain the stream and succeed with a fake content
+// address. It never delegates to a real storehandler — the retry-recovery
+// proof needs only the nonce sequence and an eventual success, not real
+// persistence (that's already covered by TestWirePayloadStore_* above).
+type flakyRetainHandler struct {
+	mu     sync.Mutex
+	fail   int
+	nonces []string
+}
+
+func (h *flakyRetainHandler) RetainPayload(ctx context.Context, stream *connect.ClientStream[payloadpb.RetainPayloadRequest]) (*connect.Response[payloadpb.RetainPayloadResponse], error) {
+	if !stream.Receive() {
+		if err := stream.Err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("flakyRetainHandler: stream closed before the metadata frame")
+	}
+	meta := stream.Msg().GetMetadata()
+
+	h.mu.Lock()
+	h.nonces = append(h.nonces, meta.GetAuthProof().GetNonce())
+	shouldFail := h.fail > 0
+	if shouldFail {
+		h.fail--
+	}
+	h.mu.Unlock()
+
+	if shouldFail {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
+	}
+
+	var size int
+	for stream.Receive() {
+		size += len(stream.Msg().GetChunk())
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: fmt.Sprintf("sha256:fake-%d", size)}), nil
+}
+
+// TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns is the plan's
+// Step 5 integration proof (retain site): a stub RetainPayload server
+// returns CodeUnavailable twice then succeeds; Store must recover, and the
+// server must have seen exactly 3 attempts with 3 DISTINCT nonces.
+func TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns(t *testing.T) {
+	handler := &flakyRetainHandler{fail: 2}
+	path, hh := payloadpbconnect.NewPayloadStoreServiceHandler(handler)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, payloadOwnerA)
+
+	factory := newPayloadClientFactory(ks, srv.URL, "", srv.Client(), 0)
+	store := wirePayloadStore{factory: factory}
+
+	contentAddress, err := store.Store(context.Background(), []byte("payload racing the boot window"), payloadOwnerA)
+	if err != nil {
+		t.Fatalf("Store: %v, want recovery via retry", err)
+	}
+	if contentAddress == "" {
+		t.Error("Store returned an empty content address")
+	}
+	if len(handler.nonces) != 3 {
+		t.Fatalf("server saw %d RetainPayload attempts, want 3 (2 failures + 1 success)", len(handler.nonces))
+	}
+	assertDistinctNonces(t, handler.nonces)
+}
+
+// flakyResolveHandler simulates the boot-window barrier for ResolvePayload:
+// the first `fail` calls return CodeUnavailable; later calls stream back a
+// fixed payload.
+type flakyResolveHandler struct {
+	payloadpbconnect.UnimplementedPayloadServiceHandler
+	mu     sync.Mutex
+	fail   int
+	nonces []string
+}
+
+const flakyResolvedPayload = "resolved payload bytes"
+
+func (h *flakyResolveHandler) ResolvePayload(ctx context.Context, req *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
+	h.mu.Lock()
+	h.nonces = append(h.nonces, req.Msg.GetAuthProof().GetNonce())
+	shouldFail := h.fail > 0
+	if shouldFail {
+		h.fail--
+	}
+	h.mu.Unlock()
+
+	if shouldFail {
+		return connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
+	}
+	return stream.Send(&payloadpb.ResolvePayloadResponse{Chunk: []byte(flakyResolvedPayload)})
+}
+
+// TestWireRetryingPayloadResolver_ResolvePayload_RetriesOnUnavailableAndResigns
+// proves the resolve (read) side recovers exactly like retain: a stub
+// ResolvePayload server fails twice with CodeUnavailable then succeeds.
+func TestWireRetryingPayloadResolver_ResolvePayload_RetriesOnUnavailableAndResigns(t *testing.T) {
+	handler := &flakyResolveHandler{fail: 2}
+	path, hh := payloadpbconnect.NewPayloadServiceHandler(handler)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireNodeDID)
+
+	factory := newPayloadClientFactory(ks, "", "", http.DefaultClient, 0)
+	resolver := wireRetryingPayloadResolver{client: factory.For(wireNodeDID)}
+
+	got, err := resolver.ResolvePayload(context.Background(), srv.URL, addr("d"))
+	if err != nil {
+		t.Fatalf("ResolvePayload: %v, want recovery via retry", err)
+	}
+	if string(got) != flakyResolvedPayload {
+		t.Errorf("ResolvePayload = %q, want %q", got, flakyResolvedPayload)
+	}
+	if len(handler.nonces) != 3 {
+		t.Fatalf("server saw %d ResolvePayload attempts, want 3 (2 failures + 1 success)", len(handler.nonces))
+	}
+	assertDistinctNonces(t, handler.nonces)
+}
+
+// flakyAuditServiceHandler simulates the boot-window barrier independently
+// for RegisterEvidence and RegisterAuditHead: the first failEvidence /
+// failAuditHead calls to each RPC return CodeUnavailable, then each
+// succeeds. Embeds UnimplementedAuditServiceHandler for the read methods
+// (GetAuditStatus etc.) neither test below calls.
+type flakyAuditServiceHandler struct {
+	auditpbconnect.UnimplementedAuditServiceHandler
+	mu              sync.Mutex
+	failEvidence    int
+	failAuditHead   int
+	evidenceNonces  []string
+	auditHeadNonces []string
+}
+
+func (h *flakyAuditServiceHandler) RegisterEvidence(ctx context.Context, req *connect.Request[auditpb.RegisterEvidenceRequest]) (*connect.Response[auditpb.RegisterEvidenceResponse], error) {
+	h.mu.Lock()
+	h.evidenceNonces = append(h.evidenceNonces, req.Msg.GetAuthProof().GetNonce())
+	shouldFail := h.failEvidence > 0
+	if shouldFail {
+		h.failEvidence--
+	}
+	h.mu.Unlock()
+	if shouldFail {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
+	}
+	return connect.NewResponse(&auditpb.RegisterEvidenceResponse{}), nil
+}
+
+func (h *flakyAuditServiceHandler) RegisterAuditHead(ctx context.Context, req *connect.Request[auditpb.RegisterAuditHeadRequest]) (*connect.Response[auditpb.RegisterAuditHeadResponse], error) {
+	h.mu.Lock()
+	h.auditHeadNonces = append(h.auditHeadNonces, req.Msg.GetAuthProof().GetNonce())
+	shouldFail := h.failAuditHead > 0
+	if shouldFail {
+		h.failAuditHead--
+	}
+	h.mu.Unlock()
+	if shouldFail {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
+	}
+	return connect.NewResponse(&auditpb.RegisterAuditHeadResponse{}), nil
+}
+
+// TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns proves
+// RegisterAuditHead recovers via retry, each attempt re-signed.
+func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
+	handler := &flakyAuditServiceHandler{failAuditHead: 2}
+	path, hh := auditpbconnect.NewAuditServiceHandler(handler)
+	mux := http.NewServeMux()
+	mux.Handle(path, hh)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireNodeDID)
+
+	factory := newAuditClientFactory(ks, srv.URL, "", srv.Client())
+	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
+
+	if err := registrar.Add(pipelineruntime.StoredHead{WireVariantID: "variant-1"}); err != nil {
+		t.Fatalf("Add: %v, want recovery via retry", err)
+	}
+	if len(handler.auditHeadNonces) != 3 {
+		t.Fatalf("server saw %d RegisterAuditHead attempts, want 3 (2 failures + 1 success)", len(handler.auditHeadNonces))
+	}
+	assertDistinctNonces(t, handler.auditHeadNonces)
+}
+
+// TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns
+// proves RegisterEvidence recovers via retry, each attempt re-signed. Put
+// also calls ResolveCredential first (over a real VCResolverService,
+// unwrapped — not in this task's loss-sensitive matrix), so this harness
+// mounts BOTH a real VCResolverService and the flaky AuditService on one mux.
+func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t *testing.T) {
+	vcSvc := vcresolver.New(vcresolver.NewVariantStore(vcresolvermemstore.NewBackend()), vcresolvermemstore.NewPool())
+	auditHandler := &flakyAuditServiceHandler{failEvidence: 2}
+
+	mux := http.NewServeMux()
+	vcPath, vcH := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc))
+	mux.Handle(vcPath, vcH)
+	auditPath, auditH := auditpbconnect.NewAuditServiceHandler(auditHandler)
+	mux.Handle(auditPath, auditH)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	vcClient := vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL))
+	store := vcStoreAdapter{client: vcClient}
+	head, err := store.StoreVC(context.Background(), minimalCredentialBytes(t, wireAggregateIssuerDID, nil), "", 0)
+	if err != nil {
+		t.Fatalf("StoreVC: %v", err)
+	}
+
+	ks := ksfilestore.New(t.TempDir())
+	provisionAuthKey(t, ks, wireAggregateIssuerDID)
+
+	factory := newAuditClientFactory(ks, srv.URL, "", srv.Client())
+	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
+
+	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, []string{addr("c")}); err != nil {
+		t.Fatalf("Put: %v, want recovery via retry", err)
+	}
+	if len(auditHandler.evidenceNonces) != 3 {
+		t.Fatalf("server saw %d RegisterEvidence attempts, want 3 (2 failures + 1 success)", len(auditHandler.evidenceNonces))
+	}
+	assertDistinctNonces(t, auditHandler.evidenceNonces)
 }

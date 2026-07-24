@@ -21,7 +21,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
 // Service is the consumer-side view of the chainmanager domain the operator
@@ -215,11 +215,9 @@ func formatCreated(t time.Time) string {
 // sentinels, to Connect codes (errors.Is, never string matching).
 func mapError(err error) error {
 	switch {
-	// Malformed request / proof shape (ReportEmitHealth's codec + wireauth).
-	case errors.Is(err, errMalformedIssuedAt),
-		errors.Is(err, wireauth.ErrMissingProof),
-		errors.Is(err, wireauth.ErrMalformedProof),
-		errors.Is(err, wireauth.ErrInvalidView):
+	// Malformed request (ReportEmitHealth's issued_at codec). Wireauth's own
+	// structural sentinels are handled by the wireautherr delegation below.
+	case errors.Is(err, errMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, allowlist.ErrInvalidPattern):
 		return connect.NewError(connect.CodeInvalidArgument, err)
@@ -249,23 +247,19 @@ func mapError(err error) error {
 		}
 		return connect.NewError(connect.CodeUnavailable, err)
 	// Inbound caller hung up mid-verification: CodeCanceled, not a
-	// server-side "unavailable". Precedes ErrResolverUnavailable, which the
-	// cancellation also wraps — order decides the mapping.
+	// server-side "unavailable". Precedes the wireautherr delegation below,
+	// which the cancellation can also wrap (ErrResolverUnavailable) — order
+	// decides the mapping.
 	case errors.Is(err, context.Canceled):
 		return connect.NewError(connect.CodeCanceled, err)
-	// Transient resolver condition (timeout/capacity): retryable, NOT an
-	// identity rejection. Must precede the Unauthenticated cases — the error
-	// also wraps ErrResolverUnavailable, and order decides the mapping.
-	case errors.Is(err, wireauth.ErrResolverUnavailable):
-		return connect.NewError(connect.CodeUnavailable, err)
-	// Failed to prove identity (ReportEmitHealth's wireauth verification).
-	case errors.Is(err, wireauth.ErrExpired),
-		errors.Is(err, wireauth.ErrFromFuture),
-		errors.Is(err, wireauth.ErrBeforeEpoch),
-		errors.Is(err, wireauth.ErrKeyResolution),
-		errors.Is(err, wireauth.ErrSignatureInvalid),
-		errors.Is(err, wireauth.ErrReplay):
-		return connect.NewError(connect.CodeUnauthenticated, err)
+	}
+	// ReportEmitHealth's wireauth verification (structural, transient-resolver,
+	// and identity sentinels), delegated to the shared classifier so this
+	// mapping cannot drift from the other 5 handlers.
+	if code, ok := wireautherr.Code(err); ok {
+		return connect.NewError(code, err)
+	}
+	switch {
 	// Signer-to-actor binding: the proven signer must be the claimed publisher.
 	case errors.Is(err, errPublisherMismatch):
 		return connect.NewError(connect.CodePermissionDenied, err)
