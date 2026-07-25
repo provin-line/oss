@@ -39,7 +39,7 @@ permissions:
 
 env:
   # github.com/provin-line/e2e — the harness revision this commit is gated by.
-  E2E_REF: 6d3a27581c81749d3883c00e9ee1b79660adcbe8
+  E2E_REF: 6b8ff7a00000b80eb1c0f8b30cdab1607a457bdf
 
 jobs:
   process:
@@ -53,17 +53,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: oss
-      # A deploy key, not the workflow token: GITHUB_TOKEN is scoped to this
-      # repository and cannot read a private sibling. The key's public half is a
-      # read-only deploy key on provin-line/e2e; only the private half is here,
-      # as an encrypted Actions secret.
+      # An installation token from a GitHub App, not a deploy key: the
+      # provin-line organisation disables deploy keys by policy and points at
+      # Apps instead. GITHUB_TOKEN cannot be used either — it is scoped to this
+      # repository and cannot read a private sibling.
+      #
+      # The token is minted per job, expires in an hour, and `repositories:`
+      # narrows it to the one repo this job reads. Nothing long-lived and
+      # nothing user-scoped is involved.
+      - id: app-token
+        name: mint a scoped token for the harness checkout
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: provin-line
+          repositories: e2e
       - name: checkout the pinned harness
         uses: actions/checkout@v4
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
-          ssh-key: ${{ secrets.E2E_DEPLOY_KEY }}
+          token: ${{ steps.app-token.outputs.token }}
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
@@ -91,13 +103,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: oss
+      - id: app-token
+        name: mint a scoped token for the harness checkout
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: provin-line
+          repositories: e2e
       - name: checkout the pinned harness
         uses: actions/checkout@v4
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
-          ssh-key: ${{ secrets.E2E_DEPLOY_KEY }}
+          token: ${{ steps.app-token.outputs.token }}
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
