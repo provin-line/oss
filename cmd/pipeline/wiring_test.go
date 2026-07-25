@@ -938,7 +938,7 @@ func TestPreflightWireOnlySignerKeys_NoCustodyLogs_OnlyChecksNodeDID(t *testing.
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Task 3 (wireauth-boot-epoch-retryable spec): loss-sensitive wiring sites
+// Loss-sensitive wiring sites
 // wrapped with retryOnUnavailable — wirePayloadStore.Store (RetainPayload),
 // wireRetryingPayloadResolver.ResolvePayload, wireAuditRegistrar.Add
 // (RegisterAuditHead), and wireReceiptWriter.Put (RegisterEvidence). Each

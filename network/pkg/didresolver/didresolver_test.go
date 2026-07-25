@@ -135,14 +135,17 @@ func TestResolve_NotFound(t *testing.T) {
 	}
 }
 
-// A non-404 upstream failure is transient, not a definitive absence: the error
-// must NOT classify as resolver.ErrNotFound (the verifier treats it as
-// indeterminate, retryable).
-func TestResolve_ServerError_NotClassifiedNotFound(t *testing.T) {
+// A 5xx upstream failure is transient, not a definitive absence: it must carry
+// the typed ErrRegistryUnavailable class (so wireauth maps it to a retryable
+// code) and must NOT classify as resolver.ErrNotFound.
+func TestResolve_ServerError_TypedUnavailableNotNotFound(t *testing.T) {
 	r := newResolver(t, &stub{serverError: true}, loopbackGuard())
 	_, err := r.Resolve(context.Background(), testDID)
 	if err == nil {
 		t.Fatal("HTTP 500: want error")
+	}
+	if !errors.Is(err, didresolver.ErrRegistryUnavailable) {
+		t.Errorf("HTTP 500: err = %v, want ErrRegistryUnavailable", err)
 	}
 	if errors.Is(err, resolver.ErrNotFound) {
 		t.Errorf("HTTP 500 classified as definitive not-found: %v", err)

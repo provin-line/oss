@@ -60,8 +60,10 @@ docker compose up --build      # provisions NATS trust material + pipeline keys,
 ```
 
 Wait until `policy-verifier`, `auth-provider`, `network`, and `pipeline` are
-healthy. Published ports: `network` (the registry) `8443`, `pipeline` (the
-data plane) `8444`, policy-verifier `3001`, auth-provider `3000`.
+healthy. Published ports (all bound to `127.0.0.1` only — this stack shares a
+dev secret and serves unauthenticated monitoring, so nothing is exposed to the
+host's network): `network` (the registry) `8443`, `pipeline` (the data plane)
+`8444`, policy-verifier `3001`, auth-provider `3000`.
 
 ## 2. Walk a record to VERIFIED
 

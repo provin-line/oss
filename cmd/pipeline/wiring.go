@@ -381,7 +381,7 @@ type wireAuditRegistrar struct {
 }
 
 // Add registers head for audit, retrying a boot-window CodeUnavailable
-// (Task 3, wireauth-boot-epoch-retryable spec: RegisterAuditHead is
+// (RegisterAuditHead is
 // idempotent — the server-side audit queue's Add preserves an existing
 // entry's Attempts, see wireReceiptWriter's own doc — so a bounded,
 // re-signing retry is safe here) via retryOnUnavailable. Each retry
@@ -443,12 +443,12 @@ type wireReceiptWriter struct {
 }
 
 // Put resolves headHash to its wire variant and registers evidence, retrying
-// a boot-window CodeUnavailable on the RegisterEvidence call itself (Task 3,
-// wireauth-boot-epoch-retryable spec: RegisterEvidence is idempotent — the
+// a boot-window CodeUnavailable on the RegisterEvidence call itself
+// (RegisterEvidence is idempotent — the
 // server-side audit queue's Add preserves an existing entry's Attempts, see
 // this type's own doc above — so a bounded, re-signing retry is safe).
-// ResolveCredential (the earlier read, over the SAME wire) is not itself in
-// the spec's loss-sensitive retry matrix and is left unwrapped. Each retry
+// ResolveCredential (the earlier read, over the SAME wire) is not itself
+// loss-sensitive and is left unwrapped. Each retry
 // re-invokes RegisterEvidence, which signs a fresh wireauth proof internally
 // on every call (auditor/client.Client.proof) — never a resent cached proof.
 //
@@ -643,9 +643,9 @@ type wirePayloadStore struct {
 	factory *payloadClientFactory
 }
 
-// Store retains payload, retrying a boot-window CodeUnavailable (Task 3,
-// wireauth-boot-epoch-retryable spec: RetainPayload is idempotent re-retain —
-// see the spec's recovery matrix). Store still holds the whole payload as
+// Store retains payload, retrying a boot-window CodeUnavailable
+// (RetainPayload is idempotent re-retain, so a bounded, re-signing retry is
+// safe). Store still holds the whole payload as
 // []byte (pipeline/runtime.PayloadRetainStore's own contract), so each retry
 // rebuilds a FRESH bytes.Reader per attempt — Retain's io.Reader is consumed
 // on the first attempt and cannot be replayed, which is exactly why the

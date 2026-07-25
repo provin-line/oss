@@ -8,7 +8,7 @@
 
 | 規範 | SoT |
 |---|---|
-| dPLaaX protocol 規則（claim 文法・接地・開世界デフォルト等） | `dplaax.spec_draft` の rule catalog（`rules/` + `schemas/` + `vectors/`） |
+| dPLaaX protocol 規則（claim 文法・接地・開世界デフォルト等） | `dplaax.spec` の rule catalog（`rules/` + `schemas/` + `vectors/`） |
 | provin claim registry と各 claim の意味（closed / conformant-closed / open） | [vc/credential.go](../vc/credential.go)（`TransformationClaim` registry の doc comment）+ [vc/README.ja.md](../vc/README.ja.md) |
 | provin profile context 文書（byte 単位で正規） | [vc/contexts/provin-v1.jsonld](../vc/contexts/provin-v1.jsonld) |
 
@@ -22,7 +22,7 @@
   文書が担う prefix 接地、`@protected`。文書バイトの変更は意図的な行為であり、
   同一変更内で台帳を更新しなければ harness が fail する。
 
-vector の形状は `dplaax.spec_draft` の vector 規約に従う。`instantiates` field は
+vector の形状は `dplaax.spec` の vector 規約に従う。`instantiates` field は
 その vector が行使する protocol rule id への参照 — 情報提供であり、protocol 側
 vector 集合への所属を主張するものではない。
 
@@ -33,7 +33,7 @@ SoT が生まれる。
 ## dplaax protocol vectors（vendored）
 
 `vectors/dplaax/` は protocol 自身の conformance vector catalog
-（`dplaax.spec_draft` `vectors/`、2026-07-06 時点 95 本）を byte-exact に
+（`dplaax.spec` `vectors/`、全 corpus）を byte-exact に
 vendoring し、`MANIFEST.sha256` で pin する。manifest テストは in-place 編集で
 fail する — spec 変更の取り込みは意図的な行為であり、
 `scripts/sync-spec-vectors.sh` を実行して vendored diff ごと commit する。

@@ -60,7 +60,10 @@ Each RPC carries a proof over the request it authenticates:
 - **replay defense**: single-use nonces within an acceptance window
   (asymmetric clock-skew tolerance — larger toward the past than the
   future), plus a **restart epoch barrier** so an in-memory nonce store
-  reset cannot re-admit pre-restart proofs. Inside the boot window this
+  reset cannot re-admit pre-restart proofs (a guarantee that holds under a
+  non-backward-stepping clock; a clock stepped back across a restart — NTP
+  step, VM snapshot restore — can reopen the window, closed post-v0 with
+  the durable nonce store below). Inside the boot window this
   barrier also rejects a *legitimate* fresh proof; the handler returns a
   **retryable `Unavailable`** (never a permanent `Unauthenticated`), and a
   conforming peer recovers by a bounded, re-signing retry. On retry-budget

@@ -219,6 +219,8 @@ func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.
 		"cancelled":    context.Canceled,
 		"at capacity":  didresolver.ErrResolverBusy,
 		"wrapped busy": fmt.Errorf("resolve chain: %w", didresolver.ErrResolverBusy),
+		"registry 5xx": didresolver.ErrRegistryUnavailable,
+		"wrapped 5xx":  fmt.Errorf("resolve chain: %w", didresolver.ErrRegistryUnavailable),
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := testVerifier(t, errResolver{err: resErr})

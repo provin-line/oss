@@ -1,7 +1,9 @@
 # delegation — Delegation Credentials
 
 Owner-signed `DelegationCredential` asserting that an Owner DID delegates authority
-(scoped, e.g. `pipeline:operate`, `process:sign`) to a Pipeline or Process DID.
+to a Pipeline or Process DID. The provin profile is **unscoped**: a delegation
+carrying a scope is rejected fail-closed (the spec's `delegation.scope` keeps
+scope optional for other wire profiles; provin opts out — see `delegation.go`).
 
 ## Conventions
 

@@ -15,7 +15,13 @@ authorization allow-list, **not authentication** (see
 [network/README.md](network/README.md#pdp-backends--the-locus-of-authentication)).
 
 > **Status: PoC skeleton.** Directory structure and per-layer conventions are in place;
-> interfaces and implementations land incrementally.
+> interfaces and implementations land incrementally. Accepted PoC gaps are
+> recorded at their code sites and tracked against the P0 slices — notably:
+> audit evidence is keyed by a credential's **body** address, so a verdict does
+> not name which admitted variant it audited
+> (`network/pkg/services/auditor/evidence.go`, P0-1 slices B/C), and DID
+> lifecycle writes are non-transactional with known partial-failure windows
+> (`network/pkg/services/didregistry`, closed by the durable tlog substrate).
 
 ## Naming
 

@@ -62,6 +62,13 @@ var (
 	// wireauth verifier, which maps it to a retryable RPC code) should treat it
 	// as "try again", never as a definitive resolution failure.
 	ErrResolverBusy = errors.New("didresolver: resolver at capacity")
+	// ErrRegistryUnavailable is returned when the owning registry answered with
+	// a 5xx: the registry exists but could not serve the resolution — a
+	// transient upstream condition, never a verdict about the DID. Consumers
+	// treat it like ErrResolverBusy (retry — the wireauth verifier maps it to a
+	// retryable RPC code), not like ErrDIDNotFound (definitive absence). The
+	// dplaax vector did-resolution-unavailable-001 pins exactly this split.
+	ErrRegistryUnavailable = errors.New("didresolver: registry unavailable (upstream 5xx)")
 )
 
 // Resolver resolves did:dplaax DIDs over HTTP against their owning registry.
@@ -184,6 +191,9 @@ func (r *Resolver) ResolveDocument(ctx context.Context, didStr string) (*did.DID
 	case http.StatusNotFound:
 		return nil, nil, fmt.Errorf("%w: %s", ErrDIDNotFound, didStr)
 	default:
+		if resp.StatusCode >= 500 {
+			return nil, nil, fmt.Errorf("%w: %s: status %d", ErrRegistryUnavailable, didStr, resp.StatusCode)
+		}
 		return nil, nil, fmt.Errorf("didresolver: %s: unexpected status %d", didStr, resp.StatusCode)
 	}
 	// Bounded read: cap+1 so an exactly-cap body still fits and an over-cap body

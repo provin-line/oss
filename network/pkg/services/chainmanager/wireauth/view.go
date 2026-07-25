@@ -7,10 +7,12 @@ import (
 	"github.com/provin-line/oss/canon/jcs"
 )
 
-// ViewVersion is the frozen version of the signed-view composition. It is
-// carried as "v" in the signed bytes; a verifier rejects any other version as
-// ErrMalformedProof, so a future view-format change is a clean, detectable break
-// rather than a silent canonicalization divergence across peers.
+// ViewVersion is the frozen version of the signed-view composition, folded
+// into the signed bytes as "v". The version is not carried on the wire: the
+// verifier always reconstructs the view with this constant, so a signer using
+// any other version fails signature verification (ErrSignatureInvalid) — a
+// clean, detectable break rather than a silent canonicalization divergence
+// across peers.
 const ViewVersion = 1
 
 // viewBytes builds the canonical signing scope of one ChainPeerService RPC and

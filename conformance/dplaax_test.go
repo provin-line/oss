@@ -564,7 +564,7 @@ func runSignerRegister(t *testing.T, v dplaaxVector) {
 // the real variant store in tranche2_test.go.
 //
 // These vectors carry hashes the CATALOG derived from its own rule text
-// (dplaax.spec_draft tools/gen_identity_vectors.py), not values this
+// (dplaax.spec tools/gen_identity_vectors.py), not values this
 // implementation printed. That is what makes them able to fail: a KAT the
 // implementation authored proves only that the code equals itself. For the
 // same reason identity-* is absent from the regen tool's allow-list.
