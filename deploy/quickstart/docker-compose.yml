@@ -59,9 +59,9 @@ services:
   # a 0.2.x patch republish rather than reusing a stale cached layer (a plain
   # moving pin without this stays on the first-seen digest — Compose's default
   # pull policy is `missing`). Pin a `sha-<sha>` tag (and drop pull_policy)
-  # instead for an exact, reproducible build. While provin.auth is private the
-  # pull needs `docker login ghcr.io` with a token that can read the org's
-  # packages.
+  # instead for an exact, reproducible build. If the pull is denied (a 401 —
+  # e.g. the GHCR packages are not public in your environment), `docker login
+  # ghcr.io` with a token that can read the org's packages.
   # Building from source instead: swap the `image:`/`pull_policy` lines for the
   # commented build block (needs $GITHUB_TOKEN as a BuildKit secret; see
   # policy-verifier.Dockerfile).
@@ -226,11 +226,11 @@ volumes:
   provisioned:
   pipeline-data:
 
-# GitHub token for cloning the (currently private) provin.auth — only needed
-# when building policy-verifier / auth-provider FROM SOURCE (the commented
-# build blocks above) instead of pulling the published images. Read from
-# $GITHUB_TOKEN; harmless to leave defined while unused, inert once the repos
-# are public.
+# GitHub token for cloning provin.auth — only needed when building
+# policy-verifier / auth-provider FROM SOURCE (the commented build blocks
+# above) instead of pulling the published images, and only when the clone
+# needs authentication. Read from $GITHUB_TOKEN; harmless to leave defined
+# while unused, inert against a public repo.
 secrets:
   github_token:
     environment: GITHUB_TOKEN

@@ -37,8 +37,9 @@ separated topology provin.e2e's own compose-runtime scenarios (e.g.
   images** (`ghcr.io/provin-line/auth-*`, built by provin.auth's
   publish-images workflow and pinned to the moving `v0.2` minor tag in the
   compose file — swap in a `sha-<sha>` tag to pin an exact, reproducible
-  build). While `provin.auth` is **private**, pulling them needs a one-time
-  registry login with a token that can read the org's packages:
+  build). If the pull is denied (a 401 — the GHCR packages not being public
+  in your environment), do a one-time registry login with a token that can
+  read the org's packages:
 
   ```sh
   gh auth token | docker login ghcr.io -u "$(gh api user --jq .login)" --password-stdin
