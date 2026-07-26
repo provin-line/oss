@@ -48,7 +48,7 @@ func natsOperator(c *chainconfig.Config) (infra.Operator, error) {
 		return nil, err
 	}
 	// Publish the account's current claims at boot so a freshly-provisioned
-	// account is resolvable before its first grant (findings #14). Idempotent;
+	// account is resolvable before its first grant (E2E-F-014 in provin.e2e's FINDINGS.md). Idempotent;
 	// hydrate has already absorbed any previously published grant set, so this
 	// never clobbers live grants.
 	if err := op.PublishClaims(); err != nil {

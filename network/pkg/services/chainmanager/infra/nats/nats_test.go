@@ -450,7 +450,7 @@ func TestMutators_RejectMalformed(t *testing.T) {
 
 // PublishClaims makes a freshly-created account resolvable BEFORE any grant:
 // without it, account JWTs are written only on a mutation, so a bare account
-// cannot connect (finding #14 in the provin.e2e findings log).
+// cannot connect (E2E-F-014 in provin.e2e's FINDINGS.md).
 func TestOperator_PublishClaims(t *testing.T) {
 	dir := t.TempDir()
 	op, _ := nkeys.CreateOperator()
