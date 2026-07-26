@@ -21,6 +21,12 @@
 # reader; promote it to a file when a second pin appears (a quickstart auth
 # smoke would want the auth image digests, for instance).
 #
+# Every action here is pinned to a commit SHA, unlike this repository's other
+# workflows. The release-engineering track defers SHA pinning for read-only CI,
+# and that judgement does not reach this file: these steps handle a GitHub App
+# private key, and a moved or compromised tag would receive it. A tag is
+# mutable; a commit SHA is the only immutable action reference.
+#
 # Cost: the compose job builds two images and runs eleven container stacks
 # serially, so it is the slowest thing in this repository's CI by a wide margin.
 # It is required anyway — the two runtimes are equivalent by rule (the harness's
@@ -39,18 +45,28 @@ permissions:
 
 env:
   # github.com/provin-line/e2e — the harness revision this commit is gated by.
-  E2E_REF: 9877d56d8ad8eb6aa90ffc0d5fa12632993082b4
+  E2E_REF: 70b978c48146193d40e5d2f331463f1deb628638
 
 jobs:
   process:
     runs-on: ubuntu-latest
+    # A fork's pull request gets no repository secrets, so the App key below is
+    # empty and the harness checkout cannot happen. Skipping is not a coverage
+    # hole being papered over — it is the only honest option, and the
+    # alternatives are worse: leaving it to fail hands every external
+    # contributor two permanently red jobs they cannot fix, and
+    # pull_request_target would hand a fork's code the very secret this guards.
+    # A skipped job reports success even when required, so this does not wedge
+    # a protected branch. Same-repository pull requests and the post-merge push
+    # still run it, which is where the gate has to hold.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       # Both repositories go in subdirectories so the harness's repos/oss can be
       # a sibling symlink. Checking oss out at the workspace root instead would
       # make repos/oss point at a tree containing the harness itself, and the
       # docker build context would swallow it.
       - name: checkout this oss commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
       # An installation token from a GitHub App, not a deploy key: the
@@ -63,25 +79,33 @@ jobs:
       # nothing user-scoped is involved.
       - id: app-token
         name: mint a scoped token for the harness checkout
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.CI_APP_ID }}
           private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
           owner: provin-line
           repositories: e2e
+          # Without this the token inherits EVERY permission the installation
+          # holds; `repositories:` narrows which repos, not which rights. The
+          # workflow calls this a scoped token, so make that true rather than
+          # dependent on how the App happens to be configured.
+          permission-contents: read
       - name: checkout the pinned harness
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
           token: ${{ steps.app-token.outputs.token }}
+          # Otherwise checkout writes the installation token into the clone's
+          # git config, where every later step in the job can read it.
+          persist-credentials: false
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
           ln -sfn ../../oss e2e/repos/oss
           test -e e2e/repos/oss/go.mod || { echo "symlink does not resolve to an oss checkout"; exit 1; }
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: e2e/go.mod
           cache: true
@@ -98,32 +122,50 @@ jobs:
 
   compose:
     runs-on: ubuntu-latest
+    # A fork's pull request gets no repository secrets, so the App key below is
+    # empty and the harness checkout cannot happen. Skipping is not a coverage
+    # hole being papered over — it is the only honest option, and the
+    # alternatives are worse: leaving it to fail hands every external
+    # contributor two permanently red jobs they cannot fix, and
+    # pull_request_target would hand a fork's code the very secret this guards.
+    # A skipped job reports success even when required, so this does not wedge
+    # a protected branch. Same-repository pull requests and the post-merge push
+    # still run it, which is where the gate has to hold.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: checkout this oss commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
       - id: app-token
         name: mint a scoped token for the harness checkout
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.CI_APP_ID }}
           private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
           owner: provin-line
           repositories: e2e
+          # Without this the token inherits EVERY permission the installation
+          # holds; `repositories:` narrows which repos, not which rights. The
+          # workflow calls this a scoped token, so make that true rather than
+          # dependent on how the App happens to be configured.
+          permission-contents: read
       - name: checkout the pinned harness
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
           token: ${{ steps.app-token.outputs.token }}
+          # Otherwise checkout writes the installation token into the clone's
+          # git config, where every later step in the job can read it.
+          persist-credentials: false
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
           ln -sfn ../../oss e2e/repos/oss
           test -e e2e/repos/oss/go.mod || { echo "symlink does not resolve to an oss checkout"; exit 1; }
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: e2e/go.mod
           cache: true
