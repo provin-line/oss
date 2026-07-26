@@ -170,7 +170,7 @@ func main() {
 		log.Fatalf("network: %v", err)
 	}
 
-	// The chain operator publishes the node account's claims (findings #14) —
+	// The chain operator publishes the node account's claims (E2E-F-014 in provin.e2e's FINDINGS.md) —
 	// required for the chain-management RPCs (ChainService) this node
 	// exposes, even though it runs no transport loop of its own.
 	chainOp, err := netcompose.ChainOperator(chainCfg)

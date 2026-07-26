@@ -192,7 +192,7 @@ func assertNoTempFiles(t *testing.T, dir string) {
 
 // TestBackendSurvivesRestart: a fresh instance over the same directory sees
 // everything the first one acknowledged. Evidence that does not survive a
-// restart is not evidence (e2e finding #23).
+// restart is not evidence (E2E-F-023 in provin.e2e's FINDINGS.md).
 func TestBackendSurvivesRestart(t *testing.T) {
 	b, dir := newBackend(t)
 	body, variant := hex64('e'), hex64('f')

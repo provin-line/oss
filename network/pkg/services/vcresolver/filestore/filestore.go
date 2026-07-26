@@ -1,6 +1,6 @@
 // Package filestore is the file-backed implementation of the vcresolver Store
 // and Pool — the durable evidence substrate (spec: evidence-persistence,
-// driven by e2e finding #23: a restart must not erase the audit evidence).
+// driven by E2E-F-023 in provin.e2e's FINDINGS.md: a restart must not erase the audit evidence).
 //
 // Layout (one JSON file per entry under the store's root):
 //

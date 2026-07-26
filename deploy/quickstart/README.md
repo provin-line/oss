@@ -187,11 +187,11 @@ See `docs/architecture/deployment.md` "Metrics" for the family reference.
 ### 2f. Export an offline evidence bundle (from the host)
 
 `provin bundle export` archives a head's chain + authority documents into a
-self-contained bundle a relying party can verify offline. Using the
-`payload_hash` from step 2c as the head:
+self-contained bundle a relying party can verify offline. It wants a **chain
+head content address** — take the `headHash` step 2d already printed:
 
 ```sh
-HEAD=sha256:…      # the payload_hash returned by step 2c
+HEAD=sha256:…      # entries[].headHash from step 2d's ListAuditStatuses
 
 $PROVIN --registry "$REGISTRY" --token "$TOKEN" \
   bundle export --head "$HEAD" --out /tmp/bundle \
@@ -199,6 +199,13 @@ $PROVIN --registry "$REGISTRY" --token "$TOKEN" \
   --vc-resolver-base "poc.dplaax.dev=$REGISTRY" \
   --audit-base       "poc.dplaax.dev=$REGISTRY"
 ```
+
+Not the `payload_hash` from step 2c: that is the hash of the payload you sent,
+equal to the issued credential's input/output hash, and it is a **correlation
+handle** rather than a content address. There is no direct call today that maps
+one to the other, so enumerating heads is the way to get one — unambiguous here
+because this deployment has issued exactly one, and something to keep in mind on
+a node that has issued many.
 
 The `--*-base` overrides are required from the host: `network`'s DID
 documents advertise the compose-internal `http://network:8443` (reachable

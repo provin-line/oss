@@ -1,6 +1,6 @@
 // Package filestore is the file-backed implementation of the auditor's
 // StatusStore, ReceiptStore, and AuditQueue — the durable audit half of the
-// evidence substrate (spec: evidence-persistence, e2e finding #23).
+// evidence substrate (spec: evidence-persistence, E2E-F-023 in provin.e2e's FINDINGS.md).
 //
 // Layout (one versioned-envelope JSON file per entry, named by the head's
 // content-address hex):
