@@ -57,22 +57,81 @@ extkeys="$workdir/pipeline-external-keys.json"
 "$provin" pipeline create --did "$pipeline" --owner-key "$key" --registry "$registry" --token "$token" --external-key "$extkeys"
 "$provin" process  create --did "$process"  --owner-key "$key" --registry "$registry" --token "$token" --external-key "$extkeys"
 
+# ListAuditStatuses, raw.
+audit_list() {
+	curl -fsS -X POST "$registry/dplaax.audit.v1.AuditService/ListAuditStatuses" \
+		-H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+		-d '{"pageSize":50}'
+}
+
+# Print the head that is BOTH absent from the pre-push snapshot AND verified on
+# the overall verdict and all three axes; exit 1 when there is none yet, so the
+# caller can keep polling.
+#
+# Structural JSON rather than grep, deliberately. Matching CONFIDENCE_VERIFIED
+# anywhere in a fifty-entry response says nothing about which record produced
+# it, nor whether every axis passed — a stale verdict from an earlier run
+# satisfies it. A walkthrough that can report success without proving the thing
+# it advertises is worse than no walkthrough: it is how README §2f shipped an
+# instruction that had never been executed.
+new_verified_head() {
+	node -e '
+const fs = require("fs");
+const before = new Set((JSON.parse(fs.readFileSync(process.argv[1], "utf8")).entries ?? []).map(e => e.headHash));
+let s = "";
+process.stdin.on("data", d => (s += d)).on("end", () => {
+  const V = "CONFIDENCE_VERIFIED";
+  for (const e of JSON.parse(s).entries ?? []) {
+    if (before.has(e.headHash)) continue;
+    const lc = e.status?.linearChain;
+    if (!lc) continue;
+    const ax = lc.axes ?? {};
+    if (lc.confidence === V && ax.dataIntegrity === V && ax.signerAuthenticity === V && ax.chainConsistency === V) {
+      console.log(e.headHash);
+      process.exit(0);
+    }
+  }
+  process.exit(1);
+});' "$1"
+}
+
 echo "④ HTTP push ingest (via pipeline, not network — network carries no data plane)"
+# Snapshot first: the verdict accepted below must belong to the record this run
+# pushed, not to one an earlier run left behind.
+before="$workdir/heads-before.json"
+audit_list > "$before"
 curl -fsS -o /dev/null -w "  push status: %{http_code}\n" -X POST "$pipeline_url/ingest/src/push" \
 	-H "Authorization: Bearer $token" -H "Content-Type: application/json" \
 	-d '{"sensor":"temp-01","celsius":21.5}'
 
-echo "⑤ audit verdict (polling for VERIFIED)"
+echo "⑤ audit verdict for THAT record — overall plus all three axes"
+head_hash=""
 for _ in $(seq 1 15); do
-	body="$(curl -fsS -X POST "$registry/dplaax.audit.v1.AuditService/ListAuditStatuses" \
-		-H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"pageSize":10}')"
-	if printf '%s' "$body" | grep -q CONFIDENCE_VERIFIED; then
-		echo "  ✅ VERIFIED"
-		printf '%s\n' "$body"
-		exit 0
+	if head_hash="$(audit_list | new_verified_head "$before")"; then
+		echo "  ✅ VERIFIED — $head_hash"
+		break
 	fi
+	head_hash=""
 	sleep 1
 done
+if [ -z "$head_hash" ]; then
+	echo "  ✗ no NEW fully-VERIFIED verdict after 15s — inspect: docker compose logs network pipeline" >&2
+	audit_list >&2
+	exit 1
+fi
 
-echo "  ✗ no VERIFIED verdict after 15s — inspect: docker compose logs network pipeline" >&2
-exit 1
+# The registry namespace the quickstart's DIDs live under, taken from the owner
+# DID rather than repeated as a literal.
+ns="$(printf '%s' "$owner" | cut -d: -f3)"
+
+echo "⑥ export an offline evidence bundle for that head (README §2f)"
+bundle="$workdir/bundle"
+"$provin" --registry "$registry" --token "$token" \
+	bundle export --head "$head_hash" --out "$bundle" \
+	--did-base         "$ns=$registry" \
+	--vc-resolver-base "$ns=$registry" \
+	--audit-base       "$ns=$registry"
+
+echo "⑦ verify the bundle offline — what a relying party actually does"
+"$provin" bundle verify --bundle "$bundle" --head "$head_hash"
+echo "  ✅ bundle verifies offline against $head_hash"
