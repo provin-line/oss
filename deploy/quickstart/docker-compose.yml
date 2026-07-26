@@ -94,7 +94,7 @@ services:
   # --registry-base-url is a placeholder; the env below overrides it at runtime
   # (the image is deployment-generic).
   auth-provider:
-    image: ghcr.io/provin-line/auth-auth-provider:v0.2
+    image: ghcr.io/provin-line/auth-provider:v0.2
     pull_policy: always
     # build:
     #   context: .
