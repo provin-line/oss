@@ -126,12 +126,28 @@ ns="$(printf '%s' "$owner" | cut -d: -f3)"
 
 echo "⑥ export an offline evidence bundle for that head (README §2f)"
 bundle="$workdir/bundle"
-"$provin" --registry "$registry" --token "$token" \
-	bundle export --head "$head_hash" --out "$bundle" \
+# --allow-loopback: the --*-base overrides point DID resolution at localhost,
+# and the SSRF guard on those fetches is fail-closed. Without it the issuers do
+# not resolve, signer-authenticity and chain-consistency come back
+# indeterminate, and export correctly refuses to write the archive.
+export_out="$("$provin" bundle export --head "$head_hash" --out "$bundle" \
+	--registry "$registry" --token "$token" \
+	--allow-loopback \
 	--did-base         "$ns=$registry" \
 	--vc-resolver-base "$ns=$registry" \
-	--audit-base       "$ns=$registry"
+	--audit-base       "$ns=$registry")"
+printf '%s\n' "$export_out"
+
+# Both anchors, not just the head: --head anchors what data flowed, --digest
+# anchors the whole archive including the authority documents. Verifying only
+# the head would leave the stronger anchor unexercised — and an unexercised
+# documented flag is how README §2f came to ship two defects.
+digest="$(printf '%s\n' "$export_out" | sed -n 's/^bundle digest: *//p')"
+if [ -z "$digest" ]; then
+	echo "could not parse the bundle digest out of export's output" >&2
+	exit 1
+fi
 
 echo "⑦ verify the bundle offline — what a relying party actually does"
-"$provin" bundle verify --bundle "$bundle" --head "$head_hash"
-echo "  ✅ bundle verifies offline against $head_hash"
+"$provin" bundle verify --bundle "$bundle" --head "$head_hash" --digest "$digest"
+echo "  ✅ bundle verifies offline against $head_hash and $digest"

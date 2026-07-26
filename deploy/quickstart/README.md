@@ -193,8 +193,9 @@ head content address** — take the `headHash` step 2d already printed:
 ```sh
 HEAD=sha256:…      # entries[].headHash from step 2d's ListAuditStatuses
 
-$PROVIN --registry "$REGISTRY" --token "$TOKEN" \
-  bundle export --head "$HEAD" --out /tmp/bundle \
+$PROVIN bundle export --head "$HEAD" --out /tmp/bundle \
+  --registry "$REGISTRY" --token "$TOKEN" \
+  --allow-loopback \
   --did-base         "poc.dplaax.dev=$REGISTRY" \
   --vc-resolver-base "poc.dplaax.dev=$REGISTRY" \
   --audit-base       "poc.dplaax.dev=$REGISTRY"
@@ -214,6 +215,42 @@ at `$REGISTRY` (`http://localhost:8443`). `--audit-base` is a separate
 override from `--did-base` because export defaults to `--aggregate-complete`,
 which fetches each issuer's `#audit` receipts to re-verify the
 source-commitment axis offline.
+
+`--allow-loopback` is needed for the same reason those overrides are: the
+SSRF guard on DID-document fetches is fail-closed, and the overrides point
+resolution at `localhost`. Without it export cannot resolve the issuers, so
+signer-authenticity and chain-consistency come back **indeterminate** and
+export refuses to write an archive that could not re-verify offline. That
+refusal is the correct behaviour — a bundle is only worth anything if a
+relying party can re-verify it — so the flag stays opt-in, and a deployment
+whose DIDs resolve over real DNS never passes it.
+
+### 2g. Verify the bundle offline
+
+This is the step that makes the bundle worth exporting, and the only one a
+relying party runs. It takes no `--registry` and no token: everything it needs
+is inside the directory.
+
+```sh
+$PROVIN bundle verify --bundle /tmp/bundle --head "$HEAD" \
+  --digest sha256:…      # the bundle digest 2f printed
+```
+
+```text
+anchors checked:     head=true digest=true
+data integrity:      VERIFIED
+signer authenticity: VERIFIED
+chain consistency:   VERIFIED
+overall:             VERIFIED
+```
+
+The two anchors answer different questions and are independent — pass either or
+both. `--head` anchors **what data flowed** (the chain head the bundle claims);
+`--digest` anchors **the whole archive**, proofs and authority documents
+included, so a bundle whose documents were swapped after export fails even
+though its chain head is untouched. Neither is discoverable from the bundle
+itself — that is the point. Carry them out-of-band, or you are trusting the
+artifact to describe itself.
 
 ## How it fits together
 
