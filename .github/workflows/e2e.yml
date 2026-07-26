@@ -1,0 +1,142 @@
+# Runs provin.e2e's black-box scenarios against THIS commit.
+#
+# This is the direction that prevents product regressions from shipping. The
+# e2e repository has its own CI, but that one holds oss still at a pinned
+# revision and varies the harness — it can only catch "an e2e change broke
+# against known-good oss". Nothing there runs when oss changes. Without the job
+# below, an oss commit could break every scenario and no gate would notice.
+#
+# The pairing is deliberately asymmetric:
+#
+#   - the harness is PINNED (E2E_REF), so a red run here means THIS commit
+#     broke something, not that someone edited a test five minutes ago;
+#   - oss is whatever is being proposed, checked out by the triggering event.
+#
+# So `make verify-pin` is NOT run: that target asserts repos/oss matches the
+# harness's own pin, which is exactly what this job deliberately violates.
+#
+# Bumping E2E_REF is deliberate work, same discipline as the harness's own
+# pins.env: read what changed in the harness, run both jobs, then commit the new
+# SHA. It lives here rather than in a pins file because it has exactly one
+# reader; promote it to a file when a second pin appears (a quickstart auth
+# smoke would want the auth image digests, for instance).
+#
+# Cost: the compose job builds two images and runs eleven container stacks
+# serially, so it is the slowest thing in this repository's CI by a wide margin.
+# It is required anyway — the two runtimes are equivalent by rule (the harness's
+# AGENTS.md rule 3) and gating only the cheap one would let the container half
+# rot. Narrow it with evidence about what it stops catching, never to save time
+# on principle.
+name: e2e
+
+on:
+  push:
+    branches: [poc, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # github.com/provin-line/e2e — the harness revision this commit is gated by.
+  E2E_REF: 9877d56d8ad8eb6aa90ffc0d5fa12632993082b4
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      # Both repositories go in subdirectories so the harness's repos/oss can be
+      # a sibling symlink. Checking oss out at the workspace root instead would
+      # make repos/oss point at a tree containing the harness itself, and the
+      # docker build context would swallow it.
+      - name: checkout this oss commit
+        uses: actions/checkout@v4
+        with:
+          path: oss
+      # An installation token from a GitHub App, not a deploy key: the
+      # provin-line organisation disables deploy keys by policy and points at
+      # Apps instead. GITHUB_TOKEN cannot be used either — it is scoped to this
+      # repository and cannot read a private sibling.
+      #
+      # The token is minted per job, expires in an hour, and `repositories:`
+      # narrows it to the one repo this job reads. Nothing long-lived and
+      # nothing user-scoped is involved.
+      - id: app-token
+        name: mint a scoped token for the harness checkout
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: provin-line
+          repositories: e2e
+      - name: checkout the pinned harness
+        uses: actions/checkout@v4
+        with:
+          repository: provin-line/e2e
+          ref: ${{ env.E2E_REF }}
+          path: e2e
+          token: ${{ steps.app-token.outputs.token }}
+      - name: point the harness at this oss checkout
+        run: |
+          mkdir -p e2e/repos
+          ln -sfn ../../oss e2e/repos/oss
+          test -e e2e/repos/oss/go.mod || { echo "symlink does not resolve to an oss checkout"; exit 1; }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+          cache: true
+          cache-dependency-path: e2e/go.sum
+      - name: report the pair under test
+        run: |
+          echo "oss (this commit):   $(git -C oss rev-parse HEAD)"
+          echo "e2e (pinned):        $(git -C e2e rev-parse HEAD)"
+      # No nats-server install: the harness starts the real server in-process
+      # from the nats-server/v2 module.
+      - name: run the scenarios (process runtime)
+        working-directory: e2e
+        run: make test
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout this oss commit
+        uses: actions/checkout@v4
+        with:
+          path: oss
+      - id: app-token
+        name: mint a scoped token for the harness checkout
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: provin-line
+          repositories: e2e
+      - name: checkout the pinned harness
+        uses: actions/checkout@v4
+        with:
+          repository: provin-line/e2e
+          ref: ${{ env.E2E_REF }}
+          path: e2e
+          token: ${{ steps.app-token.outputs.token }}
+      - name: point the harness at this oss checkout
+        run: |
+          mkdir -p e2e/repos
+          ln -sfn ../../oss e2e/repos/oss
+          test -e e2e/repos/oss/go.mod || { echo "symlink does not resolve to an oss checkout"; exit 1; }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+          cache: true
+          cache-dependency-path: e2e/go.sum
+      - name: report the pair under test
+        run: |
+          echo "oss (this commit):   $(git -C oss rev-parse HEAD)"
+          echo "e2e (pinned):        $(git -C e2e rev-parse HEAD)"
+      # Builds cmd/network and cmd/pipeline images FROM THIS COMMIT, which is
+      # what makes the container half of this gate meaningful.
+      - name: build the node images from this commit
+        working-directory: e2e
+        run: make docker-build
+      - name: run the scenarios (compose runtime)
+        working-directory: e2e
+        run: make test-compose
