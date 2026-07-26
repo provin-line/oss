@@ -39,7 +39,7 @@ permissions:
 
 env:
   # github.com/provin-line/e2e — the harness revision this commit is gated by.
-  E2E_REF: fe042a250f9fd341bc56c52c62a1dff7973c726c
+  E2E_REF: 9877d56d8ad8eb6aa90ffc0d5fa12632993082b4
 
 jobs:
   process:
