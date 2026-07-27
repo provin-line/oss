@@ -37,6 +37,23 @@ const (
 // carries the CLI's bearer token.
 func newRegistry(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newRegistryWithRPCGuard(t, func(r *http.Request) bool {
+		return r.Header.Get("Authorization") == "Bearer "+testToken
+	})
+}
+
+// newRegistryWithRPCGuard is newRegistry with the RPC authorization decision
+// injected, so a test can model a token that carries SOME of the DID surface
+// rather than all of it.
+//
+// The public resolution route is mounted alongside and deliberately NOT
+// guarded — that is how the real server mounts it
+// (internal/netcompose/server.go: `mux.Handle("/did/", ...)`, outside the auth
+// interceptor) and what NewResolutionHandler's own contract requires. A test
+// harness that authenticated it would hide exactly the difference these tests
+// exist to pin.
+func newRegistryWithRPCGuard(t *testing.T, allowRPC func(*http.Request) bool) *httptest.Server {
+	t.Helper()
 	svc := didregistry.New(
 		didyaml.New(t.TempDir()), filestore.New(t.TempDir()),
 		ed25519.Generator{}, ed25519.Verifier{}, registryID,
@@ -44,12 +61,13 @@ func newRegistry(t *testing.T) *httptest.Server {
 	path, h := didpbconnect.NewDIDServiceHandler(didhandler.New(svc))
 	mux := http.NewServeMux()
 	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testToken {
+		if !allowRPC(r) {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
 			return
 		}
 		h.ServeHTTP(w, r)
 	}))
+	mux.Handle("/did/", didhandler.NewResolutionHandler(svc, registryID))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -170,6 +188,70 @@ func TestOwnerInit_RerunAfterSuccessIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(second.String(), "already registered") {
 		t.Errorf("re-run output = %q, want an already-registered notice", second.String())
+	}
+}
+
+// The re-run above is idempotent with a token that can do everything. The
+// bootstrap case is the one that matters: `deploy/quickstart`'s first-owner
+// token is scoped to register:dids ONLY (its minting script says so, and says
+// why — least privilege), so the resolve half of resolve-and-compare is
+// denied. Comparing a PUBLIC key against a PUBLIC document needs no
+// authorization, and the registry serves exactly that at /did/…/did.json, a
+// route whose own contract calls itself unauthenticated. Settle it there.
+//
+// Without this, both the walkthrough script AND the documented manual §2a are
+// single-shot per deployment: the second run dies on permission_denied with
+// nothing pointing at `docker compose down -v`.
+func TestOwnerInit_RerunIsIdempotentUnderARegisterOnlyToken(t *testing.T) {
+	const registerOnly = "register-dids-only-token"
+	srv := newRegistryWithRPCGuard(t, func(r *http.Request) bool {
+		// Stands in for the PDP: the bootstrap token carries register:dids and
+		// nothing else, so ResolveDID is refused while RegisterOwner is not.
+		if r.Header.Get("Authorization") != "Bearer "+registerOnly {
+			return false
+		}
+		return !strings.HasSuffix(r.URL.Path, "/ResolveDID")
+	})
+	bootstrapEnv := func(out *bytes.Buffer) commands.Env {
+		return commands.Env{Registry: srv.URL, Token: registerOnly, HTTPClient: srv.Client(), Stdout: out}
+	}
+	keyPath := filepath.Join(t.TempDir(), "acme-owner.jwk")
+	ctx := context.Background()
+
+	if err := commands.OwnerInit(ctx, bootstrapEnv(&bytes.Buffer{}), ownerDID, keyPath); err != nil {
+		t.Fatalf("first OwnerInit with the bootstrap token: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond) // cross the proof.created second boundary
+
+	var second bytes.Buffer
+	if err := commands.OwnerInit(ctx, bootstrapEnv(&second), ownerDID, keyPath); err != nil {
+		t.Fatalf("re-run with the bootstrap token should be idempotent, got %v", err)
+	}
+	if !strings.Contains(second.String(), "already registered") {
+		t.Errorf("re-run output = %q, want an already-registered notice", second.String())
+	}
+}
+
+// The different-key refusal must survive the same scoping: it is the one
+// answer that must never soften into "probably fine" because the caller's
+// token was narrow.
+func TestOwnerInit_DifferentKeyStillFailsUnderARegisterOnlyToken(t *testing.T) {
+	const registerOnly = "register-dids-only-token"
+	srv := newRegistryWithRPCGuard(t, func(r *http.Request) bool {
+		if r.Header.Get("Authorization") != "Bearer "+registerOnly {
+			return false
+		}
+		return !strings.HasSuffix(r.URL.Path, "/ResolveDID")
+	})
+	bootstrapEnv := commands.Env{Registry: srv.URL, Token: registerOnly, HTTPClient: srv.Client(), Stdout: &bytes.Buffer{}}
+	ctx := context.Background()
+
+	if err := commands.OwnerInit(ctx, bootstrapEnv, ownerDID, filepath.Join(t.TempDir(), "real.jwk")); err != nil {
+		t.Fatalf("first OwnerInit: %v", err)
+	}
+	err := commands.OwnerInit(ctx, bootstrapEnv, ownerDID, filepath.Join(t.TempDir(), "impostor.jwk"))
+	if err == nil || !strings.Contains(err.Error(), "DIFFERENT key") {
+		t.Fatalf("wrong-key re-init under a scoped token: want different-key error, got %v", err)
 	}
 }
 

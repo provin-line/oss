@@ -14,12 +14,12 @@ import (
 	"github.com/provin-line/oss/resolver"
 )
 
-// maxOrgDocumentSize bounds the DID Document fetched by the org commands'
+// maxRegistryDocSize bounds the DID Document fetched by the org commands'
 // resolver adapter — a registry response is attacker-influenceable input
 // (whatever it chooses to serve at the resolved URL), so the body is read
 // through an io.LimitReader and an over-cap response is an error rather than
 // unbounded memory, mirroring network/pkg/didresolver's own cap.
-const maxOrgDocumentSize = 1 << 20 // 1 MiB
+const maxRegistryDocSize = 1 << 20 // 1 MiB
 
 // OrgVerifyConfig carries `provin org verify`'s inputs beyond the global
 // environment.
@@ -38,7 +38,7 @@ type OrgVerifyConfig struct {
 // command whose exit code is verdict-driven; inspect/diagnose/generate-txt
 // exit 0 on success regardless of the underlying state.
 func OrgVerify(ctx context.Context, env Env, cfg OrgVerifyConfig) error {
-	docResolver, err := newOrgDocumentResolver(env)
+	docResolver, err := newRegistryDocResolver(env)
 	if err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ type OrgInspectConfig struct {
 // without computing a verdict. It exits 0 on any execution success — there
 // is no verdict-driven exit code (spec §7.7).
 func OrgInspect(ctx context.Context, env Env, cfg OrgInspectConfig) error {
-	docResolver, err := newOrgDocumentResolver(env)
+	docResolver, err := newRegistryDocResolver(env)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ type OrgDiagnoseConfig struct {
 // steps, not a pass/fail judgment; use `org verify` for the scriptable exit
 // code.
 func OrgDiagnose(ctx context.Context, env Env, cfg OrgDiagnoseConfig) error {
-	docResolver, err := newOrgDocumentResolver(env)
+	docResolver, err := newRegistryDocResolver(env)
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func OrgGenerateTXT(ctx context.Context, env Env, cfg OrgGenerateTXTConfig) erro
 
 	fingerprint := cfg.Fingerprint
 	if fingerprint == "" {
-		docResolver, err := newOrgDocumentResolver(env)
+		docResolver, err := newRegistryDocResolver(env)
 		if err != nil {
 			return err
 		}
@@ -233,8 +233,13 @@ func orgOwnerDID(didStr string) (*dplaax.DID, error) {
 	return parsed.OwnerDID(), nil
 }
 
-// newOrgDocumentResolver builds the org commands' DID Document resolver: a
-// small adapter over the registry's public W3C resolution route
+// newRegistryDocResolver builds a DID Document resolver over this registry's
+// public route. It is named for that responsibility rather than for the org
+// commands, which were merely its first caller: `owner init` settles an
+// AlreadyExists registration through it too, because comparing a public key
+// against a public document is not an authorized read.
+//
+// A small adapter over the registry's public W3C resolution route
 // (GET <registry>/did/<accountType>/<accountId>[/<resourcePath>...]/did.json
 // — see network/pkg/services/didregistry/handler.NewResolutionHandler, the
 // route this mirrors), anchored at env.Registry (spec §7.4 — NOT derived
@@ -242,17 +247,17 @@ func orgOwnerDID(didStr string) (*dplaax.DID, error) {
 // network/pkg/didresolver's cross-registry resolution used by bundle
 // export). The route is unauthenticated (public DID resolution), so no
 // bearer token is sent or required.
-func newOrgDocumentResolver(env Env) (resolver.Resolver, error) {
+func newRegistryDocResolver(env Env) (resolver.Resolver, error) {
 	if env.Registry == "" {
-		return nil, fmt.Errorf("org: --registry is required (env PROVIN_REGISTRY) to resolve DID documents")
+		return nil, fmt.Errorf("resolve: --registry is required (env PROVIN_REGISTRY) to resolve DID documents")
 	}
 	if err := client.ValidateBaseURL(env.Registry); err != nil {
-		return nil, fmt.Errorf("org: registry URL: %w", err)
+		return nil, fmt.Errorf("resolve: registry URL: %w", err)
 	}
-	return &orgDocumentResolver{httpClient: env.httpClient(), registry: env.Registry}, nil
+	return &registryDocResolver{httpClient: env.httpClient(), registry: env.Registry}, nil
 }
 
-type orgDocumentResolver struct {
+type registryDocResolver struct {
 	httpClient httpDoer
 	registry   string
 }
@@ -267,22 +272,22 @@ type httpDoer interface {
 
 // Resolve fetches and parses the DID Document for didStr from the org
 // adapter's registry base. It satisfies resolver.Resolver.
-func (r *orgDocumentResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
+func (r *registryDocResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("org: parse %q: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: parse %q: %w", didStr, err)
 	}
 	segs := append([]string{d.AccountType, d.AccountID}, d.ResourcePath...)
 	url := strings.TrimRight(r.registry, "/") + "/did/" + strings.Join(segs, "/") + "/did.json"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("org: build request for %s: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: build request for %s: %w", didStr, err)
 	}
 	req.Header.Set("Accept", "application/did+json")
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("org: fetch %s: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: fetch %s: %w", didStr, err)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -290,27 +295,27 @@ func (r *orgDocumentResolver) Resolve(ctx context.Context, didStr string) (*did.
 	case http.StatusNotFound:
 		// resolver.Resolver contract: authoritative absence wraps ErrNotFound
 		// (consumers treat any other error as transient).
-		return nil, fmt.Errorf("org: %s: not found at %s: %w", didStr, url, resolver.ErrNotFound)
+		return nil, fmt.Errorf("resolve: %s: not found at %s: %w", didStr, url, resolver.ErrNotFound)
 	default:
-		return nil, fmt.Errorf("org: %s: unexpected status %d from %s", didStr, resp.StatusCode, url)
+		return nil, fmt.Errorf("resolve: %s: unexpected status %d from %s", didStr, resp.StatusCode, url)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOrgDocumentSize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRegistryDocSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("org: read %s: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: read %s: %w", didStr, err)
 	}
-	if len(body) > maxOrgDocumentSize {
-		return nil, fmt.Errorf("org: %s: document exceeds %d bytes", didStr, maxOrgDocumentSize)
+	if len(body) > maxRegistryDocSize {
+		return nil, fmt.Errorf("resolve: %s: document exceeds %d bytes", didStr, maxRegistryDocSize)
 	}
 	var doc did.DIDDocument
 	if err := doc.UnmarshalJSON(body); err != nil {
-		return nil, fmt.Errorf("org: parse document for %s: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: parse document for %s: %w", didStr, err)
 	}
 	// The resolver.Resolver contract requires the returned document's id to
 	// equal the requested DID — without this, a registry answering with a
 	// DIFFERENT identity's document would have its key fingerprinted, and a
 	// matching TXT record would yield a false `verified`.
 	if got := doc.ID(); got != didStr {
-		return nil, fmt.Errorf("org: registry returned document for %q, requested %q", got, didStr)
+		return nil, fmt.Errorf("resolve: registry returned document for %q, requested %q", got, didStr)
 	}
 	return &doc, nil
 }

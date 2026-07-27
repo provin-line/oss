@@ -8,6 +8,16 @@
 # (for pulling the pipeline's external-key export out of the `provisioned`
 # volume — see README §2c).
 #
+# ONE RUN PER STACK LIFETIME. This mints a fresh owner key into a throwaway
+# workdir every time, so a second run against the same volumes asks to register
+# an already-registered DID under a different key — which `provin owner init`
+# correctly refuses. Reset first:
+#
+#     docker compose down -v && docker compose up --build -d --wait
+#
+# The README's step-by-step (§2) does not have this limit: it keeps the owner
+# key at a stable path, so re-running §2a re-confirms the same key and says so.
+#
 # Usage: walkthrough.sh [--provin <path>] [--registry <url>] [--pipeline-url <url>] [--provider <url>]
 
 set -euo pipefail
