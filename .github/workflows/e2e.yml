@@ -22,10 +22,12 @@
 # smoke would want the auth image digests, for instance).
 #
 # Every action here is pinned to a commit SHA, unlike this repository's other
-# workflows. The release-engineering track defers SHA pinning for read-only CI,
-# and that judgement does not reach this file: these steps handle a GitHub App
-# private key, and a moved or compromised tag would receive it. A tag is
-# mutable; a commit SHA is the only immutable action reference.
+# workflows. The original reason was that these steps handled a GitHub App
+# private key; they no longer do — provin-line/e2e went public on 2026-07-27
+# and the harness checkout is anonymous. The pins stay anyway. Unpinning is a
+# regression on its own terms (a tag is mutable), and this is the one workflow
+# here that runs a fork's proposed code, so the actions it invokes should not
+# be able to change underneath it.
 #
 # Cost: the compose job builds two images and runs eleven container stacks
 # serially, so it is the slowest thing in this repository's CI by a wide margin.
@@ -45,21 +47,11 @@ permissions:
 
 env:
   # github.com/provin-line/e2e — the harness revision this commit is gated by.
-  E2E_REF: 329c519b0468c2a4d0b5576d3acd36f747e12557
+  E2E_REF: 9bfcce34430e6360a6db4c5fa3a02fa375a45573
 
 jobs:
   process:
     runs-on: ubuntu-latest
-    # A fork's pull request gets no repository secrets, so the App key below is
-    # empty and the harness checkout cannot happen. Skipping is not a coverage
-    # hole being papered over — it is the only honest option, and the
-    # alternatives are worse: leaving it to fail hands every external
-    # contributor two permanently red jobs they cannot fix, and
-    # pull_request_target would hand a fork's code the very secret this guards.
-    # A skipped job reports success even when required, so this does not wedge
-    # a protected branch. Same-repository pull requests and the post-merge push
-    # still run it, which is where the gate has to hold.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       # Both repositories go in subdirectories so the harness's repos/oss can be
       # a sibling symlink. Checking oss out at the workspace root instead would
@@ -69,36 +61,20 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
-      # An installation token from a GitHub App, not a deploy key: the
-      # provin-line organisation disables deploy keys by policy and points at
-      # Apps instead. GITHUB_TOKEN cannot be used either — it is scoped to this
-      # repository and cannot read a private sibling.
-      #
-      # The token is minted per job, expires in an hour, and `repositories:`
-      # narrows it to the one repo this job reads. Nothing long-lived and
-      # nothing user-scoped is involved.
-      - id: app-token
-        name: mint a scoped token for the harness checkout
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.CI_APP_ID }}
-          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-          owner: provin-line
-          repositories: e2e
-          # Without this the token inherits EVERY permission the installation
-          # holds; `repositories:` narrows which repos, not which rights. The
-          # workflow calls this a scoped token, so make that true rather than
-          # dependent on how the App happens to be configured.
-          permission-contents: read
+      # No credential: provin-line/e2e is public, so an anonymous checkout
+      # reaches it. This used to mint a GitHub App installation token because
+      # GITHUB_TOKEN is scoped to this repository and could not read a private
+      # sibling — which is also why these jobs used to skip themselves on fork
+      # pull requests, a fork getting no secrets. Both went away with the
+      # harness's visibility on 2026-07-27.
       - name: checkout the pinned harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
-          token: ${{ steps.app-token.outputs.token }}
-          # Otherwise checkout writes the installation token into the clone's
-          # git config, where every later step in the job can read it.
+          # Still false: checkout defaults to persisting GITHUB_TOKEN in the
+          # clone's git config, and this clone has no use for it.
           persist-credentials: false
       - name: point the harness at this oss checkout
         run: |
@@ -122,43 +98,17 @@ jobs:
 
   compose:
     runs-on: ubuntu-latest
-    # A fork's pull request gets no repository secrets, so the App key below is
-    # empty and the harness checkout cannot happen. Skipping is not a coverage
-    # hole being papered over — it is the only honest option, and the
-    # alternatives are worse: leaving it to fail hands every external
-    # contributor two permanently red jobs they cannot fix, and
-    # pull_request_target would hand a fork's code the very secret this guards.
-    # A skipped job reports success even when required, so this does not wedge
-    # a protected branch. Same-repository pull requests and the post-merge push
-    # still run it, which is where the gate has to hold.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: checkout this oss commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
-      - id: app-token
-        name: mint a scoped token for the harness checkout
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.CI_APP_ID }}
-          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-          owner: provin-line
-          repositories: e2e
-          # Without this the token inherits EVERY permission the installation
-          # holds; `repositories:` narrows which repos, not which rights. The
-          # workflow calls this a scoped token, so make that true rather than
-          # dependent on how the App happens to be configured.
-          permission-contents: read
       - name: checkout the pinned harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
           ref: ${{ env.E2E_REF }}
           path: e2e
-          token: ${{ steps.app-token.outputs.token }}
-          # Otherwise checkout writes the installation token into the clone's
-          # git config, where every later step in the job can read it.
           persist-credentials: false
       - name: point the harness at this oss checkout
         run: |
