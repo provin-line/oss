@@ -10,12 +10,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/cmd/provin/internal/keyfile"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
-	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/vc"
 )
@@ -50,7 +48,7 @@ func OwnerInit(ctx context.Context, env Env, ownerDID, keyPath string) error {
 		// rejects a retry AFTER a success that this client never saw. Resolve
 		// the registered document and compare keys instead of guessing.
 		if connect.CodeOf(err) == connect.CodeAlreadyExists {
-			return confirmRegisteredKey(ctx, c, env, key, keyPath)
+			return confirmRegisteredKey(ctx, env, key, keyPath)
 		}
 		return fmt.Errorf("owner init: RegisterOwner(%s): %w (owner key kept at %s; re-run to retry)", ownerDID, err, keyPath)
 	}
@@ -63,20 +61,28 @@ func OwnerInit(ctx context.Context, env Env, ownerDID, keyPath string) error {
 // established and the command succeeds idempotently; a different key means
 // this key file cannot act for the DID — an honest hard error, not a retry
 // suggestion.
-func confirmRegisteredKey(ctx context.Context, c didpbconnect.DIDServiceClient, env Env, key *keyfile.Key, keyPath string) error {
-	res, err := c.ResolveDID(ctx, connect.NewRequest(&didpb.ResolveDIDRequest{Did: key.DID}))
+//
+// Resolution goes over the registry's PUBLIC route, not the ResolveDID RPC.
+// The comparison is a public key against a public document, so it needs no
+// authorization, and requiring some made this path unreachable exactly when it
+// was needed most: the quickstart's first-owner bootstrap token is scoped to
+// register:dids alone, so it could create the registration it then could not
+// settle — a re-run died on permission_denied with the idempotent branch
+// sitting right there, implemented and out of reach.
+func confirmRegisteredKey(ctx context.Context, env Env, key *keyfile.Key, keyPath string) error {
+	r, err := newRegistryDocResolver(env)
+	if err != nil {
+		return fmt.Errorf("owner init: %s is already registered but no resolver could be built to compare keys: %w", key.DID, err)
+	}
+	doc, err := r.Resolve(ctx, key.DID)
 	if err != nil {
 		return fmt.Errorf("owner init: %s is already registered but resolving it to compare keys failed: %w", key.DID, err)
-	}
-	var doc did.DIDDocument
-	if err := canon.NewStrictDecoder(res.Msg.GetDidDocument()).Decode(&doc); err != nil {
-		return fmt.Errorf("owner init: parse registered document for %s: %w", key.DID, err)
 	}
 	// Compare raw key bytes, not one encoding's rendering of them: the same key
 	// is the same key whether the registered document carries it as Multikey or
 	// as a legacy JWK, and a comparison pinned to publicKeyJwk["x"] would report
 	// a Multikey-registered owner as a DIFFERENT key on every re-run.
-	registered, _, err := did.ExtractPublicKeyAndEncoding(&doc, key.DID+"#signing", did.RelationshipAssertionMethod)
+	registered, _, err := did.ExtractPublicKeyAndEncoding(doc, key.DID+"#signing", did.RelationshipAssertionMethod)
 	if err != nil {
 		return fmt.Errorf("owner init: %s is already registered but its #signing key is unreadable: %v — the file at %s cannot be confirmed against it", key.DID, err, keyPath)
 	}

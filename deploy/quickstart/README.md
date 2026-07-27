@@ -100,6 +100,14 @@ $PROVIN owner init --did "$OWNER" --key /tmp/acme-owner.jwk \
 # → registered owner did:dplaax:poc.dplaax.dev:org:acme
 ```
 
+Re-running this is safe as long as `/tmp/acme-owner.jwk` is the same file: the
+command re-confirms the registered key against it and reports
+`already registered with this key; nothing to do`. It settles that by reading
+the public DID document (`GET $REGISTRY/did/org/acme/did.json`), not by an
+authorized call — which is why it works with a bootstrap token scoped to
+`register:dids` alone. A *different* key file for the same DID is refused, and
+should be: it would mean registering someone else's identity.
+
 ### 2b. Exchange a DID-signed assertion for a real JWT
 
 Now that the owner is registered and resolvable, get a real JWT from the
