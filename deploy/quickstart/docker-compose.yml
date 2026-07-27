@@ -58,8 +58,11 @@ services:
   # v0.2 minor tag with `pull_policy: always`, so `docker compose up` re-pulls
   # a 0.2.x patch republish rather than reusing a stale cached layer (a plain
   # moving pin without this stays on the first-seen digest — Compose's default
-  # pull policy is `missing`). Pin a `sha-<sha>` tag (and drop pull_policy)
-  # instead for an exact, reproducible build. If the pull is denied (a 401 —
+  # pull policy is `missing`). To pin an exact build, use the image DIGEST
+  # (`image: ghcr.io/…@sha256:<digest>`, printed in the publish run's job
+  # summary) and drop pull_policy — a `sha-<sha>` tag names the source commit
+  # but is still a movable registry tag, not an identity. If the pull is
+  # denied (a 401 —
   # e.g. the GHCR packages are not public in your environment), `docker login
   # ghcr.io` with a token that can read the org's packages.
   # Building from source instead: swap the `image:`/`pull_policy` lines for the

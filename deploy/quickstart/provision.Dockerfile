@@ -5,7 +5,7 @@
 # account claims JWT, and nats-server.conf into the shared `provisioned` volume
 # before the broker and node start. Build context is the provin.oss module root.
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.25.5-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

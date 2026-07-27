@@ -12,7 +12,7 @@
 #
 #   docker run -v ./config:/app/config -p 8443:8443 provin-line/network:local
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.25.5-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
