@@ -6,14 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 While the version is `0.x`, exported Go API and configuration keys may still
 change between minor releases. The **v0 credential wire is frozen** as of the
-Unreleased line below (see its freeze declaration): changing any byte of the
+`0.2.0` line below (see its freeze declaration): changing any byte of the
 credential Data Integrity signing scope is a next-MAJOR break, not a minor
 change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
-The P0 (public-release hardening) line. Releases as the next minor at the
-public/production cut; no intermediate tag is minted.
+## [0.2.0] - 2026-07-27
+
+The P0 (public-release hardening) line, cut at the public/production cut as
+this section always said it would be — no intermediate tag was minted between
+`0.1.0` and here, so everything below is one release.
+
+This is the first supported line: `SECURITY.md` names `0.2.x` as the supported
+line and `0.1.x` as an internal soak line, unsupported at the public cut, which
+until this tag existed left the repository with no supported version at all.
 
 ### v0 credential wire freeze declaration
 
@@ -29,8 +36,8 @@ participates in a credential signature — is frozen**. Concretely:
   `hashData = SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document))`, the
   W3C proof configuration — the six typed members plus the proof-local
   `@context` copied from the document when it has one (vc-di-eddsa §3.3.1
-  step 2; amended within this unreleased line by the Fork W entry below, which
-  post-dates and supersedes the original six-member wording) — and the
+  step 2; amended within this same release line by the Fork W entry below,
+  which post-dates and supersedes the original six-member wording) — and the
   base58btc (`z` multibase) `proofValue` encoding.
 - Both cryptosuites and their canonicalizations: `eddsa-jcs-2022`
   (actual RFC 8785 via the `jcs-rfc8785` canonicalizer, Phase-1 MUST, issuance
@@ -66,12 +73,13 @@ there are compatibility-relevant and are called out in this changelog (see
 the checkpoint entry under Changed below), but they are versioned by their
 own contracts, not by this credential-wire declaration.
 
-### Fork W — full W3C `eddsa-jcs-2022` conformance (BREAKING within Unreleased)
+### Fork W — full W3C `eddsa-jcs-2022` conformance (BREAKING within this line)
 
 Ratified architecture decision (debate P0-4 = Fork W, 2026-07-15): external
 W3C-DI verifier interop is a product goal. `eddsa-jcs-2022` now means what W3C
-says it means. All changes below land before any public tag, so they revise the
-unreleased freeze declaration above rather than breaking a shipped wire.
+says it means. All changes below landed before any public tag, so they revise
+the freeze declaration above — which ships for the first time in this same
+release — rather than breaking a wire anyone had.
 
 - **Canonicalization**: new `jcs-rfc8785` canonicalizer (byte-for-byte RFC 8785;
   unsafe integers round through binary64 like any strict-ES6 implementation).
@@ -123,7 +131,7 @@ unreleased freeze declaration above rather than breaking a shipped wire.
   repository issues, not yet what it admits); after it, admission requires the
   W3C shape.
 
-### P0-1A — immutable wire-variant set (BREAKING within Unreleased)
+### P0-1A — immutable wire-variant set (BREAKING within this line)
 
 Ratified architecture decision (debate P0-1 = B2.1, 2026-07-16), slice A of
 three: identity. One body can hold several signed forms, because re-issuing a
@@ -310,6 +318,32 @@ closure required, now met with executed evidence rather than review.
   had no healthcheck, so `docker compose up --wait` saw a container that
   `restart: on-failure` kept "running" and declared the stack ready. It now
   waits on the node's own `/readyz`.
+- **The quickstart's offline-bundle instructions had never been executed, and
+  did not work.** README §2f accumulated three defects behind the fact that
+  nothing ran it — `walkthrough.sh` discarded the ingest response and exited
+  before the export step:
+  - it passed `payload_hash` to `bundle export --head`. That is a correlation
+    handle, not a chain head content address, and **no call maps one to the
+    other** — the head comes from enumerating `ListAuditStatuses` (see
+    `E2E-F-030` in the harness's findings register for the missing surface);
+  - it placed the global flags before the group/operation
+    (`provin --registry … bundle export …`), which the CLI does not accept.
+    §2a and §2c already had the right order, so this one call site was the
+    outlier;
+  - it omitted `--allow-loopback` while pointing DID resolution at
+    `http://localhost:8443`. The SSRF guard on those fetches is fail-closed, so
+    the issuers did not resolve, signer-authenticity and chain-consistency came
+    back indeterminate, and export **correctly refused to write an archive that
+    could not re-verify offline**. The fix passes the flag; the refusal was
+    right.
+
+  `walkthrough.sh` now runs the export and the offline verify as steps ⑥/⑦, and
+  verifies **both** anchors — `--head` (what data flowed) and `--digest` (the
+  whole archive, authority documents included). Verifying only the head would
+  have left the stronger anchor unexercised, which is how §2f got into this
+  state. A new README §2g documents `bundle verify`, which appeared nowhere
+  before: §2f claimed a relying party could verify offline and never showed the
+  command.
 
 ### Added
 
@@ -516,6 +550,15 @@ closure required, now met with executed evidence rather than review.
   locally and the next boot's shipper resumes it from the registry's own
   acked cursor). `cmd/standalone` still does not ship: it continues to
   serve TlogService reads from its in-process map and mirrors nothing.
+- CI gate on the `provin.e2e` harness (`.github/workflows/e2e.yml`): every
+  commit here runs the harness's black-box scenarios in **both** runtimes —
+  process (real `cmd/network` + `cmd/pipeline` subprocesses against a real
+  broker) and compose (the same scenarios in containers built from this
+  commit). The harness is pinned by SHA and this repository is whatever is
+  proposed, so a red run means *this* commit broke something rather than that
+  a test moved. The pairing was asymmetric before: the harness gated its own
+  changes against a pinned product revision, and nothing ran when the product
+  changed — an oss commit could break every scenario with no gate noticing.
 
 ### Changed
 
@@ -640,6 +683,15 @@ closure required, now met with executed evidence rather than review.
   to `pipeline-external-keys.json` for the external-key CLI flag above to
   consume. `TestShippedConfigsParse` covers both new split `application.conf`
   files under the real HOCON parser.
+- `deploy/quickstart`: the auth-layer services are pulled as published images
+  rather than built from source. They pin the moving `ghcr.io/provin-line/auth-*`
+  **`v0.2`** minor tag with `pull_policy: always`, so a patch release of the auth
+  stack reaches the quickstart without a pin bump; swap in a `sha-<sha>` tag for
+  an exact, reproducible build. The provider's image is
+  `ghcr.io/provin-line/auth-provider` — it was briefly `auth-auth-provider`,
+  from prefixing an `auth-` onto a component already named `auth-provider`, and
+  the old name is deleted rather than aliased (GHCR has neither rename nor
+  alias).
 
 ### Removed
 
@@ -691,5 +743,6 @@ Initial internal release — pinned for internal (private) deployment and soak.
 - The quickstart pins the `provin.auth` policy-verifier / auth-provider images
   and `AUTH_REF` to `v0.1.0` (built from provin.auth's matching tag).
 
-[Unreleased]: https://github.com/provin-line/oss/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/provin-line/oss/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/provin-line/oss/releases/tag/v0.2.0
 [0.1.0]: https://github.com/provin-line/oss/releases/tag/v0.1.0
