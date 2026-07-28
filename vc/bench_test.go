@@ -3,7 +3,6 @@ package vc_test
 import (
 	"context"
 	stded25519 "crypto/ed25519"
-	"encoding/base64"
 	"fmt"
 	"testing"
 
@@ -14,8 +13,8 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// Paper 04 §6.2 Tables 4–5, Figs 2–3 (BENCH-RETAKE on provin): VC build/verify, VC-chain depth
-// scaling, and multi-organization synthetic-chain build. Cryptographic work only (§6 preamble):
+// Paper 04 §6.4 microbenchmarks: VC build/verify, VC-chain depth scaling, and
+// multi-organization synthetic-chain build/verify. Cryptographic work only:
 // signing uses an in-memory crypto.Signer (keystore/disk excluded); verification uses a real
 // vc.Verifier over an in-memory local DID resolver (no network).
 
@@ -38,6 +37,10 @@ func benchOrgDID(i int) string {
 	return fmt.Sprintf("did:dplaax:reg:org:acme:pipeline:p%d:process:q%d", i, i)
 }
 
+func benchPipelineDID(i int) string {
+	return fmt.Sprintf("did:dplaax:reg:org:acme:pipeline:p%d", i)
+}
+
 // benchOrg is one signing organization: its issuer DID, an in-memory signer, and (for verify)
 // its DID document seeded into the resolver.
 type benchOrg struct {
@@ -57,21 +60,33 @@ func newBenchOrg(b *testing.B, i int) benchOrg {
 	return benchOrg{did: d, vm: d + "#signing", signer: benchSigner{priv: stded25519.PrivateKey(kp.PrivateKey)}, pub: kp.PublicKey}
 }
 
-func benchDIDDoc(processDID, owner string, pub []byte) *did.DIDDocument {
-	return did.New(did.DocumentFields{
-		ID:         processDID,
-		Controller: owner,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         processDID + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: processDID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP", "crv": "Ed25519",
-				"x": base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{processDID + "#signing"},
-	})
+// benchDoc builds a DID Document. When pub is non-nil the document carries a
+// Multikey AssertionMethod key (id + "#signing") — the encoding the builder's
+// eddsa-jcs-2022 W3C contract (proof-local @context) dispatches on.
+func benchDoc(b *testing.B, id, controller string, pub []byte) *did.DIDDocument {
+	b.Helper()
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
+	if pub != nil {
+		vm, err := did.NewMultikeyVerificationMethod(id+"#signing", id, pub)
+		if err != nil {
+			b.Fatalf("multikey vm: %v", err)
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
+		fields.AssertionMethod = []string{id + "#signing"}
+	}
+	return did.New(fields)
+}
+
+// benchAddOrgChain seeds res with org i's full controller chain on the current
+// DID hierarchy: Process (controller = Pipeline) → Pipeline (controller =
+// Owner). The self-controlled Owner document is added once by the caller.
+func benchAddOrgChain(b *testing.B, res *local.Resolver, i int, org benchOrg) {
+	b.Helper()
+	res.Add(benchDoc(b, org.did, benchPipelineDID(i), org.pub))
+	res.Add(benchDoc(b, benchPipelineDID(i), benchOwner, nil))
 }
 
 func benchSubject() vc.CredentialSubjectFields {
@@ -124,8 +139,8 @@ func BenchmarkVCVerify(b *testing.B) {
 	org := newBenchOrg(b, 0)
 	builder := vc.NewBuilder(org.signer)
 	res := local.New()
-	res.Add(benchDIDDoc(org.did, benchOwner, org.pub))
-	res.Add(did.New(did.DocumentFields{ID: benchOwner, Controller: benchOwner}))
+	benchAddOrgChain(b, res, 0, org)
+	res.Add(benchDoc(b, benchOwner, benchOwner, nil))
 	verifier := vc.NewVerifier(res, ed25519.Verifier{})
 	cred, err := builder.BuildFirstDrop(org.did, benchKeyID, org.vm, benchSubject(), nil)
 	if err != nil {
@@ -164,7 +179,7 @@ func buildChain(b *testing.B, builder *vc.Builder, org benchOrg, depth int) []*v
 	return chain
 }
 
-// BenchmarkChainBuild (Fig 2): building a depth-length chain scales linearly with depth.
+// BenchmarkChainBuild: building a depth-length chain scales linearly with depth.
 func BenchmarkChainBuild(b *testing.B) {
 	org := newBenchOrg(b, 0)
 	builder := vc.NewBuilder(org.signer)
@@ -178,14 +193,16 @@ func BenchmarkChainBuild(b *testing.B) {
 	}
 }
 
-// BenchmarkChainVerify (Fig 2): per-VC verify cost is near-constant regardless of depth (each
-// VC verifies independently — one Ed25519 verify + a previousCredential hash comparison).
+// BenchmarkChainVerify: per-VC verify cost is near-constant regardless of depth. Each
+// VC is verified independently via Verifier.Verify (signer authenticity + the
+// controller-chain walk); cross-credential linkage checks are VerifyChain's job
+// and are not on this path.
 func BenchmarkChainVerify(b *testing.B) {
 	org := newBenchOrg(b, 0)
 	builder := vc.NewBuilder(org.signer)
 	res := local.New()
-	res.Add(benchDIDDoc(org.did, benchOwner, org.pub))
-	res.Add(did.New(did.DocumentFields{ID: benchOwner, Controller: benchOwner}))
+	benchAddOrgChain(b, res, 0, org)
+	res.Add(benchDoc(b, benchOwner, benchOwner, nil))
 	verifier := vc.NewVerifier(res, ed25519.Verifier{})
 	ctx := context.Background()
 	for _, depth := range benchDepths {
@@ -204,7 +221,7 @@ func BenchmarkChainVerify(b *testing.B) {
 	}
 }
 
-// benchGrid is the paper §6.2 Table 5 / Figure 3 grid: orgs {2,5,10,20,50} × stages {1,3,5,10}.
+// benchGrid is the paper §6.4 multi-organization grid: orgs {2,5,10,20,50} × stages {1,3,5,10}.
 var benchGrid = []struct{ orgs, stages int }{
 	{2, 1}, {2, 3}, {2, 5}, {2, 10},
 	{5, 1}, {5, 3}, {5, 5}, {5, 10},
@@ -225,7 +242,7 @@ func newBenchOrgs(b *testing.B, n int) ([]benchOrg, []*vc.Builder) {
 	return orgs, builders
 }
 
-// BenchmarkMultiOrgChainBuild (Table 5): a synthetic chain spanning `orgs` organizations with
+// BenchmarkMultiOrgChainBuild: a synthetic chain spanning `orgs` organizations with
 // `stages` process-boundary signatures each; total VCs = orgs*stages. Build latency scales
 // linearly with total VCs; per-VC cost is near-constant across chain breadth.
 func BenchmarkMultiOrgChainBuild(b *testing.B) {
@@ -258,18 +275,19 @@ func BenchmarkMultiOrgChainBuild(b *testing.B) {
 	}
 }
 
-// BenchmarkMultiOrgChainVerify (Fig 3): verifying every credential of a multi-organization
+// BenchmarkMultiOrgChainVerify: verifying every credential of a multi-organization
 // synthetic chain, resolving each issuer's DID document from the in-memory resolver. Each VC
-// verifies independently (one Ed25519 verify + a previousCredential hash comparison), so
-// per-VC cost stays near-constant across chain breadth; total latency scales with orgs*stages.
+// is verified independently via Verifier.Verify (cross-credential linkage is VerifyChain's
+// job), so per-VC cost stays near-constant across chain breadth; total latency scales with
+// orgs*stages.
 func BenchmarkMultiOrgChainVerify(b *testing.B) {
 	ctx := context.Background()
 	for _, g := range benchGrid {
 		orgs, builders := newBenchOrgs(b, g.orgs)
 		res := local.New()
-		res.Add(did.New(did.DocumentFields{ID: benchOwner, Controller: benchOwner}))
-		for _, o := range orgs {
-			res.Add(benchDIDDoc(o.did, benchOwner, o.pub))
+		res.Add(benchDoc(b, benchOwner, benchOwner, nil))
+		for i, o := range orgs {
+			benchAddOrgChain(b, res, i, o)
 		}
 		verifier := vc.NewVerifier(res, ed25519.Verifier{})
 

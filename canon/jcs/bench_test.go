@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Paper 04 §6.2 Table 4 (BENCH-RETAKE on provin): JCS canonicalization latency vs field count.
+// Paper 04 §6.4 microbenchmarks: JCS canonicalization latency vs field count.
 // The document mixes strings, numbers, and a nested object so the canonical sort/encode work is
 // representative of a credential body rather than a flat string map.
 
