@@ -4,7 +4,6 @@ import (
 	"context"
 	stded25519 "crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -24,8 +23,8 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// Paper 04 §6.2 Table 6 / Fig 4-5 (BENCH-RETAKE on provin): pipeline overhead — the
-// chained relay path with and without VC provenance.
+// Paper 04 §6.4 microbenchmarks: pipeline overhead — the chained relay path
+// with and without VC provenance.
 //
 //   - Baseline ("without VC"): the transformation work alone — JSONata filter + JSONata
 //     converter over the payload bytes, exactly the runtime's stages 6-7.
@@ -34,15 +33,16 @@ import (
 //     binding, filter, convert, strict decode, hashing, and a real chain-preserving
 //     Ed25519 sign via vcdid.Signer.
 //
-// Consistent with the §6 preamble ("cryptographic work only"), signing uses an in-memory
-// crypto.Signer (no keystore) and the ingress-VC store is a no-op (persistence is I/O,
-// not cryptographic work). Network transport and TLS are absent by construction.
+// Cryptographic work only: signing uses an in-memory crypto.Signer (no keystore)
+// and the ingress-VC store is a no-op (persistence is I/O, not cryptographic
+// work). Network transport and TLS are absent by construction.
 
 const (
-	benchOwnerDID   = "did:dplaax:reg:org:acme"
-	benchSourceDID  = "did:dplaax:reg:org:acme:pipeline:bench:process:source"
-	benchChainedDID = "did:dplaax:reg:org:acme:pipeline:bench:process:chained"
-	benchKeyID      = "signing"
+	benchOwnerDID    = "did:dplaax:reg:org:acme"
+	benchPipelineDID = "did:dplaax:reg:org:acme:pipeline:bench"
+	benchSourceDID   = "did:dplaax:reg:org:acme:pipeline:bench:process:source"
+	benchChainedDID  = "did:dplaax:reg:org:acme:pipeline:bench:process:chained"
+	benchKeyID       = "signing"
 )
 
 // benchFilterExpr is truthy for every bench payload; benchConvertExpr derives a
@@ -70,21 +70,24 @@ func (benchNopStore) StoreIngressVC(context.Context, *vc.PipelinePassCredential,
 	return nil
 }
 
-func benchProcessDoc(processDID, owner string, pub []byte) *did.DIDDocument {
-	return did.New(did.DocumentFields{
-		ID:         processDID,
-		Controller: owner,
-		VerificationMethod: []did.VerificationMethod{{
-			ID:         processDID + "#signing",
-			Type:       "JsonWebKey2020",
-			Controller: processDID,
-			PublicKeyJWK: map[string]any{
-				"kty": "OKP", "crv": "Ed25519",
-				"x": base64.RawURLEncoding.EncodeToString(pub),
-			},
-		}},
-		AssertionMethod: []string{processDID + "#signing"},
-	})
+// benchDoc builds a DID Document. When pub is non-nil the document carries a
+// Multikey AssertionMethod key (id + "#signing") — the encoding the builder's
+// eddsa-jcs-2022 W3C contract (proof-local @context) dispatches on.
+func benchDoc(b *testing.B, id, controller string, pub []byte) *did.DIDDocument {
+	b.Helper()
+	fields := did.DocumentFields{
+		Context: did.IssuedDocumentContexts(),
+		ID:      id, Controller: controller,
+	}
+	if pub != nil {
+		vm, err := did.NewMultikeyVerificationMethod(id+"#signing", id, pub)
+		if err != nil {
+			b.Fatalf("multikey vm: %v", err)
+		}
+		fields.VerificationMethod = []did.VerificationMethod{vm}
+		fields.AssertionMethod = []string{id + "#signing"}
+	}
+	return did.New(fields)
 }
 
 // benchJSONPayload builds a JSON document of exactly size bytes: fixed fields the
@@ -139,9 +142,12 @@ func benchSetup(b *testing.B, payload []byte, nFilters int) (*chained.Processor,
 	sourceSigner, sourcePub := benchKeygen(b)
 	chainedSigner, _ := benchKeygen(b)
 
+	// The ingress issuer's full controller chain on the current DID hierarchy:
+	// Process (controller = Pipeline) → Pipeline (controller = Owner) → Owner.
 	res := local.New()
-	res.Add(benchProcessDoc(benchSourceDID, benchOwnerDID, sourcePub))
-	res.Add(did.New(did.DocumentFields{ID: benchOwnerDID, Controller: benchOwnerDID}))
+	res.Add(benchDoc(b, benchSourceDID, benchPipelineDID, sourcePub))
+	res.Add(benchDoc(b, benchPipelineDID, benchOwnerDID, nil))
+	res.Add(benchDoc(b, benchOwnerDID, benchOwnerDID, nil))
 
 	filters := make([]filter.Filter, 0, nFilters)
 	for i := 0; i < nFilters; i++ {
@@ -207,7 +213,7 @@ var (
 	sinkBytes  []byte
 )
 
-// BenchmarkPipelineBaseline (Table 6 "without VC"): the transformation work alone —
+// BenchmarkPipelineBaseline ("without VC"): the transformation work alone —
 // one JSONata filter step + the JSONata converter over the payload bytes.
 func BenchmarkPipelineBaseline(b *testing.B) {
 	f, err := filterjsonata.New([]string{benchFilterExpr})
@@ -239,7 +245,7 @@ func BenchmarkPipelineBaseline(b *testing.B) {
 	}
 }
 
-// BenchmarkPipelineWithVC (Table 6 "with VC"): the full chained relay runtime —
+// BenchmarkPipelineWithVC ("with VC"): the full chained relay runtime —
 // envelope decode, Ed25519 ingress verify, binding gate, filter, convert, strict
 // decode, hashing, chain-preserving Ed25519 sign.
 func BenchmarkPipelineWithVC(b *testing.B) {
@@ -260,7 +266,7 @@ func BenchmarkPipelineWithVC(b *testing.B) {
 	}
 }
 
-// BenchmarkPipelineStepScaling (§6.2 prose): with-VC latency at 256 B as filter
+// BenchmarkPipelineStepScaling (§6.4 prose): with-VC latency at 256 B as filter
 // step count grows — the signing cost, not step execution, should dominate.
 func BenchmarkPipelineStepScaling(b *testing.B) {
 	ctx := context.Background()
