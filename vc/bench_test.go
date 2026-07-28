@@ -193,8 +193,10 @@ func BenchmarkChainBuild(b *testing.B) {
 	}
 }
 
-// BenchmarkChainVerify: per-VC verify cost is near-constant regardless of depth (each
-// VC verifies independently — one Ed25519 verify + a previousCredential hash comparison).
+// BenchmarkChainVerify: per-VC verify cost is near-constant regardless of depth. Each
+// VC is verified independently via Verifier.Verify (signer authenticity + the
+// controller-chain walk); cross-credential linkage checks are VerifyChain's job
+// and are not on this path.
 func BenchmarkChainVerify(b *testing.B) {
 	org := newBenchOrg(b, 0)
 	builder := vc.NewBuilder(org.signer)
@@ -275,8 +277,9 @@ func BenchmarkMultiOrgChainBuild(b *testing.B) {
 
 // BenchmarkMultiOrgChainVerify: verifying every credential of a multi-organization
 // synthetic chain, resolving each issuer's DID document from the in-memory resolver. Each VC
-// verifies independently (one Ed25519 verify + a previousCredential hash comparison), so
-// per-VC cost stays near-constant across chain breadth; total latency scales with orgs*stages.
+// is verified independently via Verifier.Verify (cross-credential linkage is VerifyChain's
+// job), so per-VC cost stays near-constant across chain breadth; total latency scales with
+// orgs*stages.
 func BenchmarkMultiOrgChainVerify(b *testing.B) {
 	ctx := context.Background()
 	for _, g := range benchGrid {

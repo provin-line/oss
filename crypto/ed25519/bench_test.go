@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Paper 04 §6.2 Table 4 (BENCH-RETAKE on provin): Ed25519 sign/verify latency across payload
-// sizes. Cryptographic work only — keystore/network/serialization excluded (§6 preamble), so
+// Paper 04 §6.4 microbenchmarks: Ed25519 sign/verify latency across payload
+// sizes. Cryptographic work only — keystore/network/serialization excluded, so
 // signing is benched over the raw primitive provin's Signer.Sign delegates to (stdlib
 // crypto/ed25519), and verification over provin's pure Verifier (no keystore, no resolver).
 
