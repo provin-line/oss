@@ -116,8 +116,18 @@ type SinkConfig struct {
 	UpstreamEndpoint     string
 	PayloadDelivery      string
 	AllowIssuers         []string
+	AgentAccess          AgentAccessConfig
 	Receipt              SinkReceiptConfig
 	Output               SinkOutputConfig
+}
+
+// AgentAccessConfig opts a production/archival sink into synchronous exact
+// EvidenceView appraisal. Zero value is the legacy adjacent-only mode.
+type AgentAccessConfig struct {
+	Enabled           bool
+	BoundaryID        string
+	DecisionProfileID string
+	RequiredScopes    []string
 }
 
 // ChainedConfig is a relay loop's producing identity + consuming verification

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/appraisal"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -31,6 +32,18 @@ type fakeVerifier struct {
 	calls  int
 	result *vc.VerifyResult
 	err    error
+}
+
+type fakeAppraiser struct {
+	calls  int
+	view   *appraisal.View
+	result *vc.VerifyResult
+	err    error
+}
+
+func (f *fakeAppraiser) Appraise(_ context.Context, _ *vc.PipelinePassCredential) (*appraisal.View, *vc.VerifyResult, error) {
+	f.calls++
+	return f.view, f.result, f.err
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, _ *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
@@ -81,13 +94,13 @@ func rawHash(data []byte) string {
 
 // boundCred builds a credential whose outputHash equals sha256 over payload —
 // the binding the sink enforces.
-func boundCred(t *testing.T, payload []byte) *vc.PipelinePassCredential {
+func boundCred(t testing.TB, payload []byte) *vc.PipelinePassCredential {
 	t.Helper()
 	return boundCredIssuer(t, payload, "did:example:upstream")
 }
 
 // boundCredIssuer is boundCred with an explicit issuer DID (for allow-list tests).
-func boundCredIssuer(t *testing.T, payload []byte, issuer string) *vc.PipelinePassCredential {
+func boundCredIssuer(t testing.TB, payload []byte, issuer string) *vc.PipelinePassCredential {
 	t.Helper()
 	cred, err := vc.New(vc.CredentialFields{
 		Issuer:    issuer,
@@ -105,7 +118,7 @@ func boundCredIssuer(t *testing.T, payload []byte, issuer string) *vc.PipelinePa
 	return cred
 }
 
-func encode(t *testing.T, cred *vc.PipelinePassCredential, payload []byte) []byte {
+func encode(t testing.TB, cred *vc.PipelinePassCredential, payload []byte) []byte {
 	t.Helper()
 	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
 		Credential: cred,
@@ -119,6 +132,32 @@ func encode(t *testing.T, cred *vc.PipelinePassCredential, payload []byte) []byt
 }
 
 func verified() *vc.VerifyResult { return &vc.VerifyResult{Overall: vc.ConfidenceVerified} }
+
+func appraisedView(t testing.TB, cred *vc.PipelinePassCredential, truth appraisal.TruthState, decision appraisal.Decision) *appraisal.View {
+	t.Helper()
+	body, err := cred.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant, err := cred.WireVariantID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := appraisal.NewView(appraisal.Manifest{
+		Head:                 body,
+		Spine:                []appraisal.SpineEntry{{BodyAddress: body, WireVariantID: variant}},
+		ClaimContractID:      "linear-provenance@1",
+		CanonicalizerID:      "jcs-rfc8785",
+		CryptosuiteID:        "W3C_EDDSA_JCS_2022_REC_20250515@1",
+		SchemaVersion:        "pipeline-pass-credential@1",
+		InputSnapshotDigests: map[string]string{"did:issuer": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+	}, []appraisal.ScopeEntry{{Scope: "LINEAR_ATTESTATION@1", Coverage: appraisal.CoverageEvaluated, TruthState: &truth}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.PolicyDecision = &appraisal.PolicyDecision{Decision: decision, DecisionProfileID: "purpose-first-agent-access@1"}
+	return view
+}
 
 // baseConfig returns a valid observation-only adjacent config.
 func baseConfig(v *fakeVerifier, s *fakeStore, w *fakeWriter) sink.Config {
@@ -298,6 +337,99 @@ func TestProcess_Observation_InvalidVerdict_WritesNoStore(t *testing.T) {
 		if result.Confidence == nil || *result.Confidence != verdict {
 			t.Errorf("Confidence=%v, want %v", result.Confidence, verdict)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Purpose-first production: exact view + local appraisal gate the only writer.
+// ---------------------------------------------------------------------------
+
+func TestProcess_Production_AppraisalBindsDeliveryRecord(t *testing.T) {
+	payload := []byte(`{"agent":"safe"}`)
+	cred := boundCred(t, payload)
+	view := appraisedView(t, cred, appraisal.TruthVerified, appraisal.DecisionAccept)
+	a := &fakeAppraiser{view: view, result: verified()}
+	w := &fakeWriter{}
+	s := &fakeStore{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, s, w)
+	cfg.Kind = contract.SinkProduction
+	cfg.Verifier = nil // exact appraisal is the sole decision path
+	cfg.Appraiser = a
+	cfg.AgentBoundaryID = "provin-agent-delivery@1"
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Process(context.Background(), encode(t, cred, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != contract.StatusPassed || a.calls != 1 || s.calls != 1 || len(w.records) != 1 {
+		t.Fatalf("result=%+v appraisals=%d stores=%d writes=%d", result, a.calls, s.calls, len(w.records))
+	}
+	record := w.records[0]
+	if record.EvidenceView == nil || record.EvidenceView.EvidenceViewID != view.EvidenceViewID {
+		t.Fatalf("EvidenceView=%+v", record.EvidenceView)
+	}
+	if record.Delivery == nil || record.Delivery.EvidenceViewID != view.EvidenceViewID || record.Delivery.PayloadDigest != rawHash(payload) {
+		t.Fatalf("Delivery=%+v", record.Delivery)
+	}
+}
+
+func TestProcess_Production_NonAcceptAppraisalNeverWrites(t *testing.T) {
+	payload := []byte(`{"agent":"held"}`)
+	cred := boundCred(t, payload)
+	tests := []struct {
+		name      string
+		appraiser *fakeAppraiser
+	}{
+		{"quarantine", &fakeAppraiser{view: appraisedView(t, cred, appraisal.TruthIndeterminate, appraisal.DecisionQuarantine), result: &vc.VerifyResult{Overall: vc.ConfidenceIndeterminate}}},
+		{"appraisal error", &fakeAppraiser{err: errors.New("resolver unavailable")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &fakeWriter{}
+			cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w)
+			cfg.Kind = contract.SinkProduction
+			cfg.Verifier = nil
+			cfg.Appraiser = tt.appraiser
+			cfg.AgentBoundaryID = "provin-agent-delivery@1"
+			p, err := sink.New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := p.Process(context.Background(), encode(t, cred, payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != contract.StatusErrored || len(w.records) != 0 {
+				t.Fatalf("result=%+v writes=%d", result, len(w.records))
+			}
+		})
+	}
+}
+
+func TestProcess_Production_MismatchedViewIDNeverWrites(t *testing.T) {
+	payload := []byte(`{"agent":"safe"}`)
+	cred := boundCred(t, payload)
+	view := appraisedView(t, cred, appraisal.TruthVerified, appraisal.DecisionAccept)
+	view.EvidenceViewID = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	w := &fakeWriter{}
+	cfg := baseConfig(&fakeVerifier{result: verified()}, &fakeStore{}, w)
+	cfg.Kind = contract.SinkProduction
+	cfg.Verifier = nil
+	cfg.Appraiser = &fakeAppraiser{view: view, result: verified()}
+	cfg.AgentBoundaryID = "provin-agent-delivery@1"
+	p, err := sink.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Process(context.Background(), encode(t, cred, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != contract.StatusErrored || len(w.records) != 0 {
+		t.Fatalf("result=%+v writes=%d", result, len(w.records))
 	}
 }
 

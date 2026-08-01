@@ -1,0 +1,16 @@
+{
+  "id": "agent-paths-002",
+  "rule": "agent.paths.closed",
+  "description": "An enabled direct object-store path outside the appraisal boundary invalidates the mediated-access claim.",
+  "input": {
+    "credential": {
+      "deploymentId": "two-party-purpose-first@1",
+      "appraisalBoundaryId": "provin-agent-delivery@1",
+      "paths": [
+        { "id": "production-sink", "state": "ENABLED", "boundaryId": "provin-agent-delivery@1" },
+        { "id": "object-store-direct", "state": "ENABLED", "boundaryId": "direct-store@1" }
+      ]
+    }
+  },
+  "expect": "reject"
+}

@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/agentaccess"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -58,6 +59,12 @@ func init() {
 	provinRunners["claim-002"] = runProfileGrounding
 	provinRunners["claim-003"] = runProfileRegistryClosed
 	provinRunners["claim-013"] = runProfileTopologyIndependence
+	for i := 1; i <= 5; i++ {
+		provinRunners[vecID("agent-delivery", i)] = runProfileAgentDelivery
+	}
+	for i := 1; i <= 2; i++ {
+		provinRunners[vecID("agent-paths", i)] = runProfileAgentPaths
+	}
 
 	// Closure is a warranty, not a computation: no surface here decides it,
 	// and by design none should — the library's claim check is structural so
@@ -70,6 +77,33 @@ func init() {
 	// external test package. Their own tests pin the shape; this harness
 	// cannot reach it without inverting the dependency.
 	registerProvinSkip(11, 12, "issuer obligation outside this package: the identity shape is established by pipeline/runtime's unexported sinkReceiptRegistrar and its provenance/vcdid signer (unreachable from this external test package) and pinned by their own tests; vc grammar-validates and stays open-world, exactly as the rule says")
+}
+
+// --- evidence-qualified Agent access ---
+
+func runProfileAgentDelivery(t *testing.T, v dplaaxVector) {
+	var input struct {
+		PayloadText string                     `json:"payloadText"`
+		Credential  agentaccess.DeliveryRecord `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	err := input.Credential.Validate([]byte(input.PayloadText))
+	want := expectString(t, v)
+	if (err == nil) != (want == "accept") {
+		t.Fatalf("DeliveryRecord.Validate error=%v, want %s", err, want)
+	}
+}
+
+func runProfileAgentPaths(t *testing.T, v dplaaxVector) {
+	var input struct {
+		Credential agentaccess.Deployment `json:"credential"`
+	}
+	mustParse(t, v.Input, &input)
+	err := input.Credential.Validate()
+	want := expectString(t, v)
+	if (err == nil) != (want == "accept") {
+		t.Fatalf("Deployment.Validate error=%v, want %s", err, want)
+	}
 }
 
 // TestProvinProfileAllVectors is the profile harness's single entry point. It

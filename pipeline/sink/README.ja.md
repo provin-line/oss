@@ -5,7 +5,7 @@ Sink Process 型：パイプライン出力を消費・検証し、外部世界�
 
 ## 規約
 
-- シンクは消費する credential を検証する（**adjacent 戦略** — 直前の credential のみ。フルチェーン監査は非同期 audit runner の仕事）。外部に出力する際は、検証の verdict をペイロードとともに表示する。
+- シンクは既定では消費する credential を検証する（**adjacent 戦略** — 直前の credential）。purpose-first Agent sink は代わりに、選択したfull chainを同期appraisalし、exact EvidenceViewを命名する。非同期audit runnerは別の事後監査経路として残る。外部に出力する際は、検証の verdict をペイロードとともに表示する。
 - シンクはパイプラインサブジェクトに再パブリッシュしない。そうすることは、そのプロセスを事実上 Chained Process または Source Process にしてしまう。receipt（後述）は in-band の再パブリッシュでは**ない** — ローカル VC ストア + 専用 tlog + audit queue に行き、チェーンサブジェクトには決して乗らない。
 
 ## Sink kind（deploy 層の属性、`contract.SinkKind`）
@@ -26,4 +26,27 @@ Sink kind は deploy されたプロセスの config 駆動の属性であり、
 
 ## 参照実装：file/（永続 NDJSON ストリーム）
 
-`console/` と同一の行形式（構造上同一 — append モードのファイルハンドル上に console writer を埋め込む）を、プロセス stdout をスクレイプせずに tail できるファイルへ書き出す。sink ループごとに `sink.output { type = "file", path = ... }` で選択する。同一 path を共有するループは writer を共有するため、行が交錯することはない。これは配送ストリームであり evidence ストアではない — evidence の永続性は VC / verdict ストアが担う。
+`console/` と同一の行形式（構造上同一 — append モードのファイルハンドル上に console writer を埋め込む）を、プロセス stdout をスクレイプせずに tail できるファイルへ書き出す。sink ループごとに `sink.output { type = "file", path = ... }` で選択する。同一 path を共有するループは writer を共有するため、行が交錯することはない。evidence-qualified recordはEvidenceViewをinlineで含む。writerはappend syscallを使うがrecordごとの`fsync`は行わないため、保証するのはprocess-level deliveryでありpower-loss durabilityではない。
+
+## evidence-qualified Agent delivery（opt-in）
+
+production / archival sink は `agent-access` blockを明示的に有効化できる。この場合runtimeは、adjacent verdictをdelivery判断に用いず、exact-viewの同期appraisalを行う。選択したorigin-to-head spineの検証、local versioned profileの`ACCEPT`、issuer admission、実payload bytesとhead credentialの`outputHash`の一致がすべて成立するまでwriterを呼ばない。
+
+```hocon
+sink {
+  kind = "production"
+  verification-strategy = "adjacent"
+  upstream-endpoint = "https://publisher.example"
+  allow-issuers = ["did:dplaax:publisher.example:org:acme:pipeline:p:process:x"]
+  agent-access {
+    boundary-id = "provin-agent-delivery@1"
+    decision-profile-id = "purpose-first-agent-access@1"
+    required-scopes = ["LINEAR_ATTESTATION@1"]
+  }
+  output { type = "file", path = "/var/provin/agent-delivery.ndjson" }
+}
+```
+
+NDJSON recordは`evidenceView`と`delivery`を含む。後者はpayload digest、head `outputHash`、exact EvidenceViewID、local decision、boundary IDを結合する。部分設定と未versioned設定はboot errorになる。shipped profileはconsole outputを拒否する。embedderは専用Agent writerを注入できるが、そのwriterの認証と永続化は別途評価する必要がある。
+
+現在のselection policyは`projected-chain@1`である。各predecessor body addressについてlocal registryまたは明示された直近upstream registryが返すsigned variantを解決し、complete selectionを一度検証して全`(BodyAddress, WireVariantID)`をmanifestへ固定する。全wire variantの列挙、bounded-DAG、global-minimum selectionは実装していない。

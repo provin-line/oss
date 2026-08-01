@@ -1,0 +1,21 @@
+{
+  "id": "agent-delivery-005",
+  "rule": "federation.appraisal.local",
+  "description": "A sender's accepted decision cannot substitute for the receiver's missing local appraisal.",
+  "input": {
+    "payloadText": "agent-safe-result",
+    "credential": {
+      "boundaryId": "provin-agent-delivery@1",
+      "payloadDigest": "sha256:2b80da3dfe9909229a81420084e97f04466a184727417bcef639c4395ef1a7ac",
+      "headOutputHash": "sha256:2b80da3dfe9909229a81420084e97f04466a184727417bcef639c4395ef1a7ac",
+      "evidenceViewId": "sha256:4382e8875ce5c79e0f053215993f901331003e89d125de78bc610dbdb90b06aa",
+      "remoteAppraisal": {
+        "authority": "REMOTE",
+        "evidenceViewId": "sha256:4382e8875ce5c79e0f053215993f901331003e89d125de78bc610dbdb90b06aa",
+        "decision": "ACCEPT",
+        "decisionProfileId": "sender-agent-access@1"
+      }
+    }
+  },
+  "expect": "reject"
+}

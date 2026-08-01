@@ -289,6 +289,28 @@ func TestVCStoreAdapter_StoreCredential_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestFallbackCredentialResolver_UsesDeclaredUpstreamAfterLocalMiss(t *testing.T) {
+	localStore, _, _ := newVCStoreAdapter(t)
+	upstreamStore, _, _ := newVCStoreAdapter(t)
+	var credential vc.PipelinePassCredential
+	if err := json.Unmarshal(minimalCredentialBytes(t, "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1", nil), &credential); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := upstreamStore.StoreCredential(context.Background(), &credential, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := fallbackCredentialResolver{local: localStore.client, upstream: upstreamStore.client}
+	got, err := resolver.ResolveCredential(context.Background(), stored.BodyAddress)
+	if err != nil {
+		t.Fatalf("fallback resolve: %v", err)
+	}
+	gotAddress, err := got.Hash()
+	if err != nil || gotAddress != stored.BodyAddress {
+		t.Fatalf("resolved address=%q err=%v, want %q", gotAddress, err, stored.BodyAddress)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // wireAuditRegistrar + wireReceiptWriter — a combined VCResolverService +
 // AuditService harness over ONE httptest server (the "ONE registry base

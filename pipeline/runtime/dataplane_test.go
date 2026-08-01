@@ -364,6 +364,26 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	}
 }
 
+func TestBuildDataPlane_AgentAccessRequiresChainResolver(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	cfg := dpSinkCfg()
+	cfg.Loops[0].Sink.Kind = SinkProduction
+	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
+	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
+		Enabled: true, BoundaryID: "provin-agent-delivery@1",
+		DecisionProfileID: "purpose-first-agent-access@1",
+		RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+	}
+	_, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
+		Resolver:   stubResolver{},
+		SinkWriter: console.New(io.Discard),
+		VCStore:    dpVCStore(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a credential chain resolver") {
+		t.Fatalf("missing chain resolver: got %v", err)
+	}
+}
+
 // The per-loop metrics bookkeeping follows capability (P1-2): a source loop
 // registers emit counting (but no verify, and no stripped counting without a
 // payload store); a sink registers verify counting only.

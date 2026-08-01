@@ -49,6 +49,9 @@ func init() {
 	dplaaxRunners["signer-003"] = runSignerRegister
 	dplaaxRunners["identity-001"] = runIdentityDerivation
 	dplaaxRunners["identity-002"] = runIdentityReissue
+	registerRunner(runEvidenceView, "evidence-view", 1, 2)
+	registerRunner(runClaimsCoverage, "claims-coverage", 1, 4)
+	dplaaxRunners["claims-policy-001"] = runClaimsPolicy
 
 	// Tranche 2 — behavior-fixture families driven against real seams
 	// (tranche2_test.go).
@@ -118,9 +121,7 @@ func init() {
 	// entries are what makes that visible. Each converts to a driver in the
 	// slice that builds its subject; none is a judgment that the rule is
 	// unimportant.
-	registerSkip("claims-coverage", 1, 4, "blocked-on: no EvaluationViewManifest/EvidenceViewID type — the scoped evidence vector these pin is the artifact P0-1 slice B builds (inv 4-9); nothing here can carry a per-scope coverage/truth-state today")
 	registerSkip("claims-effect", 1, 2, "blocked-on: no effect-scope mapping or legacy receipt projection — both are surfaces of the P0-5 external-effect gate, unimplemented (spec transcribed 2026-07-15, catalog rules effect.*)")
-	registerSkip("claims-policy", 1, 1, "blocked-on: no policy-decision surface — claims.policy.no-accept-non-verified binds a decision profile consuming an evidence view; neither type exists until P0-1 slice B and the P0-5 effect gate land")
 	registerSkip("effect", 1, 13, "blocked-on: no external-effect gate — the P0-5 subject (ReleaseAuthorization, quarantine entries, ObservationRecord/DecisionRecord, the effect state machine) is spec-only; the catalog transcription landed 2026-07-15 ahead of any implementation")
 	registerSkip("release", 1, 13, "blocked-on: no release-engineering pipeline in this repo — the P0-7 subject (evidence manifests, advisory assessments, waivers, scan/build state machines) is CI/release infrastructure, not library code; these bind that pipeline when it is built")
 }

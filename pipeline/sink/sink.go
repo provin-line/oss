@@ -65,7 +65,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/provin-line/oss/agentaccess"
 	"github.com/provin-line/oss/allowlist"
+	"github.com/provin-line/oss/appraisal"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
@@ -78,12 +80,25 @@ type Record struct {
 	Credential *vc.PipelinePassCredential
 	Payload    []byte
 	Verdict    *vc.VerifyResult
+	// EvidenceView is non-nil for an evidence-qualified Agent delivery. It
+	// names the exact selected spine and resolver snapshots evaluated locally.
+	EvidenceView *appraisal.View
+	// Delivery binds the actual payload bytes, head output hash, and local
+	// accepted view. Legacy adjacent-only sinks leave it nil.
+	Delivery *agentaccess.DeliveryRecord
 }
 
 // Writer delivers one consumed event to the external world. Implementations
 // (console, warehouse, EDC, …) live in subpackages or extension repositories.
 type Writer interface {
 	Write(ctx context.Context, rec Record) error
+}
+
+// Appraiser performs synchronous full-chain appraisal and returns both the
+// portable evidence view and the implementation's detailed verifier result.
+// It is injected by the composition root; sink owns only call ordering.
+type Appraiser interface {
+	Appraise(ctx context.Context, head *vc.PipelinePassCredential) (*appraisal.View, *vc.VerifyResult, error)
 }
 
 // RejectReason classifies why an archival sink refused a consumed event. It is a
@@ -123,6 +138,9 @@ const (
 	RejectPayloadDeliveryViolation RejectReason = "payload-delivery-violation"
 	// RejectIngressStoreFailure — the verified ingress VC could not be stored.
 	RejectIngressStoreFailure RejectReason = "ingress-store-failure"
+	// RejectAppraisal — exact-view construction, identity validation, or local
+	// policy did not produce ACCEPT.
+	RejectAppraisal RejectReason = "appraisal"
 )
 
 // RejectRecord is one durable reject-log entry. Identity fields are best-effort —
@@ -172,6 +190,7 @@ var (
 	// to dereference its nil payloads (fail closed at construction, never on the
 	// first by-reference event).
 	ErrMissingPayloadResolver = errors.New("sink: PayloadResolver is required when PayloadDelivery is by-reference")
+	ErrInvalidAgentAppraisal  = errors.New("sink: Appraiser and a versioned AgentBoundaryID are required together and only on production or archival sinks")
 )
 
 // Config holds construction-time configuration for a Sink Process runtime.
@@ -185,6 +204,14 @@ type Config struct {
 	Codec contract.EnvelopeCodec
 	// Verifier verifies the single immediately-preceding credential. Required.
 	Verifier provenance.Verifier
+	// Appraiser enables purpose-first evidence-qualified Agent access. When set,
+	// it replaces adjacent-only verification as the delivery verdict source and
+	// must produce a locally accepted exact EvidenceView before any writer call.
+	// Nil retains the legacy adjacent-verification behavior.
+	Appraiser Appraiser
+	// AgentBoundaryID is the versioned identity written into successful delivery
+	// records. Required exactly when Appraiser is set.
+	AgentBoundaryID string
 	// Store persists the verified ingress VC. Required.
 	Store contract.IngressVCStore
 	// Writer delivers the consumed event externally. Required.
@@ -259,7 +286,16 @@ func New(cfg Config) (*Processor, error) {
 		return nil, ErrMissingUpstream
 	}
 	if cfg.Verifier == nil {
-		return nil, ErrMissingVerifier
+		if cfg.Appraiser == nil {
+			return nil, ErrMissingVerifier
+		}
+	}
+	if cfg.Appraiser != nil {
+		if cfg.Kind == contract.SinkObservationOnly || agentaccess.ValidateBoundaryID(cfg.AgentBoundaryID) != nil {
+			return nil, ErrInvalidAgentAppraisal
+		}
+	} else if cfg.AgentBoundaryID != "" {
+		return nil, ErrInvalidAgentAppraisal
 	}
 	if cfg.PayloadDelivery == contract.DeliveryByReference && cfg.PayloadResolver == nil {
 		return nil, ErrMissingPayloadResolver
@@ -301,23 +337,46 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		}
 	}
 
-	// Stage 2 — Verify the immediately-preceding credential (adjacent). Full-chain
-	// verification is the async audit runner's job (slice-17h), not the real-time path.
-	verifyResult, err := p.cfg.Verifier.Verify(ctx, cred)
-	if err != nil {
-		if isCtxErr(err) {
-			return nil, err
+	// Stage 2 — Choose exactly one verification path. A purpose-first sink runs
+	// synchronous full-chain appraisal and validates the exact view identity and
+	// local decision. A legacy sink retains adjacent verification. The two are
+	// not combined: combining independently-selected inputs would make it
+	// unclear which evidence the delivery decision actually consumed.
+	var evidenceView *appraisal.View
+	var verifyResult *vc.VerifyResult
+	if p.cfg.Appraiser != nil {
+		evidenceView, verifyResult, err = p.cfg.Appraiser.Appraise(ctx, cred)
+		if err != nil {
+			if isCtxErr(err) {
+				return nil, err
+			}
+			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("exact-view appraisal failed: %v", err), nil, consumedRef, "", issuerDIDOf(cred)), nil
 		}
-		// A verification transport error (resolver outage, chain hole) IS the
-		// indeterminate verdict — the verdict could not be computed. Synthesize
-		// it and fall through to the SinkKind policy rather than short-circuiting
-		// to StatusErrored: observation tooling exists precisely to surface these
-		// un-verifiable events (it writes failed/indeterminate), so dropping them
-		// here would defeat the observation kind. production/archival still
-		// reject indeterminate at Stage 3. The error detail (lost from the
-		// verdict, which carries no message) is logged for operators.
-		p.logger.Warn("sink: verification error treated as indeterminate", "err", err)
-		verifyResult = &vc.VerifyResult{Overall: vc.ConfidenceIndeterminate}
+		if evidenceView == nil || verifyResult == nil {
+			return p.reject(ctx, RejectAppraisal, "exact-view appraiser returned no view or verifier result", nil, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		if err := evidenceView.ValidateID(); err != nil {
+			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("evidence view identity invalid: %v", err), nil, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		if evidenceView.PolicyDecision == nil || evidenceView.PolicyDecision.Decision != appraisal.DecisionAccept {
+			decision := "missing"
+			if evidenceView.PolicyDecision != nil {
+				decision = string(evidenceView.PolicyDecision.Decision)
+			}
+			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("local appraisal decision %s: production delivery requires ACCEPT", decision), &verifyResult.Overall, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+	} else {
+		verifyResult, err = p.cfg.Verifier.Verify(ctx, cred)
+		if err != nil {
+			if isCtxErr(err) {
+				return nil, err
+			}
+			// A verification transport error (resolver outage, chain hole) IS the
+			// indeterminate verdict — the verdict could not be computed. Synthesize
+			// it and fall through to the SinkKind policy.
+			p.logger.Warn("sink: verification error treated as indeterminate", "err", err)
+			verifyResult = &vc.VerifyResult{Overall: vc.ConfidenceIndeterminate}
+		}
 	}
 	verdict := verifyResult.Overall
 
@@ -391,8 +450,18 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		return p.reject(ctx, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 
-	// Stage 7 — External write.
-	if err := p.cfg.Writer.Write(ctx, Record{Credential: cred, Payload: payload, Verdict: verifyResult}); err != nil {
+	// Stage 7 — Construct the exact successful-delivery record, then perform the
+	// only external writer call. Construction is before the call so the writer
+	// cannot receive bytes without their binding; the record becomes a delivered
+	// artifact only if Write succeeds.
+	var delivery *agentaccess.DeliveryRecord
+	if evidenceView != nil {
+		delivery, err = agentaccess.NewDelivery(p.cfg.AgentBoundaryID, payload, subject.OutputHash, evidenceView)
+		if err != nil {
+			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("construct Agent delivery: %v", err), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
+		}
+	}
+	if err := p.cfg.Writer.Write(ctx, Record{Credential: cred, Payload: payload, Verdict: verifyResult, EvidenceView: evidenceView, Delivery: delivery}); err != nil {
 		if isCtxErr(err) {
 			return nil, err
 		}

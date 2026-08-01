@@ -27,6 +27,7 @@ import (
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -97,6 +98,12 @@ func sinkConfigFrom(sc pipelineconfig.SinkConfig) pipelineruntime.SinkConfig {
 		UpstreamEndpoint:     sc.UpstreamEndpoint,
 		PayloadDelivery:      sc.PayloadDelivery,
 		AllowIssuers:         sc.AllowIssuers,
+		AgentAccess: pipelineruntime.AgentAccessConfig{
+			Enabled:           sc.AgentAccess.Enabled,
+			BoundaryID:        sc.AgentAccess.BoundaryID,
+			DecisionProfileID: sc.AgentAccess.DecisionProfileID,
+			RequiredScopes:    append([]string(nil), sc.AgentAccess.RequiredScopes...),
+		},
 		Receipt: pipelineruntime.SinkReceiptConfig{
 			Issue:      sc.Receipt.Issue,
 			Issuer:     issuerConfigFrom(sc.Receipt.Issuer),
@@ -261,11 +268,37 @@ func bearerInterceptor(token string) connect.Interceptor {
 // bounding a resolved/stored credential's read size the same way the
 // retired cmd/standalone's credentialPublisherFrom did (D-17g-13).
 func newVCStoreClient(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient) *vcresolverclient.Resolver {
+	return newVCResolverClientAt(pipeCfg, httpClient, pipeCfg.VCStoreEndpoint)
+}
+
+func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient, endpoint string) *vcresolverclient.Resolver {
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
-		httpClient, pipeCfg.VCStoreEndpoint,
+		httpClient, endpoint,
 		connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
 		connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize),
 	))
+}
+
+// fallbackCredentialResolver keeps local resolution first, then consults the
+// sink's explicitly configured immediate upstream registry. The upstream
+// fallback is needed before asynchronous predecessor replication has caught
+// up; every selected credential is still cryptographically verified and fixed
+// in the resulting EvidenceView.
+type fallbackCredentialResolver struct {
+	local    *vcresolverclient.Resolver
+	upstream *vcresolverclient.Resolver
+}
+
+func (r fallbackCredentialResolver) ResolveCredential(ctx context.Context, contentAddress string) (*vc.PipelinePassCredential, error) {
+	credential, localErr := r.local.ResolveCredential(ctx, contentAddress)
+	if localErr == nil {
+		return credential, nil
+	}
+	credential, upstreamErr := r.upstream.ResolveCredential(ctx, contentAddress)
+	if upstreamErr == nil {
+		return credential, nil
+	}
+	return nil, fmt.Errorf("pipeline: resolve credential %s locally (%v) and upstream (%w)", contentAddress, localErr, upstreamErr)
 }
 
 // vcStoreAdapter adapts *vcresolverclient.Resolver to BOTH
@@ -716,7 +749,18 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient, pipeCfg.MaxRetainChunkSize)
 
 	return pipelineruntime.Deps{
-		Resolver:            didResolver,
+		Resolver:      didResolver,
+		ChainResolver: vcClient,
+		ChainResolverFor: func(upstreamEndpoint string) chainwalk.CredentialResolver {
+			if upstreamEndpoint == "" || upstreamEndpoint == pipeCfg.VCStoreEndpoint {
+				return vcClient
+			}
+			return fallbackCredentialResolver{
+				local:    vcClient,
+				upstream: newVCResolverClientAt(pipeCfg, httpClient, upstreamEndpoint),
+			}
+		},
+		AppraisalMaxDepth:   pipeCfg.BatchResolver.MaxDepth,
 		VCStore:             store,
 		AuditQueue:          wireAuditRegistrar{client: factory.For(nodeDID)},
 		Receipts:            wireReceiptWriter{resolver: vcClient, factory: factory},
