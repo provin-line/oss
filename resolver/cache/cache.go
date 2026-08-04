@@ -57,6 +57,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/resolver"
 )
@@ -72,6 +73,18 @@ const (
 	// resolver caps one document at 1 MiB, so the default admits at least 16
 	// worst-case documents and thousands of typical ones.
 	DefaultMaxBytes = 16 << 20
+
+	// hitParseSlots bounds concurrent hit-path parses. The bare resolver holds
+	// its 64-slot admission semaphore through fetch AND parse, so the
+	// pre-signature, attacker-drivable resolution work was capped at 64
+	// concurrent worst-case parses; a cache hit that parsed unboundedly would
+	// RAISE that pre-authentication ceiling exactly where deployments enable
+	// the cache. Unlike the network semaphore this one BLOCKS instead of
+	// failing fast: the guarded work is a local parse with bounded completion
+	// time — no remote party can pin a holder — so waiting is bounded, and a
+	// fail-fast here would only push traffic back onto the network path the
+	// cache exists to relieve.
+	hitParseSlots = 64
 )
 
 var (
@@ -105,6 +118,9 @@ type Resolver struct {
 
 	// now is the clock; a test may substitute it to cross TTL boundaries.
 	now func() time.Time
+
+	// parseSem bounds concurrent hit-path parses (see hitParseSlots).
+	parseSem chan struct{}
 
 	// mu covers only the map/LRU bookkeeping below. Underlying resolution,
 	// serialization, and parsing all happen outside it, so the lock cannot
@@ -141,6 +157,7 @@ func New(next resolver.Resolver, cfg Config) (*Resolver, error) {
 		maxEntries: cfg.MaxEntries,
 		maxBytes:   cfg.MaxBytes,
 		now:        time.Now,
+		parseSem:   make(chan struct{}, hitParseSlots),
 		lru:        list.New(),
 		entries:    make(map[string]*list.Element),
 	}
@@ -162,8 +179,16 @@ func New(next resolver.Resolver, cfg Config) (*Resolver, error) {
 // never converts a successful resolution into an error.
 func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	if raw, ok := r.lookup(didStr); ok {
+		// Parse under the hit bound; honor cancellation while waiting.
+		select {
+		case r.parseSem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		doc := &did.DIDDocument{}
-		if err := doc.UnmarshalJSON(raw); err == nil {
+		err := doc.UnmarshalJSON(raw)
+		<-r.parseSem
+		if err == nil {
 			return doc, nil
 		}
 		// Stored bytes that no longer parse cannot serve anyone; drop the
@@ -199,10 +224,19 @@ func (r *Resolver) lookup(didStr string) ([]byte, bool) {
 	return e.raw, true
 }
 
-// admit stores doc's canonical bytes under the bounds. Serialization failure
-// and over-budget documents are silently non-cacheable: the caller already
-// holds a successful resolution and must keep it.
+// admit stores doc's canonical bytes under the bounds. Serialization failure,
+// over-budget documents, and documents that cannot round-trip
+// canonicalization are silently non-cacheable: the caller already holds a
+// successful resolution and must keep it.
 func (r *Resolver) admit(didStr string, doc *did.DIDDocument) {
+	// A number outside ±(2^53−1) does not survive RFC 8785 (binary64 rounds
+	// it), so a hit would return a numerically different body than the miss
+	// did. Conforming registries reject such documents at registration
+	// (didregistry runs the same gate), but resolution may face registries
+	// that never ran it.
+	if err := canon.AdmitSafeNumbers(doc.Body()); err != nil {
+		return
+	}
 	raw, err := doc.MarshalJSON()
 	if err != nil || int64(len(raw)) > r.maxBytes {
 		return

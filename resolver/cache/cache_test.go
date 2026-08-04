@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -300,4 +301,61 @@ func mustResolve(t *testing.T, r *cache.Resolver, id string) *did.DIDDocument {
 		t.Fatalf("resolve %s returned wrong document: %+v", id, doc)
 	}
 	return doc
+}
+
+// TestUnsafeIntegerDocumentIsServedButNotCached pins the canonicalization-
+// fidelity admission gate: a document carrying an integer outside ±(2^53−1)
+// cannot round-trip through RFC 8785 (binary64 rounds it), so a hit would
+// return a numerically different body than the miss did. Such documents are
+// served uncached.
+func TestUnsafeIntegerDocumentIsServedButNotCached(t *testing.T) {
+	ctx := context.Background()
+	const id = "did:dplaax:reg:org:unsafe"
+	raw, err := testDoc(id).MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal probe: %v", err)
+	}
+	// Splice an unsafe integer literal into otherwise-valid document bytes;
+	// building it through encoding/json would round at the test level.
+	unsafeRaw := []byte(strings.Replace(string(raw), `"id":`, `"unsafe":9007199254740993,"id":`, 1))
+	unsafeDoc := &did.DIDDocument{}
+	if err := unsafeDoc.UnmarshalJSON(unsafeRaw); err != nil {
+		t.Fatalf("unmarshal unsafe doc: %v", err)
+	}
+
+	next := &fixedResolver{doc: unsafeDoc}
+	r, _ := newCached(t, next, cache.Config{})
+	first, err := r.Resolve(ctx, id)
+	if err != nil || first == nil {
+		t.Fatalf("unsafe-number document must still be served: doc=%v err=%v", first, err)
+	}
+	if _, err := r.Resolve(ctx, id); err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if got := next.calls.Load(); got != 2 {
+		t.Errorf("underlying resolutions = %d, want 2 (a document that cannot round-trip canonicalization must not be cached)", got)
+	}
+}
+
+// fixedResolver serves one pre-built document and counts calls.
+type fixedResolver struct {
+	doc   *did.DIDDocument
+	calls atomic.Int64
+}
+
+func (f *fixedResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	f.calls.Add(1)
+	return f.doc, nil
+}
+
+// TestHitParseBoundMatchesResolverAdmission pins the hit-path parse bound: the
+// bare resolver holds its 64-slot admission semaphore through fetch AND parse,
+// so enabling the cache must not raise the pre-authentication parse
+// concurrency above what the bare path allowed.
+func TestHitParseBoundMatchesResolverAdmission(t *testing.T) {
+	next := newCountingResolver()
+	r, _ := newCached(t, next, cache.Config{})
+	if got := cache.HitParseSlotsForTest(r); got != 64 {
+		t.Errorf("hit-parse slots = %d, want 64 (the production resolver's admission bound)", got)
+	}
 }
