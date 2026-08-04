@@ -1,0 +1,377 @@
+# Keeps pins.env's E2E_REF from silently falling behind the harness, without
+# ever asking by failing.
+#
+# e2e.yml gates every commit here against a pinned revision of
+# provin-line/e2e, and nothing in that arrangement notices when the pin goes
+# stale: a harness fix lands over there, this gate keeps testing the version
+# before it, and the runs stay green while saying less and less. That is not
+# hypothetical — it happened the day the gate was built, and again for eight
+# consecutive nights after 0.1.0 was cut, which is what prompted this job.
+#
+# The evidence comes from provin-line/e2e's oss-crosscheck, which runs both
+# runtimes nightly against that repository's HEAD and this one's. Its run
+# conclusion means exactly "did the pair work" — the harness deliberately keeps
+# its own bookkeeping (oss-pin-bump.yml, this file's mirror) OUT of that
+# workflow so that gating on the conclusion here is sound. A green run proves a
+# specific harness revision works against this product, so this job proposes
+# exactly that revision and nothing newer. When no such run exists it does
+# nothing at all: a bump nobody has tested is worse than a stale pin, because
+# it converts a quiet gap into a red gate.
+#
+# Not a gate: no push or pull_request trigger, and a red run here never means
+# the product or the harness is broken — only that this machinery is. The bump
+# is prepared on a branch and tracked in an issue; the pull request is opened
+# by a human, which is both what the organization's policy requires
+# (GITHUB_TOKEN may not create pull requests) and what makes e2e.yml actually
+# run on it. Reading the harness diff before merging is the part that wanted a
+# human in the first place.
+name: e2e-pin-bump
+
+on:
+  schedule:
+    # After provin-line/e2e's oss-crosscheck (41 22 * * *) has had time to
+    # finish. Nothing depends on that ordering being right — this job looks
+    # for the most recent green run at any time, not tonight's — but asking on
+    # the same day it was produced keeps the issue's timestamps legible.
+    - cron: '30 23 * * *'
+  # For rehearsal. On any ref other than the default branch, mutation is
+  # forced off (see DRY_RUN below), so a dispatch against a work branch is
+  # always a dry run regardless of the input.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: report what this would do, without pushing a branch or filing an issue
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# The branch and the issue are shared mutable state; two runs interleaving
+# (a dispatch overlapping the nightly) could double-file the issue or race the
+# push. Queue instead.
+concurrency:
+  group: e2e-pin-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      # To push the bump branch.
+      contents: write
+      # To file, refresh and close the tracking issue.
+      issues: write
+      # To see whether the bump branch already has an open pull request.
+      pull-requests: read
+    env:
+      HARNESS: provin-line/e2e
+      CROSSCHECK: oss-crosscheck.yml
+      BRANCH: chore/bump-e2e-pin
+      ISSUE_TITLE: 'pins.env: E2E_REF is behind provin-line/e2e'
+      ISSUE_LABEL: pin-bump
+      BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+      GH_TOKEN: ${{ github.token }}
+      # Two ways to be a dry run: asked for one, or running anywhere other
+      # than the default branch — a dispatch against a work branch must never
+      # mutate shared state from unreviewed history. Scheduled runs happen on
+      # the default branch with an empty input, so nightly operation is live.
+      DRY_RUN: ${{ inputs.dry_run == true || github.ref_name != github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history: a push from a shallow clone is refused, and this job
+          # exists to push.
+          fetch-depth: 0
+
+      - id: evidence
+        name: which harness revision has been proven green?
+        run: |
+          set -o pipefail
+          # The newest crosscheck run that actually passed, on the harness's
+          # default branch (a constant here: the harness addresses its own
+          # default branch as main throughout). Its head_sha is the harness
+          # revision that run tested, which is the only revision this job is
+          # entitled to propose.
+          target=$(gh api \
+            "repos/$HARNESS/actions/workflows/$CROSSCHECK/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty')
+          if [ -z "$target" ]; then
+            echo "no successful $CROSSCHECK run found in $HARNESS — nothing is proven yet."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$target" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "the crosscheck run reported a head_sha that is not a commit SHA: '$target'"
+            exit 1
+          }
+          run_url=$(gh api \
+            "repos/$HARNESS/actions/workflows/$CROSSCHECK/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].html_url')
+
+          # pins.env forbids naming a revision that is not on the branch it
+          # claims to track. A crosscheck run is recorded against main, but
+          # main can be rewritten afterwards, which would leave this pointing
+          # at a commit no longer reachable — stale the moment it is written,
+          # and quiet about it.
+          status=$(gh api "repos/$HARNESS/compare/${target}...main" --jq .status)
+          case "$status" in
+            ahead|identical) ;;
+            *)
+              echo "$target is no longer on $HARNESS's main (compare says '$status') — refusing to name it."
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          echo "proven green: $target"
+          {
+            echo "found=true"
+            echo "target=$target"
+            echo "evidence=$run_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: decide
+        name: is pins.env behind that revision?
+        if: steps.evidence.outputs.found == 'true'
+        env:
+          TARGET: ${{ steps.evidence.outputs.target }}
+        run: |
+          current=$(sed -n 's/^E2E_REF=//p' pins.env | head -1)
+          # The value reaches a compare URL here and e2e.yml feeds its twin
+          # into a checkout ref — assert it is a commit id everywhere it is
+          # consumed, not just where it is written.
+          printf '%s' "$current" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "pins.env: E2E_REF must be a full 40-character commit SHA, got '$current'"
+            exit 1
+          }
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$TARGET" ]; then
+            echo "pins.env names $current — current."
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+            echo "reason=caught-up" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A pin only ever moves forward. "Newest green run" is not the same
+          # as "newer than the pin": when the crosscheck has been failing for
+          # a while, the newest GREEN one can predate the pin entirely, and
+          # proposing it would quietly revert the gate to an older harness
+          # while looking exactly like progress. On 2026-08-04 that was the
+          # live state — the newest green run was eight days older than the
+          # pin — which is how this check came to exist.
+          status=$(gh api "repos/$HARNESS/compare/${current}...${TARGET}" --jq .status)
+          if [ "$status" != "ahead" ]; then
+            echo "pins.env names  $current"
+            echo "newest green    $TARGET"
+            echo "compare says the proven revision is '$status' relative to the pin, not 'ahead' — nothing to propose."
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+            echo "reason=not-ahead" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "pins.env names  $current"
+          echo "proven green    $TARGET"
+          echo "behind=true" >> "$GITHUB_OUTPUT"
+
+      - id: branch
+        name: prepare the bump on a branch
+        if: steps.decide.outputs.behind == 'true'
+        env:
+          TARGET: ${{ steps.evidence.outputs.target }}
+          EVIDENCE: ${{ steps.evidence.outputs.evidence }}
+        run: |
+          set -o pipefail
+          # Three reasons to leave the branch alone, checked in order of how
+          # much a force-push would destroy:
+          #
+          # 1. An open pull request. Its reviewer read a specific diff, and its
+          #    title and body name a specific target; force-pushing a newer one
+          #    under them silently converts an approval of X into a merge of Y
+          #    — and a GITHUB_TOKEN push would not even rerun e2e.yml on it.
+          # 2. A tip this job did not write. Someone took the branch to fix a
+          #    bump by hand; their work is not this job's to overwrite. The
+          #    committer is checked as well as the author because --amend
+          #    preserves the original author — a hand-amended commit still
+          #    carries the bot's authorship.
+          # 3. A tip that already says what tonight would say.
+          pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "pull request #$pr is open on $BRANCH — leaving it exactly as its reviewer sees it."
+            echo "state=in-review" >> "$GITHUB_OUTPUT"
+            echo "pr=$pr" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          lease="$BRANCH:"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch --quiet origin "$BRANCH"
+            remote_tip=$(git rev-parse FETCH_HEAD)
+            lease="$BRANCH:$remote_tip"
+            author=$(git log -1 --format=%ae FETCH_HEAD)
+            committer=$(git log -1 --format=%ce FETCH_HEAD)
+            if [ "$author" != "$BOT_EMAIL" ] || [ "$committer" != "$BOT_EMAIL" ]; then
+              echo "refusing to overwrite $BRANCH: its tip is by $author/$committer, not this job."
+              echo "state=blocked" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if git show "FETCH_HEAD:pins.env" | grep -q "^E2E_REF=${TARGET}\$"; then
+              echo "$BRANCH already names $TARGET — leaving it alone."
+              echo "state=unchanged" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email "$BOT_EMAIL"
+          # Always from the default branch's tip as checked out by this run —
+          # never from a dispatch ref's history. The DRY_RUN guard makes a
+          # non-default dispatch inert anyway; this is the second lock on the
+          # same door.
+          git checkout --quiet -B "$BRANCH" "$GITHUB_SHA"
+          # Not `sed -i`: that spelling is GNU-only, and the difference does
+          # not surface until someone runs this logic somewhere other than the
+          # hosted Ubuntu runner — where it silently rewrites nothing and the
+          # commit below turns into an empty-tree failure instead of an error
+          # about the thing that actually went wrong.
+          rewritten=$(mktemp)
+          sed "s|^E2E_REF=.*|E2E_REF=${TARGET}|" pins.env > "$rewritten"
+          mv "$rewritten" pins.env
+          grep -q "^E2E_REF=${TARGET}\$" pins.env || {
+            echo "pins.env has no E2E_REF= line to rewrite — has its format changed?"
+            exit 1
+          }
+          git add pins.env
+          git commit --quiet --file - <<MSG
+          ci: move E2E_REF to ${TARGET:0:12} — proven green against this product
+
+          provin-line/e2e's oss-crosscheck ran both runtimes against this harness
+          revision and the oss revision that was current at the time. e2e.yml on
+          the bump pull request verifies the pairing with this repository's
+          actual HEAD — that run, not this message, is the gate.
+
+          pins.env also asks whoever bumps to read what changed in the harness.
+          That part is still yours; nothing merges this automatically.
+
+          Evidence: ${EVIDENCE}
+          MSG
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: would push $BRANCH (lease: $lease)"
+            git --no-pager show --stat HEAD
+            echo "state=dry-run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The lease pins the push to the tip the ownership check above
+          # actually read. If anything moved the branch in between, the push
+          # fails instead of overwriting what it never inspected.
+          git push --quiet --force-with-lease="$lease" origin "$BRANCH"
+          echo "state=pushed" >> "$GITHUB_OUTPUT"
+
+      - name: file or refresh the tracking issue
+        if: steps.decide.outputs.behind == 'true'
+        env:
+          TARGET: ${{ steps.evidence.outputs.target }}
+          EVIDENCE: ${{ steps.evidence.outputs.evidence }}
+          CURRENT: ${{ steps.decide.outputs.current }}
+          BRANCH_STATE: ${{ steps.branch.outputs.state }}
+          PR_NUMBER: ${{ steps.branch.outputs.pr }}
+        run: |
+          set -o pipefail
+          compare="$GITHUB_SERVER_URL/$HARNESS/compare/${CURRENT}...${TARGET}"
+          branch_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$BRANCH"
+
+          # A compare link with quick_pull=1 lands on the pull request form
+          # with the title and body already filled in, so "open it" stays one
+          # click even though this job is not the one opening it.
+          pr_title="ci: move E2E_REF to ${TARGET:0:12}"
+          pr_body=$(printf '%s\n\n%s\n' \
+            "Proven green by [oss-crosscheck]($EVIDENCE), which ran both runtimes against this harness revision." \
+            "Read [what changed in the harness]($compare) before merging.")
+          quick_pull="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...${BRANCH}?quick_pull=1"
+          quick_pull="${quick_pull}&title=$(printf '%s' "$pr_title" | jq -sRr @uri)"
+          quick_pull="${quick_pull}&body=$(printf '%s' "$pr_body" | jq -sRr @uri)"
+
+          {
+            cat <<HEAD
+          \`pins.env\` names a harness revision older than one proven green against this product. Until it moves, \`e2e.yml\` keeps gating this repository with the older harness — greenly, and without saying so.
+
+          | | |
+          |---|---|
+          | \`pins.env\` names | \`${CURRENT}\` |
+          | proven green | \`${TARGET}\` |
+          | evidence | [oss-crosscheck run](${EVIDENCE}) |
+          | harness diff | [\`${CURRENT:0:12}...${TARGET:0:12}\`](${compare}) |
+
+          HEAD
+            case "$BRANCH_STATE" in
+              in-review)
+                cat <<INREVIEW
+          Pull request #${PR_NUMBER} is already open from \`${BRANCH}\` and was deliberately **not** touched — its reviewer is reading a specific diff. A newer proven revision exists; it will be proposed after that pull request is resolved.
+          INREVIEW
+                ;;
+              blocked)
+                cat <<BLOCKED
+          **The branch \`${BRANCH}\` is held by someone else**, so this bump was not prepared — its tip was not written by this job. Resolve that branch and the next nightly run takes it from there.
+          BLOCKED
+                ;;
+              *)
+                cat <<READY
+          The branch [\`${BRANCH}\`](${branch_url}) already carries the edit.
+
+          **[→ open the bump pull request](${quick_pull})**
+
+          \`e2e.yml\` runs on that pull request, gating this commit with the harness revision being proposed.
+          READY
+                ;;
+            esac
+            cat <<FOOT
+
+          Read the harness diff before merging — that reading is why this is not merged automatically.
+
+          <sub>Filed and refreshed by \`e2e-pin-bump.yml\`. It closes itself once \`pins.env\` catches up.</sub>
+          FOOT
+          } > "$RUNNER_TEMP/issue-body.md"
+
+          number=$(gh issue list --state open --label "$ISSUE_LABEL" --limit 20 --json number,title \
+            | jq -r --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
+
+          if [ "$DRY_RUN" = "true" ]; then
+            if [ -n "$number" ]; then
+              echo "dry run: would refresh issue #$number"
+            else
+              echo "dry run: would file a new issue"
+            fi
+            cat "$RUNNER_TEMP/issue-body.md"
+            exit 0
+          fi
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/issue-body.md"
+          else
+            gh label create "$ISSUE_LABEL" --description "filed by pin-bump automation" --force
+            gh issue create --title "$ISSUE_TITLE" --label "$ISSUE_LABEL" --body-file "$RUNNER_TEMP/issue-body.md"
+          fi
+
+      - name: close the tracking issue once there is nothing left to bump
+        if: steps.decide.outputs.behind == 'false'
+        env:
+          TARGET: ${{ steps.evidence.outputs.target }}
+          CURRENT: ${{ steps.decide.outputs.current }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          set -o pipefail
+          number=$(gh issue list --state open --label "$ISSUE_LABEL" --limit 20 --json number,title \
+            | jq -r --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
+          [ -n "$number" ] || exit 0
+          # Two distinct ways to have nothing to bump, and the closing comment
+          # is a permanent record, so it must not claim the wrong one.
+          if [ "$REASON" = "caught-up" ]; then
+            comment="\`pins.env\` now names \`${TARGET}\`. Nothing left to bump."
+          else
+            comment="Nothing left to bump: \`pins.env\` names \`${CURRENT}\`, and the newest proven revision (\`${TARGET}\`) is not ahead of it."
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: would close issue #$number: $comment"
+            exit 0
+          fi
+          gh issue close "$number" --comment "$comment"
