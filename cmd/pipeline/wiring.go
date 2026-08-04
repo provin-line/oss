@@ -26,6 +26,7 @@ import (
 	"github.com/provin-line/oss/pipeline/contract"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/resolver/cache"
 	"github.com/provin-line/oss/vc"
 	"github.com/provin-line/oss/vc/chainwalk"
 )
@@ -181,8 +182,11 @@ func loopConfigFrom(lc pipelineconfig.LoopConfig) pipelineruntime.LoopConfig {
 // exactly: allow-private-networks=true requires a scoped resolution map
 // (registry-base-urls or resolver-base-url), or an attacker-supplied
 // registry could reach private address space via the open
-// https://{registry} fallback.
-func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
+// https://{registry} fallback. It also mirrors the did-cache posture: with
+// the block enabled the resolver is resolver/cache wrapped around the HTTP
+// resolver, so appraisal's 4-per-credential resolutions hit the node-local
+// cache; disabled (the default) resolution stays uncached.
+func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, resolver.Resolver, error) {
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
@@ -204,7 +208,22 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	if closeUnmapped && !scoped {
 		return nil, nil, fmt.Errorf("core: allow-private-networks=true requires configured registry resolution (%s or %s) so an unmapped registry cannot reach private space", "provin.network.chain.nats.registry-base-urls", "provin.network.chain.nats.resolver-base-url")
 	}
-	return guard, didresolver.New(guard, resolverOpts...), nil
+	concrete := didresolver.New(guard, resolverOpts...)
+	if !chainCfg.DIDCache.Enabled {
+		return guard, concrete, nil
+	}
+	cached, err := cache.New(concrete, cache.Config{
+		TTL:        chainCfg.DIDCache.TTL,
+		MaxEntries: chainCfg.DIDCache.MaxEntries,
+		MaxBytes:   int64(chainCfg.DIDCache.MaxBytes),
+	})
+	if err != nil {
+		// chainconfig already validated the bounds, so this is a programming
+		// error, but it still fails the boot loudly rather than running with a
+		// posture the config did not describe.
+		return nil, nil, fmt.Errorf("pipeline: did-cache: %w", err)
+	}
+	return guard, cached, nil
 }
 
 // registryBaseURL mirrors internal/netcompose.registryBaseURL exactly (see
