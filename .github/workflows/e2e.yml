@@ -17,9 +17,11 @@
 #
 # Bumping E2E_REF is deliberate work, same discipline as the harness's own
 # pins.env: read what changed in the harness, run both jobs, then commit the new
-# SHA. It lives here rather than in a pins file because it has exactly one
-# reader; promote it to a file when a second pin appears (a quickstart auth
-# smoke would want the auth image digests, for instance).
+# SHA. The pin used to live in this file's env: block on the grounds that it had
+# exactly one reader. It now lives in ./pins.env — not because a second pin
+# appeared, but because nothing automated can edit a pin inside a workflow file
+# (GITHUB_TOKEN has no `workflows` scope), and a pin only a human can move goes
+# stale. e2e-pin-bump.yml maintains it; pins.env states what that cost.
 #
 # Every action here is pinned to a commit SHA, unlike this repository's other
 # workflows. The original reason was that these steps handled a GitHub App
@@ -45,10 +47,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # github.com/provin-line/e2e — the harness revision this commit is gated by.
-  E2E_REF: 9bfcce34430e6360a6db4c5fa3a02fa375a45573
-
 jobs:
   process:
     runs-on: ubuntu-latest
@@ -61,6 +59,30 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
+      # pins.env says in prose that a pin is a SHA and never a branch name; this
+      # makes that enforceable rather than aspirational. It matters more here
+      # than in the harness's mirror of it: this workflow runs on pull requests,
+      # including from forks, and pins.env is an ordinary file a pull request can
+      # edit. Exactly one E2E_REF line is accepted — `sed -n p` prints every
+      # match and a validator that checks "some line is a SHA" while a checkout
+      # consumes a different line is two behaviours wearing one assertion.
+      # This cannot stop a pull request from naming an OLDER harness — see
+      # pins.env on why that is a review question, not one a workflow can
+      # answer. What it names is verified AFTER checkout, below.
+      - id: pin
+        name: read and validate the harness pin
+        run: |
+          count=$(grep -c '^E2E_REF=' oss/pins.env || true)
+          if [ "$count" != "1" ]; then
+            echo "pins.env: expected exactly one E2E_REF= line, found $count"
+            exit 1
+          fi
+          ref=$(sed -n 's/^E2E_REF=//p' oss/pins.env | head -1)
+          printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "pins.env: E2E_REF must be a full 40-character commit SHA, got '$ref'"
+            exit 1
+          }
+          echo "e2e_ref=$ref" >> "$GITHUB_OUTPUT"
       # No credential: provin-line/e2e is public, so an anonymous checkout
       # reaches it. This used to mint a GitHub App installation token because
       # GITHUB_TOKEN is scoped to this repository and could not read a private
@@ -71,11 +93,26 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
-          ref: ${{ env.E2E_REF }}
+          ref: ${{ steps.pin.outputs.e2e_ref }}
           path: e2e
           # Still false: checkout defaults to persisting GITHUB_TOKEN in the
           # clone's git config, and this clone has no use for it.
           persist-credentials: false
+      # The harness's own ci.yml re-asserts its checkout with `make verify-pin`;
+      # this is that backstop, pointed at this job's checkout. It makes the
+      # whole class of "the validator passed but the checkout landed somewhere
+      # else" dead rather than each instance patched: whatever string tricks
+      # survive the step above, the suite only runs if the tree IS the pinned
+      # revision.
+      - name: verify the harness landed on the pin
+        env:
+          EXPECTED: ${{ steps.pin.outputs.e2e_ref }}
+        run: |
+          have=$(git -C e2e rev-parse HEAD)
+          [ "$have" = "$EXPECTED" ] || {
+            echo "e2e checkout is at $have but pins.env names $EXPECTED"
+            exit 1
+          }
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
@@ -103,13 +140,36 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: oss
+      - id: pin
+        name: read and validate the harness pin
+        run: |
+          count=$(grep -c '^E2E_REF=' oss/pins.env || true)
+          if [ "$count" != "1" ]; then
+            echo "pins.env: expected exactly one E2E_REF= line, found $count"
+            exit 1
+          fi
+          ref=$(sed -n 's/^E2E_REF=//p' oss/pins.env | head -1)
+          printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "pins.env: E2E_REF must be a full 40-character commit SHA, got '$ref'"
+            exit 1
+          }
+          echo "e2e_ref=$ref" >> "$GITHUB_OUTPUT"
       - name: checkout the pinned harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: provin-line/e2e
-          ref: ${{ env.E2E_REF }}
+          ref: ${{ steps.pin.outputs.e2e_ref }}
           path: e2e
           persist-credentials: false
+      - name: verify the harness landed on the pin
+        env:
+          EXPECTED: ${{ steps.pin.outputs.e2e_ref }}
+        run: |
+          have=$(git -C e2e rev-parse HEAD)
+          [ "$have" = "$EXPECTED" ] || {
+            echo "e2e checkout is at $have but pins.env names $EXPECTED"
+            exit 1
+          }
       - name: point the harness at this oss checkout
         run: |
           mkdir -p e2e/repos
