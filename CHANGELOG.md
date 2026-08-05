@@ -12,6 +12,36 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-05
+
+The Paper 04 line: the delivery gate appraises the exact evidence it
+accepts, and the resolution cost that appraisal pays becomes measured —
+and recoverable — instead of implied. The paper's functional-evaluation
+revision is `38b87cf`; its scaling and cache-posture revision is
+`4174829b`; both are ancestors of this tag.
+
+### Added
+
+- Opt-in, TTL- and byte-bounded DID document cache (`resolver/cache`),
+  composed beneath input capture so the EvidenceView keeps committing the
+  digests of the documents actually used. Disabled by default.
+- Upstream pinning tests for the load-bearing resolution counts, next to
+  the verifier that owns them, so a change to the verify path fails in the
+  same run as the change.
+
+### Changed
+
+- Agent delivery is gated on an exact local appraisal: the appraised
+  spine, profile, and payload binding are fixed in the delivery record.
+- Release hardening: artifacts build with the same Go toolchain CI tests;
+  digests are identity.
+
+### Fixed
+
+- Owner-init `AlreadyExists` settles over the public route, not an
+  authorized one.
+- Verify fixtures orphaned by the hardened verifier repaired.
+
 ## [0.2.0] - 2026-07-27
 
 The P0 (public-release hardening) line, cut at the public/production cut as
