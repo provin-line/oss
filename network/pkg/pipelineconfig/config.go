@@ -15,6 +15,7 @@ import (
 	_ "embed"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/vc"
 )
+
+var versionedIDPattern = regexp.MustCompile(`^.+@[0-9]+$`)
 
 //go:embed reference.conf
 var referenceConf string
@@ -280,12 +283,24 @@ type SinkConfig struct {
 	// against a consumed credential's issuer DID). Required non-empty for
 	// production/archival; optional (unrestricted) for observation-only.
 	AllowIssuers []string
+	// AgentAccess opts this sink into synchronous exact-view appraisal. The
+	// zero value preserves the legacy adjacent-only behavior.
+	AgentAccess AgentAccessConfig
 	// Receipt configures sink-receipt issuance. Optional for production (MAY);
 	// required for archival (MUST). Zero value = no receipts.
 	Receipt SinkReceiptConfig
 	// Output is where this loop delivers consumed events (per-loop: each sink
 	// loop is one delivery target).
 	Output SinkOutputConfig
+}
+
+// AgentAccessConfig is explicit and versioned so enabling the assurance never
+// occurs through an implicit default during upgrade.
+type AgentAccessConfig struct {
+	Enabled           bool
+	BoundaryID        string
+	DecisionProfileID string
+	RequiredScopes    []string
 }
 
 // SinkReceiptConfig configures a sink's receipt issuance. When Issue is true, the
@@ -913,6 +928,41 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		return sc, fmt.Errorf("pipeline: loop %q: sink.kind %q requires a non-empty sink.allow-issuers", name, sc.Kind)
 	}
 
+	// agent-access is an opt-in assurance profile. Presence of any member means
+	// the whole block must be valid; partial configuration cannot fall back to
+	// the legacy path. Observation sinks intentionally cannot claim this profile.
+	agentBase := base + ".sink.agent-access"
+	agentKeys := []string{agentBase + ".boundary-id", agentBase + ".decision-profile-id", agentBase + ".required-scopes"}
+	hasAgent := false
+	for _, key := range agentKeys {
+		hasAgent = hasAgent || cfg.Has(key)
+	}
+	if hasAgent {
+		if sc.Kind == SinkObservationOnly {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.agent-access requires production or archival kind", name)
+		}
+		if sc.AgentAccess.BoundaryID, err = requireString(cfg, agentKeys[0]); err != nil {
+			return sc, err
+		}
+		if sc.AgentAccess.DecisionProfileID, err = requireString(cfg, agentKeys[1]); err != nil {
+			return sc, err
+		}
+		if sc.AgentAccess.RequiredScopes, err = cfg.StringList(agentKeys[2]); err != nil {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.agent-access.required-scopes: %w", name, err)
+		}
+		if !versionedIDPattern.MatchString(sc.AgentAccess.BoundaryID) || !versionedIDPattern.MatchString(sc.AgentAccess.DecisionProfileID) || len(sc.AgentAccess.RequiredScopes) == 0 {
+			return sc, fmt.Errorf("pipeline: loop %q: sink.agent-access requires versioned boundary-id, versioned decision-profile-id, and non-empty required-scopes", name)
+		}
+		seenScopes := make(map[string]bool, len(sc.AgentAccess.RequiredScopes))
+		for _, scope := range sc.AgentAccess.RequiredScopes {
+			if !versionedIDPattern.MatchString(scope) || seenScopes[scope] {
+				return sc, fmt.Errorf("pipeline: loop %q: sink.agent-access required scope %q is unversioned or duplicated", name, scope)
+			}
+			seenScopes[scope] = true
+		}
+		sc.AgentAccess.Enabled = true
+	}
+
 	// receipt issuer: MAY for production, MUST for archival. Presence of the block
 	// (its issuer.did) turns receipt issuance on; loadIssuer validates the process
 	// DID and verification-method exactly as a producing loop's issuer.
@@ -940,6 +990,9 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 
 	if sc.Output, err = loadSinkOutput(cfg, base, name); err != nil {
 		return sc, err
+	}
+	if sc.AgentAccess.Enabled && sc.Output.Type != SinkOutputFile {
+		return sc, fmt.Errorf("pipeline: loop %q: sink.agent-access requires sink.output.type = %q", name, SinkOutputFile)
 	}
 
 	return sc, nil

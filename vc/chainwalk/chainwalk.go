@@ -131,13 +131,22 @@ func New(resolver CredentialResolver, core ChainCore, opts ...Option) (*ChainVer
 // previousCredential, then delegates to the core. Implements
 // provenance.ChainVerifier.
 func (cv *ChainVerifier) VerifyChain(ctx context.Context, head *vc.PipelinePassCredential) (*vc.VerifyResult, error) {
+	_, result, err := cv.VerifyChainEvidence(ctx, head)
+	return result, err
+}
+
+// VerifyChainEvidence returns both the exact origin-first credential selection
+// and the verdict computed over it. The returned slice is a fresh assembly and
+// is the source for an EvaluationViewManifest; callers must not reconstruct a
+// spine in a second resolver pass because the variant set may have changed.
+func (cv *ChainVerifier) VerifyChainEvidence(ctx context.Context, head *vc.PipelinePassCredential) ([]*vc.PipelinePassCredential, *vc.VerifyResult, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	default:
 	}
 	if head == nil {
-		return nil, errors.New("chainwalk: head credential is nil")
+		return nil, nil, errors.New("chainwalk: head credential is nil")
 	}
 
 	// Walk head → origin, collecting head-first. seen guards against cycles by
@@ -145,7 +154,7 @@ func (cv *ChainVerifier) VerifyChain(ctx context.Context, head *vc.PipelinePassC
 	// points back to it is caught.
 	headAddr, err := head.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("chainwalk: hash head: %w", err)
+		return nil, nil, fmt.Errorf("chainwalk: hash head: %w", err)
 	}
 	seen := map[string]bool{headAddr: true}
 
@@ -153,27 +162,27 @@ func (cv *ChainVerifier) VerifyChain(ctx context.Context, head *vc.PipelinePassC
 	cur := head
 	for cur.PreviousCredential() != "" {
 		if len(headFirst) >= cv.maxDepth {
-			return nil, fmt.Errorf("chainwalk: chain exceeds MaxDepth %d at %s", cv.maxDepth, cur.PreviousCredential())
+			return nil, nil, fmt.Errorf("chainwalk: chain exceeds MaxDepth %d at %s", cv.maxDepth, cur.PreviousCredential())
 		}
 		prevAddr := cur.PreviousCredential()
 		if seen[prevAddr] {
-			return nil, fmt.Errorf("chainwalk: cycle detected — previousCredential %s already visited", prevAddr)
+			return nil, nil, fmt.Errorf("chainwalk: cycle detected — previousCredential %s already visited", prevAddr)
 		}
 		seen[prevAddr] = true
 
 		prev, err := cv.resolver.ResolveCredential(ctx, prevAddr)
 		if err != nil {
 			if isCtxErr(err) {
-				return nil, err
+				return nil, nil, err
 			}
 			// Unresolvable predecessor = a chain hole. Refuse to verify an
 			// incomplete chain; the caller maps this to indeterminate. The hole's
 			// content address is carried in a typed error so an async auditor can
 			// check whether it is still being resolved before finalizing a verdict.
-			return nil, &UnresolvedPredecessorError{Hash: prevAddr, Err: err}
+			return nil, nil, &UnresolvedPredecessorError{Hash: prevAddr, Err: err}
 		}
 		if prev == nil {
-			return nil, fmt.Errorf("chainwalk: resolver returned nil credential for %s", prevAddr)
+			return nil, nil, fmt.Errorf("chainwalk: resolver returned nil credential for %s", prevAddr)
 		}
 		headFirst = append(headFirst, prev)
 		cur = prev
@@ -186,7 +195,11 @@ func (cv *ChainVerifier) VerifyChain(ctx context.Context, head *vc.PipelinePassC
 		originFirst[len(headFirst)-1-i] = c
 	}
 
-	return cv.core.VerifyChain(ctx, originFirst)
+	result, err := cv.core.VerifyChain(ctx, originFirst)
+	if err != nil {
+		return nil, nil, err
+	}
+	return originFirst, result, nil
 }
 
 // isCtxErr reports whether err is a context cancellation or deadline — those

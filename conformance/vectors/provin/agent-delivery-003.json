@@ -1,0 +1,21 @@
+{
+  "id": "agent-delivery-003",
+  "rule": "agent.delivery.exact-occurrence",
+  "description": "A delivery view identifier that differs from the locally appraised view is rejected.",
+  "input": {
+    "payloadText": "agent-safe-result",
+    "credential": {
+      "boundaryId": "provin-agent-delivery@1",
+      "payloadDigest": "sha256:2b80da3dfe9909229a81420084e97f04466a184727417bcef639c4395ef1a7ac",
+      "headOutputHash": "sha256:2b80da3dfe9909229a81420084e97f04466a184727417bcef639c4395ef1a7ac",
+      "evidenceViewId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "appraisal": {
+        "authority": "LOCAL",
+        "evidenceViewId": "sha256:4382e8875ce5c79e0f053215993f901331003e89d125de78bc610dbdb90b06aa",
+        "decision": "ACCEPT",
+        "decisionProfileId": "purpose-first-agent-access@1"
+      }
+    }
+  },
+  "expect": "reject"
+}

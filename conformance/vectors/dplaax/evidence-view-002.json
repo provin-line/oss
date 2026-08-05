@@ -1,0 +1,34 @@
+{
+  "id": "evidence-view-002",
+  "rule": "evidence.manifest.identity",
+  "description": "A supplied EvidenceViewID that does not equal the canonical manifest digest is rejected even when the manifest and scoped vector are structurally valid.",
+  "input": {
+    "credential": {
+      "manifest": {
+        "head": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "spine": [
+          {
+            "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "claimContractId": "linear-provenance@1",
+        "canonicalizerId": "jcs-rfc8785",
+        "cryptosuiteId": "W3C_EDDSA_JCS_2022_REC_20250515@1",
+        "schemaVersion": "pipeline-pass-credential@1",
+        "inputSnapshotDigests": {
+          "did": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "evidenceViewId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "vector": [
+        {
+          "scope": "LINEAR_ATTESTATION@1",
+          "coverage": "EVALUATED",
+          "truthState": "VERIFIED"
+        }
+      ]
+    }
+  },
+  "expect": "reject"
+}

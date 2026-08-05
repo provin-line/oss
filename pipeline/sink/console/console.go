@@ -21,6 +21,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/provin-line/oss/agentaccess"
+	"github.com/provin-line/oss/appraisal"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/vc"
 )
@@ -40,9 +42,11 @@ func New(w io.Writer) *Writer {
 
 // record is the NDJSON line shape.
 type record struct {
-	Credential string          `json:"credential"`
-	Confidence string          `json:"confidence"`
-	Payload    json.RawMessage `json:"payload"`
+	Credential   string                      `json:"credential"`
+	Confidence   string                      `json:"confidence"`
+	Payload      json.RawMessage             `json:"payload"`
+	EvidenceView *appraisal.View             `json:"evidenceView,omitempty"`
+	Delivery     *agentaccess.DeliveryRecord `json:"delivery,omitempty"`
 }
 
 // Write emits one NDJSON record. Implements sink.Writer.
@@ -68,9 +72,11 @@ func (c *Writer) Write(ctx context.Context, rec sink.Record) error {
 	}
 
 	line, err := json.Marshal(record{
-		Credential: addr,
-		Confidence: conf,
-		Payload:    json.RawMessage(rec.Payload),
+		Credential:   addr,
+		Confidence:   conf,
+		Payload:      json.RawMessage(rec.Payload),
+		EvidenceView: rec.EvidenceView,
+		Delivery:     rec.Delivery,
 	})
 	if err != nil {
 		return fmt.Errorf("console: marshal record: %w", err)

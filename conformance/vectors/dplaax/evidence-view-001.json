@@ -1,0 +1,42 @@
+{
+  "id": "evidence-view-001",
+  "rule": "evidence.manifest.identity",
+  "description": "The EvidenceViewID is the sha256 content address of the RFC 8785 canonical EvaluationViewManifest and is independent of vector and decision fields.",
+  "input": {
+    "credential": {
+      "manifest": {
+        "head": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "spine": [
+          {
+            "bodyAddress": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "wireVariantId": "wire:v1:jcs-rfc8785:sha256:2222222222222222222222222222222222222222222222222222222222222222"
+          },
+          {
+            "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "wireVariantId": "wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "claimContractId": "linear-provenance@1",
+        "canonicalizerId": "jcs-rfc8785",
+        "cryptosuiteId": "W3C_EDDSA_JCS_2022_REC_20250515@1",
+        "schemaVersion": "pipeline-pass-credential@1",
+        "inputSnapshotDigests": {
+          "did:did:dplaax:factory-a": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "lifecycle:factory-a": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "evidenceViewId": "sha256:4382e8875ce5c79e0f053215993f901331003e89d125de78bc610dbdb90b06aa",
+      "vector": [
+        {
+          "scope": "LINEAR_ATTESTATION@1",
+          "coverage": "EVALUATED",
+          "truthState": "VERIFIED"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "canonical": "{\"canonicalizerId\":\"jcs-rfc8785\",\"claimContractId\":\"linear-provenance@1\",\"cryptosuiteId\":\"W3C_EDDSA_JCS_2022_REC_20250515@1\",\"head\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"inputSnapshotDigests\":{\"did:did:dplaax:factory-a\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"lifecycle:factory-a\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"schemaVersion\":\"pipeline-pass-credential@1\",\"spine\":[{\"bodyAddress\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"wireVariantId\":\"wire:v1:jcs-rfc8785:sha256:2222222222222222222222222222222222222222222222222222222222222222\"},{\"bodyAddress\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"wireVariantId\":\"wire:v1:jcs-rfc8785:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}",
+    "evidenceViewId": "sha256:4382e8875ce5c79e0f053215993f901331003e89d125de78bc610dbdb90b06aa"
+  }
+}

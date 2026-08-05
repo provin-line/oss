@@ -473,6 +473,28 @@ const validProductionSinkLoop = `
   }
 `
 
+const validAgentProductionSinkLoop = `
+  archive {
+    role = "sink"
+    ingress-subject = "did:dplaax:reg:org:acme:pipeline:pipe"
+    sink {
+      kind = "production"
+      verification-strategy = "adjacent"
+      upstream-endpoint = "https://acme.example/pipelines/pipe"
+      allow-issuers = ["did:dplaax:reg:org:acme:*"]
+      agent-access {
+        boundary-id = "provin-agent-delivery@1"
+        decision-profile-id = "purpose-first-agent-access@1"
+        required-scopes = ["LINEAR_ATTESTATION@1"]
+      }
+      output {
+        type = "file"
+        path = "/tmp/provin-agent-delivery.ndjson"
+      }
+    }
+  }
+`
+
 // An archival sink additionally MUST emit receipts, so it carries a receipt
 // issuer block (a process identity it signs receipts under).
 const validArchivalSinkLoop = `
@@ -510,6 +532,38 @@ func TestLoad_ValidProductionSink(t *testing.T) {
 	// Receipt is MAY for production and absent here.
 	if s.Receipt.Issue {
 		t.Errorf("Receipt.Issue = true, want false (no receipt block configured)")
+	}
+}
+
+func TestLoad_ValidAgentProductionSink(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(validAgentProductionSinkLoop))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := pc.Loops[0].Sink.AgentAccess
+	if !a.Enabled || a.BoundaryID != "provin-agent-delivery@1" || a.DecisionProfileID != "purpose-first-agent-access@1" || len(a.RequiredScopes) != 1 || a.RequiredScopes[0] != "LINEAR_ATTESTATION@1" {
+		t.Fatalf("AgentAccess=%+v", a)
+	}
+}
+
+func TestLoad_AgentAccessFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"observation cannot claim", strings.Replace(validAgentProductionSinkLoop, `kind = "production"`, `kind = "observation-only"`, 1)},
+		{"partial block", strings.Replace(validAgentProductionSinkLoop, "        decision-profile-id = \"purpose-first-agent-access@1\"\n", "", 1)},
+		{"unversioned profile", strings.Replace(validAgentProductionSinkLoop, `decision-profile-id = "purpose-first-agent-access@1"`, `decision-profile-id = "purpose-first-agent-access"`, 1)},
+		{"empty scopes", strings.Replace(validAgentProductionSinkLoop, `required-scopes = ["LINEAR_ATTESTATION@1"]`, `required-scopes = []`, 1)},
+		{"duplicate scopes", strings.Replace(validAgentProductionSinkLoop, `required-scopes = ["LINEAR_ATTESTATION@1"]`, `required-scopes = ["LINEAR_ATTESTATION@1", "LINEAR_ATTESTATION@1"]`, 1)},
+		{"console is not agent delivery", strings.Replace(validAgentProductionSinkLoop, `type = "file"`, `type = "console"`, 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(tt.body)))); err == nil {
+				t.Fatal("want boot error")
+			}
+		})
 	}
 }
 

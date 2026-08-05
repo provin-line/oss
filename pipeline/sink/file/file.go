@@ -5,9 +5,10 @@
 // construction (this IS a console writer over an append-mode file handle), so
 // the two surfaces can never drift.
 //
-// Durability posture: the file is a delivery stream, not an evidence store —
-// evidence lives in the VC/verdict stores (fsync'd, content-addressed). Lines
-// are appended without a per-line fsync, matching the console writer's stance.
+// Durability posture: evidence-qualified records carry their EvidenceView in
+// the delivery stream. Lines are appended without a per-line fsync, so a
+// successful call is process-level delivery, not a power-loss durability
+// claim. Credential evidence is retained separately by the ingress store.
 // sink.Writer has no lifecycle hook, so the handle lives for the process
 // lifetime; O_APPEND means a restart resumes after the last complete line.
 package file

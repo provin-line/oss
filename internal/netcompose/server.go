@@ -49,6 +49,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
+	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/resolver/cache"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/tlog/filelog"
 
@@ -161,7 +163,14 @@ func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize, maxRetainPayloadSi
 // the control plane (BuildHandler) and the data plane (sink-loop credential
 // verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
 // e2e) override the default https://{registry} mapping (D-m6).
-func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
+//
+// The returned resolver is the node's cache posture: with the did-cache block
+// enabled it is resolver/cache wrapped around the HTTP resolver, so every
+// consumer shares one bounded cache exactly as they share one resolver;
+// disabled (the default) it is the bare resolver. Archival consumers that
+// need raw fetched bytes (ResolveDocument) construct their own concrete
+// resolver and are never cached.
+func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, resolver.Resolver, error) {
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
@@ -194,7 +203,22 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 		// Fail closed and tell the operator to scope resolution.
 		return nil, nil, fmt.Errorf("core: allow-private-networks=true requires configured registry resolution (%s or %s) so an unmapped registry cannot reach private space", "provin.network.chain.nats.registry-base-urls", "provin.network.chain.nats.resolver-base-url")
 	}
-	return guard, didresolver.New(guard, resolverOpts...), nil
+	concrete := didresolver.New(guard, resolverOpts...)
+	if !chainCfg.DIDCache.Enabled {
+		return guard, concrete, nil
+	}
+	cached, err := cache.New(concrete, cache.Config{
+		TTL:        chainCfg.DIDCache.TTL,
+		MaxEntries: chainCfg.DIDCache.MaxEntries,
+		MaxBytes:   int64(chainCfg.DIDCache.MaxBytes),
+	})
+	if err != nil {
+		// chainconfig already validated the bounds, so this is a programming
+		// error, but it still fails the boot loudly rather than running with a
+		// posture the config did not describe.
+		return nil, nil, fmt.Errorf("netcompose: did-cache: %w", err)
+	}
+	return guard, cached, nil
 }
 
 // registryBaseURL derives a registry's resolution base URL from the configured
@@ -264,7 +288,7 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // records can carry full credentials, exceeding the proof-class cap every
 // other TlogService RPC uses) — see the mounting loop below for how the two
 // caps coexist on one connect service.
-func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, resolver *didresolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, mirror *MirrorWiring, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool, emitHealth *EmitHealthWiring) (http.Handler, error) {
+func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, chainCfg *chainconfig.Config, chainOp infra.Operator, verifier auth.Verifier, guard *core.URLGuard, didResolver resolver.Resolver, vcSvc *vcresolver.Service, auditStatus auditor.StatusStore, auditReceipts auditor.ReceiptStore, auditQueue auditor.AuditQueue, schemaSvc *schemaregistry.Service, payloadSvc *payloadresolver.Service, payloadStore payloadresolver.Store, tlogs map[string]tlog.Log, mirror *MirrorWiring, maxCredentialSize int, maxRetainChunkSize int, maxRetainPayloadSize int, mountIngest func(*http.ServeMux) error, readiness []ReadinessCheck, byRefHealthy func() bool, emitHealth *EmitHealthWiring) (http.Handler, error) {
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 	didStore := didyaml.New(filepath.Join(coreCfg.DataDir, "dids"))
 
@@ -287,7 +311,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 
 	chainOpts := []chainmanager.Option{
 		chainmanager.WithInfraOperator(chainOp),
-		chainmanager.WithDIDResolver(resolver),
+		chainmanager.WithDIDResolver(didResolver),
 		chainmanager.WithPeerClient(peerCli),
 		chainmanager.WithEndpointGuard(guard),
 		// This node runs the by-reference payload serving boundary (mounted below).
@@ -322,7 +346,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// The peer surface verifies each RPC in-band via L2 wireauth (signer #auth key
 	// resolved through the same resolver); it carries NO L1 interceptor.
 	peerVerifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver,
+		Resolver: didResolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
 	})
@@ -395,7 +419,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	if mirror != nil {
 		tlogSvc = tlogservice.New(tlogs, &tlogservice.MirrorConfig{
 			Store:           mirror.Store,
-			DIDResolver:     resolver,
+			DIDResolver:     didResolver,
 			Ancestry:        logident.NewDIDRegistryAncestry(didSvc),
 			Crypto:          ed25519.Verifier{},
 			MaxBatchRecords: mirror.MaxBatchRecords,

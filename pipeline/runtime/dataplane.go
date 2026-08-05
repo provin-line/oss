@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/provin-line/oss/appraisal"
+	chainappraisal "github.com/provin-line/oss/appraisal/chain"
+	"github.com/provin-line/oss/appraisal/inputcapture"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/pipeline/chained"
@@ -34,6 +37,7 @@ import (
 	"github.com/provin-line/oss/tlog/filelog"
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 	"github.com/provin-line/oss/wireprofile"
 )
 
@@ -43,6 +47,17 @@ import (
 // source loop uses neither.
 type Deps struct {
 	Resolver resolver.Resolver
+	// ChainResolver resolves predecessor credentials by content address for a
+	// synchronous exact-view appraisal. Required only by an agent-access sink.
+	ChainResolver chainwalk.CredentialResolver
+	// ChainResolverFor optionally returns a resolver scoped to one sink's
+	// declared upstream endpoint. It takes precedence over ChainResolver and
+	// lets a separated deployment synchronously resolve evidence that has not
+	// yet replicated into its local registry.
+	ChainResolverFor func(upstreamEndpoint string) chainwalk.CredentialResolver
+	// AppraisalMaxDepth bounds synchronous chain assembly. Zero selects
+	// chainwalk.DefaultMaxDepth.
+	AppraisalMaxDepth int
 	// SinkWriter, when non-nil, overrides every sink loop's config-selected
 	// delivery surface — the test seam (assert on a buffer instead of a real
 	// surface). Deployment leaves it nil: each loop's writer comes from its
@@ -428,6 +443,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 	// per-loop verifier (slice-17j retired "full").
 	var verifier *vc.Verifier
 	var ingressStore contract.IngressVCStore
+	captureRecorder := inputcapture.Recorder{}
 	ensureConsumer := func(loopName string) error {
 		if verifier != nil {
 			return nil
@@ -438,11 +454,12 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 		if deps.VCStore == nil {
 			return fmt.Errorf("runtime: loop %q: consuming role requires a VC store", loopName)
 		}
+		capturingDID := inputcapture.DIDResolver{Next: deps.Resolver}
 		var vopts []vc.VerifierOption
 		if deps.SchemaResolver != nil {
-			vopts = append(vopts, vc.WithSchemaResolver(deps.SchemaResolver))
+			vopts = append(vopts, vc.WithSchemaResolver(inputcapture.SchemaResolver{Next: deps.SchemaResolver}))
 		}
-		verifier = vc.NewVerifier(deps.Resolver, ed25519.Verifier{}, vopts...)
+		verifier = vc.NewVerifier(capturingDID, ed25519.Verifier{}, vopts...)
 		ingressStore = &serviceIngressStore{store: deps.VCStore, audit: deps.AuditQueue}
 		return nil
 	}
@@ -496,7 +513,9 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 			}
 		case RoleSink:
 			var w sink.Writer
-			if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
+			if lc.Sink.AgentAccess.Enabled && deps.SinkWriter == nil && lc.Sink.Output.Type != SinkOutputFile {
+				err = fmt.Errorf("runtime: loop %q: sink.agent-access requires a file delivery surface or an injected Agent writer", lc.Name)
+			} else if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
 				err = fmt.Errorf("runtime: loop %q: %w", lc.Name, err)
 			} else if err = ensureConsumer(lc.Name); err == nil {
 				// Per-loop verify counting over the shared verifier (P1-2).
@@ -518,8 +537,37 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 				if err == nil && lc.Sink.Kind == SinkArchival {
 					rejectLog, err = newRejectLog(lc.Name, lc.Sink.Receipt.Issuer)
 				}
+				var exactAppraiser sink.Appraiser
+				if err == nil && lc.Sink.AgentAccess.Enabled {
+					chainResolver := deps.ChainResolver
+					if deps.ChainResolverFor != nil {
+						chainResolver = deps.ChainResolverFor(lc.Sink.UpstreamEndpoint)
+					}
+					if chainResolver == nil {
+						err = fmt.Errorf("runtime: loop %q: sink.agent-access requires a credential chain resolver", lc.Name)
+					} else {
+						var walkOpts []chainwalk.Option
+						if deps.AppraisalMaxDepth > 0 {
+							walkOpts = append(walkOpts, chainwalk.WithMaxDepth(deps.AppraisalMaxDepth))
+						}
+						var walker *chainwalk.ChainVerifier
+						walker, err = chainwalk.New(chainResolver, verifier, walkOpts...)
+						if err == nil {
+							exactAppraiser, err = chainappraisal.New(walker, captureRecorder, chainappraisal.Config{
+								ClaimContractID:   "linear-provenance@1",
+								SchemaVersion:     "pipeline-pass-credential@1",
+								SelectionPolicyID: chainappraisal.ProjectedChainSelection,
+								KnownScopes:       chainappraisal.KnownScopes(),
+								Profile: appraisal.Profile{
+									ID:             lc.Sink.AgentAccess.DecisionProfileID,
+									RequiredScopes: append([]string(nil), lc.Sink.AgentAccess.RequiredScopes...),
+								},
+							})
+						}
+					}
+				}
 				if err == nil {
-					loop, err = buildSinkLoop(conn, vcnt, ingressStore, w, receipts, rejectLog, pw, lc)
+					loop, err = buildSinkLoop(conn, vcnt, exactAppraiser, ingressStore, w, receipts, rejectLog, pw, lc)
 				}
 			}
 		case RoleChained:
@@ -654,7 +702,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, appraiser sink.Appraiser, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("runtime: loop %q: %w", lc.Name, err)
@@ -668,6 +716,8 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, store
 		Kind:             kind,
 		Codec:            envelopecodec.New(),
 		Verifier:         verifier,
+		Appraiser:        appraiser,
+		AgentBoundaryID:  lc.Sink.AgentAccess.BoundaryID,
 		Store:            store,
 		Writer:           writer,
 		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,

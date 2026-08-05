@@ -26,7 +26,9 @@ import (
 	"github.com/provin-line/oss/pipeline/contract"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/resolver"
+	"github.com/provin-line/oss/resolver/cache"
 	"github.com/provin-line/oss/vc"
+	"github.com/provin-line/oss/vc/chainwalk"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -97,6 +99,12 @@ func sinkConfigFrom(sc pipelineconfig.SinkConfig) pipelineruntime.SinkConfig {
 		UpstreamEndpoint:     sc.UpstreamEndpoint,
 		PayloadDelivery:      sc.PayloadDelivery,
 		AllowIssuers:         sc.AllowIssuers,
+		AgentAccess: pipelineruntime.AgentAccessConfig{
+			Enabled:           sc.AgentAccess.Enabled,
+			BoundaryID:        sc.AgentAccess.BoundaryID,
+			DecisionProfileID: sc.AgentAccess.DecisionProfileID,
+			RequiredScopes:    append([]string(nil), sc.AgentAccess.RequiredScopes...),
+		},
 		Receipt: pipelineruntime.SinkReceiptConfig{
 			Issue:      sc.Receipt.Issue,
 			Issuer:     issuerConfigFrom(sc.Receipt.Issuer),
@@ -174,8 +182,11 @@ func loopConfigFrom(lc pipelineconfig.LoopConfig) pipelineruntime.LoopConfig {
 // exactly: allow-private-networks=true requires a scoped resolution map
 // (registry-base-urls or resolver-base-url), or an attacker-supplied
 // registry could reach private address space via the open
-// https://{registry} fallback.
-func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, *didresolver.Resolver, error) {
+// https://{registry} fallback. It also mirrors the did-cache posture: with
+// the block enabled the resolver is resolver/cache wrapped around the HTTP
+// resolver, so appraisal's 4-per-credential resolutions hit the node-local
+// cache; disabled (the default) resolution stays uncached.
+func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*core.URLGuard, resolver.Resolver, error) {
 	guard := core.NewURLGuard(
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
@@ -197,7 +208,22 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	if closeUnmapped && !scoped {
 		return nil, nil, fmt.Errorf("core: allow-private-networks=true requires configured registry resolution (%s or %s) so an unmapped registry cannot reach private space", "provin.network.chain.nats.registry-base-urls", "provin.network.chain.nats.resolver-base-url")
 	}
-	return guard, didresolver.New(guard, resolverOpts...), nil
+	concrete := didresolver.New(guard, resolverOpts...)
+	if !chainCfg.DIDCache.Enabled {
+		return guard, concrete, nil
+	}
+	cached, err := cache.New(concrete, cache.Config{
+		TTL:        chainCfg.DIDCache.TTL,
+		MaxEntries: chainCfg.DIDCache.MaxEntries,
+		MaxBytes:   int64(chainCfg.DIDCache.MaxBytes),
+	})
+	if err != nil {
+		// chainconfig already validated the bounds, so this is a programming
+		// error, but it still fails the boot loudly rather than running with a
+		// posture the config did not describe.
+		return nil, nil, fmt.Errorf("pipeline: did-cache: %w", err)
+	}
+	return guard, cached, nil
 }
 
 // registryBaseURL mirrors internal/netcompose.registryBaseURL exactly (see
@@ -261,11 +287,37 @@ func bearerInterceptor(token string) connect.Interceptor {
 // bounding a resolved/stored credential's read size the same way the
 // retired cmd/standalone's credentialPublisherFrom did (D-17g-13).
 func newVCStoreClient(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient) *vcresolverclient.Resolver {
+	return newVCResolverClientAt(pipeCfg, httpClient, pipeCfg.VCStoreEndpoint)
+}
+
+func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient, endpoint string) *vcresolverclient.Resolver {
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
-		httpClient, pipeCfg.VCStoreEndpoint,
+		httpClient, endpoint,
 		connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
 		connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize),
 	))
+}
+
+// fallbackCredentialResolver keeps local resolution first, then consults the
+// sink's explicitly configured immediate upstream registry. The upstream
+// fallback is needed before asynchronous predecessor replication has caught
+// up; every selected credential is still cryptographically verified and fixed
+// in the resulting EvidenceView.
+type fallbackCredentialResolver struct {
+	local    *vcresolverclient.Resolver
+	upstream *vcresolverclient.Resolver
+}
+
+func (r fallbackCredentialResolver) ResolveCredential(ctx context.Context, contentAddress string) (*vc.PipelinePassCredential, error) {
+	credential, localErr := r.local.ResolveCredential(ctx, contentAddress)
+	if localErr == nil {
+		return credential, nil
+	}
+	credential, upstreamErr := r.upstream.ResolveCredential(ctx, contentAddress)
+	if upstreamErr == nil {
+		return credential, nil
+	}
+	return nil, fmt.Errorf("pipeline: resolve credential %s locally (%v) and upstream (%w)", contentAddress, localErr, upstreamErr)
 }
 
 // vcStoreAdapter adapts *vcresolverclient.Resolver to BOTH
@@ -716,7 +768,18 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient, pipeCfg.MaxRetainChunkSize)
 
 	return pipelineruntime.Deps{
-		Resolver:            didResolver,
+		Resolver:      didResolver,
+		ChainResolver: vcClient,
+		ChainResolverFor: func(upstreamEndpoint string) chainwalk.CredentialResolver {
+			if upstreamEndpoint == "" || upstreamEndpoint == pipeCfg.VCStoreEndpoint {
+				return vcClient
+			}
+			return fallbackCredentialResolver{
+				local:    vcClient,
+				upstream: newVCResolverClientAt(pipeCfg, httpClient, upstreamEndpoint),
+			}
+		},
+		AppraisalMaxDepth:   pipeCfg.BatchResolver.MaxDepth,
 		VCStore:             store,
 		AuditQueue:          wireAuditRegistrar{client: factory.For(nodeDID)},
 		Receipts:            wireReceiptWriter{resolver: vcClient, factory: factory},

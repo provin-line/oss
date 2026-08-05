@@ -1,8 +1,10 @@
 // Package resolver defines DID Document resolution. Implementations live in
-// subpackages. Only local is implemented today; grpc and multi are planned —
-// the entries below describe their intended contract, not present code:
+// subpackages; grpc and multi are planned — their entries describe intended
+// contract, not present code:
 //
 //   - local: in-memory store for tests and fixtures (implemented)
+//   - cache: TTL- and byte-bounded caching decorator over any Resolver
+//     (implemented)
 //   - grpc:  (planned) ConnectRPC call to a registry's DIDService; validates
 //     that the returned document ID equals the requested DID
 //     (registry-substitution defense)

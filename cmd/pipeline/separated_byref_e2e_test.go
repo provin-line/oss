@@ -19,10 +19,12 @@ package main
 //     account, imports-and-renames it back to the plain subject on the
 //     consumer's account (D-4) — so the consumer's sink loop's own ingress
 //     config is mode-independent.
-//  3. The consumer's sink loop (payload-delivery=by-reference) dereferences
+//  3. The consumer's production sink loop (payload-delivery=by-reference)
+//     synchronously appraises the exact selected credential evidence, then dereferences
 //     the payload by content address over the registry's REAL PayloadService
 //     HTTP surface (a genuine ConnectRPC hop, counted independently below),
-//     binds it against the credential's outputHash, and delivers.
+//     binds it against the credential's outputHash, and delivers the payload together
+//     with its EvidenceView and local decision record.
 //  4. Negative: the consumer's account additionally, structurally imports the
 //     producer's PLAIN (never-exported-for-this-subscription) subject onto a
 //     distinct local alias; it stays empty even though the positive delivery
@@ -432,7 +434,13 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 		Loops: []pipelineconfig.LoopConfig{{
 			Name: "byrefsink", Role: pipelineconfig.RoleSink, IngressSubject: byrefProducerPipeline,
 			Sink: pipelineconfig.SinkConfig{
-				Kind: pipelineconfig.SinkObservationOnly, VerificationStrategy: pipelineconfig.StrategyAdjacent,
+				Kind: pipelineconfig.SinkProduction, VerificationStrategy: pipelineconfig.StrategyAdjacent,
+				AllowIssuers: []string{"did:dplaax:reg:org:acme:*"},
+				AgentAccess: pipelineconfig.AgentAccessConfig{
+					Enabled: true, BoundaryID: "provin-agent-delivery@1",
+					DecisionProfileID: "purpose-first-agent-access@1",
+					RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+				},
 				// UpstreamEndpoint is NOT decorative for a by-reference sink:
 				// sink.go's acquirePayload dials deps.PayloadResolver.
 				// ResolvePayload(ctx, UpstreamEndpoint, outputHash) with this
@@ -509,6 +517,18 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	}
 	if rec.Credential == nil || rec.Credential.Issuer() != byrefProducerIssuerDID {
 		t.Fatalf("issuer: got %v want %q", rec.Credential, byrefProducerIssuerDID)
+	}
+	if rec.EvidenceView == nil || rec.EvidenceView.PolicyDecision == nil || rec.EvidenceView.PolicyDecision.Decision != "ACCEPT" {
+		t.Fatalf("exact appraisal: got %+v", rec.EvidenceView)
+	}
+	if err := rec.EvidenceView.ValidateID(); err != nil {
+		t.Fatalf("EvidenceView identity: %v", err)
+	}
+	if got := rec.EvidenceView.Manifest.Extensions["selectionPolicyId"]; got != "projected-chain@1" {
+		t.Fatalf("selectionPolicyId: got %v", got)
+	}
+	if rec.Delivery == nil || rec.Delivery.EvidenceViewID != rec.EvidenceView.EvidenceViewID || rec.Delivery.BoundaryID != "provin-agent-delivery@1" {
+		t.Fatalf("delivery binding: delivery=%+v view=%+v", rec.Delivery, rec.EvidenceView)
 	}
 
 	// --- teeth: the STRIPPED form crossed, not the plain one. A delivered

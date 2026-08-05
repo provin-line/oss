@@ -53,6 +53,11 @@ const (
 
 	keyEmitHealthTTL                = "provin.network.chain.emit-health.ttl"
 	keyEmitHealthAdvertiseNoReports = "provin.network.chain.emit-health.advertise-without-reports"
+
+	keyDIDCacheEnabled    = "provin.network.chain.did-cache.enabled"
+	keyDIDCacheTTL        = "provin.network.chain.did-cache.ttl"
+	keyDIDCacheMaxEntries = "provin.network.chain.did-cache.max-entries"
+	keyDIDCacheMaxBytes   = "provin.network.chain.did-cache.max-bytes"
 )
 
 // Config is the typed chain transport config.
@@ -69,6 +74,30 @@ type Config struct {
 	// regardless of Transport): cmd/network's emithealth.Store and
 	// chainmanager.WithPublisherHealth read it.
 	EmitHealth EmitHealthConfig
+	// DIDCache configures the node-wide DID document resolution cache
+	// (resolver/cache) the composition roots wrap around the cross-registry
+	// resolver. Disabled by default: the uncached path is the freshness
+	// contract every verification consumer starts from, and enabling the
+	// cache is an explicit operational decision that trades up to TTL of
+	// document staleness for removing repeat resolutions from the synchronous
+	// path. Loaded unconditionally (it applies regardless of Transport).
+	DIDCache DIDCacheConfig
+}
+
+// DIDCacheConfig is the did-cache block (provin.network.chain.did-cache).
+// Bounds are always concrete here — reference.conf supplies the defaults and a
+// non-positive value is a boot error — so a booted node's cache posture is
+// exactly what its merged config says, never a Go-side fallback.
+type DIDCacheConfig struct {
+	// Enabled wraps the resolver in resolver/cache when true.
+	Enabled bool
+	// TTL is the absolute entry lifetime (resolver/cache: hits never refresh
+	// it, and an expired entry is never served).
+	TTL time.Duration
+	// MaxEntries bounds retained documents.
+	MaxEntries int
+	// MaxBytes bounds total retained canonical bytes.
+	MaxBytes int
 }
 
 // EmitHealthConfig is the ReportEmitHealth TTL-store / advertisement-policy
@@ -145,7 +174,43 @@ func LoadChainConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.EmitHealth, err = loadEmitHealth(cfg); err != nil {
 		return nil, err
 	}
+	if out.DIDCache, err = loadDIDCache(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadDIDCache reads the did-cache block — applicable regardless of Transport,
+// so it is loaded unconditionally. Bounds must be positive even while the
+// cache is disabled: a value that would fail the node the day the cache is
+// switched on should fail it today.
+func loadDIDCache(cfg *hoconconfig.Config) (DIDCacheConfig, error) {
+	enabled, err := cfg.Bool(keyDIDCacheEnabled)
+	if err != nil {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: %w", keyDIDCacheEnabled, err)
+	}
+	ttl, err := cfg.Duration(keyDIDCacheTTL)
+	if err != nil {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: %w", keyDIDCacheTTL, err)
+	}
+	if ttl <= 0 {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: must be positive", keyDIDCacheTTL)
+	}
+	maxEntries, err := cfg.Int(keyDIDCacheMaxEntries)
+	if err != nil {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: %w", keyDIDCacheMaxEntries, err)
+	}
+	if maxEntries <= 0 {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: must be positive", keyDIDCacheMaxEntries)
+	}
+	maxBytes, err := cfg.Int(keyDIDCacheMaxBytes)
+	if err != nil {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: %w", keyDIDCacheMaxBytes, err)
+	}
+	if maxBytes <= 0 {
+		return DIDCacheConfig{}, fmt.Errorf("chain: config %s: must be positive", keyDIDCacheMaxBytes)
+	}
+	return DIDCacheConfig{Enabled: enabled, TTL: ttl, MaxEntries: maxEntries, MaxBytes: maxBytes}, nil
 }
 
 // loadEmitHealth reads the emit-health block — applicable regardless of

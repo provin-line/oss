@@ -1,0 +1,17 @@
+{
+  "id": "agent-paths-001",
+  "rule": "agent.paths.closed",
+  "description": "Every enabled Agent-readable path is mediated by one declared appraisal boundary and the direct store path is disabled.",
+  "input": {
+    "credential": {
+      "deploymentId": "two-party-purpose-first@1",
+      "appraisalBoundaryId": "provin-agent-delivery@1",
+      "paths": [
+        { "id": "production-sink", "state": "ENABLED", "boundaryId": "provin-agent-delivery@1" },
+        { "id": "payload-service-direct", "state": "DISABLED" },
+        { "id": "object-store-direct", "state": "DISABLED" }
+      ]
+    }
+  },
+  "expect": "accept"
+}
