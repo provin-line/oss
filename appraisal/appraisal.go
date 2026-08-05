@@ -102,6 +102,8 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 	}
 	type plain Manifest
 	var decoded plain
+	// known is re-marshaled from a map the StrictDecoder above already
+	// checked; duplicate keys are impossible here (decoder-hygiene-exempt).
 	if err := json.Unmarshal(known, &decoded); err != nil {
 		return fmt.Errorf("%w: fields: %v", ErrInvalidManifest, err)
 	}
