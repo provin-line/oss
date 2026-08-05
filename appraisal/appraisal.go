@@ -94,6 +94,8 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 	if err := canon.NewStrictDecoder(data).Decode(&raw); err != nil {
 		return fmt.Errorf("%w: decode: %v", ErrInvalidManifest, err)
 	}
+	// Decode intermediary only: these bytes feed json.Unmarshal for field
+	// extraction and are never hashed or signed (canonicalizer-hygiene-exempt).
 	known, err := json.Marshal(raw)
 	if err != nil {
 		return fmt.Errorf("%w: normalize: %v", ErrInvalidManifest, err)
@@ -119,6 +121,8 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Display/transport serialization; the identity digest hashes
+	// CanonicalBytes, never these bytes (canonicalizer-hygiene-exempt).
 	return json.Marshal(projection)
 }
 
