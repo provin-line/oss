@@ -136,6 +136,29 @@ stability promises:
   minor releases. The first frozen API surface is declared at `1.0`, after
   the feature set is complete and has survived a real deployment soak.
 
+## Specification conformance
+
+The current release line — **provin OSS v0.3.0** — implements **dPLaaX spec
+v0.1 (draft)** and the **provin wire profile v0.1 (draft)**. A conformance
+claim is only meaningful as a version pair; this is the pair the public E2E
+and the systems paper evaluate.
+
+How that claim is checked, mechanically:
+
+- The dPLaaX vector corpus (`dplaax/spec` `vectors/`, whole catalog) is
+  vendored **byte-exact** under `conformance/vectors/dplaax/`, pinned by
+  `MANIFEST.sha256`, and **gates CI** — `go test ./conformance/` runs on every
+  push and PR. Adopting a spec change is a deliberate act:
+  `scripts/sync-spec-vectors.sh` plus a committed vendored diff.
+- A scheduled, non-gating crosscheck
+  (`.github/workflows/spec-crosscheck.yml`) additionally runs the harness
+  against `dplaax/spec` **HEAD** daily — the implementation watching the
+  spec, never the other way around. A red run there is catch-up work here,
+  not a gate.
+- The provin profile vectors (`provin-line/profile.spec` `vectors/`) are
+  vendored the same way under `conformance/vectors/provin/`
+  (`scripts/sync-profile-vectors.sh`, own `MANIFEST.sha256`).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
