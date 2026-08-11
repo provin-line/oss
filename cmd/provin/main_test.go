@@ -65,21 +65,36 @@ func TestRun_RequiredFlags(t *testing.T) {
 	}
 }
 
-// Unexpected positional arguments after flags are a usage error for the
-// three new commands (spec §6 Low-5) — checked before any required-flag or
-// file-read work, so a stray argument is caught even if other flags would
-// otherwise be enough to proceed.
+// Unexpected positional arguments after flags are a usage error for every
+// command (spec cli-stage2-spec-2026-07-12 §6 Low-5, retrofitted onto the
+// pre-Stage-2 commands by issue #12) — checked before any required-flag,
+// file-read, or network work, so a stray argument is caught even if the
+// other flags would otherwise be enough to proceed.
 func TestRun_UnexpectedPositionalArgs(t *testing.T) {
+	// Neutralize any registry configured in the developer's shell: if a
+	// guard regresses, the failure must stay local (a file/URL error), never
+	// a live RPC.
+	t.Setenv("PROVIN_REGISTRY", "")
+	t.Setenv("PROVIN_TOKEN", "")
+	tmp := t.TempDir()
 	for name, args := range map[string][]string{
-		"schema register":  {"schema", "register", "--name", "n", "--format", "f", "--file", "x", "extra"},
-		"chain subscribe":  {"chain", "subscribe", "--subscriber", "s", "--publisher", "p", "extra"},
-		"chain set-allow":  {"chain", "set-allow", "--pipeline", "p", "--clear", "extra"},
-		"chain get-allow":  {"chain", "get-allow", "--pipeline", "p", "extra"},
-		"org verify":       {"org", "verify", "--did", "did:x", "extra"},
-		"org inspect":      {"org", "inspect", "--did", "did:x", "extra"},
-		"org diagnose":     {"org", "diagnose", "--did", "did:x", "extra"},
-		"org generate-txt": {"org", "generate-txt", "--did", "did:x", "extra"},
-		"evidence rotate":  {"evidence", "rotate", "--dir", "x", "extra"},
+		// The flags-omitted case pins the ordering contract: the stray
+		// argument must be reported, not the missing required flags.
+		"owner init stray only": {"owner", "init", "extra"},
+		"owner init":            {"owner", "init", "--did", "did:x", "--key", filepath.Join(tmp, "k.jwk"), "extra"},
+		"pipeline create":       {"pipeline", "create", "--did", "did:x", "--owner-key", filepath.Join(tmp, "k.jwk"), "extra"},
+		"process create":        {"process", "create", "--did", "did:x", "--owner-key", filepath.Join(tmp, "k.jwk"), "extra"},
+		"bundle export":         {"bundle", "export", "--head", "sha256:" + strings.Repeat("a", 64), "--out", filepath.Join(tmp, "out"), "extra"},
+		"bundle verify":         {"bundle", "verify", "--bundle", filepath.Join(tmp, "bundle"), "extra"},
+		"schema register":       {"schema", "register", "--name", "n", "--format", "f", "--file", "x", "extra"},
+		"chain subscribe":       {"chain", "subscribe", "--subscriber", "s", "--publisher", "p", "extra"},
+		"chain set-allow":       {"chain", "set-allow", "--pipeline", "p", "--clear", "extra"},
+		"chain get-allow":       {"chain", "get-allow", "--pipeline", "p", "extra"},
+		"org verify":            {"org", "verify", "--did", "did:x", "extra"},
+		"org inspect":           {"org", "inspect", "--did", "did:x", "extra"},
+		"org diagnose":          {"org", "diagnose", "--did", "did:x", "extra"},
+		"org generate-txt":      {"org", "generate-txt", "--did", "did:x", "extra"},
+		"evidence rotate":       {"evidence", "rotate", "--dir", "x", "extra"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(context.Background(), args, strings.NewReader(""), io.Discard)
