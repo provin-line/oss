@@ -179,6 +179,9 @@ func ownerInit(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return err
 	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("owner init: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
 	if *did == "" || *key == "" {
 		return fmt.Errorf("owner init: --did and --key are required")
 	}
@@ -197,6 +200,9 @@ func issueCmd(ctx context.Context, args []string, stdout io.Writer, create func(
 			return nil
 		}
 		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("create: unexpected arguments %v\n%s", fs.Args(), usage)
 	}
 	if *did == "" || *ownerKey == "" {
 		return fmt.Errorf("create: --did and --owner-key are required")
@@ -267,6 +273,9 @@ func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return err
 	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("bundle export: unexpected arguments %v\n%s", fs.Args(), usage)
+	}
 	if *head == "" || *out == "" {
 		return fmt.Errorf("bundle export: --head and --out are required")
 	}
@@ -294,6 +303,9 @@ func bundleVerify(ctx context.Context, args []string, stdout io.Writer) error {
 			return nil
 		}
 		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("bundle verify: unexpected arguments %v\n%s", fs.Args(), usage)
 	}
 	if *dir == "" {
 		return fmt.Errorf("bundle verify: --bundle is required")

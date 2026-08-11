@@ -12,6 +12,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+### Changed
+
+- CLI: `owner init`, `pipeline create`, `process create`, `bundle export`,
+  and `bundle verify` now reject unexpected positional arguments after
+  flags as a usage error, matching the Stage 2 commands. Previously stray
+  arguments were silently ignored and the command proceeded.
+
 ## [0.3.0] - 2026-08-05
 
 The Paper 04 line: the delivery gate appraises the exact evidence it
