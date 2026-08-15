@@ -41,7 +41,7 @@ name: e2e
 
 on:
   push:
-    branches: [poc, main]
+    branches: [poc, main, develop]
   pull_request:
 
 permissions:

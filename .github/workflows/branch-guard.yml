@@ -1,0 +1,34 @@
+# Enforces the branch model: feature work integrates on develop; main only
+# receives release merges from develop and hotfix/release branches. This job
+# fails any other pull request into main, which is what makes the rule
+# mechanical rather than remembered. Feature PRs target develop.
+name: branch-guard
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  head-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PRs into main come from develop, hotfix/*, or release/*
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::fork pull requests must target develop, not main (head repo: $HEAD_REPO)"
+            exit 1
+          fi
+          case "$HEAD_REF" in
+            develop|hotfix/*|release/*)
+              echo "ok: head branch is $HEAD_REF"
+              ;;
+            *)
+              echo "::error::pull requests into main must come from develop, hotfix/*, or release/* (got: $HEAD_REF); feature PRs target develop"
+              exit 1
+              ;;
+          esac
