@@ -65,7 +65,7 @@ import (
 // config parameterizes provision. account is the single NATS account the
 // quickstart node runs under; natsURL is the broker URL baked into the account
 // operator (used only for its identity here — provision never dials the broker).
-// jwtSecret/jwtIssuer/serviceSubject, when a secret is set, mint the node's
+// jwtSecret/jwtIssuer/jwtAudience/serviceSubject, when a secret is set, mint the node's
 // service token (see writeServiceOverlay).
 type config struct {
 	outDir         string
@@ -73,6 +73,7 @@ type config struct {
 	natsURL        string
 	jwtSecret      string
 	jwtIssuer      string
+	jwtAudience    string
 	serviceSubject string
 	serviceTTL     time.Duration
 
@@ -92,6 +93,7 @@ func main() {
 	flag.StringVar(&cfg.natsURL, "nats-url", "nats://nats:4222", "broker URL baked into the account operator")
 	flag.StringVar(&cfg.jwtSecret, "jwt-secret", os.Getenv("OAUTH_JWT_SECRET"), "HS256 shared secret for the node's service token (empty = skip the service overlay)")
 	flag.StringVar(&cfg.jwtIssuer, "jwt-issuer", os.Getenv("OAUTH_JWT_ISSUER"), "iss claim for the node's service token")
+	flag.StringVar(&cfg.jwtAudience, "jwt-audience", os.Getenv("OAUTH_JWT_AUDIENCE"), "aud claim for the node's service token (the policy-verifier's configured audience)")
 	flag.StringVar(&cfg.serviceSubject, "service-subject", "did:dplaax:poc.dplaax.dev:org:acme", "sub claim for the node's service token")
 	flag.DurationVar(&cfg.serviceTTL, "service-ttl", 720*time.Hour, "lifetime of the node's service token (default 30d — dev; bound the blast radius of a no-scope shared-secret token)")
 	flag.StringVar(&cfg.pipelineDataDir, "pipeline-data", "/pipeline-data", "cmd/pipeline's own data directory (the pipeline-data compose volume) — its keys/ subdirectory is where this tool mints the pipeline's local #auth/#signing keypairs")
@@ -669,6 +671,7 @@ func writeServiceOverlay(cfg config) error {
 	token, err := mintHS256(cfg.jwtSecret, map[string]any{
 		"sub": cfg.serviceSubject,
 		"iss": cfg.jwtIssuer,
+		"aud": cfg.jwtAudience,
 		"iat": now.Unix(),
 		"exp": now.Add(cfg.serviceTTL).Unix(),
 	})
@@ -683,10 +686,11 @@ func writeServiceOverlay(cfg config) error {
 }
 
 // mintHS256 signs a compact JWS (HS256) over the given claims. Minimal by
-// design — the quickstart's only non-provider token minting.
+// design — the quickstart's only non-provider token minting. The header typ is
+// at+jwt: the policy-verifier accepts only RFC 9068 access tokens.
 func mintHS256(secret string, claims map[string]any) (string, error) {
 	b64 := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-	headerJSON, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	headerJSON, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "at+jwt"})
 	if err != nil {
 		return "", err
 	}

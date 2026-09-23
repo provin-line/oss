@@ -35,6 +35,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `golang.org/x/net` 0.58.0, `golang.org/x/sys` 0.47.0. `nats-server` stays
   at 2.12.6: the quickstart's broker image is pinned to the same line on
   purpose.
+- Quickstart: the auth layer moves to provin.auth v0.3 (the `:v0.3` images,
+  `AUTH_REF=v0.3.0` for the source-build fallback). Its policy-verifier
+  accepts only RFC 9068 access tokens, so every token the quickstart uses now
+  carries `iss` and `aud`, and the ones it mints itself (the bootstrap token
+  and the pipeline's service token) are typed `at+jwt`. The audience is
+  `https://quickstart.provin.invalid` (override: `OAUTH_JWT_AUDIENCE`); the
+  provider takes its DID-grant `allowedAudiences` from the new
+  `auth-provider/quickstart.conf` overlay.
+  Two defaults change because v0.3 refuses the old ones at boot: the shared
+  HS256 secret is now long enough to carry 32 bytes of key material after
+  decoding, and the issuer is `http://localhost:3000` (the provider requires
+  https for a non-loopback issuer; the issuer is an identifier, not a URL
+  anything dials). An existing `.env` that sets `OAUTH_JWT_SECRET` or
+  `OAUTH_JWT_ISSUER` must meet the same rules.
 
 ## [0.3.0] - 2026-08-05
 

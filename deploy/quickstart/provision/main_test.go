@@ -194,6 +194,7 @@ func TestProvision_ServiceOverlay(t *testing.T) {
 	const secret = "shared-secret"
 	cfg := testConfig(dir)
 	cfg.jwtSecret, cfg.jwtIssuer = secret, "http://auth-provider:3000"
+	cfg.jwtAudience = "https://quickstart.provin.invalid"
 	cfg.serviceSubject, cfg.serviceTTL = "did:dplaax:poc.dplaax.dev:org:acme", time.Hour
 	if err := provision(cfg); err != nil {
 		t.Fatalf("provision: %v", err)
@@ -229,6 +230,25 @@ func TestProvision_ServiceOverlay(t *testing.T) {
 	}
 	if claims["sub"] != "did:dplaax:poc.dplaax.dev:org:acme" {
 		t.Errorf("service token sub = %v", claims["sub"])
+	}
+	// The policy-verifier validates RFC 9068 access tokens: iss and aud must
+	// match its configuration, and the header typ must be at+jwt.
+	if claims["iss"] != "http://auth-provider:3000" {
+		t.Errorf("service token iss = %v", claims["iss"])
+	}
+	if claims["aud"] != "https://quickstart.provin.invalid" {
+		t.Errorf("service token aud = %v, want the configured audience", claims["aud"])
+	}
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	var header map[string]any
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		t.Fatalf("header not JSON: %v", err)
+	}
+	if header["typ"] != "at+jwt" {
+		t.Errorf("service token typ = %v, want at+jwt (RFC 9068)", header["typ"])
 	}
 }
 
