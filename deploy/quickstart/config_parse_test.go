@@ -24,6 +24,11 @@ import (
 // silent as loud: this asserts the thing that matters, that the parser we
 // actually ship with accepts what we actually ship.
 func TestShippedConfigsParse(t *testing.T) {
+	// auth-provider/quickstart.conf requires OAUTH_JWT_AUDIENCE, which the
+	// quickstart's compose file always supplies to that container (see the
+	// comment in the .conf for why it cannot be optional). Parse it with the
+	// environment it actually runs under.
+	t.Setenv("OAUTH_JWT_AUDIENCE", "https://quickstart.provin.invalid")
 	root := repoRoot(t)
 	var confs []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
