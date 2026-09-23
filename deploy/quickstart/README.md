@@ -93,7 +93,8 @@ signed with the shared secret (see [First-owner bootstrap](#first-owner-bootstra
 
 ```sh
 BOOTSTRAP=$(deploy/quickstart/bin/mint-bootstrap-token.sh \
-  --owner "$OWNER" --secret "$SECRET" --issuer http://localhost:3000)
+  --owner "$OWNER" --secret "$SECRET" \
+  --issuer "${OAUTH_JWT_ISSUER:-http://localhost:3000}")
 
 $PROVIN owner init --did "$OWNER" --key /tmp/acme-owner.jwk \
   --registry "$REGISTRY" --token "$BOOTSTRAP"

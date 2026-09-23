@@ -55,7 +55,7 @@ process="$pipeline:process:s1"
 key="$workdir/acme-owner.jwk"
 
 echo "① bootstrap token → owner init"
-bootstrap="$("$here/mint-bootstrap-token.sh" --owner "$owner" --secret "$secret" --issuer http://localhost:3000)"
+bootstrap="$("$here/mint-bootstrap-token.sh" --owner "$owner" --secret "$secret" --issuer "${OAUTH_JWT_ISSUER:-http://localhost:3000}")"
 "$provin" owner init --did "$owner" --key "$key" --registry "$registry" --token "$bootstrap"
 
 echo "② DID grant → real JWT"

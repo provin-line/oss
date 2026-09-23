@@ -17,8 +17,8 @@
 # Usage:
 #   mint-bootstrap-token.sh --owner <owner-did> [--secret <s>] [--issuer <iss>]
 #                           [--audience <aud>] [--ttl <sec>]
-# The secret defaults to $OAUTH_JWT_SECRET, the issuer to $OAUTH_JWT_ISSUER,
-# and the audience to $OAUTH_JWT_AUDIENCE, then to the quickstart's
+# The secret defaults to $OAUTH_JWT_SECRET, the issuer to $OAUTH_JWT_ISSUER
+# then to the quickstart's http://localhost:3000, and the audience to $OAUTH_JWT_AUDIENCE, then to the quickstart's
 # https://quickstart.provin.invalid. The policy-verifier accepts only RFC 9068
 # access tokens: typ at+jwt, and iss / aud equal to its own configuration.
 
@@ -26,7 +26,7 @@ set -euo pipefail
 
 owner=""
 secret="${OAUTH_JWT_SECRET:-}"
-issuer="${OAUTH_JWT_ISSUER:-}"
+issuer="${OAUTH_JWT_ISSUER:-http://localhost:3000}"
 audience="${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}"
 ttl=600
 

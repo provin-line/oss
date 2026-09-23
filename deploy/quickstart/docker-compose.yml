@@ -130,9 +130,11 @@ services:
       # Custom DID grant is not OIDC; allow the non-OIDC token path.
       OAUTH_OIDC_MODE: dual
       # Layers config/quickstart.conf (mounted below) over the generated
-      # application.conf: it sets the DID grant's allowedAudiences, an array
-      # an environment variable cannot express.
+      # application.conf. It builds the DID grant's allowedAudiences array
+      # from this variable, so the provider, the verifier and the token
+      # helpers all follow one OAUTH_JWT_AUDIENCE.
       CONFIG_ENV: quickstart
+      OAUTH_JWT_AUDIENCE: ${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}
     volumes:
       - ./auth-provider/clients.yaml:/app/config/clients.yaml:ro
       - ./auth-provider/quickstart.conf:/app/config/quickstart.conf:ro
