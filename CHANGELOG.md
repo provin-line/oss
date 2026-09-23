@@ -18,6 +18,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   and `bundle verify` now reject unexpected positional arguments after
   flags as a usage error, matching the Stage 2 commands. Previously stray
   arguments were silently ignored and the command proceeded.
+- **Go 1.26 is now the minimum** (`go 1.26.0`, built with `toolchain
+  go1.26.8`; the network, pipeline and quickstart provision images build on
+  `golang:1.26.8-alpine`). Go 1.25 no longer receives security fixes, and the
+  binaries were built on 1.25.5: `govulncheck` reported 18 standard-library
+  vulnerabilities, fixed in 1.26.2–1.26.6, and reports none now. The updated
+  `golang.org/x/crypto`, `golang.org/x/sys` and `nats.go` also require
+  Go 1.26.
+- Dependency refresh: `github.com/o3co/protobuf.interceptors` (and its
+  `connectrpc` module) v0.2.0 / v0.2.1 → v0.3.0, which authorizes a stream
+  before its handler runs and refuses placeholder values that would
+  restructure the authorized resource (no policy here uses placeholders);
+  `connectrpc.com/connect` 1.21.0, `google.golang.org/grpc` 1.84.0,
+  `nats.go` 1.54.0, `nats-io/jwt` 2.8.2, `nkeys` 0.4.16, `o3co/go.hocon`
+  1.13.0, and the `golang.org/x` modules. `nats-server` stays at 2.12.6: the
+  quickstart's broker image is pinned to the same line on purpose.
 
 ## [0.3.0] - 2026-08-05
 
