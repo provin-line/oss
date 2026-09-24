@@ -4,7 +4,7 @@ Guidance for AI agents and contributors working on provin OSS.
 
 ## Project shape
 
-- Go module: `github.com/provin-line/oss` (Go 1.26+)
+- Go module: `github.com/provin-line/oss` (Go 1.25+)
 - Protocol namespace: `dplaax` (proto packages `dplaax.*.v1`, DID method `did:dplaax`)
 - Product namespace: `provin` (CLI, images)
 - No database, anywhere. Persistent state is YAML files; ephemeral state is in-memory.
