@@ -27,8 +27,10 @@ services:
     environment:
       # The pipeline's service token is HS256-signed with the same shared
       # secret the provider/verifier use, so it mints against the same value.
-      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
-      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-only-shared-hs256-secret-change-me-before-sharing}
+      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://localhost:3000}
+      # aud of the service token: must equal the policy-verifier's audience.
+      OAUTH_JWT_AUDIENCE: ${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}
     volumes:
       - provisioned:/provisioned
       - pipeline-data:/pipeline-data
@@ -55,8 +57,8 @@ services:
 
   # PDP: verifies the caller's JWT (HS256, shared secret) and evaluates policy.
   # Published by provin.auth's publish-images workflow. Pinned to the moving
-  # v0.2 minor tag with `pull_policy: always`, so `docker compose up` re-pulls
-  # a 0.2.x patch republish rather than reusing a stale cached layer (a plain
+  # v0.3 minor tag with `pull_policy: always`, so `docker compose up` re-pulls
+  # a 0.3.x patch republish rather than reusing a stale cached layer (a plain
   # moving pin without this stays on the first-seen digest — Compose's default
   # pull policy is `missing`). To pin an exact build, use the image DIGEST
   # (`image: ghcr.io/…@sha256:<digest>`, printed in the publish run's job
@@ -69,7 +71,7 @@ services:
   # commented build block (needs $GITHUB_TOKEN as a BuildKit secret; see
   # policy-verifier.Dockerfile).
   policy-verifier:
-    image: ghcr.io/provin-line/auth-policy-verifier:v0.2
+    image: ghcr.io/provin-line/auth-policy-verifier:v0.3
     pull_policy: always
     # build:
     #   context: .
@@ -78,7 +80,14 @@ services:
     #     - github_token
     environment:
       OAUTH_JWT_ALGORITHM: HS256
-      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-only-shared-hs256-secret-change-me-before-sharing}
+      # The verifier refuses an HS256 secret under 32 bytes of key material,
+      # measured after base64/hex decoding — which is why the default is long.
+      # Required since provin.auth v0.3 (verifier 0.12, RFC 9068): a token is
+      # accepted only when its iss and aud equal these. Every token in the
+      # quickstart — provider-issued, bootstrap, service — carries both.
+      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://localhost:3000}
+      OAUTH_JWT_AUDIENCE: ${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}
       HTTP_PORT: "3001"
     ports:
       # Loopback-only publish: the PDP trusts a shared HS256 dev secret, so it
@@ -92,12 +101,12 @@ services:
       retries: 20
 
   # JWT issuer: mints tokens from the DID grant (owner-key-signed assertion).
-  # Same moving-tag pin (`:v0.2` + `pull_policy: always`) and image-vs-source
+  # Same moving-tag pin (`:v0.3` + `pull_policy: always`) and image-vs-source
   # choice as policy-verifier above. The image's scaffold-time
   # --registry-base-url is a placeholder; the env below overrides it at runtime
   # (the image is deployment-generic).
   auth-provider:
-    image: ghcr.io/provin-line/auth-provider:v0.2
+    image: ghcr.io/provin-line/auth-provider:v0.3
     pull_policy: always
     # build:
     #   context: .
@@ -106,8 +115,11 @@ services:
     #     - github_token
     environment:
       OAUTH_JWT_ALGORITHM: HS256
-      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}
-      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://auth-provider:3000}
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET:-quickstart-dev-only-shared-hs256-secret-change-me-before-sharing}
+      # The issuer is an identifier the verifier compares, not a URL anything
+      # dials. The provider requires https for it except on a loopback host,
+      # so the quickstart names the provider by its host-published address.
+      OAUTH_JWT_ISSUER: ${OAUTH_JWT_ISSUER:-http://localhost:3000}
       HTTP_PORT: "3000"
       # The provider resolves the owner DID against the network (registry)
       # during a DID grant. Reach it at its registry-id alias so the DID's
@@ -117,8 +129,15 @@ services:
       DPLAAX_REGISTRY_BASE_URL: http://poc.dplaax.dev:8443
       # Custom DID grant is not OIDC; allow the non-OIDC token path.
       OAUTH_OIDC_MODE: dual
+      # Layers config/quickstart.conf (mounted below) over the generated
+      # application.conf. It builds the DID grant's allowedAudiences array
+      # from this variable, so the provider, the verifier and the token
+      # helpers all follow one OAUTH_JWT_AUDIENCE.
+      CONFIG_ENV: quickstart
+      OAUTH_JWT_AUDIENCE: ${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}
     volumes:
       - ./auth-provider/clients.yaml:/app/config/clients.yaml:ro
+      - ./auth-provider/quickstart.conf:/app/config/quickstart.conf:ro
     ports:
       # Loopback-only publish: the issuer mints against the shared HS256 dev
       # secret (same rationale as network's port below).

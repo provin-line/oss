@@ -30,7 +30,7 @@ provin=""
 registry="http://localhost:8443"
 pipeline_url="http://localhost:8444"
 provider="http://localhost:3000"
-secret="${OAUTH_JWT_SECRET:-quickstart-dev-secret-change-me}"
+secret="${OAUTH_JWT_SECRET:-quickstart-dev-only-shared-hs256-secret-change-me-before-sharing}"
 workdir="$(mktemp -d)"
 
 while [ $# -gt 0 ]; do
@@ -55,7 +55,7 @@ process="$pipeline:process:s1"
 key="$workdir/acme-owner.jwk"
 
 echo "① bootstrap token → owner init"
-bootstrap="$("$here/mint-bootstrap-token.sh" --owner "$owner" --secret "$secret" --issuer http://auth-provider:3000)"
+bootstrap="$("$here/mint-bootstrap-token.sh" --owner "$owner" --secret "$secret" --issuer "${OAUTH_JWT_ISSUER:-http://localhost:3000}")"
 "$provin" owner init --did "$owner" --key "$key" --registry "$registry" --token "$bootstrap"
 
 echo "② DID grant → real JWT"

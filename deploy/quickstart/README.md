@@ -35,7 +35,7 @@ separated topology provin.e2e's own compose-runtime scenarios (e.g.
 - **Docker** with Compose v2 (`docker compose`), BuildKit enabled (default).
 - The auth-layer services (`policy-verifier`, `auth-provider`) are **published
   images** (`ghcr.io/provin-line/auth-*`, built by provin.auth's
-  publish-images workflow and pinned to the moving `v0.2` minor tag in the
+  publish-images workflow and pinned to the moving `v0.3` minor tag in the
   compose file — to pin an exact build, use the image digest
   (`@sha256:<digest>`, printed in the publish run's job summary); a
   `sha-<sha>` tag names the source commit but is still a movable registry
@@ -81,7 +81,7 @@ PIPELINE_URL=http://localhost:8444    # pipeline — /ingest/<loop>/push, /metri
 OWNER=did:dplaax:poc.dplaax.dev:org:acme
 PIPELINE=$OWNER:pipeline:readings
 PROCESS=$PIPELINE:process:s1
-SECRET=quickstart-dev-secret-change-me      # matches the compose default
+SECRET=quickstart-dev-only-shared-hs256-secret-change-me-before-sharing      # matches the compose default
 ```
 
 ### 2a. Mint a bootstrap token and register the first owner
@@ -93,7 +93,8 @@ signed with the shared secret (see [First-owner bootstrap](#first-owner-bootstra
 
 ```sh
 BOOTSTRAP=$(deploy/quickstart/bin/mint-bootstrap-token.sh \
-  --owner "$OWNER" --secret "$SECRET" --issuer http://auth-provider:3000)
+  --owner "$OWNER" --secret "$SECRET" \
+  --issuer "${OAUTH_JWT_ISSUER:-http://localhost:3000}")
 
 $PROVIN owner init --did "$OWNER" --key /tmp/acme-owner.jwk \
   --registry "$REGISTRY" --token "$BOOTSTRAP"
@@ -119,6 +120,13 @@ TOKEN=$(node deploy/quickstart/bin/did-token.mjs \
   --key /tmp/acme-owner.jwk --did "$OWNER" \
   --provider http://localhost:3000 --client quickstart)
 ```
+
+The helper signs the quickstart's audience (`https://quickstart.provin.invalid`,
+or `$OAUTH_JWT_AUDIENCE`) into the challenge. The provider accepts only the
+audiences in `auth-provider/quickstart.conf`, and the policy-verifier accepts
+only tokens whose `aud` is its own `OAUTH_JWT_AUDIENCE` — so all three must
+agree if you change it. The bootstrap token and the pipeline's service token
+carry the same `aud`.
 
 ### 2c. Create the pipeline + process (external-key mode), then push a record
 
