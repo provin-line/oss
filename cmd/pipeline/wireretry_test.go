@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	interceptors "github.com/o3co/protobuf.interceptors"
+
+	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
+	"github.com/provin-line/oss/network/pkg/auth"
 )
 
 // fakeRetryClock is a fully deterministic wireBackoff test double: Sleep
@@ -280,5 +286,56 @@ func TestRetryOnUnavailable_DeadlineBoundsHangingAttempt(t *testing.T) {
 	}
 	if gotDeadline.After(start.Add(budget + time.Second)) {
 		t.Errorf("attempt()'s ctx deadline = %v, want <= start+budget (plus a generous scheduling margin) — the dctx passed to attempt must actually be budget-bounded, not the caller's unbounded ctx", gotDeadline)
+	}
+}
+
+// pdpOutageVerifier fails with interceptors.ErrBackendUnavailable for the
+// first `down` calls, then allows.
+type pdpOutageVerifier struct {
+	down  int
+	calls int
+}
+
+func (v *pdpOutageVerifier) Verify(context.Context, string, string) error {
+	v.calls++
+	if v.calls <= v.down {
+		return fmt.Errorf("pdp: %w", interceptors.ErrBackendUnavailable)
+	}
+	return nil
+}
+
+// TestRetryOnUnavailable_RetriesL1DuringPDPOutage pins that an L1-guarded RPC
+// whose PDP is down reaches the caller as CodeUnavailable and is retried by the
+// wire retry, then proceeds once the PDP answers. The handler is the generated
+// unimplemented one, so a request the PDP allows ends in CodeUnimplemented,
+// which is not retried.
+func TestRetryOnUnavailable_RetriesL1DuringPDPOutage(t *testing.T) {
+	verifier := &pdpOutageVerifier{down: 2}
+	_, h := didpbconnect.NewDIDServiceHandler(
+		didpbconnect.UnimplementedDIDServiceHandler{},
+		connect.WithInterceptors(auth.Interceptors(verifier)...),
+	)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	client := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL)
+
+	clock := &fakeRetryClock{now: time.Unix(0, 0)}
+	backoff := wireBackoff{
+		Now:   clock.Now,
+		Delay: func(int) time.Duration { return time.Millisecond },
+		Sleep: clock.Sleep,
+	}
+	var last error
+	err := retryOnUnavailable(context.Background(), 10*time.Second, backoff, func(ctx context.Context) error {
+		req := connect.NewRequest(&didpb.RegisterOwnerRequest{})
+		req.Header().Set("Authorization", "Bearer tok")
+		_, last = client.RegisterOwner(ctx, req)
+		return last
+	})
+	if verifier.calls != 3 {
+		t.Errorf("PDP consulted %d times, want 3 (2 outage answers retried, then the allow)", verifier.calls)
+	}
+	if connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("final code = %v (%v), want Unimplemented from the handler after the PDP recovered", connect.CodeOf(err), err)
 	}
 }

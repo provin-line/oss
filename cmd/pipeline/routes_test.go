@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	interceptors "github.com/o3co/protobuf.interceptors"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
 	"github.com/provin-line/oss/network/pkg/auth"
@@ -177,5 +181,46 @@ func TestPushRoutes_PDPDenial403(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
 		t.Errorf("not-ready push: got %d (Retry-After %q), want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+type errVerifier struct{ err error }
+
+func (v errVerifier) Verify(context.Context, string, string) error { return v.err }
+
+// TestPushRoutes_PDPOutage503 pins that a PDP outage is reported as 503 with
+// Retry-After (the sender may retry) while every other Verify failure stays 403.
+func TestPushRoutes_PDPOutage503(t *testing.T) {
+	ready := make(chan struct{})
+	close(ready)
+	reached := false
+	inner := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
+	post := func(v auth.Verifier) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/push", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer tok")
+		rec := httptest.NewRecorder()
+		pushRoutes(inner, v, ready).ServeHTTP(rec, req)
+		return rec
+	}
+
+	for name, err := range map[string]error{
+		"bare":    interceptors.ErrBackendUnavailable,
+		"wrapped": fmt.Errorf("pdp: %w", interceptors.ErrBackendUnavailable),
+	} {
+		rec := post(errVerifier{err})
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+			t.Errorf("%s: got %d (Retry-After %q), want 503 with Retry-After", name, rec.Code, rec.Header().Get("Retry-After"))
+		}
+	}
+	for name, err := range map[string]error{
+		"denied":   &interceptors.DeniedError{},
+		"internal": errors.New("malformed decision"),
+	} {
+		if rec := post(errVerifier{err}); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: got %d, want 403", name, rec.Code)
+		}
+	}
+	if reached {
+		t.Error("handler reached although the PDP did not allow")
 	}
 }
