@@ -201,8 +201,11 @@ func TestNewVerifier_PlainInternal(t *testing.T) {
 			return &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cedarCfg("http://policy-verifier:3001"), PlainInternal: p}
 		},
 	} {
-		if _, err := auth.NewVerifier(cfg()); err == nil {
+		_, err := auth.NewVerifier(cfg())
+		if err == nil {
 			t.Errorf("%s: plaintext to a non-loopback host without plain-internal must be refused", name)
+		} else if !strings.Contains(err.Error(), "provin.network.auth.plain-internal") || strings.Contains(err.Error(), "AllowInsecure") {
+			t.Errorf("%s: error %q must name provin.network.auth.plain-internal and not point at AllowInsecure", name, err)
 		}
 		if _, err := auth.NewVerifier(cfg("policy-verifier:3001")); err != nil {
 			t.Errorf("%s: listed host:port refused: %v", name, err)
@@ -210,7 +213,7 @@ func TestNewVerifier_PlainInternal(t *testing.T) {
 		if _, err := auth.NewVerifier(cfg("other-host:3001")); err == nil {
 			t.Errorf("%s: an entry for another host:port must not allow the URL", name)
 		}
-		_, err := auth.NewVerifier(cfg("policy-verifier"))
+		_, err = auth.NewVerifier(cfg("policy-verifier"))
 		if err == nil || !strings.Contains(err.Error(), "provin.network.auth.plain-internal") {
 			t.Errorf("%s: invalid entry: err = %v, want one naming provin.network.auth.plain-internal", name, err)
 		}

@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"connectrpc.com/connect"
 	o3coconnect "github.com/o3co/protobuf.interceptors/connectrpc"
@@ -29,6 +30,11 @@ import (
 // key (interceptors.WithBearerToken / BearerTokenFromContext) — the seam
 // stabilizes the SIGNATURES, and an alternative Verifier implementation must
 // still read that ctx convention to see the caller.
+//
+// A backend that cannot answer (unreachable, timed out, overloaded) must
+// return an error wrapping interceptors.ErrBackendUnavailable: the RPC
+// interceptors report it as CodeUnavailable and the push receiver as 503, both
+// retryable. Any other error is a refusal or a fault, not an outage.
 type Verifier interface {
 	Verify(ctx context.Context, resource, action string) error
 }
@@ -96,17 +102,19 @@ func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 	}
 }
 
-// withPlainInternalKey runs build and, when plain-internal entries are
-// configured, names that key in a construction error: the endpoint refuses an
-// entry that is not a reachable private host:port, and the operator needs to
-// know which setting to fix.
+// withPlainInternalKey runs build and, on failure, names the
+// provin.network.auth.plain-internal key. The endpoint refuses a plaintext
+// non-loopback URL that is not listed, and an entry that is not a host:port it
+// could reach; both are fixed in that setting. The refusal text that points at
+// the endpoint library's allow-everything option is replaced: this package never
+// uses it, and the operator's lever is the provin key.
 func withPlainInternalKey(cfg *AuthConfig, build func() (Verifier, error)) (Verifier, error) {
 	v, err := build()
 	if err != nil {
-		if len(cfg.PlainInternal) > 0 {
-			return nil, fmt.Errorf("auth: %s=%q: %w", keyPlainInternal, cfg.PlainInternal, err)
+		if strings.Contains(err.Error(), "AllowInsecure") {
+			return nil, fmt.Errorf("auth: PDP endpoint refused: plaintext http to a non-loopback host needs its host:port in %s (configured: %q), or use https", keyPlainInternal, cfg.PlainInternal)
 		}
-		return nil, fmt.Errorf("auth: %w", err)
+		return nil, fmt.Errorf("auth: PDP endpoint (%s=%q): %w", keyPlainInternal, cfg.PlainInternal, err)
 	}
 	return v, nil
 }

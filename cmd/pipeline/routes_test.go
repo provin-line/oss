@@ -9,9 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"connectrpc.com/connect"
 	interceptors "github.com/o3co/protobuf.interceptors"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
+	didpb "github.com/provin-line/oss/gen/go/dplaax/did/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -222,5 +225,43 @@ func TestPushRoutes_PDPOutage503(t *testing.T) {
 	}
 	if reached {
 		t.Error("handler reached although the PDP did not allow")
+	}
+}
+
+// TestPDPOutage_RealO3coEndpoint drives the real o3co endpoint against a PDP
+// that answers 503: the push receiver answers 503 with Retry-After and an
+// L1-guarded RPC fails with Unavailable.
+func TestPDPOutage_RealO3coEndpoint(t *testing.T) {
+	pdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "overloaded", http.StatusServiceUnavailable)
+	}))
+	defer pdp.Close()
+	verifier, err := auth.NewVerifier(&auth.AuthConfig{Backend: auth.BackendO3co, PolicyVerifierURL: pdp.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ready := make(chan struct{})
+	close(ready)
+	inner := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("handler reached during a PDP outage") })
+	req := httptest.NewRequest(http.MethodPost, "/push", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	pushRoutes(inner, verifier, ready).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("push: got %d (Retry-After %q), want 503 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+
+	_, h := didpbconnect.NewDIDServiceHandler(
+		didpbconnect.UnimplementedDIDServiceHandler{},
+		connect.WithInterceptors(auth.Interceptors(verifier)...),
+	)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	rpc := connect.NewRequest(&didpb.RegisterOwnerRequest{})
+	rpc.Header().Set("Authorization", "Bearer tok")
+	_, err = didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL).RegisterOwner(context.Background(), rpc)
+	if connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Errorf("RPC: code = %v (%v), want Unavailable", connect.CodeOf(err), err)
 	}
 }
