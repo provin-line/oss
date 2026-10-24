@@ -12,8 +12,35 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+### Added
+
+- `provin.network.auth.plain-internal` (list of `host:port`, default empty):
+  the PDP endpoints that may be called over plaintext `http://`. Required for
+  any non-loopback plaintext PDP since `protobuf.interceptors` v0.5.0; a listed
+  endpoint is reached only at a private address. Applies to the `o3co`, `opa`
+  and `cedar` backends; an invalid entry fails startup naming the key. The
+  quickstart configs set it for `policy-verifier:3001`.
+- `backend = "cedar"` verifies the caller's bearer JWT in the node
+  (`provin.network.auth.cedar.jwt.{issuer,audience,jwks-url,secret,secret-encoding}`;
+  `issuer`, `audience` and exactly one of `jwks-url` / `secret` are required).
+  The principal asked about is the token's `sub`. Previously the raw bearer was
+  the principal.
+
 ### Changed
 
+- **PDP outage is reported as `Unavailable`.** With `protobuf.interceptors`
+  v0.6.0 an unreachable or overloaded PDP (HTTP 429/502/503/504, timeout)
+  fails an L1-guarded RPC with ConnectRPC `Unavailable` instead of `Internal`,
+  and the pipeline's push endpoint answers 503 with `Retry-After` instead of
+  403. The pipeline's wire retry therefore retries L1-guarded RPCs through a PDP
+  outage within its existing budget. HTTP 500 and malformed PDP answers remain
+  `Internal` / 403.
+- **Go 1.26.** `go.mod` moves to `go 1.26.0` (required by
+  `protobuf.interceptors` v0.6.0); `protobuf.interceptors` and its
+  `connectrpc` module move to v0.6.0, with the `golang.org/x/*` bumps `go mod tidy`
+  requires. A PDP now needs a complete decision envelope to allow, does not
+  follow redirects, and refuses plaintext to non-loopback hosts (see
+  `plain-internal`).
 - CLI: `owner init`, `pipeline create`, `process create`, `bundle export`,
   and `bundle verify` now reject unexpected positional arguments after
   flags as a usage error, matching the Stage 2 commands. Previously stray

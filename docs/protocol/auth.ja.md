@@ -17,6 +17,9 @@ L1 の問い: *この呼び出し元はこの RPC を呼んでよいか？* 3 �
 - **policy は proto に per-RPC で宣言される**（`o3co.authz.v1.policy` method option）。descriptor test が「保護対象サービスは全 RPC に注釈を持つ」ことを assert する — 無防備な RPC は perimeter でなくビルドが落ちる。
 - **認証の所在は backend で変わる。** `o3co` は JWT を検証する。`static` は bearer の*存在*しか見ない — それは authorization の allow-list であって **authentication ではない**。`static` は perimeter が既に認証している場所でのみ使う。backend 表は network/README.ja.md。
 - **boot で fail-closed**: 外部 backend（`o3co` / `opa` / `cedar`）では PDP URL の欠落や scheme 無しは boot error であり、開いたままのサーバにはならない。`static` は意図的に PDP URL を要しない — allow-list は in-process で、空の allow-list は deny-all。
+- **PDP への平文呼び出しは明示の許可制**: loopback 以外への `http://` は、そのエンドポイントの `host:port` を `provin.network.auth.plain-internal`（既定は空）に列挙しない限り拒否される。列挙したエンドポイントは private address に解決される場合にのみ到達する。
+- **`cedar` はノード内で呼び出し側の JWT を検証する**: Cedar agent は何も認証しないため、`provin.network.auth.cedar.jwt.*`（issuer、audience、`jwks-url` / `secret` のちょうど一方）が必須で、agent に問い合わせる principal は検証済みトークンの `sub`。
+- **PDP の停止は `Unavailable`（呼び出し側の拒否ではない）**: PDP が答えられない（到達不能、timeout、HTTP 429/502/503/504）とき、L1 で守られた RPC は ConnectRPC の `Unavailable`（従来は `Internal`）で失敗し、pipeline の push endpoint（`/ingest/<name>/…`）は **`Retry-After` 付きの 503**（従来は 403）を返す。PDP が不正な応答をした場合（HTTP 500、body 不正）は従来どおり `Internal` / 403。呼び出し側は `Unavailable` を backoff 付きで retry してよい。pipeline の wire retry も、L1 で守られた RPC を PDP の停止中に bounded な budget の範囲で retry するようになった。
 
 ## L2 — peer wire 証明（wireauth）
 

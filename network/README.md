@@ -92,8 +92,27 @@ backend is fail-closed (missing required config → the node does not boot):
 | --- | --- | --- |
 | `o3co` (default) | external o3co `auth.policy-verifier` | **yes** — verifies the JWT |
 | `opa` | external Open Policy Agent | yes, if the policy checks the token |
-| `cedar` | external Cedar-agent | principal = the **raw bearer** (no JWT verification unless the policy adds it) |
+| `cedar` | external Cedar-agent | **yes** — the node verifies the bearer JWT (`provin.network.auth.cedar.jwt.*`) and asks the agent about its `sub` |
 | `static` | in-process allow-list | **no** — checks bearer *presence* only, never validity |
+
+`cedar` needs `cedar.jwt.issuer` and `cedar.jwt.audience` plus exactly one key
+source — `cedar.jwt.jwks-url` (https; asymmetric algorithms) or `cedar.jwt.secret`
+(HS256, at least 32 bytes after decoding, written in `cedar.jwt.secret-encoding`:
+`utf8` (default) | `hex` | `base64`) — or the node does not boot. A token is
+accepted only with a valid signature, an unexpired `exp`, a passed-or-absent
+`nbf` (30 s leeway), the configured `iss` and an `aud` containing the configured
+audience.
+
+A PDP reached over plaintext `http://` on anything but loopback is refused unless
+its `host:port` is listed in `provin.network.auth.plain-internal` (default empty).
+A listed endpoint is reached only when it resolves to a private address, so list
+only backends on a network trusted against reading and changing what crosses it.
+An invalid entry fails startup. The same key applies to `o3co`, `opa` and `cedar`.
+
+When the PDP cannot answer (unreachable, timeout, HTTP 429/502/503/504), an
+L1-guarded RPC fails with ConnectRPC `Unavailable` ("authorization backend
+unavailable"), no longer `Internal`; a PDP that answers badly (HTTP 500, malformed
+body) remains `Internal`. `Unavailable` is a refusal that clients may retry.
 
 `static` is authorization, **not authentication**: use it only where the perimeter
 already authenticates (single-tenant / dev), never where the PDP is expected to

@@ -36,6 +36,22 @@ Facts a deployment must internalize:
   `cedar`) a missing or scheme-less PDP URL is a boot error, never an
   open server. `static` deliberately needs no PDP URL — its allow-list
   is in-process, and an empty allow-list is deny-all.
+- **Plaintext PDP calls are opt-in**: `http://` to anything but loopback is
+  refused unless the endpoint's `host:port` is listed in
+  `provin.network.auth.plain-internal` (default empty). A listed endpoint is
+  reached only at a private address.
+- **`cedar` verifies the caller's JWT in the node**: a Cedar agent
+  authenticates nothing, so `provin.network.auth.cedar.jwt.*` (issuer,
+  audience, and exactly one of `jwks-url` / `secret`) is required, and the
+  principal asked about is the verified token's `sub`.
+- **PDP outage is `Unavailable`, not a refusal of the caller**: when the PDP
+  cannot answer (unreachable, timeout, HTTP 429/502/503/504) an L1-guarded RPC
+  fails with ConnectRPC `Unavailable` (previously `Internal`), and the pipeline's
+  push endpoint (`/ingest/<name>/…`) answers **503 with `Retry-After`**
+  (previously 403). A PDP that answers badly (HTTP 500, malformed body) is still
+  `Internal` / 403. Callers may retry `Unavailable` with backoff; the pipeline's
+  own wire retry now retries L1-guarded RPCs through a PDP outage within its
+  bounded budget.
 
 ## L2 — peer wire proof (wireauth)
 

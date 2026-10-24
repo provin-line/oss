@@ -15,8 +15,9 @@
 ## 提供するもの
 
 - `Interceptors(verifier) []connect.Interceptor` — ハンドラに載せる順序付きチェーン（`PolicyOptionInterceptor` → `VerificationInterceptor`）。順序は固定: option interceptor が context を埋めてから verification interceptor が読む。
-- `NewVerifier(url, opts…) (endpoint.VerifierEndpoint, error)` — 本番 verifier（`auth.policy-verifier` REST クライアント）を構築。URL は明示的な `http://`/`https://` scheme 必須（fail-closed; 偶発的な平文を防ぐ）。テストは `endpoint.NewStaticEndpoint` を直接使う。
-- `AuthConfig` + `LoadAuthConfig` — 型付き `provin.network.auth.*` 設定（`policy-verifier-url`）。起動時に fail-closed 検証（空/scheme なし → 起動エラー。未設定エンドポイントに対して認可を走らせない）。
+- `NewVerifier(cfg) (Verifier, error)` — 設定された backend（`o3co` | `opa` | `cedar` | `static`）の本番 verifier を構築。URL は明示的な `http://`/`https://` scheme 必須（fail-closed）。loopback 以外への平文は、その `host:port` を `provin.network.auth.plain-internal` に列挙しない限り拒否される。`With*AllowInsecure` は使わない。
+- `AuthConfig` + `LoadAuthConfig` — 型付き `provin.network.auth.*` 設定。起動時に fail-closed 検証（空/scheme なしの URL、`backend = "cedar"` での `cedar.jwt.*` の欠落・矛盾 → 起動エラー）。
+- `cedar` backend は bearer JWT を自分で検証する（Cedar agent は何も認証しない）: `cedar.jwt.issuer`、`cedar.jwt.audience`、`cedar.jwt.jwks-url`（https）/ `cedar.jwt.secret`（HS256、`cedar.jwt.secret-encoding` は `utf8` | `hex` | `base64`）のちょうど一方。検証は内部 package `jwtprincipal` に 1 メソッドの interface の裏で閉じ込め、本パッケージは backend の選択と resolver の受け渡しだけを行う。
 
 ## ポリシー宣言
 
