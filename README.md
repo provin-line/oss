@@ -10,7 +10,9 @@ Self-hosting a node means standing up its authorization layer too: the node is
 fail-closed and needs a policy decision point (PDP). For an authenticated stack —
 real `auth.provider` + policy-verifier + node + NATS in one command, driving a
 record to a `VERIFIED` verdict — see [`deploy/quickstart/`](deploy/quickstart/README.md).
-The PDP backend is pluggable (`o3co` | `opa` | `cedar` | `static`); `static` is an
+The PDP backend is pluggable (`o3co` | `opa` | `cedar` | `static`); a plaintext
+`http://` PDP on a private network must be listed in
+`provin.network.auth.plain-internal`; `static` is an
 authorization allow-list, **not authentication** (see
 [network/README.md](network/README.md#pdp-backends--the-locus-of-authentication)).
 

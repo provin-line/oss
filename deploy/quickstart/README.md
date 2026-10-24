@@ -329,7 +329,10 @@ Each node's PDP backend is configurable (`provin.network.auth.backend`):
 `o3co` (this quickstart), `opa`, `cedar`, or `static`. `static` is an in-process
 allow-list and is **not authentication** — see the network `reference.conf` and
 the deployment note in the repo README. This quickstart uses `o3co` precisely to
-exercise real JWT verification end-to-end.
+exercise real JWT verification end-to-end. The PDP is plaintext `http://` to the
+`policy-verifier` service, so both node configs list it in
+`provin.network.auth.plain-internal = ["policy-verifier:3001"]`; without that
+entry the node refuses to start.
 
 ## Going to production
 

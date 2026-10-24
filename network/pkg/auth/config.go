@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/network/pkg/auth/internal/jwtprincipal"
 )
 
 //go:embed reference.conf
@@ -21,7 +22,14 @@ const (
 	keyOPABaseURL        = "provin.network.auth.opa.base-url"
 	keyOPAPolicyPath     = "provin.network.auth.opa.policy-path"
 	keyCedarBaseURL      = "provin.network.auth.cedar.base-url"
-	keyStaticAllow       = "provin.network.auth.static.allow"
+	keyPlainInternal     = "provin.network.auth.plain-internal"
+
+	keyCedarJWTIssuer         = "provin.network.auth.cedar.jwt.issuer"
+	keyCedarJWTAudience       = "provin.network.auth.cedar.jwt.audience"
+	keyCedarJWTJWKSURL        = "provin.network.auth.cedar.jwt.jwks-url"
+	keyCedarJWTSecret         = "provin.network.auth.cedar.jwt.secret"
+	keyCedarJWTSecretEncoding = "provin.network.auth.cedar.jwt.secret-encoding"
+	keyStaticAllow            = "provin.network.auth.static.allow"
 )
 
 // Backend selects where the authorization decision (PDP) is made. Every backend
@@ -50,9 +58,24 @@ type OPAConfig struct {
 	PolicyPath string
 }
 
-// CedarConfig configures the cedar backend (Cedar-agent REST).
+// CedarConfig configures the cedar backend (Cedar-agent REST). A Cedar agent
+// authenticates nothing, so the backend verifies the caller's bearer JWT itself
+// (JWT) and asks the agent about the verified subject.
 type CedarConfig struct {
 	BaseURL string
+	JWT     CedarJWTConfig
+}
+
+// CedarJWTConfig configures how the cedar backend verifies the bearer JWT.
+// Issuer and Audience are required; exactly one of JWKSURL (https) and Secret
+// (HS256, written in SecretEncoding: utf8, hex or base64; empty means utf8)
+// supplies the key. The principal is the verified token's sub claim.
+type CedarJWTConfig struct {
+	Issuer         string
+	Audience       string
+	JWKSURL        string
+	Secret         string
+	SecretEncoding string
 }
 
 // StaticConfig configures the static backend's in-process allow-list. An empty
@@ -75,6 +98,10 @@ type AuthConfig struct {
 	// PolicyVerifierURL is the base URL of the auth.policy-verifier PDP
 	// (backend = o3co).
 	PolicyVerifierURL string
+	// PlainInternal lists the "host:port" PDP endpoints that may be called over
+	// plaintext http: only a listed endpoint that resolves to a private address
+	// is reached. Empty (the default) permits plaintext to loopback only.
+	PlainInternal []string
 	// OPA, Cedar, and Static carry the params for their respective backends;
 	// only the selected backend's block is consulted.
 	OPA    OPAConfig
@@ -100,6 +127,12 @@ func LoadAuthConfig(cfg *hoconconfig.Config) (*AuthConfig, error) {
 		keyOPABaseURL:        &ac.OPA.BaseURL,
 		keyOPAPolicyPath:     &ac.OPA.PolicyPath,
 		keyCedarBaseURL:      &ac.Cedar.BaseURL,
+
+		keyCedarJWTIssuer:         &ac.Cedar.JWT.Issuer,
+		keyCedarJWTAudience:       &ac.Cedar.JWT.Audience,
+		keyCedarJWTJWKSURL:        &ac.Cedar.JWT.JWKSURL,
+		keyCedarJWTSecret:         &ac.Cedar.JWT.Secret,
+		keyCedarJWTSecretEncoding: &ac.Cedar.JWT.SecretEncoding,
 	} {
 		v, err := optString(cfg, key)
 		if err != nil {
@@ -122,6 +155,12 @@ func LoadAuthConfig(cfg *hoconconfig.Config) (*AuthConfig, error) {
 		}
 		ac.Static.Allow = append(ac.Static.Allow, rule)
 	}
+
+	plain, err := cfg.StringList(keyPlainInternal)
+	if err != nil {
+		return nil, fmt.Errorf("auth: config %s: %w", keyPlainInternal, err)
+	}
+	ac.PlainInternal = plain
 
 	if err := ac.validate(); err != nil {
 		return nil, fmt.Errorf("auth: config: %w", err)
@@ -175,10 +214,29 @@ func (cfg *AuthConfig) validate() error {
 		if err := validateVerifierURL(cfg.Cedar.BaseURL); err != nil {
 			return fmt.Errorf("cedar base-url: %w", err)
 		}
+		if _, err := cfg.Cedar.JWT.resolver(); err != nil {
+			return err
+		}
 	case BackendStatic:
 		// no required field; an empty allow-list denies everything (safe).
 	default:
 		return fmt.Errorf("unknown backend %q (want o3co|opa|cedar|static)", cfg.Backend)
 	}
 	return nil
+}
+
+// resolver builds the principal resolver the cedar backend authenticates with.
+// Its errors name the provin.network.auth.cedar.jwt keys.
+func (c CedarJWTConfig) resolver() (jwtprincipal.Resolver, error) {
+	r, err := jwtprincipal.New(jwtprincipal.Config{
+		Issuer:         c.Issuer,
+		Audience:       c.Audience,
+		JWKSURL:        c.JWKSURL,
+		Secret:         c.Secret,
+		SecretEncoding: c.SecretEncoding,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cedar jwt (provin.network.auth.cedar.jwt.*): %w", err)
+	}
+	return r, nil
 }

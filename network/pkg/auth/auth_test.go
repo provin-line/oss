@@ -2,8 +2,17 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	interceptors "github.com/o3co/protobuf.interceptors"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 	"github.com/provin-line/oss/network/pkg/auth"
@@ -90,9 +99,124 @@ func TestNewVerifier_OPACedarRequireBaseURL(t *testing.T) {
 	if v, err := auth.NewVerifier(opa); err != nil || v == nil {
 		t.Errorf("NewVerifier opa happy path: v=%v err=%v", v, err)
 	}
-	cedar := &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: auth.CedarConfig{BaseURL: "https://cedar.internal:8180"}}
+	cedar := &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cedarCfg("https://cedar.internal:8180")}
 	if v, err := auth.NewVerifier(cedar); err != nil || v == nil {
 		t.Errorf("NewVerifier cedar happy path: v=%v err=%v", v, err)
+	}
+}
+
+const testSecret = "0123456789abcdef0123456789abcdef"
+
+func cedarCfg(baseURL string) auth.CedarConfig {
+	return auth.CedarConfig{BaseURL: baseURL, JWT: auth.CedarJWTConfig{
+		Issuer: "https://issuer.example", Audience: "provin-network", Secret: testSecret,
+	}}
+}
+
+func TestNewVerifier_CedarRequiresJWTConfig(t *testing.T) {
+	base := "https://cedar.internal:8180"
+	with := func(f func(*auth.CedarJWTConfig)) *auth.AuthConfig {
+		c := cedarCfg(base)
+		f(&c.JWT)
+		return &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: c}
+	}
+	for name, cfg := range map[string]*auth.AuthConfig{
+		"no issuer":   with(func(j *auth.CedarJWTConfig) { j.Issuer = "" }),
+		"no audience": with(func(j *auth.CedarJWTConfig) { j.Audience = "" }),
+		"no key":      with(func(j *auth.CedarJWTConfig) { j.Secret = "" }),
+		"both keys":   with(func(j *auth.CedarJWTConfig) { j.JWKSURL = "https://issuer.example/jwks" }),
+		"http jwks":   with(func(j *auth.CedarJWTConfig) { j.Secret = ""; j.JWKSURL = "http://issuer.example/jwks" }),
+		"weak secret": with(func(j *auth.CedarJWTConfig) { j.Secret = "short" }),
+	} {
+		_, err := auth.NewVerifier(cfg)
+		if err == nil {
+			t.Errorf("%s: want error (fail-closed)", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "provin.network.auth.cedar.jwt") {
+			t.Errorf("%s: error %q does not name the config key", name, err)
+		}
+	}
+}
+
+func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
+	var agentHits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agentHits.Add(1)
+		var body struct{ Principal string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Principal != `User::"did:dplaax:alice"` {
+			t.Errorf("agent asked about principal %q", body.Principal)
+		}
+		_, _ = w.Write([]byte(`{"decision":"Allow","diagnostics":{"reason":[],"errors":[]}}`))
+	}))
+	defer agent.Close()
+	v, err := auth.NewVerifier(&auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cedarCfg(agent.URL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, nil)
+	good, _ := jwt.Signed(sig).Claims(jwt.Claims{
+		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
+		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}).Serialize()
+
+	if err := v.Verify(interceptors.WithBearerToken(context.Background(), good), "dids", "read"); err != nil {
+		t.Fatalf("verified token denied: %v", err)
+	}
+	if agentHits.Load() != 1 {
+		t.Fatalf("agent hits = %d, want 1", agentHits.Load())
+	}
+	// Same claims, signed with a different key: the signature cannot verify.
+	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, nil)
+	forged, _ := jwt.Signed(otherSig).Claims(jwt.Claims{
+		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
+		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}).Serialize()
+	if forged == good {
+		t.Fatal("forged token equals the valid one")
+	}
+	err = v.Verify(interceptors.WithBearerToken(context.Background(), forged), "dids", "read")
+	var unauth *interceptors.UnauthenticatedError
+	if !errors.As(err, &unauth) {
+		t.Errorf("forged token: err = %v, want UnauthenticatedError", err)
+	}
+	if agentHits.Load() != 1 {
+		t.Errorf("agent was asked about an unverified token (hits = %d)", agentHits.Load())
+	}
+}
+
+func TestNewVerifier_PlainInternal(t *testing.T) {
+	// A plaintext, non-loopback PDP URL needs an explicit plain-internal entry
+	// (backend construction refuses it otherwise); an invalid entry fails
+	// construction with the config key named.
+	for name, cfg := range map[string]func(plain ...string) *auth.AuthConfig{
+		"o3co": func(p ...string) *auth.AuthConfig {
+			return &auth.AuthConfig{Backend: auth.BackendO3co, PolicyVerifierURL: "http://policy-verifier:3001", PlainInternal: p}
+		},
+		"opa": func(p ...string) *auth.AuthConfig {
+			return &auth.AuthConfig{Backend: auth.BackendOPA, OPA: auth.OPAConfig{BaseURL: "http://policy-verifier:3001", PolicyPath: "p/a"}, PlainInternal: p}
+		},
+		"cedar": func(p ...string) *auth.AuthConfig {
+			return &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cedarCfg("http://policy-verifier:3001"), PlainInternal: p}
+		},
+	} {
+		_, err := auth.NewVerifier(cfg())
+		if err == nil {
+			t.Errorf("%s: plaintext to a non-loopback host without plain-internal must be refused", name)
+		} else if !strings.Contains(err.Error(), "provin.network.auth.plain-internal") || strings.Contains(err.Error(), "AllowInsecure") {
+			t.Errorf("%s: error %q must name provin.network.auth.plain-internal and not point at AllowInsecure", name, err)
+		}
+		if _, err := auth.NewVerifier(cfg("policy-verifier:3001")); err != nil {
+			t.Errorf("%s: listed host:port refused: %v", name, err)
+		}
+		if _, err := auth.NewVerifier(cfg("other-host:3001")); err == nil {
+			t.Errorf("%s: an entry for another host:port must not allow the URL", name)
+		}
+		_, err = auth.NewVerifier(cfg("policy-verifier"))
+		if err == nil || !strings.Contains(err.Error(), "provin.network.auth.plain-internal") {
+			t.Errorf("%s: invalid entry: err = %v, want one naming provin.network.auth.plain-internal", name, err)
+		}
 	}
 }
 

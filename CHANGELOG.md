@@ -12,29 +12,63 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+### Added
+
+- `provin.network.auth.plain-internal` (list of `host:port`, default empty):
+  the PDP endpoints that may be called over plaintext `http://`. A listed
+  endpoint is reached only at a private address (checked on every connection).
+  Applies to the `o3co`, `opa` and `cedar` backends; a malformed entry fails
+  startup naming the key. The quickstart configs set it for
+  `policy-verifier:3001`.
+
 ### Changed
 
+- **BREAKING (config)** `backend = "cedar"` verifies the caller's bearer JWT in
+  the node and asks the Cedar agent about the token's `sub`; previously the raw
+  bearer was the principal. Existing cedar configs must add
+  `provin.network.auth.cedar.jwt.{issuer,audience}` and exactly one of
+  `jwks-url` (https) / `secret` (with optional `secret-encoding`: `utf8` |
+  `hex` | `base64`), or the node does not boot. With `jwks-url` the key set is
+  cached 10 minutes, refetched at most every 30 seconds, and kept as a 30 minute
+  stale grace for known key ids, so a withdrawn key can be trusted for up to 40
+  minutes during a JWKS outage.
+- **BREAKING (config)** A PDP at a non-loopback `http://` URL is refused unless
+  its `host:port` is listed in `provin.network.auth.plain-internal`
+  (`protobuf.interceptors` v0.5.0+). Deployments with a plaintext PDP on a
+  private network must add the entry or the node does not boot.
+- **BREAKING (wire)** A PDP outage is reported as `Unavailable`. With
+  `protobuf.interceptors` v0.6.0 an unreachable or overloaded PDP (HTTP
+  429/502/503/504, timeout) fails an L1-guarded RPC with ConnectRPC
+  `Unavailable` instead of `Internal`, and the pipeline's push endpoint answers
+  503 with `Retry-After` instead of 403. The pipeline's wire retry therefore
+  retries L1-guarded RPCs through a PDP outage within its existing budget. HTTP
+  500 and malformed PDP answers remain `Internal` / 403. With the `cedar`
+  backend a token-check failure, a JWKS outage included, stays
+  `Unauthenticated`.
+- **BREAKING (wire)** With the `o3co` backend an allow now requires HTTP 200 with
+  a complete decision envelope (`resource`, `action`, `decision`, `reason` with
+  `reason.groups`); an empty 200 or 204 no longer allows. The PDP also must not
+  redirect.
 - CLI: `owner init`, `pipeline create`, `process create`, `bundle export`,
   and `bundle verify` now reject unexpected positional arguments after
   flags as a usage error, matching the Stage 2 commands. Previously stray
   arguments were silently ignored and the command proceeded.
-- **Binaries build on Go 1.26.8.** The network, pipeline and quickstart
-  provision images move from `golang:1.25.5-alpine` to
-  `golang:1.26.8-alpine`, and `go.mod` pins `toolchain go1.26.8`. Go 1.25 no
-  longer receives security fixes: `govulncheck` reported 18
-  standard-library vulnerabilities on the old toolchain and reports none
-  now. The module's minimum stays `go 1.25.5`, so consumers and the e2e
-  harness are unaffected; `golang.org/x/crypto`, `golang.org/x/sys` and
-  `nats.go` are held at the newest releases that still support Go 1.25.
+- **Binaries build on Go 1.26.8, and the module needs Go 1.26.** The network,
+  pipeline and quickstart provision images move from `golang:1.25.5-alpine`
+  to `golang:1.26.8-alpine`, `go.mod` pins `toolchain go1.26.8`, and its minimum
+  is `go 1.26.0` (required by `protobuf.interceptors` v0.6.0). Go 1.25 no longer
+  receives security fixes: `govulncheck` reported 18 standard-library
+  vulnerabilities on the old toolchain and reports none now.
 - Dependency refresh: `github.com/o3co/protobuf.interceptors` (and its
-  `connectrpc` module) v0.2.0 / v0.2.1 → v0.3.0, which authorizes a stream
-  before its handler runs and refuses placeholder values that would
-  restructure the authorized resource (no policy here uses placeholders);
-  `connectrpc.com/connect` 1.21.0, `nats.go` 1.53.1, `nats-io/jwt` 2.8.2,
-  `nkeys` 0.4.16, `o3co/go.hocon` 1.13.0, `golang.org/x/crypto` 0.55.0,
-  `golang.org/x/net` 0.58.0, `golang.org/x/sys` 0.47.0. `nats-server` stays
-  at 2.12.6: the quickstart's broker image is pinned to the same line on
-  purpose.
+  `connectrpc` module) v0.2.0 / v0.2.1 → v0.6.0, which authorizes a stream
+  before its handler runs, refuses placeholder values that would restructure
+  the authorized resource (no policy here uses placeholders), and re-checks a
+  stream per message; `connectrpc.com/connect` 1.21.0, `nats.go` 1.53.1,
+  `nats-io/jwt` 2.8.2, `nkeys` 0.4.16, `o3co/go.hocon` 1.13.0,
+  `golang.org/x/crypto` 0.57.0, `golang.org/x/net` 0.60.0, `golang.org/x/sys`
+  0.48.0, plus `github.com/go-jose/go-jose/v4` 4.1.6 (new, for the cedar JWT
+  check). `nats-server` stays at 2.12.6: the quickstart's broker image is pinned
+  to the same line on purpose.
 - Quickstart: the auth layer moves to provin.auth v0.3 (the `:v0.3` images,
   `AUTH_REF=v0.3.0` for the source-build fallback). Its policy-verifier
   accepts only RFC 9068 access tokens, so every token the quickstart uses now

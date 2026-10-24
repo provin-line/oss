@@ -12,6 +12,11 @@ provin.network {
   # verifier). Must carry an explicit http:// or https:// scheme.
   auth.policy-verifier-url = "https://auth.example.internal/policy"
 
+  # OPTIONAL. host:port PDP endpoints that may be called over plaintext http
+  # (reached only at private addresses). Needed only for an http:// PDP URL on a
+  # non-loopback host, e.g. ["policy-verifier:3001"].
+  # auth.plain-internal = []
+
   registry {
     # REQUIRED — no default. The did:dplaax {registry} segment this server is
     # authoritative for; appears in every DID it mints and resolves. Must be a
