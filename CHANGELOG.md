@@ -67,8 +67,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `nats-io/jwt` 2.8.2, `nkeys` 0.4.16, `o3co/go.hocon` 1.13.0,
   `golang.org/x/crypto` 0.57.0, `golang.org/x/net` 0.60.0, `golang.org/x/sys`
   0.48.0, plus `github.com/go-jose/go-jose/v4` 4.1.6 (new, for the cedar JWT
-  check). `nats-server` stays at 2.12.6: the quickstart's broker image is pinned
-  to the same line on purpose.
+  check).
+- Dependency refresh to the latest releases: `connectrpc.com/connect` 1.21.1,
+  `nats-server` 2.15.1 and `nats.go` 1.55.0, `o3co/go.hocon` 1.14.2,
+  `piprate/json-gold` 0.9.1, `prometheus/client_golang` 1.25.0,
+  `santhosh-tekuri/jsonschema/v6` 6.0.3, OpenTelemetry 1.47.0
+  (`exporters/prometheus` 0.69.0), `golang.org/x/net` 0.61.0,
+  `golang.org/x/sys` 0.49.0, and what `go mod tidy` carries with them
+  (`golang.org/x/crypto` 0.58.0, `x/text` 0.43.0, `x/time` 0.16.0). The
+  quickstart's broker image moves to `nats:2.15.1`, the server line the
+  broker-contract tests now run against.
 - Quickstart: the auth layer moves to provin.auth v0.3 (the `:v0.3` images,
   `AUTH_REF=v0.3.0` for the source-build fallback). Its policy-verifier
   accepts only RFC 9068 access tokens, so every token the quickstart uses now
