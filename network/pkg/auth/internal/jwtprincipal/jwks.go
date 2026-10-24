@@ -157,13 +157,29 @@ func (c *jwksCache) fetch(ctx context.Context) (*jose.JSONWebKeySet, error) {
 	if len(body) > maxJWKSBytes {
 		return nil, fmt.Errorf("response larger than %d bytes", maxJWKSBytes)
 	}
-	var set jose.JSONWebKeySet
 	// The key set is the issuer's own document, not a protocol payload: no hashed
 	// or signed canonical form is derived from it, and a duplicate member can only
 	// change which of the issuer's own keys is read.
 	// decoder-hygiene-exempt: see above.
-	if err := json.Unmarshal(body, &set); err != nil {
+	var doc struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if doc.Keys == nil {
+		return nil, errors.New("decode: no keys member")
+	}
+	// A member this library cannot parse (an unsupported curve or key type) is
+	// skipped so it cannot take the issuer's other keys down with it (RFC 7517 §5).
+	var set jose.JSONWebKeySet
+	for _, raw := range doc.Keys {
+		var k jose.JSONWebKey
+		// decoder-hygiene-exempt: one member of the key set decoded above.
+		if err := json.Unmarshal(raw, &k); err != nil {
+			continue
+		}
+		set.Keys = append(set.Keys, k)
 	}
 	return &set, nil
 }

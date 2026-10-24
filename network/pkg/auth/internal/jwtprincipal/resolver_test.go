@@ -174,6 +174,7 @@ type jwksServer struct {
 	hits atomic.Int32
 	keys atomic.Value // []jose.JSONWebKey
 	fail atomic.Bool
+	raw  atomic.Pointer[string]        // when set, /jwks answers with this body
 	gate atomic.Pointer[chan struct{}] // when set, /jwks blocks until it is closed
 }
 
@@ -195,6 +196,10 @@ func newJWKSServer(t *testing.T, keys ...jose.JSONWebKey) *jwksServer {
 		}
 		switch r.URL.Path {
 		case "/jwks":
+			if raw := s.raw.Load(); raw != nil {
+				_, _ = w.Write([]byte(*raw))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: s.keys.Load().([]jose.JSONWebKey)})
 		case "/redirect":
 			http.Redirect(w, r, "/jwks", http.StatusFound)
@@ -441,5 +446,90 @@ func TestJWKS_GraceKeepsKnownKidsWhileRefetchFails(t *testing.T) {
 	claims = validClaims(clk.Now())
 	if _, err := r.Principal(ctx, esToken(t, k2, "k2", claims)); err != nil {
 		t.Errorf("not recovered after the endpoint came back: %v", err)
+	}
+}
+
+func TestHS256_NotBeforeWithinLeewayAndMultiAudience(t *testing.T) {
+	now := time.Now()
+	r := newHS(t, now)
+	c := validClaims(now)
+	c.NotBefore = jwt.NewNumericDate(now.Add(leeway / 2))
+	c.Audience = jwt.Audience{"other", testAudience}
+	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err != nil {
+		t.Errorf("nbf within leeway / multi-valued aud rejected: %v", err)
+	}
+	c.NotBefore = jwt.NewNumericDate(now.Add(2 * leeway))
+	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err == nil {
+		t.Error("nbf beyond leeway accepted")
+	}
+}
+
+func TestJWKS_SkipsKeysItCannotParse(t *testing.T) {
+	k, jwk := ecKey(t, "k1")
+	good, _ := json.Marshal(jwk)
+	body := `{"keys":[{"kty":"OKP","crv":"X25519","kid":"x","x":"` + strings.Repeat("A", 43) + `"},` +
+		`{"kty":"EC","crv":"secp256k1","kid":"y","x":"AA","y":"AA"},` + string(good) + `]}`
+	srv := newJWKSServer(t, jwk)
+	srv.raw.Store(&body)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	if _, err := r.Principal(context.Background(), esToken(t, k, "k1", validClaims(clk.Now()))); err != nil {
+		t.Errorf("a set with unparsable members must still yield its good key: %v", err)
+	}
+}
+
+func TestJWKS_SetWithoutKeysMemberIsAFailedFetch(t *testing.T) {
+	for _, body := range []string{`{}`, `null`, `{"keys":null}`} {
+		k, jwk := ecKey(t, "k1")
+		srv := newJWKSServer(t, jwk)
+		clk := newClock()
+		r := newJWKSResolver(t, srv, "/jwks", clk)
+		ctx := context.Background()
+		if _, err := r.Principal(ctx, esToken(t, k, "k1", validClaims(clk.Now()))); err != nil {
+			t.Fatal(err)
+		}
+		srv.raw.Store(&body)
+		clk.Advance(jwksTTL + time.Second)
+		tok := esToken(t, k, "k1", validClaims(clk.Now()))
+		// The previous set is kept (grace applies), not replaced by an empty one.
+		if _, err := r.Principal(ctx, tok); err != nil {
+			t.Errorf("%s: previous set lost: %v", body, err)
+		}
+		if _, err := r.Principal(ctx, tok); err != nil {
+			t.Errorf("%s: %v", body, err)
+		}
+		// Counted as an attempt: the second call did not refetch.
+		if srv.hits.Load() != 2 {
+			t.Errorf("%s: hits = %d, want 2 (failed attempt rate-limits the next)", body, srv.hits.Load())
+		}
+	}
+}
+
+func TestLookup_Filters(t *testing.T) {
+	k, pub := ecKey(t, "k1")
+	other, otherPub := ecKey(t, "k2")
+	_ = other
+	priv := jose.JSONWebKey{Key: k, KeyID: "p", Algorithm: "ES256", Use: "sig"}
+	hdr := func(kid, alg string) jose.Header { return jose.Header{KeyID: kid, Algorithm: alg} }
+	with := func(f func(*jose.JSONWebKey)) jose.JSONWebKey { j := pub; f(&j); return j }
+
+	cases := map[string]struct {
+		keys []jose.JSONWebKey
+		h    jose.Header
+		ok   bool
+	}{
+		"match":                 {[]jose.JSONWebKey{pub}, hdr("k1", "ES256"), true},
+		"alg mismatch":          {[]jose.JSONWebKey{pub}, hdr("k1", "ES384"), false},
+		"use enc":               {[]jose.JSONWebKey{with(func(j *jose.JSONWebKey) { j.Use = "enc" })}, hdr("k1", "ES256"), false},
+		"no use no alg":         {[]jose.JSONWebKey{with(func(j *jose.JSONWebKey) { j.Use = ""; j.Algorithm = "" })}, hdr("k1", "ES256"), true},
+		"private key ignored":   {[]jose.JSONWebKey{priv}, hdr("p", "ES256"), false},
+		"kid-less one key":      {[]jose.JSONWebKey{pub}, hdr("", "ES256"), true},
+		"kid-less several keys": {[]jose.JSONWebKey{pub, otherPub}, hdr("", "ES256"), false},
+		"unknown kid":           {[]jose.JSONWebKey{pub}, hdr("zz", "ES256"), false},
+	}
+	for name, c := range cases {
+		if _, ok := lookup(&jose.JSONWebKeySet{Keys: c.keys}, c.h); ok != c.ok {
+			t.Errorf("%s: ok = %v, want %v", name, ok, c.ok)
+		}
 	}
 }

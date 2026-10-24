@@ -167,7 +167,15 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 	if agentHits.Load() != 1 {
 		t.Fatalf("agent hits = %d, want 1", agentHits.Load())
 	}
-	forged := good[:len(good)-2] + "AA"
+	// Same claims, signed with a different key: the signature cannot verify.
+	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, nil)
+	forged, _ := jwt.Signed(otherSig).Claims(jwt.Claims{
+		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
+		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}).Serialize()
+	if forged == good {
+		t.Fatal("forged token equals the valid one")
+	}
 	err = v.Verify(interceptors.WithBearerToken(context.Background(), forged), "dids", "read")
 	var unauth *interceptors.UnauthenticatedError
 	if !errors.As(err, &unauth) {
