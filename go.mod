@@ -28,6 +28,8 @@ require (
 	golang.org/x/sys v0.48.0
 )
 
+require github.com/go-jose/go-jose/v4 v4.1.6
+
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.6.0-default-no-op // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
