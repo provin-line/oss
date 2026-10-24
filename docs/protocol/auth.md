@@ -43,13 +43,20 @@ Facts a deployment must internalize:
 - **`cedar` verifies the caller's JWT in the node**: a Cedar agent
   authenticates nothing, so `provin.network.auth.cedar.jwt.*` (issuer,
   audience, and exactly one of `jwks-url` / `secret`) is required, and the
-  principal asked about is the verified token's `sub`.
+  principal asked about is the verified token's `sub` (which must be non-empty).
+  The JWKS is cached 10 minutes and refetched at most every 30 seconds; while a
+  refetch fails, the expired set still verifies known `kid`s for another 30
+  minutes, so a withdrawn key can be trusted for up to 40 minutes during a JWKS
+  outage (unknown `kid`s are refused).
 - **PDP outage is `Unavailable`, not a refusal of the caller**: when the PDP
   cannot answer (unreachable, timeout, HTTP 429/502/503/504) an L1-guarded RPC
   fails with ConnectRPC `Unavailable` (previously `Internal`), and the pipeline's
   push endpoint (`/ingest/<name>/…`) answers **503 with `Retry-After`**
   (previously 403). A PDP that answers badly (HTTP 500, malformed body) is still
-  `Internal` / 403. Callers may retry `Unavailable` with backoff; the pipeline's
+  `Internal` / 403. The `cedar` backend is the exception: a failure to verify the
+  token (a JWKS outage included) is reported as `Unauthenticated` (push: 403, no
+  wire retry), because the Cedar endpoint turns every resolver error into an
+  authentication failure. Callers may retry `Unavailable` with backoff; the pipeline's
   own wire retry now retries L1-guarded RPCs through a PDP outage within its
   bounded budget.
 

@@ -30,7 +30,10 @@ Three-layer separation (the dPLaaX auth stack):
 - The `cedar` backend verifies the bearer JWT itself (a Cedar agent authenticates
   nothing): `cedar.jwt.issuer`, `cedar.jwt.audience` and exactly one of
   `cedar.jwt.jwks-url` (https) / `cedar.jwt.secret` (HS256, `cedar.jwt.secret-encoding`
-  `utf8` | `hex` | `base64`). The verification lives in the internal
+  `utf8` | `hex` | `base64`). A token needs a valid signature, `exp`, `iss`, an
+  `aud` containing the audience and a non-empty `sub` (the principal). JWKS bounds:
+  10 min cache, refetch at most every 30 s, 30 min stale grace for known `kid`s
+  (a withdrawn key can be trusted up to 40 min during a JWKS outage). The verification lives in the internal
   `jwtprincipal` package behind a one-method interface; this package only selects
   the backend and passes the resolver in.
 
