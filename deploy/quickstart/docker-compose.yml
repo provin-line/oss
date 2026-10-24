@@ -38,7 +38,7 @@ services:
   nats:
     # Pinned to the same server line the repo's broker-contract tests run
     # against (the claims-update API the pipeline's live push depends on).
-    image: nats:2.12.6
+    image: nats:2.15.1
     # Same uid as the network/pipeline images (their Dockerfiles): the
     # broker's directory resolver and each node's DirPublisher both rewrite
     # account JWTs in the shared resolver dir, so they must share ownership
