@@ -160,10 +160,10 @@ func (c *jwksCache) fetch(ctx context.Context) (*jose.JSONWebKeySet, error) {
 	// The key set is the issuer's own document, not a protocol payload: no hashed
 	// or signed canonical form is derived from it, and a duplicate member can only
 	// change which of the issuer's own keys is read.
-	// decoder-hygiene-exempt: see above.
 	var doc struct {
 		Keys []json.RawMessage `json:"keys"`
 	}
+	// decoder-hygiene-exempt: the issuer's own key set, see above.
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
