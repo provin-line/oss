@@ -194,3 +194,21 @@ func TestLoadAuthConfig_CedarJWTIgnoredForOtherBackends(t *testing.T) {
 		t.Errorf("o3co must not require cedar.jwt config: %v", err)
 	}
 }
+
+// The quickstart's PDP is plaintext http to a compose service name, which only
+// builds when the config lists it under plain-internal.
+func TestQuickstartConfigsBuildVerifier(t *testing.T) {
+	for _, svc := range []string{"network", "pipeline"} {
+		body, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "quickstart", svc, "config", "application.conf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cc, err := auth.LoadAuthConfig(loadWith(t, string(body)))
+		if err != nil {
+			t.Fatalf("%s: %v", svc, err)
+		}
+		if _, err := auth.NewVerifier(cc); err != nil {
+			t.Errorf("%s: quickstart PDP endpoint refused: %v", svc, err)
+		}
+	}
+}
