@@ -135,7 +135,8 @@ func decodeSecret(s, encoding string) ([]byte, error) {
 		return nil, fmt.Errorf("unknown secret-encoding %q (want utf8|hex|base64)", encoding)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("not valid %s: %w", encoding, err)
+		// The decoder's error is not wrapped: it can quote bytes of the secret.
+		return nil, fmt.Errorf("not valid %s", encoding)
 	}
 	if len(b) < minSecretBytes {
 		return nil, fmt.Errorf("must be at least %d bytes after decoding (got %d)", minSecretBytes, len(b))

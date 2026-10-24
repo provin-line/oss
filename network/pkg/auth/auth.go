@@ -66,11 +66,23 @@ func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 	}
 	switch cfg.Backend {
 	case BackendO3co:
-		return endpoint.NewO3coEndpoint(cfg.PolicyVerifierURL)
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewO3coEndpoint(cfg.PolicyVerifierURL, endpoint.WithO3coAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendOPA:
-		return endpoint.NewOPAEndpoint(cfg.OPA.BaseURL, cfg.OPA.PolicyPath)
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewOPAEndpoint(cfg.OPA.BaseURL, cfg.OPA.PolicyPath, endpoint.WithOPAAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendCedar:
-		return endpoint.NewCedarEndpoint(cfg.Cedar.BaseURL)
+		resolver, err := cfg.Cedar.JWT.resolver()
+		if err != nil {
+			return nil, fmt.Errorf("auth: %w", err)
+		}
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewCedarEndpoint(cfg.Cedar.BaseURL,
+				endpoint.WithCedarPrincipalResolver(resolver.Principal),
+				endpoint.WithCedarAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendStatic:
 		rules := make([]endpoint.StaticRule, len(cfg.Static.Allow))
 		for i, r := range cfg.Static.Allow {
@@ -82,6 +94,21 @@ func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 		// the switch stays total if a backend is added without wiring here.
 		return nil, fmt.Errorf("auth: unknown backend %q", cfg.Backend)
 	}
+}
+
+// withPlainInternalKey runs build and, when plain-internal entries are
+// configured, names that key in a construction error: the endpoint refuses an
+// entry that is not a reachable private host:port, and the operator needs to
+// know which setting to fix.
+func withPlainInternalKey(cfg *AuthConfig, build func() (Verifier, error)) (Verifier, error) {
+	v, err := build()
+	if err != nil {
+		if len(cfg.PlainInternal) > 0 {
+			return nil, fmt.Errorf("auth: %s=%q: %w", keyPlainInternal, cfg.PlainInternal, err)
+		}
+		return nil, fmt.Errorf("auth: %w", err)
+	}
+	return v, nil
 }
 
 // validateVerifierURL rejects a URL that is empty, scheme-less, not http(s), or

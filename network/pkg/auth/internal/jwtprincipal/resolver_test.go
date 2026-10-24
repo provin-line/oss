@@ -313,3 +313,11 @@ func TestJWKS_FetchFailuresFailClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestNew_ErrorsDoNotQuoteTheSecret(t *testing.T) {
+	secret := strings.Repeat("zq", 32)
+	_, err := New(Config{Issuer: testIssuer, Audience: testAudience, Secret: secret, SecretEncoding: "hex"})
+	if err == nil || strings.Contains(err.Error(), "zq") {
+		t.Errorf("err = %v, want an error that does not quote the secret", err)
+	}
+}
