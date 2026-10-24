@@ -1,6 +1,6 @@
 module github.com/provin-line/oss
 
-go 1.25.5
+go 1.26.0
 
 toolchain go1.26.8
 
@@ -15,8 +15,8 @@ require (
 	github.com/nats-io/nats-server/v2 v2.12.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/nats-io/nkeys v0.4.16
-	github.com/o3co/protobuf.interceptors v0.3.0
-	github.com/o3co/protobuf.interceptors/connectrpc v0.3.0
+	github.com/o3co/protobuf.interceptors v0.6.0
+	github.com/o3co/protobuf.interceptors/connectrpc v0.6.0
 	github.com/piprate/json-gold v0.8.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
@@ -24,11 +24,9 @@ require (
 	go.opentelemetry.io/otel/exporters/prometheus v0.66.0
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
 )
-
-require google.golang.org/grpc v1.84.0 // indirect
 
 require (
 	github.com/antithesishq/antithesis-sdk-go v0.6.0-default-no-op // indirect
@@ -53,7 +51,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
