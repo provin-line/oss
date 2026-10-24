@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -172,6 +173,8 @@ type jwksServer struct {
 	*httptest.Server
 	hits atomic.Int32
 	keys atomic.Value // []jose.JSONWebKey
+	fail atomic.Bool
+	gate atomic.Pointer[chan struct{}] // when set, /jwks blocks until it is closed
 }
 
 func newJWKSServer(t *testing.T, keys ...jose.JSONWebKey) *jwksServer {
@@ -180,6 +183,16 @@ func newJWKSServer(t *testing.T, keys ...jose.JSONWebKey) *jwksServer {
 	s.keys.Store(keys)
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.hits.Add(1)
+		if g := s.gate.Load(); g != nil {
+			select {
+			case <-*g:
+			case <-r.Context().Done():
+			}
+		}
+		if s.fail.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
 		switch r.URL.Path {
 		case "/jwks":
 			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: s.keys.Load().([]jose.JSONWebKey)})
@@ -319,5 +332,114 @@ func TestNew_ErrorsDoNotQuoteTheSecret(t *testing.T) {
 	_, err := New(Config{Issuer: testIssuer, Audience: testAudience, Secret: secret, SecretEncoding: "hex"})
 	if err == nil || strings.Contains(err.Error(), "zq") {
 		t.Errorf("err = %v, want an error that does not quote the secret", err)
+	}
+}
+
+func TestJWKS_CancelledCallerDoesNotPoisonCacheOrLimiter(t *testing.T) {
+	k, jwk := ecKey(t, "k1")
+	srv := newJWKSServer(t, jwk)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	tok := esToken(t, k, "k1", validClaims(clk.Now()))
+
+	gate := make(chan struct{})
+	srv.gate.Store(&gate)
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { _, err := r.Principal(ctx, tok); errc <- err }()
+	for srv.hits.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-errc; err == nil {
+		t.Fatal("cancelled caller got a principal")
+	}
+	close(gate)
+
+	// The fetch ran on its own: a later caller is served without a second fetch
+	// and is not held back by the refetch limiter.
+	var err error
+	for i := 0; i < 1000; i++ {
+		if _, err = r.Principal(context.Background(), tok); err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("later caller failed: %v", err)
+	}
+	if srv.hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1", srv.hits.Load())
+	}
+}
+
+func TestJWKS_ConcurrentUnknownKidFetchesOnce(t *testing.T) {
+	k, jwk := ecKey(t, "k1")
+	srv := newJWKSServer(t, jwk)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	tok := esToken(t, k, "k1", validClaims(clk.Now()))
+	gate := make(chan struct{})
+	srv.gate.Store(&gate)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.Principal(context.Background(), tok); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	for srv.hits.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	if srv.hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1", srv.hits.Load())
+	}
+}
+
+func TestJWKS_GraceKeepsKnownKidsWhileRefetchFails(t *testing.T) {
+	k1, jwk1 := ecKey(t, "k1")
+	k2, jwk2 := ecKey(t, "k2")
+	srv := newJWKSServer(t, jwk1)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	ctx := context.Background()
+	if _, err := r.Principal(ctx, esToken(t, k1, "k1", validClaims(clk.Now()))); err != nil {
+		t.Fatal(err)
+	}
+	srv.fail.Store(true)
+	clk.Advance(jwksTTL + time.Second)
+	claims := validClaims(clk.Now())
+	tok1, tok2 := esToken(t, k1, "k1", claims), esToken(t, k2, "k2", claims)
+
+	// Expired set, refetch failing: a known kid still verifies, an unknown one does not.
+	if _, err := r.Principal(ctx, tok1); err != nil {
+		t.Errorf("known kid refused during grace: %v", err)
+	}
+	if _, err := r.Principal(ctx, tok2); err == nil {
+		t.Error("unknown kid accepted from a stale set")
+	}
+	// The same holds while the refetch is rate-limited.
+	if _, err := r.Principal(ctx, tok1); err != nil {
+		t.Errorf("known kid refused while rate-limited: %v", err)
+	}
+	// Past the grace bound nothing verifies.
+	clk.Advance(jwksGrace)
+	claims = validClaims(clk.Now())
+	if _, err := r.Principal(ctx, esToken(t, k1, "k1", claims)); err == nil {
+		t.Error("stale set used beyond the grace period")
+	}
+	// Recovery: a successful fetch restores service.
+	srv.fail.Store(false)
+	srv.keys.Store([]jose.JSONWebKey{jwk1, jwk2})
+	clk.Advance(jwksMinRefetch + time.Second)
+	claims = validClaims(clk.Now())
+	if _, err := r.Principal(ctx, esToken(t, k2, "k2", claims)); err != nil {
+		t.Errorf("not recovered after the endpoint came back: %v", err)
 	}
 }

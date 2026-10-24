@@ -17,6 +17,10 @@ const (
 	// jwksTTL bounds how long a fetched key set is trusted; after it the set is
 	// refetched before any token is verified.
 	jwksTTL = 10 * time.Minute
+	// jwksGrace is how long past its TTL a key set still verifies tokens for the
+	// key ids it holds while no fresher set can be fetched. It bounds how long a
+	// withdrawn key stays trusted during an endpoint outage.
+	jwksGrace = 30 * time.Minute
 	// jwksMinRefetch is the shortest gap between two fetches. It caps the
 	// request rate to the JWKS endpoint when tokens name unknown key ids.
 	jwksMinRefetch = 30 * time.Second
@@ -39,7 +43,16 @@ type jwksCache struct {
 	set         *jose.JSONWebKeySet
 	fetchedAt   time.Time
 	lastAttempt time.Time
+	inflight    *flight
 }
+
+// flight is one running fetch that every waiting caller shares.
+type flight struct {
+	done chan struct{}
+	err  error
+}
+
+var errRefetchLimited = errors.New("key set refetch rate-limited")
 
 func newJWKSCache(url string, client *http.Client, now func() time.Time) *jwksCache {
 	if client == nil {
@@ -53,31 +66,74 @@ func newJWKSCache(url string, client *http.Client, now func() time.Time) *jwksCa
 	return &jwksCache{url: url, client: &c, now: now}
 }
 
+// key returns the verification key for a token header.
+//
+// A key set younger than jwksTTL is used as is. A missing key id or an expired
+// set triggers one shared fetch, started at most every jwksMinRefetch. The fetch
+// runs detached from the caller's context, so a caller that gives up neither
+// fails it for the others nor spends the rate limit with a fetch that never
+// completed. If the set is expired and the fetch fails or is rate-limited, the
+// set still verifies tokens for the key ids it holds until jwksGrace after its
+// expiry; an unknown key id is always refused.
 func (c *jwksCache) key(ctx context.Context, h jose.Header) (any, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	now := c.now()
-	fresh := c.set != nil && now.Sub(c.fetchedAt) < jwksTTL
-	if fresh {
+	if c.set != nil && now.Sub(c.fetchedAt) < jwksTTL {
 		if k, ok := lookup(c.set, h); ok {
+			c.mu.Unlock()
 			return k, nil
 		}
 	}
-	// Either the cached set expired or it lacks this key id.
-	if !c.lastAttempt.IsZero() && now.Sub(c.lastAttempt) < jwksMinRefetch {
-		return nil, errors.New("no verification key for token (key set refetch rate-limited)")
+	fl := c.inflight
+	if fl == nil && (c.lastAttempt.IsZero() || now.Sub(c.lastAttempt) >= jwksMinRefetch) {
+		fl = &flight{done: make(chan struct{})}
+		c.inflight = fl
+		c.lastAttempt = now
+		go c.run(fl)
 	}
-	c.lastAttempt = now
-	set, err := c.fetch(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch jwks: %w", err)
+	c.mu.Unlock()
+
+	fetchErr := errRefetchLimited
+	if fl != nil {
+		select {
+		case <-fl.done:
+			fetchErr = fl.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	c.set, c.fetchedAt = set, now
+
+	c.mu.Lock()
+	set, age := c.set, c.now().Sub(c.fetchedAt)
+	c.mu.Unlock()
+	switch {
+	case set == nil:
+		return nil, fmt.Errorf("no key set available: %w", fetchErr)
+	case age < jwksTTL:
+	case fetchErr != nil && age < jwksTTL+jwksGrace:
+	default:
+		return nil, fmt.Errorf("key set expired: %w", fetchErr)
+	}
 	if k, ok := lookup(set, h); ok {
 		return k, nil
 	}
 	return nil, fmt.Errorf("no verification key for kid %q", h.KeyID)
+}
+
+func (c *jwksCache) run(fl *flight) {
+	ctx, cancel := context.WithTimeout(context.Background(), jwksTimeout)
+	defer cancel()
+	set, err := c.fetch(ctx)
+	c.mu.Lock()
+	if err == nil {
+		c.set, c.fetchedAt = set, c.now()
+	}
+	c.inflight = nil
+	c.mu.Unlock()
+	if err != nil {
+		fl.err = fmt.Errorf("fetch jwks: %w", err)
+	}
+	close(fl.done)
 }
 
 func (c *jwksCache) fetch(ctx context.Context) (*jose.JSONWebKeySet, error) {
