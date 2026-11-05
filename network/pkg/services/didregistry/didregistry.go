@@ -21,7 +21,6 @@ package didregistry
 import (
 	"bytes"
 	"context"
-	stded25519 "crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -31,6 +30,7 @@ import (
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
@@ -176,6 +176,9 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 	if err := s.verifyDocProof(doc); err != nil {
 		return nil, err
 	}
+	if err := validateDocumentKeys(doc); err != nil {
+		return nil, err
+	}
 	snap, err := doc.Hash()
 	if err != nil {
 		return nil, fmt.Errorf("%w: hash document: %v", ErrInvalidArgument, err)
@@ -232,27 +235,19 @@ type ExternalPublicKeys struct {
 	SigningPublicKey []byte
 }
 
-// validate confirms both public keys are correctly-sized raw Ed25519 keys.
-// Fail-closed: a short, long, or absent key is rejected as InvalidArgument
-// rather than silently encoded into a DID document whose verification method
-// no one holds a matching private key for.
+// validate confirms both public keys are acceptable raw Ed25519 keys
+// (ed25519.ValidatePublicKey: correctly sized and not of small order).
+// Fail-closed: a short, long, absent or small-order key is rejected as
+// InvalidArgument rather than silently encoded into a DID document whose
+// verification method no one holds a matching private key for, or that anyone
+// can sign with. The mint path can never produce such a key; the external path
+// must reject it.
 func (e *ExternalPublicKeys) validate() error {
-	if n := len(e.AuthPublicKey); n != stded25519.PublicKeySize {
-		return fmt.Errorf("%w: external auth_public_key length %d, want %d (raw Ed25519)", ErrInvalidArgument, n, stded25519.PublicKeySize)
+	if err := ed25519.ValidatePublicKey(e.AuthPublicKey); err != nil {
+		return fmt.Errorf("%w: external auth_public_key: %w", ErrInvalidArgument, err)
 	}
-	if n := len(e.SigningPublicKey); n != stded25519.PublicKeySize {
-		return fmt.Errorf("%w: external signing_public_key length %d, want %d (raw Ed25519)", ErrInvalidArgument, n, stded25519.PublicKeySize)
-	}
-	// An all-zeros key is a small-order point no real private key matches —
-	// signatures over it are forgeable by anyone, so a registry-issued document
-	// carrying it would brand a verification method nobody controls. The mint
-	// path can never produce it; the external path must reject it (this
-	// function's own fail-closed rationale).
-	if isAllZeros(e.AuthPublicKey) {
-		return fmt.Errorf("%w: external auth_public_key is all zeros — no matching private key can exist", ErrInvalidArgument)
-	}
-	if isAllZeros(e.SigningPublicKey) {
-		return fmt.Errorf("%w: external signing_public_key is all zeros — no matching private key can exist", ErrInvalidArgument)
+	if err := ed25519.ValidatePublicKey(e.SigningPublicKey); err != nil {
+		return fmt.Errorf("%w: external signing_public_key: %w", ErrInvalidArgument, err)
 	}
 	// The mint path always produces DISTINCT #auth and #signing keys (two
 	// independent generations); the external path preserves that separation —
@@ -262,16 +257,6 @@ func (e *ExternalPublicKeys) validate() error {
 		return fmt.Errorf("%w: external auth_public_key and signing_public_key are identical — supply distinct keys", ErrInvalidArgument)
 	}
 	return nil
-}
-
-// isAllZeros reports whether b is entirely zero bytes.
-func isAllZeros(b []byte) bool {
-	for _, x := range b {
-		if x != 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // IssuePipeline mints a Pipeline DID under the delegation's owner. ext selects
@@ -634,6 +619,28 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 	// the other canonicalizer.
 	if _, err := vc.VerifyProofWithContract(s.verifier, pub, encoding, proof, signing); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+	}
+	return nil
+}
+
+// validateDocumentKeys checks every Ed25519 key a verification consumer could
+// extract from doc with ed25519.ValidatePublicKey: each verification method
+// that is listed under the authentication or assertionMethod relationship (the
+// relationships did.ExtractPublicKey resolves keys through). The proof is
+// verified under #signing alone, so without this check a small-order key in
+// any other method would be registered unchecked. A method that cannot be
+// extracted (not listed, undecodable) yields no key and is not checked here.
+func validateDocumentKeys(doc *did.DIDDocument) error {
+	for _, vm := range doc.VerificationMethod() {
+		for _, rel := range []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod} {
+			key, err := did.ExtractPublicKey(doc, vm.ID, rel)
+			if err != nil {
+				continue
+			}
+			if err := ed25519.ValidatePublicKey(key); err != nil {
+				return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
+			}
+		}
 	}
 	return nil
 }

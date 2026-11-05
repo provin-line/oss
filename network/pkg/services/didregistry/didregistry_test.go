@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,7 +168,7 @@ func ed25519JWK(pub []byte) map[string]any {
 // a self-signed Data Integrity proof over the document body.
 func signedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, aka []string) *did.DIDDocument {
 	t.Helper()
-	base := did.New(did.DocumentFields{
+	return signedOwnerDocFields(t, signer, did.DocumentFields{
 		Context:            did.IssuedDocumentContexts(),
 		ID:                 ownerDID,
 		Controller:         ownerDID,
@@ -175,6 +176,13 @@ func signedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, aka []st
 		VerificationMethod: []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub)},
 		AssertionMethod:    []string{ownerDID + "#signing"},
 	})
+}
+
+// signedOwnerDocFields signs the document built from fields with the owner's
+// #signing key.
+func signedOwnerDocFields(t *testing.T, signer crypto.Signer, fields did.DocumentFields) *did.DIDDocument {
+	t.Helper()
+	base := did.New(fields)
 	body := base.Body()
 	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
 	if err != nil {
@@ -791,24 +799,38 @@ func TestIssuePipeline_MintPath_StillPopulatesKeystore(t *testing.T) {
 // A malformed (short or absent) external public key is fail-closed
 // InvalidArgument, never silently zero-padded or accepted into a document a
 // holder cannot actually use.
-func TestIssuePipeline_ExternalKeys_RejectsMalformedKeyLength(t *testing.T) {
+func TestIssuePipeline_ExternalKeys_RejectsInvalidKeys(t *testing.T) {
 	validKP := localKeyPair(t)
 	cases := []struct {
-		name string
-		ext  *didregistry.ExternalPublicKeys
+		name       string
+		ext        *didregistry.ExternalPublicKeys
+		smallOrder bool
 	}{
-		{"short auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: []byte{1, 2, 3}, SigningPublicKey: validKP.PublicKey}},
-		{"short signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: []byte{1, 2, 3}}},
-		{"zero-length auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: nil, SigningPublicKey: validKP.PublicKey}},
-		{"zero-length signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: nil}},
-		{"oversized auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: append(append([]byte{}, validKP.PublicKey...), 0xff), SigningPublicKey: validKP.PublicKey}},
+		{"short auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: []byte{1, 2, 3}, SigningPublicKey: validKP.PublicKey}, false},
+		{"short signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: []byte{1, 2, 3}}, false},
+		{"zero-length auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: nil, SigningPublicKey: validKP.PublicKey}, false},
+		{"zero-length signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: nil}, false},
+		{"oversized auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: append(append([]byte{}, validKP.PublicKey...), 0xff), SigningPublicKey: validKP.PublicKey}, false},
 		// An all-zeros key is a small-order point no private key matches —
 		// forgeable by anyone; the mint path can never produce it.
-		{"all-zeros auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: make([]byte, 32), SigningPublicKey: validKP.PublicKey}},
-		{"all-zeros signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: make([]byte, 32)}},
+		{"all-zeros auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: make([]byte, 32), SigningPublicKey: validKP.PublicKey}, true},
+		{"all-zeros signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: make([]byte, 32)}, true},
+		// Every small-order point is a key anyone can sign with, in any encoding.
+		{"identity as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000"), SigningPublicKey: validKP.PublicKey}, true},
+		{"identity as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")}, true},
+		{"identity with sign bit as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000080"), SigningPublicKey: validKP.PublicKey}, true},
+		{"identity with sign bit as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000080")}, true},
+		{"order-2 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-2 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")}, true},
+		{"order-4 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0000000000000000000000000000000000000000000000000000000000000080"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-4 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0000000000000000000000000000000000000000000000000000000000000080")}, true},
+		{"order-8 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-8 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a")}, true},
+		{"non-canonical identity as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"), SigningPublicKey: validKP.PublicKey}, true},
+		{"non-canonical identity as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")}, true},
 		// The mint path always produces DISTINCT auth/signing keys; the external
 		// path preserves that separation.
-		{"identical auth and signing keys", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: validKP.PublicKey}},
+		{"identical auth and signing keys", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: validKP.PublicKey}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -819,6 +841,9 @@ func TestIssuePipeline_ExternalKeys_RejectsMalformedKeyLength(t *testing.T) {
 			_, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID), tc.ext)
 			if !errors.Is(err, didregistry.ErrInvalidArgument) {
 				t.Errorf("err = %v, want ErrInvalidArgument", err)
+			}
+			if got := errors.Is(err, ed25519.ErrSmallOrder); got != tc.smallOrder {
+				t.Errorf("errors.Is(err, ErrSmallOrder) = %v, want %v (err = %v)", got, tc.smallOrder, err)
 			}
 			// The rejected attempt must leave no trace: no document, no keys.
 			if _, rerr := svc.ResolveDID(ctx, pipelineDID); !errors.Is(rerr, store.ErrNotFound) {
@@ -882,5 +907,50 @@ func TestIssuePipeline_ExternalKeys_LocalPrivateKeySignsAndVerifiesAgainstResolv
 	}
 	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, encoding, proof, body); err != nil {
 		t.Errorf("credential signed locally does not verify against the registry-resolved document: %v", err)
+	}
+}
+
+func mustHex(t *testing.T, h string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// Every Ed25519 key in an owner document is checked, whatever relationship
+// lists it: an honest #signing beside a small-order #auth is refused, and the
+// owner is never served.
+func TestRegisterOwner_RefusesSmallOrderKeyInAnyVerificationMethod(t *testing.T) {
+	identity := mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")
+	for _, rel := range []string{"authentication", "assertionMethod"} {
+		t.Run(rel, func(t *testing.T) {
+			svc, signer, signPub := newService(t)
+			fields := did.DocumentFields{
+				Context:    did.IssuedDocumentContexts(),
+				ID:         ownerDID,
+				Controller: ownerDID,
+				VerificationMethod: []did.VerificationMethod{
+					mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub),
+					mustMultikeyVM(ownerDID+"#auth", ownerDID, identity),
+				},
+				AssertionMethod: []string{ownerDID + "#signing"},
+			}
+			if rel == "authentication" {
+				fields.Authentication = []string{ownerDID + "#auth"}
+			} else {
+				fields.AssertionMethod = append(fields.AssertionMethod, ownerDID+"#auth")
+			}
+			doc := signedOwnerDocFields(t, signer, fields)
+
+			_, err := svc.RegisterOwner(context.Background(), doc, nil)
+			if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, ed25519.ErrSmallOrder) {
+				t.Fatalf("err = %v, want ErrInvalidArgument wrapping ErrSmallOrder", err)
+			}
+			if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+				t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
+			}
+		})
 	}
 }

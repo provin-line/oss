@@ -92,6 +92,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   anything dials). An existing `.env` that sets `OAUTH_JWT_SECRET` or
   `OAUTH_JWT_ISSUER` must meet the same rules.
 
+### Security
+
+- Ed25519 public keys are validated by the new `crypto/ed25519.ValidatePublicKey`
+  (with the new constant error type `ed25519.Error`): a key must be 32 bytes,
+  must not be of small order (the eight low-order points, in every encoding
+  including non-canonical ones and either sign bit), and must be the canonical
+  encoding of a point on the curve. The errors are `ed25519.ErrPublicKeySize`,
+  `ed25519.ErrSmallOrder` and `ed25519.ErrInvalidPoint`.
+- `crypto/ed25519.Verifier.Verify` applies that check to the public key and
+  returns `ed25519.ErrSmallOrder` for a signature whose R (its first 32 bytes)
+  is of small order, with `ed25519.ErrSignatureSize` for a wrong signature
+  size, instead of a verdict. `crypto.Verifier` documents that an implementation
+  may refuse a key or signature with an error.
+- The DID registry refuses a small-order or invalid key in the external public
+  keys of `IssuePipeline` / `IssueProcess` (replacing the all-zero check), and an
+  owner document in `RegisterOwner` that carries one in any verification method
+  listed under `authentication` or `assertionMethod`; both are `ErrInvalidArgument`.
+
 ## [0.3.0] - 2026-08-05
 
 The Paper 04 line: the delivery gate appraises the exact evidence it
