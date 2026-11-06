@@ -18,3 +18,8 @@ func (e Error) Error() string { return string(e) }
 // whose encoding cannot be read is a different failure and is not
 // ErrInvalidPublicKey.
 const ErrInvalidPublicKey Error = "did: invalid public key"
+
+// ErrInvalidKeyReference reports a key reference, or a method id, that does
+// not name a key of the document in the one form every reader reads alike, or
+// a document whose id is not a DID (see AbsoluteKeyID).
+const ErrInvalidKeyReference Error = "did: invalid key reference"

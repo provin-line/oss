@@ -186,6 +186,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   verification, and the DID registry's check of an owner document's own proof)
   therefore refuses such a key when it extracts it. `did.EncodeEd25519Multikey`
   and `did.NewMultikeyVerificationMethod` refuse the same keys.
+- `did.ExtractPublicKey` (and every reader of keys in this repository) reads a
+  key reference, and every method id in the document, only as `#fragment` or
+  `<the document's DID>#fragment`, with a single `#` and a fragment of
+  `[A-Za-z0-9._-]` (a deliberate profile restriction, narrower than DID Core),
+  through the new `did.AbsoluteKeyID`; anything else, and a document whose id
+  is not a DID, is the new `did.ErrInvalidKeyReference`. `#x#signing` and a
+  bare `signing` were read as `#signing`; a method whose id names another DID
+  was extracted as this document's key; a method with such an id beside the
+  real one was skipped. A document that holds such a method is now refused as
+  a whole, whatever key is asked for. A method carries exactly one key member,
+  its type's: any other `publicKey*` or `secretKey*` member, `blockchainAccountId`
+  or `ethereumAddress`, which some readers read first, is refused. The DID
+  registry's owner-document check uses the same rule and wraps
+  `did.ErrInvalidKeyReference`.
 - A JWK verification method's `x` must be the canonical unpadded base64url
   spelling of the key (zero trailing bits, no line breaks); another spelling of
   the same bytes is refused.

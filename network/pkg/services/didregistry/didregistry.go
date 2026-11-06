@@ -630,21 +630,6 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 // through.
 var keyRelationships = []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod}
 
-// isOwnKeyID reports whether id names a key of the document subject as
-// "#fragment" or "<subject>#fragment", with a single "#" and a fragment of
-// [A-Za-z0-9._-] that is not only dots (dplaax.IsSafeSegment, the rule of the
-// DID's own segments). A fragment outside that set — percent-encoded, with
-// whitespace or other characters — can be read by URL parsers elsewhere as
-// another fragment ("#sign%69ng" and "#signing " as "#signing").
-//
-// This rule belongs to did.ExtractPublicKey, which reads "#x#signing" and a
-// bare "signing" as "#signing" for every reader in this repository; it is here
-// until did refuses those spellings itself, and goes when it does.
-func isOwnKeyID(subject, id string) bool {
-	prefix, fragment, found := strings.Cut(id, "#")
-	return found && dplaax.IsSafeSegment(fragment) && (prefix == "" || prefix == subject)
-}
-
 // relationshipMembers are the five DID Core verification relationships.
 var relationshipMembers = []string{string(did.RelationshipAuthentication), string(did.RelationshipAssertionMethod), "keyAgreement", "capabilityInvocation", "capabilityDelegation"}
 
@@ -671,7 +656,7 @@ var otherKeyMembers = []string{"keyAgreement", "capabilityInvocation", "capabili
 //     relationship, no legacy publicKey list;
 //   - every method id and every reference names a key of this document,
 //     spelled "#fragment" or "<this DID>#fragment" with a single "#" and a
-//     fragment of [A-Za-z0-9._-] (isOwnKeyID). A reader elsewhere
+//     fragment of [A-Za-z0-9._-] (did.AbsoluteKeyID). A reader elsewhere
 //     dereferences an id of another DID against that DID's document, and reads
 //     "#x#signing", a bare "signing" or "#sign%69ng" differently from this
 //     repository's readers.
@@ -695,15 +680,17 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 		}
 	}
 	for _, vm := range doc.VerificationMethod() {
-		if !isOwnKeyID(subject, vm.ID) {
-			return fmt.Errorf("%w: verification method id %q is not a key of %s spelled #fragment or <DID>#fragment", ErrInvalidArgument, vm.ID, subject)
+		if _, err := did.AbsoluteKeyID(subject, vm.ID); err != nil {
+			return fmt.Errorf("%w: verification method id: %w", ErrInvalidArgument, err)
 		}
 	}
 	for _, member := range relationshipMembers {
 		refs, _ := body[member].([]any)
 		for i, ref := range refs {
-			if s, ok := ref.(string); ok && !isOwnKeyID(subject, s) {
-				return fmt.Errorf("%w: %s entry %d %q is not a key of %s spelled #fragment or <DID>#fragment", ErrInvalidArgument, member, i, s, subject)
+			if s, ok := ref.(string); ok {
+				if _, err := did.AbsoluteKeyID(subject, s); err != nil {
+					return fmt.Errorf("%w: %s entry %d: %w", ErrInvalidArgument, member, i, err)
+				}
 			}
 		}
 	}

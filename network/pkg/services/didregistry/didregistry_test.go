@@ -1096,43 +1096,43 @@ func TestRegisterOwner_RefusesKeysNoReaderHereExtracts(t *testing.T) {
 		{name: "the legacy publicKey member", mutate: func(b map[string]any) {
 			b["publicKey"] = []any{multikeyMap(ownerDID+"#legacy", ownerDID, other.PublicKey)}
 		}},
-		{name: "a method whose id names another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a method whose id names another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(otherOrg+"#signing", ownerDID, other.PublicKey))
 			b["authentication"] = []any{otherOrg + "#signing"}
 		}},
-		{name: "a method id with two fragments", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a method id with two fragments", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#x#auth", ownerDID, other.PublicKey))
 			b["authentication"] = []any{ownerDID + "#x#auth"}
 		}},
-		{name: "a reference with two fragments that resolves to #signing here", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a reference with two fragments that resolves to #signing here", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["authentication"] = []any{"#x#signing"}
 		}},
-		{name: "a bare reference without #", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a bare reference without #", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["authentication"] = []any{"signing"}
 		}},
-		{name: "a reference with an empty fragment", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a reference with an empty fragment", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["capabilityInvocation"] = []any{ownerDID + "#"}
 		}},
-		{name: "a percent-encoded fragment read elsewhere as #signing", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a percent-encoded fragment read elsewhere as #signing", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sign%69ng", ownerDID, other.PublicKey))
 			b["assertionMethod"] = append(b["assertionMethod"].([]any), "#sign%69ng")
 		}},
-		{name: "a fragment with a tab", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a fragment with a tab", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sig\tning", ownerDID, other.PublicKey))
 			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#sig\tning")
 		}},
-		{name: "a fragment with a trailing space", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a fragment with a trailing space", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#signing ", ownerDID, other.PublicKey))
 			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#signing ")
 		}},
-		{name: "a non-ASCII fragment", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a non-ASCII fragment", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sígning", ownerDID, other.PublicKey))
 			b["authentication"] = []any{ownerDID + "#sígning"}
 		}},
-		{name: "a capabilityDelegation reference to another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a capabilityDelegation reference to another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["capabilityDelegation"] = []any{otherOrg + "#signing"}
 		}},
-		{name: "a keyAgreement reference to another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+		{name: "a keyAgreement reference to another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
 			b["keyAgreement"] = []any{otherOrg + "#agree"}
 		}},
 		{name: "keyAgreement as a single embedded method", mutate: func(b map[string]any) {

@@ -48,9 +48,9 @@ const (
 // VerificationMethod is a public key entry in a DID Document. Two key
 // encodings are read, selected by Type: JWK (type "JsonWebKey2020",
 // publicKeyJwk) and Multikey (type "Multikey", publicKeyMultibase). The type
-// and the encoding are mutually exclusive — a method carrying the encoding
-// its type does not name, or both encodings at once, is rejected at
-// extraction (see ExtractPublicKey). Documents this repository ISSUES use the
+// carries exactly one key member, its type's — a method carrying another key
+// member (the other type's encoding, a deprecated or future one), is rejected
+// at extraction (see ExtractPublicKey). Documents this repository ISSUES use the
 // JWK form; Multikey is a read capability for interoperating with W3C
 // Data Integrity verifiers and controller documents. The PoC supports
 // Ed25519 keys in both encodings.
@@ -292,8 +292,11 @@ const (
 // Multikey (type "Multikey"). The relationship and controller checks are
 // security gates: a key not listed under the required relationship, or whose
 // controller is not the document subject, is rejected (key-confusion and
-// cross-document injection defense). The method type and its key encoding are
-// enforced as mutually exclusive — see decodeVMPublicKey.
+// cross-document injection defense). A method carries exactly one key member,
+// its type's (see checkEncodingExclusivity). Key references, and every method
+// id in the document, are read in one form (AbsoluteKeyID); a document with
+// any method id outside it, or a reference outside it, is refused with
+// ErrInvalidKeyReference.
 //
 // The key must be a usable Ed25519 public key: one that
 // ed25519.ValidatePublicKey accepts. A key of the wrong size, of small order,
@@ -305,11 +308,15 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	if doc == nil {
 		return nil, fmt.Errorf("did: nil document")
 	}
-	frag := fragmentOf(keyID)
-	if frag == "" {
-		return nil, fmt.Errorf("did: empty key reference")
-	}
 	subject := doc.ID()
+	// Resolve the reference to an absolute method id against the document
+	// subject, and match by that absolute id — NOT by fragment alone. Fragment-
+	// only matching lets a verification method with a different DID id but the
+	// same fragment be selected (key-confusion / fragment-collision injection).
+	wantID, err := AbsoluteKeyID(subject, keyID)
+	if err != nil {
+		return nil, err
+	}
 
 	// The key must be listed under the required relationship.
 	var refs []string
@@ -321,15 +328,9 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	default:
 		return nil, fmt.Errorf("did: unknown verification relationship %q", rel)
 	}
-	// Resolve the reference to an absolute method id against the document
-	// subject, and match by that absolute id — NOT by fragment alone. Fragment-
-	// only matching lets a verification method with a different DID id but the
-	// same fragment be selected (key-confusion / fragment-collision injection).
-	wantID := absoluteKeyID(subject, keyID)
-
 	listed := false
 	for _, r := range refs {
-		if absoluteKeyID(subject, r) == wantID {
+		if keyIDOf(subject, r) == wantID {
 			listed = true
 			break
 		}
@@ -341,10 +342,17 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	// Locate the verification method by exact absolute id. Duplicate matching
 	// ids are ambiguous (a substituted key could shadow the genuine one) and are
 	// rejected rather than silently resolving to the first.
+	// A method whose id is not in the one form is refused, not skipped: a
+	// reader that splits ids differently might take it for the key asked for.
 	methods := doc.VerificationMethod()
+	for i := range methods {
+		if _, err := AbsoluteKeyID(subject, methods[i].ID); err != nil {
+			return nil, fmt.Errorf("verification method: %w", err)
+		}
+	}
 	var vm *VerificationMethod
 	for i := range methods {
-		if absoluteKeyID(subject, methods[i].ID) != wantID {
+		if keyIDOf(subject, methods[i].ID) != wantID {
 			continue
 		}
 		if vm != nil {
@@ -419,10 +427,10 @@ func ExtractPublicKeyAndEncoding(doc *DIDDocument, keyID string, rel Verificatio
 // verificationMethodByID returns the typed method with the given absolute id.
 func (d *DIDDocument) verificationMethodByID(keyID string) (*VerificationMethod, error) {
 	subject := d.ID()
-	wantID := absoluteKeyID(subject, keyID)
+	wantID := keyIDOf(subject, keyID)
 	methods := d.VerificationMethod()
 	for i := range methods {
-		if absoluteKeyID(subject, methods[i].ID) == wantID {
+		if wantID != "" && keyIDOf(subject, methods[i].ID) == wantID {
 			return &methods[i], nil
 		}
 	}
@@ -437,33 +445,40 @@ func (d *DIDDocument) rawVMByID(subject, wantID string) (map[string]any, error) 
 		if !ok {
 			continue
 		}
-		if absoluteKeyID(subject, getString(m, "id")) == wantID {
+		if keyIDOf(subject, getString(m, "id")) == wantID {
 			return m, nil
 		}
 	}
 	return nil, fmt.Errorf("did: no verification method for key %q", wantID)
 }
 
-// checkEncodingExclusivity rejects a method that carries the encoding member
-// belonging to the other type, whatever its value.
+// checkEncodingExclusivity rejects a method that carries a key member other
+// than its type's own encoding, whatever its value: the other type's
+// encoding, any other publicKey* or secretKey* member (the DID specification
+// registries' deprecated ones, and any later one), or an account identifier
+// (blockchainAccountId, ethereumAddress). A reader elsewhere may read any of
+// them, some before publicKeyMultibase.
 //
-// Presence is the violation. A null, empty, or wrong-typed foreign member is
-// still a member the document's hash commits to, and a reader that keys on raw
-// presence would see a dual-encoded method where the typed projection sees a
-// clean one — the disagreement about key identity this exclusivity exists to
-// prevent.
+// Presence is the violation. A null, empty, or wrong-typed member is still a
+// member the document's hash commits to, and a reader that keys on raw
+// presence would see a second key where the typed projection sees none.
 func checkEncodingExclusivity(raw map[string]any, vm *VerificationMethod) error {
-	var foreign string
+	var own string
 	switch vm.Type {
 	case vmTypeMultikey:
-		foreign = "publicKeyJwk"
+		own = "publicKeyMultibase"
 	case vmTypeJSONWebKey2020:
-		foreign = "publicKeyMultibase"
+		own = "publicKeyJwk"
 	default:
 		return nil // decodeVMPublicKey rejects the unknown type with a better message
 	}
-	if _, present := raw[foreign]; present {
-		return fmt.Errorf("did: %s method %q also carries %s (type and encoding are exclusive)", vm.Type, vm.ID, foreign)
+	for member := range raw {
+		if member == own {
+			continue
+		}
+		if strings.HasPrefix(member, "publicKey") || strings.HasPrefix(member, "secretKey") || member == "blockchainAccountId" || member == "ethereumAddress" {
+			return fmt.Errorf("did: %s method %q also carries %s (a method carries one key, in its type's encoding)", vm.Type, vm.ID, member)
+		}
 	}
 	return nil
 }
@@ -538,25 +553,60 @@ func checkEd25519PublicKey(key []byte) error {
 	return nil
 }
 
-// absoluteKeyID resolves a DID URL key reference to its absolute form against
-// the document subject: a reference that already carries a DID part before its
-// "#" (e.g. "did:…:proc1#signing") is returned verbatim; a relative "#signing"
-// or a bare "signing" becomes "<subject>#signing". This is what lets key
-// matching compare full ids rather than fragments alone.
-func absoluteKeyID(subject, ref string) string {
-	if i := strings.Index(ref, "#"); i > 0 {
-		return ref // already absolute: a DID part precedes the fragment
+// AbsoluteKeyID resolves a key reference against the document subject: a
+// reference "#fragment" or "<subject>#fragment", with a single "#" and a
+// fragment of [A-Za-z0-9._-] that is not only dots, resolves to
+// "<subject>#fragment". Anything else is ErrInvalidKeyReference: a reference
+// with another DID part (a key of another document, never this one's), a bare
+// "fragment", more than one "#", an empty fragment, or a fragment with other
+// characters. Those are the spellings that URL readers elsewhere read
+// differently — "#x#signing" and "signing" as something other than "#signing",
+// "#sign%69ng" and "#signing " as "#signing" — so a key is named in one form
+// that every reader reads alike.
+//
+// subject must itself be a DID — "did:" and a method, no fragment, query or
+// path — or every reference is refused: the result has exactly one "#".
+func AbsoluteKeyID(subject, ref string) (string, error) {
+	if _, err := MethodOf(subject); err != nil || strings.ContainsAny(subject, "#?/") {
+		return "", fmt.Errorf("%w: the document id %q is not a DID", ErrInvalidKeyReference, subject)
 	}
-	return subject + "#" + fragmentOf(ref)
+	prefix, fragment, found := strings.Cut(ref, "#")
+	if !found || !isKeyFragment(fragment) || (prefix != "" && prefix != subject) {
+		return "", fmt.Errorf("%w: %q (want #fragment or %q#fragment)", ErrInvalidKeyReference, ref, subject)
+	}
+	return subject + "#" + fragment, nil
 }
 
-// fragmentOf returns the fragment of a key reference: the part after the last
-// "#", or the whole string when there is no "#" (a bare fragment id).
-func fragmentOf(ref string) string {
-	if i := strings.LastIndex(ref, "#"); i >= 0 {
-		return ref[i+1:]
+// keyIDOf is AbsoluteKeyID for matching: the absolute id, or "" for a
+// reference that names no key of the subject (which then matches nothing).
+func keyIDOf(subject, ref string) string {
+	id, err := AbsoluteKeyID(subject, ref)
+	if err != nil {
+		return ""
 	}
-	return ref
+	return id
+}
+
+// isKeyFragment reports whether s is a key fragment: [A-Za-z0-9._-]+, not only
+// dots. The set is this profile's restriction, narrower than DID Core: it
+// leaves out every character a URL reader may decode or split on ("%", "#",
+// whitespace, ":", "~" and the rest), so no fragment has two readings. A
+// document of another method that uses other fragments is not read here.
+func isKeyFragment(s string) bool {
+	if s == "" {
+		return false
+	}
+	onlyDots := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			onlyDots = false
+		case r == '.':
+		default:
+			return false
+		}
+	}
+	return !onlyDots
 }
 
 // decodeEd25519JWK extracts the 32-byte Ed25519 public key from an OKP JWK.
