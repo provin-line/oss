@@ -14,6 +14,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `vc.ValidateChainLinks(chain)` and `vc.ValidateChainFrom(chain, originInput)`:
+  the links of a chain (origin first) without its signatures — the origin
+  claims no predecessor; each later credential names its predecessor's content
+  address, takes its non-empty `outputHash` as `inputHash`, and includes its
+  issuer in a source commitment it carries — through the same implementation as
+  `VerifyChain`. `ValidateChainFrom` also requires the origin's `inputHash` to
+  be `originInput`. A broken link is a `*vc.ChainLinkError` with the
+  credential's index; an empty chain, a nil credential or an empty
+  `originInput` is another error. A prefix of a linked chain is linked.
+
 - `vc.Credential` and `(*vc.Verifier).VerifySignerAuthenticity`: the
   signer-authenticity axis alone, for a Data Integrity–secured credential of any
   type, returned as `vc.SignerAuthenticityResult` (state; suite contract,

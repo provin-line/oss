@@ -20,7 +20,7 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 
 ## チェーントポロジー — 線形不変
 
-- `previousCredential` は**単数**: チェーンは厳密に線形であり、DAG にはならない。空/欠落はチェーン起点（FirstDrop）を意味する: 外部インジェストまたは集約。
+- `previousCredential` は**単数**: チェーンは厳密に線形であり、DAG にはならない。欠落または null はチェーン起点（FirstDrop）を意味する: 外部インジェストまたは集約。
 - 集約が新しいチェーンを開始する判定基準はトリガー規則（単一の適合イベントに起こされた実行ではないこと）であり、集約結果がどの単一入力とも同一性関係を持たないことはその根拠（Paper 01 §4.8）。**ベースのクレデンシャルスキーマは上流参照フィールドを持たない** — 入力マニフェストはデータペイロード / ビジネスロジックの関心事。唯一公認された拡張が**ソースコミットメント**（`derived_from` / `source_root` / `source_root_canonical`）: **audit-reachable conformance class** の下で任意のクレデンシャルが運ぶ監査属性であり（`previousCredential` と直交 — chain-preserving は先行イベントを含む全消費分に commit する）、open な署名ボディに dplaax JSON-LD context で宣言される profile 語彙として載る（wire 名は dPLaaX spec が確定済み — profile 横断で共有されるため profile ごとに改名しない）。これは消費した source 集合への content commitment であって親リンクではない — チェーントポロジーは厳密に線形のままで、Paper 01 §4.8 の排除（チェーンに上流リンクなし・ベーススキーマに上流フィールドなし）は維持される。
 - subject はハッシュのみを運び、ペイロード自体は運ばない（Paper 01 §4.3）: データを埋め込まずに完全性を証明する。
 
@@ -32,6 +32,7 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 - チェーン分類（confidence と直交）: `ChainOrigin` / `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — 誰が署名し、いくつの信頼境界を跨いだか。データがどう作られたかではない。
 - ライフサイクルフェーズ: Unknown → Active → Deprecated → Sunset、`proof.created` をキーに評価。**ゼロ値はフェイルクローズ。** ライフサイクルポリシーの公開形（append-only な registry artifact かサービスか）は仕様層で確定待ち。
 - no-op 識別子の禁止（`""`・`"none"`・`"null"`・`"identity"`）は登録時と検証時の両方で適用（JOSE `alg:none` クラス防御）。
+- 署名を見ない結び付きだけの検査: `ValidateChainLinks` はクレデンシャルの間の結び付き（と、起点が前を持たないこと）を確かめ、`ValidateChainFrom` は加えて起点の `inputHash` を与えた入力に結び付ける。`VerifyChain` と同じ結び付きの検査を使う。結び付いた連鎖の前の部分も結び付いているので、末尾が欠けたことは分からない。
 - ソースコミットメント検証（`VerifySourceCommitment`）は意図的に **3 規範軸の外**・イベント毎経路の外に置く: オンデマンドの監査操作である。source クレデンシャルは非同期に収集し（VC リゾルバー・取引相手のストア）、claim された集合が揃うまで verdict は `indeterminate` — ホットパスは境界あたり O(1) のまま。コミットメントが証明するのは claim の完全性ではなく**改竄不能性**（発行後の tamper-evidence）— 申告漏れの検出はイングレス VC ストアとの突合という監査層の作業。
 
 ## contexts/

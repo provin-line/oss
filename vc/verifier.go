@@ -538,42 +538,17 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	}
 
 	// 2. Chain-structure checks contributing to DataIntegrity / ChainConsistency.
+	// A deterministic malformation (un-hashable body, malformed subject) is a
+	// FAILED verdict, not a Go error: the per-credential pass already recorded
+	// the failure, and returning an error here would let a chain walker map a
+	// definitive malformation to an indeterminate transport hole.
 	di, cc := ConfidenceVerified, ConfidenceVerified
-	if chain[0].PreviousCredential() != "" {
-		di = ConfidenceFailed // a chain origin must carry no previousCredential
+	if firstBrokenLink(chain) != nil {
+		di = ConfidenceFailed // the links: no predecessor at origin, linkage, data flow, all-consumed
 	}
 	for n := 1; n < len(chain); n++ {
-		prev, cur := chain[n-1], chain[n]
-		// A deterministic malformation (un-hashable body, malformed subject) is a
-		// FAILED verdict, not a Go error: the per-credential pass already recorded
-		// the failure, and returning an error here would let a chain walker map a
-		// definitive malformation to an indeterminate transport hole.
-		if !createdMonotonic(prev, cur) {
+		if !createdMonotonic(chain[n-1], chain[n]) {
 			cc = ConfidenceFailed // ordering
-		}
-		prevHash, err := prev.Hash()
-		if err != nil {
-			di = ConfidenceFailed
-			continue
-		}
-		if cur.PreviousCredential() != prevHash {
-			di = ConfidenceFailed // linkage: cur must reference prev's content address
-		}
-		ps, err := prev.Subject()
-		if err != nil {
-			di = ConfidenceFailed
-			continue
-		}
-		cs, err := cur.Subject()
-		if err != nil {
-			di = ConfidenceFailed
-			continue
-		}
-		if ps.OutputHash == "" || ps.OutputHash != cs.InputHash {
-			di = ConfidenceFailed // data-flow invariant
-		}
-		if sc := cur.SourceCommitment(); sc != nil && !containsString(sc.DerivedFrom, prev.Issuer()) {
-			di = ConfidenceFailed // all-consumed: commitment must include the predecessor's issuer
 		}
 	}
 	acc = glbAxes(acc, AxisResult{

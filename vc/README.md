@@ -29,7 +29,7 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 ## Chain topology — linear invariant
 
 - `previousCredential` is **singular**: the chain is strictly linear, never a DAG.
-  Empty/absent marks a chain origin (FirstDrop): external ingestion or aggregation.
+  Absent or null marks a chain origin (FirstDrop): external ingestion or aggregation.
 - Aggregation starts a fresh chain — normatively because the run is not triggered
   by a single conformant event (trigger rule); the rationale is that the result has
   no identity relationship with any single input (Paper 01 §4.8). The **base credential schema
@@ -75,6 +75,11 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
   (registry artifact vs service) is still being settled at the spec layer.
 - No-op identifier ban (`""`, `"none"`, `"null"`, `"identity"`) at registration and
   verification time (JOSE `alg:none` class defense).
+- The links alone, without signatures: `ValidateChainLinks` checks the links
+  between credentials (and that the origin claims no predecessor);
+  `ValidateChainFrom` also binds the origin's `inputHash` to a given input. They
+  run the same link checks as `VerifyChain`. A prefix of a linked chain is
+  linked, so they do not detect a missing tail.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'
