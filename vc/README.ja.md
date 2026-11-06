@@ -1,7 +1,7 @@
 # vc — Verifiable Credentials（W3C Data Integrity）
 > 日本語版 — English: [README.md](README.md)
 
-`PipelinePassCredential`（パイプラインのすべてのプロセス境界で発行される VC）のクレデンシャルモデル・証明の作成と検証・暗号スイートレジストリ・confidence 評価（3 軸）。
+`PipelinePassCredential`（パイプラインのすべてのプロセス境界で発行される VC）のクレデンシャルモデル・証明の作成と検証・暗号スイートレジストリ・confidence 評価（3 軸）と、型を問わないクレデンシャルの Signer authenticity の軸だけの評価。
 
 ## コア設計: ボディを真実の単一ソースとする
 
@@ -28,6 +28,7 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 
 - 各軸と全体は 3 状態ドメイン: `failed ⊏ indeterminate ⊏ verified`、最大下界（最弱リンク）で合成。`failed` = 矛盾が確定、`indeterminate` = 現在の入力では完了不能（後で解決し得る）。この区別が、同じスナップショットを与えられた任意の検証器が同じ結果を出す決定論性を支える。
 - 軸: **Data integrity**（入出力バインディング + スキーマ content-hash）、**Signer authenticity**（署名 + `proof.created` 時点の暗号スイートライフサイクル）、**Chain consistency**（終端 Owner DID までの controller 連鎖 + 順序整合）。
+- 型を問わない Signer authenticity: `Verifier.VerifySignerAuthenticity` は、`Credential`（Data Integrity の proof つきの、どの型の VC の wire 形でもよい。型の規則は持たない）について、Signer authenticity の軸だけを、`Verify` と同じ実装で判定する。確かめるのは、報告する suite contract の正規化でこの本文と同じになる文書に、誰が署名したかだけである。型・欄・有効期間・発行者のどの鍵で署名してよいかは、呼ぶ側が自分の型の規則で確かめる（正規化で区別されない値は、メソッドの説明を参照）。
 - チェーン分類（confidence と直交）: `ChainOrigin` / `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — 誰が署名し、いくつの信頼境界を跨いだか。データがどう作られたかではない。
 - ライフサイクルフェーズ: Unknown → Active → Deprecated → Sunset、`proof.created` をキーに評価。**ゼロ値はフェイルクローズ。** ライフサイクルポリシーの公開形（append-only な registry artifact かサービスか）は仕様層で確定待ち。
 - no-op 識別子の禁止（`""`・`"none"`・`"null"`・`"identity"`）は登録時と検証時の両方で適用（JOSE `alg:none` クラス防御）。

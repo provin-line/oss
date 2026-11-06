@@ -140,6 +140,62 @@ func (v *Verifier) Verify(ctx context.Context, cred *PipelinePassCredential) (*V
 	}, nil
 }
 
+// SignerAuthenticityResult is the signer-authenticity verdict on one
+// credential, on its own.
+type SignerAuthenticityResult struct {
+	// State is the axis state.
+	State ConfidenceState
+	// SuiteContract names the rules the proof verified under. Issuer is the
+	// issuer the verdict is about, and VerificationMethod the key, listed under
+	// the issuer's assertionMethod, that made the proof. The three are set
+	// exactly when the proof verified, and empty otherwise; State may then still
+	// be indeterminate, when the cryptosuite lifecycle could not be read.
+	SuiteContract      SuiteContract
+	Issuer             string
+	VerificationMethod string
+	// Notations carry advisory annotations (e.g. a Deprecated cryptosuite).
+	Notations []string
+}
+
+// VerifySignerAuthenticity evaluates the signer-authenticity axis alone, for a
+// credential of any type: the proof policy, issuer DID resolution, the
+// assertionMethod key, the proof, and the cryptosuite lifecycle — the same
+// evaluation, through the same implementation, as Verify's axis.
+//
+// Verified establishes that Issuer signed, with VerificationMethod, a document
+// equivalent to this body under SuiteContract. Equivalent is not always
+// identical:
+//
+//   - Under ContractW3CEdDSAJCS2022 the comparison is of RFC 8785 forms, in
+//     which two JSON numbers beyond ±(2^53−1) can be alike
+//     (canon.AdmitSafeNumbers refuses them at issuance; verification does
+//     not). ContractLegacyProvinEdDSAJCSInt64 keeps integers verbatim, so they
+//     are not alike there.
+//   - Under ContractW3CEdDSARDFC2022 the signature covers the RDF dataset the
+//     body expands to, not its JSON shape. Array order, duplicate entries, a
+//     single value or a one-element array, "id" or "@id", an IRI string or an
+//     object with that id, a compact or an expanded term, and a member whose
+//     value is an empty array all verify alike.
+//
+// It checks nothing else: not the credential's type, wire form, content,
+// validity period, status, or any chain it belongs to. A caller accepts only
+// the contract its credential type is issued under — ContractW3CEdDSAJCS2022
+// for a caller that reads fields by their JSON shape;
+// ContractLegacyProvinEdDSAJCSInt64 names historical provin evidence and is
+// issued into by nothing new — and only the key its type requires
+// (VerificationMethod), and then checks the type, the fields and the validity
+// on Body().
+func (v *Verifier) VerifySignerAuthenticity(ctx context.Context, cred *Credential) (*SignerAuthenticityResult, error) {
+	if cred == nil {
+		return nil, errors.New("vc: nil credential")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	res := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	return &res, nil
+}
+
 // evalDataIntegrity evaluates the data-integrity axis for one credential: the
 // wire-form verdict (via ValidateWireForm — the single implementation, so a
 // standalone check and the axis can never drift) refined by the schema
@@ -220,7 +276,18 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 	return true
 }
 
-// evalSignerAuthenticity evaluates the signer-authenticity axis: the typed
+// evalSignerAuthenticity evaluates the signer-authenticity axis of a
+// PipelinePassCredential through signerAuthenticity, the one implementation the
+// type-agnostic VerifySignerAuthenticity shares.
+func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string, outContract *SuiteContract) ConfidenceState {
+	r := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	*notations = append(*notations, r.Notations...)
+	*outContract = r.SuiteContract
+	return r.State
+}
+
+// signerAuthenticity evaluates the signer-authenticity axis of a credential,
+// given its issuer, its raw wire proof (nil when unsigned) and its body: the typed
 // proof field policy, the FCoT obligations (extra-member rejection and
 // verificationMethod-names-the-issuer), issuer DID resolution and assertion-key
 // extraction, Ed25519 proof verification, and the cryptosuite lifecycle phase
@@ -232,39 +299,43 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // is never honoured; because a misconfigured base mapping and a hostile
 // registry are indistinguishable at this point, it is indeterminate rather
 // than a terminal failed.
-func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string, outContract *SuiteContract) ConfidenceState {
-	proof := cred.Proof()
+//
+// It reads nothing of the credential's type or content, so it applies to a
+// credential of any type.
+func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawProof, body map[string]any) SignerAuthenticityResult {
+	failed := SignerAuthenticityResult{State: ConfidenceFailed}
+	indeterminate := SignerAuthenticityResult{State: ConfidenceIndeterminate}
+	proof := proofView(rawProof)
 	if proof == nil {
-		return ConfidenceFailed // unsigned
+		return failed // unsigned
 	}
 	if proof.Type != proofType || proof.ProofPurpose != proofPurposeSign {
-		return ConfidenceFailed
+		return failed
 	}
 	created, err := time.Parse(time.RFC3339, proof.Created)
 	if err != nil {
-		return ConfidenceFailed
+		return failed
 	}
 	// FCoT: reject a proof carrying any member outside the typed six — extra
 	// members ride outside the signature and would be malleable if trusted.
-	for k := range cred.proof {
+	for k := range rawProof {
 		if !allowedProofMembers[k] {
-			return ConfidenceFailed
+			return failed
 		}
 	}
 	// "@context": null is present-but-nil: after parsing it reads as absence,
 	// which classifies as the legacy row — where the mirror check cannot pin
 	// it. No contract accepts the shape (see DataIntegrityProof.UnmarshalJSON,
 	// which closes the typed path the same way).
-	if v, present := cred.proof[keyContext]; present && v == nil {
-		return ConfidenceFailed
+	if v, present := rawProof[keyContext]; present && v == nil {
+		return failed
 	}
 	// FCoT: the verificationMethod MUST be an absolute issuer#fragment reference
 	// naming the issuer; a bare DID, or a key fragment in another DID's document,
 	// must not be honoured.
-	issuer := cred.Issuer()
 	vmDID, _, found := strings.Cut(proof.VerificationMethod, "#")
-	if !found || vmDID != issuer {
-		return ConfidenceFailed
+	if issuer == "" || !found || vmDID != issuer {
+		return failed
 	}
 	// Cryptosuite lifecycle at proof.created (optional hardening layer; a nil
 	// registry means no lifecycle gating — a registered, non-no-op suite is
@@ -279,49 +350,55 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 	if v.lifecycle != nil {
 		phase, phaseErr = v.lifecycle.PhaseAt(ctx, proof.Cryptosuite, created)
 		if phaseErr == nil && phase != PhaseActive && phase != PhaseDeprecated {
-			return ConfidenceFailed // Sunset / Unknown fail closed
+			return failed // Sunset / Unknown fail closed
 		}
 	}
 	doc, err := v.resolver.Resolve(ctx, issuer)
 	switch {
 	case errors.Is(err, resolver.ErrNotFound):
-		return ConfidenceFailed // definitive not-found: the registry states the issuer does not exist
+		return failed // definitive not-found: the registry states the issuer does not exist
 	case err != nil:
-		return ConfidenceIndeterminate // transient resolution failure — may resolve later
+		return indeterminate // transient resolution failure — may resolve later
 	}
 	if doc.ID() != issuer {
-		return ConfidenceIndeterminate // registry-substitution defense on the signing path: never honoured, never verified
+		return indeterminate // registry-substitution defense on the signing path: never honoured, never verified
 	}
 	// Key and encoding come from one resolution: the encoding decides which
 	// claim contract the proof is checked under, so reading it separately would
 	// let the dispatch and the key disagree about which method they mean.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return ConfidenceFailed
+		return failed
 	}
 	// Exact dispatch: the contract is resolved from the suite id, the proof
 	// shape, and the key encoding, and the canonicalizer follows from the
 	// contract. A proof whose shape matches no contract fails here rather than
 	// being retried under the other canonicalizer to see if it happens to check
 	// out (signer.suite.exact-dispatch).
-	contract, err := VerifyProofWithContract(v.sigVerifier, pub, encoding, proof, cred.Body())
+	contract, err := VerifyProofWithContract(v.sigVerifier, pub, encoding, proof, deepCopyMap(body))
 	if err != nil {
-		return ConfidenceFailed
+		return failed
 	}
 	// The contract reaches the caller as a typed field, not a notation: it
 	// applies to every verdict, and Notations are for exceptions.
-	*outContract = contract
+	res := SignerAuthenticityResult{
+		State:              ConfidenceVerified,
+		SuiteContract:      contract,
+		Issuer:             issuer,
+		VerificationMethod: proof.VerificationMethod,
+	}
 	if v.lifecycle != nil {
 		if phaseErr != nil {
-			return ConfidenceIndeterminate
+			res.State = ConfidenceIndeterminate
+			return res
 		}
 		if phase == PhaseDeprecated {
 			// acceptable, but the verdict carries an annotation.
-			*notations = append(*notations,
+			res.Notations = append(res.Notations,
 				"signer-authenticity: cryptosuite "+proof.Cryptosuite+" is Deprecated (verified with notation)")
 		}
 	}
-	return ConfidenceVerified
+	return res
 }
 
 // evalChainConsistency reconstructs the controller chain from the issuer

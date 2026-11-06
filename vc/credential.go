@@ -384,21 +384,27 @@ func (c *PipelinePassCredential) SourceCommitment() *SourceCommitment {
 // proof members are not visible here but survive round-trips in the raw
 // proof map (see MarshalJSON).
 func (c *PipelinePassCredential) Proof() *DataIntegrityProof {
-	if c.proof == nil {
+	return proofView(c.proof)
+}
+
+// proofView is the typed read view of a raw wire proof (a defensive copy); nil
+// for no proof.
+func proofView(raw map[string]any) *DataIntegrityProof {
+	if raw == nil {
 		return nil
 	}
 	p := &DataIntegrityProof{
-		Type:               getString(c.proof, "type"),
-		Cryptosuite:        getString(c.proof, "cryptosuite"),
-		VerificationMethod: getString(c.proof, "verificationMethod"),
-		ProofPurpose:       getString(c.proof, "proofPurpose"),
-		Created:            getString(c.proof, "created"),
-		ProofValue:         getString(c.proof, "proofValue"),
+		Type:               getString(raw, "type"),
+		Cryptosuite:        getString(raw, "cryptosuite"),
+		VerificationMethod: getString(raw, "verificationMethod"),
+		ProofPurpose:       getString(raw, "proofPurpose"),
+		Created:            getString(raw, "created"),
+		ProofValue:         getString(raw, "proofValue"),
 	}
 	// Carried on presence: the suite classifier keys on this member
 	// (signer.suite.legacy-projection), so a view that dropped it would
 	// reclassify every W3C proof as shapeless the moment it round-tripped.
-	if ctx, present := c.proof[keyContext]; present {
+	if ctx, present := raw[keyContext]; present {
 		p.Context = deepCopyValue(ctx)
 	}
 	return p
@@ -421,40 +427,50 @@ func (c *PipelinePassCredential) Hash() (string, error) {
 // canonical — deterministic output keeps wire comparisons trivial, and it is
 // what source_root_canonical ("jcs-rfc8785") has always named.
 func (c *PipelinePassCredential) MarshalJSON() ([]byte, error) {
-	return jcs.CanonicalizeRFC8785(c.wireDocument())
+	return jcs.CanonicalizeRFC8785(wireDocument(c.body, c.proof))
 }
 
 // UnmarshalJSON parses the wire form under strict-decoder rules, preserving
 // unknown signed-scope fields in the body.
 func (c *PipelinePassCredential) UnmarshalJSON(data []byte) error {
+	body, proof, err := decodeWire(data)
+	if err != nil {
+		return err
+	}
+	c.body = body
+	c.proof = proof
+	return nil
+}
+
+// decodeWire parses a credential's wire form under strict-decoder rules and
+// splits it into the body (every member but the proof) and the raw proof map
+// (nil when unsigned).
+func decodeWire(data []byte) (body, proof map[string]any, err error) {
 	var doc map[string]any
 	if err := canon.NewStrictDecoder(data).Decode(&doc); err != nil {
-		return fmt.Errorf("vc: %w", err)
+		return nil, nil, fmt.Errorf("vc: %w", err)
 	}
-	var proof map[string]any
 	if raw, present := doc[keyProof]; present {
 		pm, ok := raw.(map[string]any)
 		if !ok {
 			// Proof sets (arrays) and scalar proofs are not supported yet:
 			// reject loudly rather than present a signed credential as
 			// unsigned.
-			return fmt.Errorf("vc: proof must be a JSON object, got %T", raw)
+			return nil, nil, fmt.Errorf("vc: proof must be a JSON object, got %T", raw)
 		}
 		proof = pm
 		delete(doc, keyProof)
 	}
-	c.body = doc
-	c.proof = proof
-	return nil
+	return doc, proof, nil
 }
 
 // wireDocument assembles the full wire-form map: body plus the raw proof.
 // This is the value source-root leaves are computed over (the VC as
 // received) — which is why the proof must round-trip byte-faithfully.
-func (c *PipelinePassCredential) wireDocument() map[string]any {
-	doc := deepCopyMap(c.body)
-	if c.proof != nil {
-		doc[keyProof] = deepCopyMap(c.proof)
+func wireDocument(body, proof map[string]any) map[string]any {
+	doc := deepCopyMap(body)
+	if proof != nil {
+		doc[keyProof] = deepCopyMap(proof)
 	}
 	return doc
 }

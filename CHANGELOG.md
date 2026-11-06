@@ -14,6 +14,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `vc.Credential` and `(*vc.Verifier).VerifySignerAuthenticity`: the
+  signer-authenticity axis alone, for a Data Integrity–secured credential of any
+  type, returned as `vc.SignerAuthenticityResult` (state; suite contract,
+  issuer and verification method, set only when the proof verified;
+  notations). It is the same evaluation, through the same implementation, as
+  `Verify`'s axis (proof policy, issuer DID resolution, the assertionMethod key,
+  the proof, the cryptosuite lifecycle) and checks nothing of the credential's
+  type or content. A caller accepts only the suite contract and the key its
+  credential type requires; under the RDFC contract, JSON shapes that expand to
+  the same statements verify alike. `Credential` is read only through
+  `UnmarshalJSON` (the strict decoder); `Credential.Issuer` reads a string
+  issuer or an issuer object's `id`, and `Credential.Types` is nil for a
+  malformed `type`.
+
 - `crypto/es256` and `crypto/rs256`: `crypto.Verifier` implementations for
   ES256 (ECDSA P-256 with SHA-256; the key is the SEC1 uncompressed point, the
   signature `r || s`) and RS256 (RSASSA-PKCS1-v1_5 with SHA-256; the key is the
@@ -30,6 +44,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `policy-verifier:3001`.
 
 ### Changed
+
+- The signer-authenticity axis fails a credential whose issuer is empty before
+  resolving anything; with a bare-fragment `verificationMethod` it could
+  previously be indeterminate during a resolver outage. `Verify`'s overall
+  verdict does not change: the wire form already fails an empty issuer.
 
 - **BREAKING (config)** `backend = "cedar"` verifies the caller's bearer JWT in
   the node and asks the Cedar agent about the token's `sub`; previously the raw

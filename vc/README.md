@@ -1,7 +1,8 @@
 # vc — Verifiable Credentials (W3C Data Integrity)
 
 The credential model, proof creation/verification, cryptosuite registry, and
-confidence evaluation (the three axes) for `PipelinePassCredential` — the VC issued at every pipeline process boundary.
+confidence evaluation (the three axes) for `PipelinePassCredential` — the VC issued at every pipeline process boundary —
+and the signer-authenticity axis alone for a credential of any type.
 
 ## Core design: body-as-source-of-truth
 
@@ -58,6 +59,14 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 - Axes: **Data integrity** (input/output binding + schema content-hash),
   **Signer authenticity** (signature + cryptosuite lifecycle at `proof.created`),
   **Chain consistency** (controller chain to the terminal Owner DID + ordering).
+- Signer authenticity alone, for a credential of any type:
+  `Verifier.VerifySignerAuthenticity` evaluates that axis on a `Credential` (the
+  wire form of any Data Integrity–secured VC, carrying no type's rules) through
+  the same implementation `Verify` uses. It establishes who signed a document
+  that canonicalizes, under the reported suite contract, as this body does; the
+  caller checks its own type's rules (type, fields, validity period, which of
+  the issuer's keys may sign) — see the method's documentation for the values
+  canonicalization does not tell apart.
 - Chain classification (orthogonal to confidence): `ChainOrigin` /
   `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — who signed and how many
   trust boundaries were crossed, not how the data was produced.
