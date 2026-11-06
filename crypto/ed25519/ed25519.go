@@ -44,35 +44,53 @@ const ErrInvalidPoint Error = "ed25519: not a canonical point on the curve"
 
 var fieldP = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
 
-// smallOrderY holds the y coordinates of the eight points of order dividing 8
-// on edwards25519, over the field of p = 2^255 - 19: 1 (the identity), p-1
-// (order 2), 0 (the two points of order 4) and ±y8 (the four points of order
-// 8). The two points sharing a y differ only in the sign of x, so the sign
-// bit is not part of the lookup.
-var smallOrderY = func() []*big.Int {
-	y8, _ := new(big.Int).SetString("7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7", 16)
-	return []*big.Int{
-		big.NewInt(0),
-		big.NewInt(1),
-		new(big.Int).Sub(fieldP, big.NewInt(1)),
-		y8,
-		new(big.Int).Sub(fieldP, y8),
-	}
-}()
+// smallOrderEncodings are the encodings, with the sign bit of x cleared, of
+// the points of order dividing 8 on edwards25519: y = 0 (the two points of
+// order 4), y = 1 (the identity), y = p-1 (order 2), the two y of the four
+// points of order 8, and y = p and y = p+1, the non-canonical spellings of 0
+// and 1. They are every 255-bit value whose reduction modulo p = 2^255 - 19 is
+// the y of a small-order point (the other small-order y plus p exceed 255
+// bits), and they are libsodium's blacklist.
+var smallOrderEncodings = [7][32]byte{
+	{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+	{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+	{0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+	{0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+	{0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+	{0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+}
+
+// yOf returns the 32-byte encoding point with the sign bit of x cleared: the
+// little-endian y, possibly not reduced modulo p.
+func yOf(point []byte) [32]byte {
+	var y [32]byte
+	copy(y[:], point)
+	y[31] &= 0x7f
+	return y
+}
 
 // hasSmallOrder reports whether the 32-byte encoding point is a point of small
-// order. The y coordinate is reduced modulo p first, so the non-canonical
-// spellings (y >= p) of those points are caught as well.
+// order, in any spelling and with either sign bit.
 func hasSmallOrder(point []byte) bool {
-	be := make([]byte, 32)
-	for i, b := range point {
-		be[31-i] = b
+	y := yOf(point)
+	for i := range smallOrderEncodings {
+		if y == smallOrderEncodings[i] {
+			return true
+		}
 	}
-	be[0] &= 0x7f // the sign bit of x
-	y := new(big.Int).SetBytes(be)
-	y.Mod(y, fieldP)
-	for _, s := range smallOrderY {
-		if y.Cmp(s) == 0 {
+	return false
+}
+
+// isCanonicalY reports whether the little-endian y (sign bit cleared) is below
+// p = 2^255 - 19. The values from p to 2^255 - 1 are 0x7f, then 30 bytes of
+// 0xff, then a low byte of at least 0xed, read from the top.
+func isCanonicalY(y [32]byte) bool {
+	if y[31] != 0x7f || y[0] < 0xed {
+		return true
+	}
+	for _, b := range y[1:31] {
+		if b != 0xff {
 			return true
 		}
 	}
@@ -85,28 +103,27 @@ var curveD = func() *big.Int {
 	return n.Mul(n, new(big.Int).ModInverse(big.NewInt(121666), fieldP)).Mod(n, fieldP)
 }()
 
-// isCanonicalPoint reports whether the 32-byte encoding point (RFC 8032
-// section 5.1.3) has y < p and an x with x^2 = (y^2-1)/(d*y^2+1) mod p. The
-// sign bit never makes an otherwise valid y invalid here: the one case RFC 8032
-// rejects, x = 0 with the sign bit set, only occurs for y = 1 and y = p-1,
-// which are small-order points that hasSmallOrder has already refused. The
-// values involved are public, so variable-time big.Int arithmetic is fine.
-func isCanonicalPoint(point []byte) bool {
-	be := make([]byte, 32)
-	for i, b := range point {
+// isOnCurve reports whether some x satisfies the curve equation for the
+// reduced little-endian y: x^2 = u/v with u = y^2 - 1 and v = d*y^2 + 1. v is
+// never 0 (-1/d is not a square modulo p), and u/v = u*v/v^2, so a solution
+// exists exactly when u*v is a square modulo p — its Legendre symbol, which for
+// the prime p is the Jacobi symbol, is not -1. That needs no modular inverse
+// and no square root. The sign bit never makes an otherwise valid y invalid:
+// the one case RFC 8032 rejects, x = 0 with the sign bit set, only occurs for
+// y = 1 and y = p-1, which hasSmallOrder has already refused. The values are
+// public, so variable-time arithmetic is fine.
+func isOnCurve(y [32]byte) bool {
+	var be [32]byte
+	for i, b := range y {
 		be[31-i] = b
 	}
-	be[0] &= 0x7f
-	y := new(big.Int).SetBytes(be)
-	if y.Cmp(fieldP) >= 0 {
-		return false
-	}
-	y2 := new(big.Int).Mul(y, y)
-	num := new(big.Int).Sub(y2, big.NewInt(1))
-	den := new(big.Int).Mul(curveD, y2)
-	den.Add(den, big.NewInt(1)).Mod(den, fieldP)
-	x2 := num.Mul(num, new(big.Int).ModInverse(den, fieldP)).Mod(num, fieldP)
-	return x2.Sign() == 0 || new(big.Int).ModSqrt(x2, fieldP) != nil
+	yy := new(big.Int).SetBytes(be[:])
+	yy.Mul(yy, yy).Mod(yy, fieldP)
+	v := new(big.Int).Mul(curveD, yy)
+	v.Add(v, big.NewInt(1))
+	yy.Sub(yy, big.NewInt(1))
+	yy.Mul(yy, v).Mod(yy, fieldP)
+	return big.Jacobi(yy, fieldP) >= 0
 }
 
 // ValidatePublicKey checks that pub is an acceptable raw Ed25519 public key,
@@ -128,7 +145,8 @@ func ValidatePublicKey(pub []byte) error {
 	if hasSmallOrder(pub) {
 		return ErrSmallOrder
 	}
-	if !isCanonicalPoint(pub) {
+	y := yOf(pub)
+	if !isCanonicalY(y) || !isOnCurve(y) {
 		return ErrInvalidPoint
 	}
 	return nil
