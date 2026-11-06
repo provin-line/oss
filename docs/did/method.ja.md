@@ -50,7 +50,7 @@ document は整合性保護された JSON: document の canonical（JCS）hash �
 
 | 操作 | 機構 | 認可 |
 | --- | --- | --- |
-| Create（owner） | `RegisterOwner` — 完全な**自己署名** document（proof が document 自身の鍵の支配を証明する） | L1 policy + document proof |
+| Create（owner） | `RegisterOwner` — 完全な**自己署名** document（proof が document 自身の鍵の支配を証明する）。document の中のすべての鍵が、`authentication` か `assertionMethod` から読み取れるもの（一覧にあり、id が一意で、自分が controller の Ed25519 の Multikey か JWK の method）でなければならない。埋め込みの method、古い `publicKey` の一覧、一覧にない・重複した・他の DID の鍵は断る | L1 policy + document proof |
 | Create（pipeline / process） | `IssuePipeline` / `IssueProcess`: registry が対象 DID に正確に bind された **owner 署名の delegation credential** を検証し、owner（process の場合は親 pipeline も）が active であることを要求し、`#auth`/`#signing` の鍵ペアを**生成**して document を組み立てる（`controller` = 構造上の親） | L1 policy + delegation 検証 |
 | Read / Resolve | `ResolveDID` RPC（L1）または public resolution route（下記） | public route は open read |
 | Update / key rotation | **未対応。** document 更新・鍵 rotation の操作は存在しない | — |

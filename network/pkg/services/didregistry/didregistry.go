@@ -173,9 +173,9 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 	if err := canon.AdmitSafeNumbers(doc.Body()); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	// The key check runs first: it is structural, and it gives an unusable key
-	// in any listed method — the proof's own #signing included — the same
-	// verdict.
+	// The key check runs first: it is structural, and it gives every key no
+	// reader here extracts — the proof's own #signing included — the same
+	// verdict, ErrInvalidArgument.
 	if err := validateDocumentKeys(doc); err != nil {
 		return nil, err
 	}
@@ -626,20 +626,74 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 	return nil
 }
 
-// validateDocumentKeys refuses doc when a reader could extract an unusable key
-// from it: a verification method that did.ExtractPublicKey resolves through the
-// authentication or assertionMethod relationship and whose key it refuses with
-// did.ErrInvalidPublicKey. The proof is verified under #signing alone, so
-// without this check a small-order key in any other method would be registered
-// unchecked. A method that cannot be extracted for another reason (not listed,
-// an id shared by two methods, an unreadable encoding) yields no key to any
-// reader and is not refused here.
+// keyRelationships are the relationships did.ExtractPublicKey reads keys
+// through.
+var keyRelationships = []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod}
+
+// otherKeyMembers are the members of a DID document that carry keys no reader
+// here extracts: the other DID Core verification relationships, which may embed
+// methods, and the legacy publicKey list.
+var otherKeyMembers = []string{"keyAgreement", "capabilityInvocation", "capabilityDelegation", "publicKey"}
+
+// validateDocumentKeys refuses doc unless every key in it is one a reader here
+// extracts:
+//
+//   - every verification method yields its key through did.ExtractPublicKey
+//     under authentication or assertionMethod (so none is unlisted, shares its
+//     id with another method, is controlled by another DID, or has an unread
+//     type or encoding);
+//   - every entry of authentication and assertionMethod is a reference that
+//     resolves that way (no embedded method, no reference to a missing or
+//     foreign key);
+//   - no other member carries a key: no embedded method under another
+//     relationship, no legacy publicKey list.
+//
+// The registry serves the document to resolvers outside this repository, whose
+// readers may pick among other keys differently. Every refusal is
+// ErrInvalidArgument; an unusable key also wraps did.ErrInvalidPublicKey. The
+// proof is verified under #signing alone, so this is what holds every other
+// key to the same rule.
 func validateDocumentKeys(doc *did.DIDDocument) error {
-	for _, vm := range doc.VerificationMethod() {
-		for _, rel := range []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod} {
-			if _, err := did.ExtractPublicKey(doc, vm.ID, rel); errors.Is(err, did.ErrInvalidPublicKey) {
-				return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
+	body := doc.Body()
+	if methods, ok := body["verificationMethod"].([]any); ok {
+		for i, m := range methods {
+			if _, ok := m.(map[string]any); !ok {
+				return fmt.Errorf("%w: verificationMethod entry %d is not a method object", ErrInvalidArgument, i)
 			}
+		}
+	}
+	for _, rel := range keyRelationships {
+		refs, _ := body[string(rel)].([]any)
+		for i, ref := range refs {
+			s, ok := ref.(string)
+			if !ok {
+				return fmt.Errorf("%w: %s entry %d is not a reference (an embedded method is not read here)", ErrInvalidArgument, rel, i)
+			}
+			if _, err := did.ExtractPublicKey(doc, s, rel); err != nil {
+				return fmt.Errorf("%w: %s %q: %w", ErrInvalidArgument, rel, s, err)
+			}
+		}
+	}
+	for _, member := range otherKeyMembers {
+		list, _ := body[member].([]any)
+		for i, e := range list {
+			if _, ok := e.(string); !ok || member == "publicKey" {
+				return fmt.Errorf("%w: %s entry %d carries a key no reader here extracts", ErrInvalidArgument, member, i)
+			}
+		}
+	}
+	for _, vm := range doc.VerificationMethod() {
+		var failed []string
+		for _, rel := range keyRelationships {
+			if _, err := did.ExtractPublicKey(doc, vm.ID, rel); err != nil {
+				if errors.Is(err, did.ErrInvalidPublicKey) {
+					return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
+				}
+				failed = append(failed, fmt.Sprintf("%s: %v", rel, err))
+			}
+		}
+		if len(failed) == len(keyRelationships) {
+			return fmt.Errorf("%w: verification method %q: no reader can extract its key (%s)", ErrInvalidArgument, vm.ID, strings.Join(failed, "; "))
 		}
 	}
 	return nil

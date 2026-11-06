@@ -152,9 +152,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   unusable key that a reader could extract through `authentication` or
   `assertionMethod` — the proof's own `#signing` included, which was
   `ErrUnauthorized` — is `ErrInvalidArgument` wrapping `did.ErrInvalidPublicKey`.
-  Such a key of the wrong size is now refused the same way (it was skipped). A
-  method no reader can extract (an id shared by two methods, an unreadable
-  encoding) is still not refused.
+  Such a key of the wrong size is now refused the same way (it was skipped).
+- `RegisterOwner` stores an owner document only when every key in it is one
+  `did.ExtractPublicKey` extracts through `authentication` or
+  `assertionMethod`; anything else is `ErrInvalidArgument`. It refuses a
+  verification method listed under neither relationship, sharing its id with
+  another method, controlled by another DID, or of a type or encoding not read
+  here (anything but an Ed25519 Multikey or JWK); an entry of those
+  relationships that is an embedded method or a reference to a missing or
+  foreign key; an embedded method under `keyAgreement`,
+  `capabilityInvocation` or `capabilityDelegation`; a legacy top-level
+  `publicKey` list; and a `verificationMethod` entry that is not an object.
+  Such documents were stored and served to outside resolvers, whose readers may
+  pick among those keys differently. A duplicated `#signing`, or one controlled
+  by another DID, was `ErrUnauthorized` and is now `ErrInvalidArgument`.
+  Documents stored before this change are not checked again.
 
 ## [0.3.0] - 2026-08-05
 
