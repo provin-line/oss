@@ -59,6 +59,11 @@ probe** — the binary panics at startup rather than serve broken canonicalizati
 - Axes: **Data integrity** (input/output binding + schema content-hash),
   **Signer authenticity** (signature + cryptosuite lifecycle at `proof.created`),
   **Chain consistency** (controller chain to the terminal Owner DID + ordering).
+- How issuers are established is replaceable: an `IssuerVerifier` gives the key
+  a proof verifies under and the Owner responsible for the issuer
+  (`WithIssuerVerifier`; the default, `NewDIDDocumentIssuers`, reads DID
+  documents). The proof policy, the proof itself, and "the Owner is the one the
+  issuer's Process DID names" stay with the Verifier.
 - Signer authenticity alone, for a credential of any type:
   `Verifier.VerifySignerAuthenticity` evaluates that axis on a `Credential` (the
   wire form of any Data Integrity–secured VC, carrying no type's rules) through

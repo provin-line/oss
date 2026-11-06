@@ -12,8 +12,8 @@ package vc
 // inputs" and may later resolve to verified or failed as inputs become
 // available (e.g. a DID Document propagates, a predecessor body appears in
 // the VC resolver). The distinction is what keeps verification
-// deterministic: any verifier given the same DID Document, VC-resolver, and
-// lifecycle snapshots produces the same result.
+// deterministic: any verifier given the same issuer (by default, DID Document),
+// VC-resolver, and lifecycle snapshots produces the same result.
 type ConfidenceState int
 
 const (
@@ -33,20 +33,24 @@ type AxisResult struct {
 	// schema → indeterminate; established mismatch → failed.
 	DataIntegrity ConfidenceState
 	// SignerAuthenticity — identity binding: the signature verifies under
-	// the public key resolved from proof.verificationMethod in the issuer's
-	// DID Document, and the cryptosuite is acceptable at proof.created per
-	// the lifecycle policy. Transient resolution failure (any resolver error
-	// not wrapping resolver.ErrNotFound) or a substituted document identity
-	// (resolved id != issuer — never honoured) → indeterminate; definitive
-	// not-found (resolver.ErrNotFound), cryptographic failure, or
-	// Sunset/unregistered cryptosuite → failed.
+	// the issuer's key that proof.verificationMethod names, as the Verifier's
+	// IssuerVerifier establishes it (by default, from the issuer's DID
+	// Document), and the cryptosuite is acceptable at proof.created per the
+	// lifecycle policy. A transient failure to establish the key (by default:
+	// a resolver error not wrapping resolver.ErrNotFound, or a substituted
+	// document identity — never honoured) → indeterminate; an established
+	// negative (ErrIssuerNotFound; by default a definitive not-found or an
+	// unextractable key), cryptographic failure, or Sunset/unregistered
+	// cryptosuite → failed.
 	SignerAuthenticity ConfidenceState
-	// ChainConsistency — organizational attribution: the controller chain
-	// from the issuer Process DID reconstructs to a terminal Owner DID
-	// using only public DID Documents, and ordering against the predecessor
-	// (proof.created monotonicity) is consistent. Transiently unreachable
-	// (or substituted) intermediate document → indeterminate; definitively
-	// absent intermediate (resolver.ErrNotFound), broken controller link,
+	// ChainConsistency — organizational attribution: the issuer Process DID
+	// reaches the Owner DID its name designates, as the Verifier's
+	// IssuerVerifier establishes it (by default, the controller chain
+	// reconstructed from public DID Documents), and ordering against the
+	// predecessor (proof.created monotonicity) is consistent. A transient
+	// failure (by default an unreachable or substituted intermediate
+	// document) → indeterminate; an established negative (ErrIssuerNotFound;
+	// by default an absent intermediate or a broken link), a foreign Owner,
 	// or inconsistent ordering → failed.
 	ChainConsistency ConfidenceState
 }

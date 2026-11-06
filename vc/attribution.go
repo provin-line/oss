@@ -6,9 +6,11 @@ import (
 )
 
 // AttributeOwner resolves an issuer Process DID to the Owner DID that bears
-// responsibility for the credentials it signs, via the validated
-// controller-binding walk shared with ClassifyChain and the chain-consistency
-// axis (audit.attribution.segment). Applied to a chain origin's issuer it
+// responsibility for the credentials it signs, through the Verifier's
+// IssuerVerifier (by default, the validated controller-binding walk) and the
+// check that it is the Owner the issuer's DID names — shared with ClassifyChain
+// and the chain-consistency axis (audit.attribution.segment). An established
+// negative wraps ErrIssuerNotFound. Applied to a chain origin's issuer it
 // yields the origin-default attribution target — whoever cuts the chain
 // answers for what lies beyond the cut (audit.attribution.origin-default);
 // composing the two rules over a chain is deliberately the caller's job, so
@@ -19,7 +21,7 @@ import (
 // that credential and pass its verified issuer. An unreachable or broken
 // controller chain is an error — an owner is never fabricated.
 func (v *Verifier) AttributeOwner(ctx context.Context, issuer string) (string, error) {
-	owner, err := v.walkControllerChain(ctx, issuer)
+	owner, err := v.ownerOf(ctx, issuer)
 	if err != nil {
 		return "", fmt.Errorf("vc: attribute owner of %q: %w", issuer, err)
 	}

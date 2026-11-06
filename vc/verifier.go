@@ -7,15 +7,8 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto"
-	"github.com/provin-line/oss/did"
-	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/resolver"
 )
-
-// maxControllerDepth bounds the controller-chain walk. The dplaax hierarchy is
-// Process → Pipeline → Owner (two hops); the bound is generous headroom, and a
-// seen-set guards cycles independently.
-const maxControllerDepth = 8
 
 // allowedProofMembers is the exact wire member set of a provin DataIntegrityProof.
 // Any other member is not covered by the signature and so is rejected at
@@ -52,10 +45,11 @@ func AllowedProofMembers() map[string]bool {
 	return out
 }
 
-// Verifier performs credential verification: wire-form checks, issuer DID
-// resolution, proof verification, and confidence evaluation.
+// Verifier performs credential verification: wire-form checks, issuer
+// establishment (an IssuerVerifier; by default DID documents), proof
+// verification, and confidence evaluation.
 type Verifier struct {
-	resolver       resolver.Resolver
+	issuers        IssuerVerifier
 	sigVerifier    crypto.Verifier
 	lifecycle      LifecycleRegistry
 	schemaResolver SchemaResolver
@@ -64,10 +58,12 @@ type Verifier struct {
 // VerifierOption configures a Verifier.
 type VerifierOption func(*Verifier)
 
-// NewVerifier returns a Verifier resolving issuer DIDs through r and
-// verifying signatures through sigVerifier.
+// NewVerifier returns a Verifier verifying signatures through sigVerifier and
+// establishing issuers from DID documents resolved through r
+// (NewDIDDocumentIssuers), unless WithIssuerVerifier replaces that; r is then
+// unused and may be nil.
 func NewVerifier(r resolver.Resolver, sigVerifier crypto.Verifier, opts ...VerifierOption) *Verifier {
-	v := &Verifier{resolver: r, sigVerifier: sigVerifier}
+	v := &Verifier{sigVerifier: sigVerifier, issuers: NewDIDDocumentIssuers(r)}
 	for _, opt := range opts {
 		opt(v)
 	}
@@ -107,10 +103,12 @@ type VerifyResult struct {
 // axes: wire-form checks (@context, required fields, and the claim rules —
 // ValidateTransformationClaim composes into this axis: grammar,
 // bare-rejection, and grounding fail it, while unrecognized grounded
-// claims pass open-world), issuer DID resolution
-// and public-key extraction, proof verification with cryptosuite lifecycle
-// evaluation at proof.created, controller-chain reconstruction to the
-// terminal Owner DID, and weakest-link composition of the axis verdicts.
+// claims pass open-world), the issuer's key from the IssuerVerifier (by
+// default, DID resolution and public-key extraction), proof verification with
+// cryptosuite lifecycle evaluation at proof.created, the issuer's Owner from
+// the IssuerVerifier checked against the Owner its Process DID names (by
+// default, controller-chain reconstruction to the terminal Owner DID), and
+// weakest-link composition of the axis verdicts.
 //
 // Wire-form checks include source-commitment well-formedness: when the
 // commitment fields are present (on any credential — they are orthogonal to
@@ -158,9 +156,10 @@ type SignerAuthenticityResult struct {
 }
 
 // VerifySignerAuthenticity evaluates the signer-authenticity axis alone, for a
-// credential of any type: the proof policy, issuer DID resolution, the
-// assertionMethod key, the proof, and the cryptosuite lifecycle — the same
-// evaluation, through the same implementation, as Verify's axis.
+// credential of any type: the proof policy, the issuer's key from the
+// IssuerVerifier (by default the assertionMethod key of the issuer's DID
+// document), the proof, and the cryptosuite lifecycle — the same evaluation,
+// through the same implementation, as Verify's axis.
 //
 // Verified establishes that Issuer signed, with VerificationMethod, a document
 // equivalent to this body under SuiteContract. Equivalent is not always
@@ -289,16 +288,12 @@ func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePas
 // signerAuthenticity evaluates the signer-authenticity axis of a credential,
 // given its issuer, its raw wire proof (nil when unsigned) and its body: the typed
 // proof field policy, the FCoT obligations (extra-member rejection and
-// verificationMethod-names-the-issuer), issuer DID resolution and assertion-key
-// extraction, Ed25519 proof verification, and the cryptosuite lifecycle phase
-// at proof.created. Issuer resolution follows the resolver error taxonomy: an
-// error wrapping resolver.ErrNotFound is a definitive not-found (failed —
-// verification completed against an authoritative negative), any other
-// resolution error is transient (indeterminate — may resolve later). A
-// resolved document whose id differs from the issuer (registry substitution)
-// is never honoured; because a misconfigured base mapping and a hostile
-// registry are indistinguishable at this point, it is indeterminate rather
-// than a terminal failed.
+// verificationMethod-names-the-issuer), the issuer's key from the
+// IssuerVerifier (which must be the key the verificationMethod names), the
+// proof under the exact suite contract, and the cryptosuite lifecycle phase at
+// proof.created. An IssuerVerifier error wrapping ErrIssuerNotFound is an
+// established negative (failed); any other is transient (indeterminate — may
+// resolve later). The default's taxonomy: see NewDIDDocumentIssuers.
 //
 // It reads nothing of the credential's type or content, so it applies to a
 // credential of any type.
@@ -353,29 +348,21 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 			return failed // Sunset / Unknown fail closed
 		}
 	}
-	doc, err := v.resolver.Resolve(ctx, issuer)
+	key, err := v.issuers.IssuerKey(ctx, &Credential{body: body, proof: rawProof})
 	switch {
-	case errors.Is(err, resolver.ErrNotFound):
-		return failed // definitive not-found: the registry states the issuer does not exist
+	case errors.Is(err, ErrIssuerNotFound):
+		return failed // established: no such issuer, or no usable key under the verificationMethod
 	case err != nil:
-		return indeterminate // transient resolution failure — may resolve later
-	}
-	if doc.ID() != issuer {
-		return indeterminate // registry-substitution defense on the signing path: never honoured, never verified
-	}
-	// Key and encoding come from one resolution: the encoding decides which
-	// claim contract the proof is checked under, so reading it separately would
-	// let the dispatch and the key disagree about which method they mean.
-	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
-	if err != nil {
-		return failed
+		return indeterminate // transient — may resolve later
+	case key.ID != proof.VerificationMethod:
+		return failed // a key of another method than the proof names is not the signer's
 	}
 	// Exact dispatch: the contract is resolved from the suite id, the proof
 	// shape, and the key encoding, and the canonicalizer follows from the
 	// contract. A proof whose shape matches no contract fails here rather than
 	// being retried under the other canonicalizer to see if it happens to check
 	// out (signer.suite.exact-dispatch).
-	contract, err := VerifyProofWithContract(v.sigVerifier, pub, encoding, proof, deepCopyMap(body))
+	contract, err := VerifyProofWithContract(v.sigVerifier, key.PublicKey, key.Encoding, proof, deepCopyMap(body))
 	if err != nil {
 		return failed
 	}
@@ -401,100 +388,15 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	return res
 }
 
-// evalChainConsistency reconstructs the controller chain from the issuer
-// Process DID up to its terminal Owner DID using only DID Documents, verifying
-// every hop. Each resolved document is held to the registry-substitution
-// defense (doc.ID == requested DID); each controller link must be a structural
-// ancestor of the current DID (moving strictly up toward the owner); the walk
-// must terminate at the issuer's own owner, self-controlled. A transiently
-// unreachable (or substituted) intermediate document is indeterminate (may
-// resolve later); a definitively absent one (resolver.ErrNotFound), a broken
-// link, a foreign owner, or a cycle is failed.
+// evalChainConsistency establishes the Owner responsible for the issuer
+// Process DID through ownerOf: the IssuerVerifier's Owner (by default, the
+// controller chain reconstructed from DID documents), which must be the Owner
+// the issuer's DID names. An established negative (ErrIssuerNotFound, a
+// foreign Owner, an issuer that is not a Process DID) is failed; any other
+// failure is indeterminate.
 func (v *Verifier) evalChainConsistency(ctx context.Context, cred *PipelinePassCredential) ConfidenceState {
-	issuer, err := dplaax.Parse(cred.Issuer())
-	if err != nil || !issuer.IsProcess() {
-		return ConfidenceFailed
-	}
-	owner, err := v.walkControllerChain(ctx, cred.Issuer())
-	switch {
-	case errors.Is(err, errControllerUnreachable):
-		return ConfidenceIndeterminate // an intermediate document may resolve later
-	case err != nil:
-		return ConfidenceFailed // broken link, foreign owner, or cycle
-	}
-	if owner != issuer.OwnerDID().String() {
-		return ConfidenceFailed // terminated at an owner outside the issuer's lineage
-	}
-	return ConfidenceVerified
-}
-
-// Sentinel errors distinguishing the controller-walk outcomes: a resolution gap
-// (may resolve later → indeterminate) from a structural inconsistency
-// (established → failed).
-var (
-	errControllerUnreachable = errors.New("vc: controller document unavailable")
-	errControllerBroken      = errors.New("vc: controller chain broken")
-)
-
-// walkControllerChain walks from a Process DID up to its terminal Owner DID
-// using only DID Documents, verifying every hop: each resolved document is held
-// to the registry-substitution defense (doc.ID == requested DID), each
-// controller link must be a structural ancestor of the current DID, the owner
-// must be self-controlled, and the walk is bounded with a cycle guard. It
-// returns the reached Owner DID, or errControllerUnreachable / errControllerBroken.
-// The two normative consumers — evalChainConsistency (a confidence verdict) and
-// ClassifyChain (the terminal owner) — share this one walk.
-//
-// The depth bound and cycle guard are defence-in-depth: isStructuralAncestor
-// forces each hop to a strictly shorter resource path (Process len 4 → Pipeline
-// len 2 / Owner len 0 → Owner terminal), so the walk is already bounded at two
-// hops and cannot revisit a DID through the public API. The guards exist so a
-// future relaxation of that invariant fails safe rather than looping.
-func (v *Verifier) walkControllerChain(ctx context.Context, start string) (string, error) {
-	if d0, err := dplaax.Parse(start); err != nil || !d0.IsProcess() {
-		return "", errControllerBroken
-	}
-	cur := start
-	seen := map[string]bool{}
-	for depth := 0; depth <= maxControllerDepth; depth++ {
-		if seen[cur] {
-			return "", errControllerBroken // cycle
-		}
-		seen[cur] = true
-		d, err := dplaax.Parse(cur)
-		if err != nil {
-			return "", errControllerBroken
-		}
-		doc, err := v.resolver.Resolve(ctx, cur)
-		switch {
-		case errors.Is(err, resolver.ErrNotFound):
-			return "", errControllerBroken // the controller target definitively does not exist — broken link
-		case err != nil:
-			return "", errControllerUnreachable // transient: the document may resolve later
-		}
-		if doc.ID() != cur {
-			// Registry-substitution defense: never honour the substituted document.
-			// Misconfiguration and attack are indistinguishable here, so treat the
-			// hop as unresolved (indeterminate) rather than an established break.
-			return "", errControllerUnreachable
-		}
-		ctrl := doc.Controller()
-		if d.IsOwner() {
-			if ctrl != "" && ctrl != cur {
-				return "", errControllerBroken // owner must be self-controlled
-			}
-			return cur, nil
-		}
-		if ctrl == "" {
-			return "", errControllerBroken // a non-owner with no controller cannot reach an owner
-		}
-		parent, err := dplaax.Parse(ctrl)
-		if err != nil || !isStructuralAncestor(parent, d) {
-			return "", errControllerBroken
-		}
-		cur = ctrl
-	}
-	return "", errControllerBroken // exceeded the depth bound without reaching the owner
+	_, err := v.ownerOf(ctx, cred.Issuer())
+	return ownerState(err)
 }
 
 // VerifyChain verifies each credential individually (folding the per-credential
@@ -604,24 +506,6 @@ func containsString(s []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// isStructuralAncestor reports whether anc is a proper structural ancestor of
-// d: same owner triple (registry / accountType / accountId), a strictly
-// shorter resource path that prefixes d's, and itself a known DID pattern.
-func isStructuralAncestor(anc, d *dplaax.DID) bool {
-	if anc.Registry != d.Registry || anc.AccountType != d.AccountType || anc.AccountID != d.AccountID {
-		return false
-	}
-	if len(anc.ResourcePath) >= len(d.ResourcePath) {
-		return false
-	}
-	for i, seg := range anc.ResourcePath {
-		if d.ResourcePath[i] != seg {
-			return false
-		}
-	}
-	return anc.IsOwner() || anc.IsPipeline() || anc.IsProcess()
 }
 
 // isSortedUniqueSet reports whether s is strictly ascending (hence

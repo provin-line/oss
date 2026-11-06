@@ -14,6 +14,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `vc.IssuerVerifier`, `vc.WithIssuerVerifier`, `vc.NewDIDDocumentIssuers`,
+  `vc.IssuerKey`, and the constant `vc.ErrIssuerNotFound` (of the new type
+  `vc.Error`): how a `vc.Verifier` establishes an issuer — the key its proof
+  verifies under, and the Owner responsible for it — can be replaced, so a
+  deployment that registers its stages elsewhere needs no DID document per
+  stage. The default, `NewDIDDocumentIssuers`, reads both from DID documents as
+  before. The Verifier keeps the proof policy (run before the key is asked for),
+  the rule that the key is the one the proof names (`IssuerKey.ID` must be its
+  `verificationMethod`), the proof verification, and the rule that the Owner is
+  the one the issuer's Process DID names (`credential.field.issuer`); `Verify`, `VerifyChain`,
+  `VerifySignerAuthenticity`, `AttributeOwner` and `ClassifyChain` all go
+  through it. An error wrapping `ErrIssuerNotFound` reads as failed, any other
+  as indeterminate.
+
 - `vc.ValidateChainLinks(chain)` and `vc.ValidateChainFrom(chain, originInput)`:
   the links of a chain (origin first) without its signatures — the origin
   claims no predecessor; each later credential names its predecessor's content
@@ -54,6 +68,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `policy-verifier:3001`.
 
 ### Changed
+
+- `vc.Verifier.AttributeOwner` and `ClassifyChain` errors for an Owner that is
+  established not to exist (a broken controller chain, an issuer that is not a
+  Process DID) now wrap `vc.ErrIssuerNotFound`; a transient failure does not.
 
 - The signer-authenticity axis fails a credential whose issuer is empty before
   resolving anything; with a bare-fragment `verificationMethod` it could
