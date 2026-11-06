@@ -91,6 +91,7 @@ other — they interact exclusively over the wire (ConnectRPC / NATS).
 | `tlog/` | Per-organization transparency log: append-only, tamper-evident record sequences (audit substrate) |
 | `hoconconfig/` | Three-layer HOCON configuration loader |
 | `orgverify/` | DNS-based organization identity verification |
+| `keybinding/` | Key bindings (an issuer binds a key to a subject for a relying party) and the issuer's revocation list (W3C Bitstring Status List) |
 | `decisionrecord/` | The record of each decision a deciding party makes, and the levels it is written at (all, refusals, summary, none) |
 
 Internal dependency DAG (within the library layer):
@@ -104,6 +105,7 @@ orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
 decisionrecord ──► canon
+keybinding ──► vc, did, canon, crypto
 ```
 
 ## Pipeline Process model

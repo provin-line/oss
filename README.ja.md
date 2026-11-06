@@ -64,6 +64,7 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `tlog/` | 組織ごとの transparency log: append-only・改竄検出可能なレコード列（監査基盤） |
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
+| `keybinding/` | 鍵の結び付け（発行者が、受け手のために鍵を主体に結ぶ）と、発行者の失効の一覧（W3C の Bitstring Status List） |
 | `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・拒否だけ・要約・なし） |
 
 ライブラリ層内部の依存 DAG:
@@ -77,6 +78,7 @@ orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
 decisionrecord ──► canon
+keybinding ──► vc, did, canon, crypto
 ```
 
 ## Pipeline プロセスモデル

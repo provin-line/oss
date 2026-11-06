@@ -14,6 +14,26 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `keybinding`: the key binding — a `KeyBindingCredential` in which an issuer
+  binds a key (`keyId` and an RFC 7517 public JWK in its one RFC 7638 spelling:
+  Ed25519, P-256 or RSA, each a key the `crypto` validators accept) to a
+  subject, of a kind, with roles (always a list), of a key class, for one
+  relying party (`audience`), from `validFrom` until `validUntil` (both
+  required, UTC to the second), with a `BitstringStatusListEntry` in the
+  issuer's revocation list — and the revocation list itself (a W3C
+  `BitstringStatusListCredential`, at least 131 072 entries, at most 16 MiB
+  expanded). `Issue` and `IssueStatusList` sign with eddsa-jcs-2022;
+  `Verifier.VerifyBinding` checks a binding against the trust `Anchor` (the
+  issuer, its issuance keys, the longest validity, the oldest list) and the
+  held list, and `Verifier.VerifyStatusList` checks a list and refuses one
+  older than the one held, one not yet valid, and one whose id is not a DID URL
+  of its issuer. A `StatusList` is read-only (accessors) and is current only
+  while its signing key is in the anchor. The wire holds no JSON numbers (the
+  list index is a decimal string). Each refusal is a constant
+  `keybinding.Error`; `ErrSignatureUnestablished` (the issuer's document
+  unavailable now) is not `ErrSignature`. What an issuer may bind (its scope) is
+  not evaluated here.
+
 - `decisionrecord`: the record a deciding party writes for each decision
   (`Record`: id, deciding party, time, accepted or refused, the refusing check
   and reason, the parties it is attributed to, what was decided on as an
