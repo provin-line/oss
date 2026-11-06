@@ -20,6 +20,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did"
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
@@ -119,6 +120,28 @@ func TestPipelineRuntimeConfigFrom_MapsNATSAndDataDirDerivedPaths(t *testing.T) 
 	}
 	if len(cfg.Loops) != 1 || cfg.Loops[0].Name != "src" || cfg.Loops[0].Source.OutputSubject != "did:dplaax:reg:org:acme:pipeline:src" {
 		t.Errorf("Loops = %+v", cfg.Loops)
+	}
+}
+
+func TestPipelineRuntimeConfigFrom_MapsDecisionRecord(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNATS, NATS: chainconfig.NATSConfig{URL: "nats://x:4222"}}
+	pipeCfg := &pipelineconfig.Config{DecisionRecord: pipelineconfig.DecisionRecordConfig{
+		Level: decisionrecord.LevelSummary, Output: pipelineconfig.DecisionRecordOutputJSONL,
+		Path: "/var/provin/decisions.jsonl", SummaryWindow: 30 * time.Second,
+	}}
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := pipelineruntime.DecisionRecordConfig{
+		Level: decisionrecord.LevelSummary, Output: pipelineruntime.DecisionRecordOutputJSONL,
+		Path: "/var/provin/decisions.jsonl", SummaryWindow: 30 * time.Second,
+	}
+	if cfg.DecisionRecord != want {
+		t.Errorf("DecisionRecord = %+v, want %+v", cfg.DecisionRecord, want)
+	}
+	if pipelineconfig.DecisionRecordOutputLog != pipelineruntime.DecisionRecordOutputLog || pipelineconfig.DecisionRecordOutputJSONL != pipelineruntime.DecisionRecordOutputJSONL {
+		t.Error("sink names drifted between pipelineconfig and pipeline/runtime")
 	}
 }
 

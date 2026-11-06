@@ -19,6 +19,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
@@ -364,9 +365,71 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	}
 }
 
+func TestBuildDataPlane_AgentAccessRequiresDecisionRecord(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	cfg := dpSinkCfg()
+	cfg.Loops[0].Sink.Kind = SinkProduction
+	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
+	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
+		Enabled: true, BoundaryID: "provin-agent-delivery@1",
+		DecisionProfileID: "purpose-first-agent-access@1",
+		RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+	}
+	_, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
+		Resolver:      stubResolver{},
+		ChainResolver: stubChainResolver{},
+		SinkWriter:    console.New(io.Discard),
+		VCStore:       dpVCStore(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime.Config.DecisionRecord") || !strings.Contains(err.Error(), `loop "archive"`) {
+		t.Fatalf("zero DecisionRecord on a purpose-first sink: got %v", err)
+	}
+}
+
+type stubChainResolver struct{}
+
+func (stubChainResolver) ResolveCredential(context.Context, string) (*vc.PipelinePassCredential, error) {
+	return nil, fmt.Errorf("stub chain resolver")
+}
+
+func TestBuildDataPlane_AgentAccessRecordsToConfiguredFile(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	cfg := dpSinkCfg()
+	cfg.DecisionRecord = DecisionRecordConfig{Level: decisionrecord.LevelAll, Output: DecisionRecordOutputJSONL, Path: path, SummaryWindow: time.Minute}
+	cfg.Loops[0].Sink.Kind = SinkProduction
+	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
+	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
+		Enabled: true, BoundaryID: "provin-agent-delivery@1",
+		DecisionProfileID: "purpose-first-agent-access@1",
+		RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+	}
+	dp, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
+		Resolver:      stubResolver{},
+		ChainResolver: stubChainResolver{},
+		SinkWriter:    console.New(io.Discard),
+		VCStore:       dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("decision record file: stat=%v err=%v, want a 0600 file", st, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := dp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestBuildDataPlane_AgentAccessRequiresChainResolver(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	cfg := dpSinkCfg()
+	cfg.DecisionRecord = DecisionRecordConfig{Level: decisionrecord.LevelAll, Output: DecisionRecordOutputLog, SummaryWindow: time.Minute}
 	cfg.Loops[0].Sink.Kind = SinkProduction
 	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
 	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{

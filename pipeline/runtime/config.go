@@ -58,6 +58,10 @@ type Config struct {
 	Loops        []LoopConfig
 	TlogDir      string
 	RejectLogDir string
+	// DecisionRecord configures the delivery decision record of purpose-first
+	// sink loops. It is read only when such a loop exists, and then its zero
+	// value fails the build (the zero level is refused).
+	DecisionRecord DecisionRecordConfig
 }
 
 // IssuerConfig is the issuing process identity for a producing loop or a

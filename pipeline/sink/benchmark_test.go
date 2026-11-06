@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/provin-line/oss/appraisal"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -49,16 +50,17 @@ func BenchmarkSinkDelivery(b *testing.B) {
 		appraiser sink.Appraiser
 		verifier  benchmarkVerifier
 		boundary  string
+		recorder  decisionrecord.Recorder
 	}{
 		{name: "legacy-adjacent", verifier: benchmarkVerifier{}},
-		{name: "exact-view-delivery", appraiser: benchmarkAppraiser{view: view}, boundary: "provin-agent-delivery@1"},
+		{name: "exact-view-delivery", appraiser: benchmarkAppraiser{view: view}, boundary: "provin-agent-delivery@1", recorder: discardRecorder{}},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			cfg := sink.Config{
 				Strategy: contract.VerificationAdjacent, Kind: contract.SinkProduction,
 				Codec: envelopecodec.New(), Verifier: tc.verifier, Appraiser: tc.appraiser,
-				AgentBoundaryID: tc.boundary, Store: benchmarkStore{}, Writer: benchmarkWriter{},
+				AgentBoundaryID: tc.boundary, DecisionRecorder: tc.recorder, Store: benchmarkStore{}, Writer: benchmarkWriter{},
 				UpstreamEndpoint: "https://upstream.example", AllowIssuers: []string{issuer},
 			}
 			processor, err := sink.New(cfg)

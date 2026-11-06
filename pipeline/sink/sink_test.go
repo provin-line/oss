@@ -356,6 +356,7 @@ func TestProcess_Production_AppraisalBindsDeliveryRecord(t *testing.T) {
 	cfg.Verifier = nil // exact appraisal is the sole decision path
 	cfg.Appraiser = a
 	cfg.AgentBoundaryID = "provin-agent-delivery@1"
+	cfg.DecisionRecorder = discardRecorder{}
 	p, err := sink.New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +395,7 @@ func TestProcess_Production_NonAcceptAppraisalNeverWrites(t *testing.T) {
 			cfg.Verifier = nil
 			cfg.Appraiser = tt.appraiser
 			cfg.AgentBoundaryID = "provin-agent-delivery@1"
+			cfg.DecisionRecorder = discardRecorder{}
 			p, err := sink.New(cfg)
 			if err != nil {
 				t.Fatal(err)
@@ -420,6 +422,7 @@ func TestProcess_Production_MismatchedViewIDNeverWrites(t *testing.T) {
 	cfg.Verifier = nil
 	cfg.Appraiser = &fakeAppraiser{view: view, result: verified()}
 	cfg.AgentBoundaryID = "provin-agent-delivery@1"
+	cfg.DecisionRecorder = discardRecorder{}
 	p, err := sink.New(cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -156,6 +156,44 @@ func TestPipeline_BootRejectsMissingVCStoreEndpointAndBearer(t *testing.T) {
 	}
 }
 
+// A malformed provin.decision-record value fails startup naming its key,
+// before any side-effectful boot work.
+func TestPipeline_BootRejectsMalformedDecisionRecord(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary")
+	}
+	bin := buildPipelineBinary(t)
+	dir := t.TempDir()
+	certFile, keyFile := writeSelfSignedCert(t)
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+
+	confPath := writeBootConfigFile(t, dir, bootConfig{
+		ListenAddr:    fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:       filepath.Join(dir, "data"),
+		CertFile:      certFile,
+		KeyFile:       keyFile,
+		Transport:     "nats",
+		NATSURL:       "nats://127.0.0.1:1",
+		AccSeed:       accSeedFile,
+		TrustSeed:     trustSeedFile,
+		ResolveDir:    filepath.Join(dir, "resolver"),
+		NodeDID:       "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		PipelineLoops: validSourceLoopConf,
+		Extra:         "\nprovin.decision-record.level = \"everything\"\n",
+	})
+
+	out, err := runPipelineBinary(t, bin, dir, confPath)
+	if err == nil {
+		t.Fatalf("pipeline booted with an unknown decision-record level; want a non-zero exit\noutput:\n%s", out)
+	}
+	if want := "provin.decision-record.level"; !strings.Contains(out, want) {
+		t.Errorf("boot failure does not name %q:\n%s", want, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "data")); statErr == nil {
+		t.Errorf("data dir was created despite the config rejecting boot")
+	}
+}
+
 // F8: allow-private-networks=true requires a scoped registry-resolution map
 // (registry-base-urls or resolver-base-url) — an unmapped (attacker-supplied)
 // registry must not fall back to the open https://{registry} resolution and
@@ -394,6 +432,9 @@ type bootConfig struct {
 	PipelineLoops   string
 	VCStoreEndpoint string
 	VCStoreBearer   string
+
+	// Extra is appended verbatim (e.g. a provin.decision-record block).
+	Extra string
 }
 
 // writeBootConfigFile writes dir/pipeline.conf for the actual binary to load
@@ -453,6 +494,8 @@ provin.network.chain {
 		b.WriteString("}\n")
 		conf += b.String()
 	}
+
+	conf += c.Extra
 
 	path := filepath.Join(dir, "pipeline.conf")
 	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {

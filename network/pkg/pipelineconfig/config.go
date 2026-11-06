@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/allowlist"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/vc"
@@ -84,6 +85,18 @@ const (
 	arIntervalKey              = auditRunnerKey + ".interval"
 	arBatchSizeKey             = auditRunnerKey + ".batch-size"
 	arMaxAttemptsKey           = auditRunnerKey + ".max-attempts"
+
+	decisionRecordKey              = "provin.decision-record"
+	decisionRecordLevelKey         = decisionRecordKey + ".level"
+	decisionRecordSinkKey          = decisionRecordKey + ".sink"
+	decisionRecordPathKey          = decisionRecordKey + ".path"
+	decisionRecordSummaryWindowKey = decisionRecordKey + ".summary-window"
+)
+
+// Where decision records are written.
+const (
+	DecisionRecordOutputLog   = "log"
+	DecisionRecordOutputJSONL = "jsonl"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -141,6 +154,24 @@ type Config struct {
 	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
 	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
 	AuditRunner AuditRunnerConfig
+	// DecisionRecord is how this node records its delivery decisions. Sourced
+	// from reference.conf (default: every decision, to the log).
+	DecisionRecord DecisionRecordConfig
+}
+
+// DecisionRecordConfig selects what is recorded of each delivery decision
+// (provin.decision-record.*) and where.
+type DecisionRecordConfig struct {
+	// Level is how much is written: all, refusals, summary or none.
+	Level decisionrecord.Level
+	// Output is DecisionRecordOutputLog or DecisionRecordOutputJSONL (the HOCON
+	// key is provin.decision-record.sink; "sink" is not used for Go names here
+	// because the Sink Process owns that word).
+	Output string
+	// Path is the JSON-lines file; set exactly when Output is DecisionRecordOutputJSONL.
+	Path string
+	// SummaryWindow is how often counts are written at the summary level. Positive.
+	SummaryWindow time.Duration
 }
 
 // HasConsumingLoop reports whether any loop consumes upstream credentials — a sink,
@@ -478,7 +509,55 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.AuditRunner, err = loadAuditRunner(cfg); err != nil {
 		return nil, err
 	}
+	if out.DecisionRecord, err = loadDecisionRecord(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadDecisionRecord reads provin.decision-record.* (defaults in reference.conf).
+// An unknown level or sink, a jsonl sink without a path, or a non-positive
+// window fails startup naming the key.
+func loadDecisionRecord(cfg *hoconconfig.Config) (DecisionRecordConfig, error) {
+	var dr DecisionRecordConfig
+	level, err := cfg.String(decisionRecordLevelKey)
+	if err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordLevelKey, err)
+	}
+	if dr.Level, err = decisionrecord.ParseLevel(level); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordLevelKey, err)
+	}
+	if dr.Output, err = cfg.String(decisionRecordSinkKey); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordSinkKey, err)
+	}
+	hasPath := cfg.Has(decisionRecordPathKey)
+	if hasPath {
+		if dr.Path, err = cfg.String(decisionRecordPathKey); err != nil {
+			return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordPathKey, err)
+		}
+		if dr.Path == "" {
+			return dr, fmt.Errorf("pipeline: config %s must not be empty", decisionRecordPathKey)
+		}
+	}
+	switch dr.Output {
+	case DecisionRecordOutputLog:
+		if hasPath {
+			return dr, fmt.Errorf("pipeline: config %s is only valid when %s is %q", decisionRecordPathKey, decisionRecordSinkKey, DecisionRecordOutputJSONL)
+		}
+	case DecisionRecordOutputJSONL:
+		if !hasPath {
+			return dr, fmt.Errorf("pipeline: config %s is required when %s is %q", decisionRecordPathKey, decisionRecordSinkKey, DecisionRecordOutputJSONL)
+		}
+	default:
+		return dr, fmt.Errorf("pipeline: config %s: unknown sink %q (want %q or %q)", decisionRecordSinkKey, dr.Output, DecisionRecordOutputLog, DecisionRecordOutputJSONL)
+	}
+	if dr.SummaryWindow, err = cfg.Duration(decisionRecordSummaryWindowKey); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordSummaryWindowKey, err)
+	}
+	if dr.SummaryWindow <= 0 {
+		return dr, fmt.Errorf("pipeline: config %s must be positive, got %s", decisionRecordSummaryWindowKey, dr.SummaryWindow)
+	}
+	return dr, nil
 }
 
 // loadAuditRunner reads the async audit-runner tuning from the (layered) config. All three

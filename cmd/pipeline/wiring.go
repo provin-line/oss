@@ -58,6 +58,12 @@ func pipelineRuntimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineco
 			ConnectWait: chainCfg.NATS.ConnectWait,
 		},
 	}
+	cfg.DecisionRecord = pipelineruntime.DecisionRecordConfig{
+		Level:         pipeCfg.DecisionRecord.Level,
+		Output:        pipeCfg.DecisionRecord.Output,
+		Path:          pipeCfg.DecisionRecord.Path,
+		SummaryWindow: pipeCfg.DecisionRecord.SummaryWindow,
+	}
 	if dataDir != "" {
 		cfg.TlogDir = filepath.Join(dataDir, "tlog")
 		cfg.RejectLogDir = filepath.Join(dataDir, "evidence", "sink-rejects")

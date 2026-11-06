@@ -44,8 +44,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the zero level and a `Filter` not made by `NewFilter` are refused. At `all` a
   record the sink does not accept is an error, so the deciding party refuses
   the decision; at other levels it is a warning. Sinks: JSON lines
-  (`NewJSONLines`) and structured log (`NewLog`). No decision point in this
-  repository writes records yet.
+  (`NewJSONLines`) and structured log (`NewLog`). The purpose-first sink
+  writes its delivery decisions through it (see Changed).
 
 - `vc.IssuerVerifier`, `vc.WithIssuerVerifier`, `vc.NewDIDDocumentIssuers`,
   `vc.IssuerKey`, and the constant `vc.ErrIssuerNotFound` (of the new type
@@ -101,6 +101,55 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `policy-verifier:3001`.
 
 ### Changed
+
+- **Delivery decisions are now recorded by default** (at `all`, no payload is
+  delivered without its accepted record; refusal records are best effort; the
+  other levels keep less). Every delivery decision of the purpose-first sink (a sink loop with an `agent-access` block;
+  `sink.Config.Appraiser`) writes a `decisionrecord.Record` through the new
+  `sink.Config.DecisionRecorder`: an envelope that does not decode is refused
+  (check `decode`); the appraisal's decision is accepted on `ACCEPT` and refused
+  (check `appraisal`) otherwise, with the attributes `appraisalDecision` and
+  `decisionProfile`. A decision recorded as accepted that a later stage refuses
+  is recorded again under the same `DecisionID` as refused, the check being that
+  stage's reject reason (`verdict`, `allow-list`, `ingress-store-failure`,
+  `malformed-credential`, `payload-fetch`, `payload-delivery-violation`,
+  `binding-gate`, `appraisal`); a context cancellation before the write is
+  refused with check `cancelled`. An error from the writer is never recorded as
+  a refusal (the writer may have delivered): the decision gets a further
+  accepted record whose reason says the write outcome is unknown. Records hold
+  content addresses (the EvidenceView ID, and the payload address on the
+  write-outcome record), never payload bytes. The legacy verifier path is
+  unchanged. **It is on for every user of the purpose-first sink**, at level
+  `all`: if the accepted record cannot be written the delivery is refused (new
+  reject reason `decision-record`), and the default `log` output writes one
+  `info` entry per record (a decision that is accepted and then refused or
+  write-errored writes two). Turn it off with
+  `provin.decision-record.level = "none"`. Records after the accepted one are
+  best effort: if one cannot be written the accepted record stands, so the
+  record may show an acceptance that was not delivered, never a delivery without
+  its acceptance. HOCON configs are unaffected: the keys below have defaults, so
+  existing configs keep booting, and a malformed value fails startup naming the
+  key.
+  - `provin.decision-record.level`: `all` (default) | `refusals` | `summary` |
+    `none`.
+  - `provin.decision-record.sink`: `log` (default, the process's structured
+    logger) | `jsonl`.
+  - `provin.decision-record.path`: the JSON-lines file; required when `sink` is
+    `jsonl`, an error otherwise. Opened append-only and unbuffered (mode 0600
+    when created; the mode of an existing file is unchanged), closed on
+    shutdown. Lines are written to the OS without `fsync` (the same posture as
+    the sink file output), the file grows without bound (rotate with
+    copytruncate or a restart), and an unterminated last line from a previous
+    process is ended with a newline before the first new record.
+  - `provin.decision-record.summary-window` (default `1m`): how often counts
+    are written at level `summary`, and once at shutdown.
+
+  **BREAKING (Go API)**: `sink.New` with `Appraiser` and no `DecisionRecorder`
+  fails with `sink.ErrMissingDecisionRecorder`; `runtime.Build` with a sink loop
+  that has `agent-access` fails unless `runtime.Config.DecisionRecord` is set
+  (embedders that call `runtime.Build` must set it; the zero value is refused).
+  New: `sink.RejectDecisionRecord`, `pipelineconfig.Config.DecisionRecord` and
+  `runtime.Config.DecisionRecord` (`Level`, `Output`, `Path`, `SummaryWindow`).
 
 - `vc.Verifier.AttributeOwner` and `ClassifyChain` errors for an Owner that is
   established not to exist (a broken controller chain, an issuer that is not a
