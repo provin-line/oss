@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,7 +315,8 @@ func TestStatusList(t *testing.T) {
 	}
 
 	// The same list again is the held list; an earlier one, or another one with
-	// the same validFrom, is a rewind; a later one replaces it.
+	// the same validFrom, is a rewind; a later one that keeps its marks
+	// replaces it.
 	if again, err := f.v.VerifyStatusList(ctx, first, f.anchor, held, at); err != nil || again != held {
 		t.Errorf("the same list again = %v, %v; want the held list", again, err)
 	}
@@ -326,7 +328,7 @@ func TestStatusList(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrStatusListRewound", name, err)
 		}
 	}
-	later, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", at.Add(-10*time.Minute)), f.anchor, held, at)
+	later, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", at.Add(-10*time.Minute), 3, 131071), f.anchor, held, at)
 	if err != nil || later == held {
 		t.Fatalf("a later list: %v, %v", later, err)
 	}
@@ -342,6 +344,71 @@ func TestStatusList(t *testing.T) {
 	} {
 		if _, err := f.v.VerifyStatusList(ctx, tc.raw, f.anchor, nil, at); !errors.Is(err, tc.want) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
+		}
+	}
+}
+
+// A revocation cannot be undone (W3C Bitstring Status List, statusPurpose
+// revocation): a later list that clears a mark the held list has — dropped,
+// or past the end of a shorter list — is refused, not a rewind, so an issuer
+// restored to an older state cannot undo a revocation a relying party has
+// seen. A shorter list that keeps every mark is taken.
+func TestStatusList_RefusesALaterListThatClearsARevocation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	at := t0.Add(time.Hour)
+	from, later := at.Add(-30*time.Minute), at.Add(-10*time.Minute)
+	held, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", from, 3, 131071), f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := f.list(t, issuerDID, "issuer", later, 3)
+	_, err = f.v.VerifyStatusList(ctx, cleared, f.anchor, held, at)
+	if !errors.Is(err, keybinding.ErrStatusListRevocationCleared) || errors.Is(err, keybinding.ErrStatusListRewound) || !strings.HasSuffix(err.Error(), ": entry 131071") {
+		t.Errorf("a later list without mark 131071: err = %v, want ErrStatusListRevocationCleared at entry 131071", err)
+	}
+
+	big := 2 * uint64(keybinding.MinStatusListSize)
+	issue := func(from time.Time, size uint64, revoked ...uint64) []byte {
+		t.Helper()
+		raw, err := keybinding.IssueStatusList(f.signer, issuerDID, "issuer", listID, from, from.Add(time.Hour), revoked, size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	heldBig, err := f.v.VerifyStatusList(ctx, issue(from, big, 3, big-1), f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.v.VerifyStatusList(ctx, issue(later, keybinding.MinStatusListSize, 3), f.anchor, heldBig, at); !errors.Is(err, keybinding.ErrStatusListRevocationCleared) || !strings.HasSuffix(err.Error(), fmt.Sprintf(": entry %d", big-1)) {
+		t.Errorf("a shorter list that loses mark %d: err = %v, want ErrStatusListRevocationCleared at entry %d", big-1, err, big-1)
+	}
+	heldBig, err = f.v.VerifyStatusList(ctx, issue(from, big, 3), f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shorter, err := f.v.VerifyStatusList(ctx, issue(later, keybinding.MinStatusListSize, 3), f.anchor, heldBig, at); err != nil || shorter == heldBig {
+		t.Errorf("a shorter list that keeps every mark = %v, %v; want the new list", shorter, err)
+	}
+}
+
+// A later list may add revocations: it is taken and replaces the held list.
+func TestStatusList_TakesALaterListThatAddsARevocation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	at := t0.Add(time.Hour)
+	held, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", at.Add(-30*time.Minute), 3), f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", at.Add(-10*time.Minute), 3, 4), f.anchor, held, at)
+	if err != nil || later == held {
+		t.Fatalf("a later list with mark 4 added: %v, %v", later, err)
+	}
+	for idx, want := range map[uint64]bool{3: true, 4: true, 5: false} {
+		if got, err := later.Revoked(idx); err != nil || got != want {
+			t.Errorf("Revoked(%d) = %v, %v; want %v", idx, got, err, want)
 		}
 	}
 }

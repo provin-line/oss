@@ -58,7 +58,10 @@ const (
 	ErrRevoked                Error = "keybinding: revoked"
 	ErrStatusListStale        Error = "keybinding: no current status list"
 	ErrStatusListRewound      Error = "keybinding: status list older than the one held"
-	ErrAudience               Error = "keybinding: for another relying party"
+	// ErrStatusListRevocationCleared: a later list leaves unmarked an entry the
+	// held list marks. A revocation is not reversible.
+	ErrStatusListRevocationCleared Error = "keybinding: status list clears a revocation the one held marks"
+	ErrAudience                    Error = "keybinding: for another relying party"
 )
 
 // Wire vocabulary.
@@ -510,7 +513,10 @@ func parseTime(v any) (time.Time, error) {
 // StatusList is a verified revocation list. Only VerifyStatusList makes one;
 // its fields cannot be changed. A relying party keeps the raw list it was made
 // from (a StatusList is not serialized) and verifies it again after a restart:
-// with no held list, any current list is accepted.
+// with no held list, any current list is accepted. A kept list that no longer
+// verifies (older than the anchor's maximum age, or its key gone from the
+// anchor) is not held, so it guards none of its marks: keeping the marks seen
+// is then the relying party's.
 type StatusList struct {
 	issuer     string
 	id         string
@@ -541,7 +547,10 @@ func (l *StatusList) Revoked(index uint64) (bool, error) {
 
 // IssueStatusList signs the issuer's revocation list id, valid from validFrom
 // until validUntil, of size entries (at least MinStatusListSize, a multiple of
-// 8), with revoked marked.
+// 8), with revoked marked. A revocation is not reversible: an index marked
+// stays marked in every later list of id, and is not given to another binding
+// (a relying party refuses a later list that clears a mark it holds, with
+// ErrStatusListRevocationCleared).
 func IssueStatusList(signer crypto.Signer, issuer, keyFragment, id string, validFrom, validUntil time.Time, revoked []uint64, size uint64) ([]byte, error) {
 	if size < MinStatusListSize || size%8 != 0 || size/8 > MaxStatusListBytes {
 		return nil, fmt.Errorf("keybinding: a status list of %d entries", size)
@@ -600,8 +609,12 @@ func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string
 // no older than the anchor's maximum age) — and returns it, or held when raw is
 // held again (the same list is not a step back). held must be a list of the same id and issuer.
 // A list whose validFrom is not later than held's, or the same validFrom with
-// another body, is ErrStatusListRewound: a list only moves forward. Whatever
-// it returns is current at at.
+// another body, is ErrStatusListRewound: a list only moves forward. A later
+// list that leaves unmarked an entry held marks (an entry past its end is
+// unmarked) is ErrStatusListRevocationCleared: a revocation is not reversible,
+// so an issuer restored to an older state cannot undo one in the list held
+// (only a held list guards its marks; see StatusList). Whatever it returns is
+// current at at.
 func (v *Verifier) VerifyStatusList(ctx context.Context, raw []byte, a Anchor, held *StatusList, at time.Time) (*StatusList, error) {
 	if v == nil || v.sig == nil {
 		return nil, errNotMade
@@ -627,12 +640,35 @@ func (v *Verifier) VerifyStatusList(ctx context.Context, raw []byte, a Anchor, h
 			out = held
 		case !l.validFrom.After(held.validFrom):
 			return nil, fmt.Errorf("%w: from %s, held from %s", ErrStatusListRewound, l.validFrom.Format(timeLayout), held.validFrom.Format(timeLayout))
+		default:
+			if i, ok := firstCleared(held, l); ok {
+				return nil, fmt.Errorf("%w: entry %d", ErrStatusListRevocationCleared, i)
+			}
 		}
 	}
 	if err := v.current(out, a, at); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// firstCleared returns the first entry held marks and l does not; an entry
+// past l's end is unmarked in l.
+func firstCleared(held, l *StatusList) (uint64, bool) {
+	for i, b := range held.bits {
+		if i < len(l.bits) {
+			b &^= l.bits[i]
+		}
+		if b == 0 {
+			continue
+		}
+		j := uint64(0)
+		for b&(0x80>>j) == 0 {
+			j++
+		}
+		return uint64(i)*8 + j, true
+	}
+	return 0, false
 }
 
 func readStatusList(body map[string]any) (*StatusList, error) {

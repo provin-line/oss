@@ -8,14 +8,20 @@ revocation list it already holds; it does not ask the issuer at decision time.
 
 - `Issue` signs a `Binding` as a `KeyBindingCredential` (W3C VC Data Model 2.0,
   eddsa-jcs-2022). `IssueStatusList` signs the issuer's revocation list as a W3C
-  `BitstringStatusListCredential`.
+  `BitstringStatusListCredential`. An index marked stays marked in every later
+  list of that id, and is not given to another binding.
 - `Verifier.VerifyStatusList` checks a list and returns it, current at the
   given time; a list never moves back (an older `validFrom`, or the same one
-  with another body, is refused), a list dated in the future is not taken, and
-  a list's id is a DID URL of its issuer. A `StatusList` cannot be changed once
+  with another body, is refused), a later list never clears a mark of the
+  held one (a revocation is not reversible; a mark past the end of a shorter
+  list counts as cleared), a list dated in the future is not taken, and a
+  list's id is a DID URL of its issuer. A `StatusList` cannot be changed once
   verified, and it counts only while its signing key is among the anchor's
   issuance keys. Keep the raw list and verify it again after a restart: with
-  no held list, any current list is accepted.
+  no held list, any current list is accepted. A kept list that no longer
+  verifies (older than the anchor's maximum age, or its key gone from the
+  anchor) guards none of its marks; keeping the marks seen is then the
+  relying party's.
 - `Verifier.VerifyBinding` checks, in order: the anchor's issuer signed it with
   an issuance key, under the W3C eddsa-jcs-2022 contract; it is well formed
   and carries no unsafe number; the time is within its period and the period

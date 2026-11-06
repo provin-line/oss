@@ -26,13 +26,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `Verifier.VerifyBinding` checks a binding against the trust `Anchor` (the
   issuer, its issuance keys, the longest validity, the oldest list) and the
   held list, and `Verifier.VerifyStatusList` checks a list and refuses one
-  older than the one held, one not yet valid, and one whose id is not a DID URL
-  of its issuer. A `StatusList` is read-only (accessors) and is current only
-  while its signing key is in the anchor. The wire holds no JSON numbers (the
-  list index is a decimal string). Each refusal is a constant
-  `keybinding.Error`; `ErrSignatureUnestablished` (the issuer's document
-  unavailable now) is not `ErrSignature`. What an issuer may bind (its scope) is
-  not evaluated here.
+  older than the one held, a later one that clears a mark of the one held
+  (`ErrStatusListRevocationCleared`: a revocation is not reversible, so an
+  issuer restored to an older state cannot undo one in the list held; a mark
+  past the end of a shorter list counts as cleared), one not yet valid, and
+  one whose id is not a DID URL of its issuer. A kept list that no longer
+  verifies after a restart guards none of its marks. An index marked stays
+  marked in every later list of that id. A `StatusList` is read-only
+  (accessors) and is current only while its signing key is in the anchor. The
+  wire holds no JSON numbers (the list index is a decimal string). Each refusal
+  is a constant `keybinding.Error`; `ErrSignatureUnestablished` (the issuer's
+  document unavailable now) is not `ErrSignature`. What an issuer may bind (its
+  scope) is not evaluated here.
 
 - `decisionrecord`: the record a deciding party writes for each decision
   (`Record`: id, deciding party, time, accepted or refused, the refusing check
