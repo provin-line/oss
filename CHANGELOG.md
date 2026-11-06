@@ -14,6 +14,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `crypto/es256` and `crypto/rs256`: `crypto.Verifier` implementations for
+  ES256 (ECDSA P-256 with SHA-256; the key is the SEC1 uncompressed point, the
+  signature `r || s`) and RS256 (RSASSA-PKCS1-v1_5 with SHA-256; the key is the
+  DER of a PKCS #1 RSAPublicKey with an odd modulus of 2048 to 4096 bits).
+  Malformed keys and signatures are typed errors (`Error` constants), as with
+  `crypto/ed25519`. ES256 signature bytes are not unique (`(r, n-s)` verifies
+  as `(r, s)` does), so nothing may count or deduplicate signatures by them.
+
 - `provin.network.auth.plain-internal` (list of `host:port`, default empty):
   the PDP endpoints that may be called over plaintext `http://`. A listed
   endpoint is reached only at a private address (checked on every connection).

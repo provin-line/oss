@@ -1,7 +1,7 @@
 // Package ed25519 is the Ed25519 implementation of the crypto interfaces — the
-// PoC's only signature suite — plus the raw signing primitive. Generator,
-// Verifier, and the package-level Sign are pure primitives over key bytes: they
-// hold no key custody and are unaware of DIDs.
+// one suite that also generates keys and signs — plus the raw signing
+// primitive. Generator, Verifier, and the package-level Sign are pure
+// primitives over key bytes: they hold no key custody and are unaware of DIDs.
 //
 // The DID-aware signing seam is crypto.Signer (Sign(did, keyID, data)),
 // implemented by keystore-backed stores that hold the keys; this package's raw

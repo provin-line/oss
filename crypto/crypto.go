@@ -1,6 +1,7 @@
 // Package crypto defines the key-generation, signing, and verification
-// interfaces. Implementations live in subpackages (ed25519 for the PoC); the
-// interfaces carry the algorithm dimension so adding suites is non-breaking.
+// interfaces. Implementations live in subpackages: ed25519 generates, signs
+// and verifies; es256 and rs256 verify. The interfaces carry the algorithm
+// dimension, so adding suites is non-breaking.
 package crypto
 
 // KeyPair is a generated key pair. PrivateKey appears only inside the
