@@ -96,6 +96,7 @@ Internal dependency DAG (within the library layer):
 
 ```text
 vc ──► did, canon, crypto
+did ──► canon, crypto, multibase
 delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver

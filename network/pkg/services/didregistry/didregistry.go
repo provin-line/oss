@@ -173,10 +173,13 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 	if err := canon.AdmitSafeNumbers(doc.Body()); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	if err := s.verifyDocProof(doc); err != nil {
+	// The key check runs first: it is structural, and it gives an unusable key
+	// in any listed method — the proof's own #signing included — the same
+	// verdict.
+	if err := validateDocumentKeys(doc); err != nil {
 		return nil, err
 	}
-	if err := validateDocumentKeys(doc); err != nil {
+	if err := s.verifyDocProof(doc); err != nil {
 		return nil, err
 	}
 	snap, err := doc.Hash()
@@ -623,21 +626,18 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 	return nil
 }
 
-// validateDocumentKeys checks every Ed25519 key a verification consumer could
-// extract from doc with ed25519.ValidatePublicKey: each verification method
-// that is listed under the authentication or assertionMethod relationship (the
-// relationships did.ExtractPublicKey resolves keys through). The proof is
-// verified under #signing alone, so without this check a small-order key in
-// any other method would be registered unchecked. A method that cannot be
-// extracted (not listed, undecodable) yields no key and is not checked here.
+// validateDocumentKeys refuses doc when a reader could extract an unusable key
+// from it: a verification method that did.ExtractPublicKey resolves through the
+// authentication or assertionMethod relationship and whose key it refuses with
+// did.ErrInvalidPublicKey. The proof is verified under #signing alone, so
+// without this check a small-order key in any other method would be registered
+// unchecked. A method that cannot be extracted for another reason (not listed,
+// an id shared by two methods, an unreadable encoding) yields no key to any
+// reader and is not refused here.
 func validateDocumentKeys(doc *did.DIDDocument) error {
 	for _, vm := range doc.VerificationMethod() {
 		for _, rel := range []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod} {
-			key, err := did.ExtractPublicKey(doc, vm.ID, rel)
-			if err != nil {
-				continue
-			}
-			if err := ed25519.ValidatePublicKey(key); err != nil {
+			if _, err := did.ExtractPublicKey(doc, vm.ID, rel); errors.Is(err, did.ErrInvalidPublicKey) {
 				return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
 			}
 		}

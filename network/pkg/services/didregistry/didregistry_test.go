@@ -18,6 +18,7 @@ import (
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/multibase"
 	"github.com/provin-line/oss/network/pkg/services/didregistry"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
@@ -33,6 +34,18 @@ func mustMultikeyVM(id, controller string, pub []byte) did.VerificationMethod {
 		panic(err) // a non-Ed25519 fixture key is a test bug
 	}
 	return vm
+}
+
+// rawMultikeyVM builds a Multikey verification method for any 32 bytes,
+// encoding them by hand: did.NewMultikeyVerificationMethod refuses an unusable
+// Ed25519 key, and an adversarial owner document is not built with it.
+func rawMultikeyVM(id, controller string, pub []byte) did.VerificationMethod {
+	return did.VerificationMethod{
+		ID:                 id,
+		Type:               "Multikey",
+		Controller:         controller,
+		PublicKeyMultibase: multibase.EncodeBase58Btc(append([]byte{0xed, 0x01}, pub...)),
+	}
 }
 
 const (
@@ -920,37 +933,70 @@ func mustHex(t *testing.T, h string) []byte {
 }
 
 // Every Ed25519 key in an owner document is checked, whatever relationship
-// lists it: an honest #signing beside a small-order #auth is refused, and the
+// lists it: an honest #signing beside an unusable #auth is refused, and the
 // owner is never served.
-func TestRegisterOwner_RefusesSmallOrderKeyInAnyVerificationMethod(t *testing.T) {
-	identity := mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")
-	for _, rel := range []string{"authentication", "assertionMethod"} {
-		t.Run(rel, func(t *testing.T) {
-			svc, signer, signPub := newService(t)
-			fields := did.DocumentFields{
-				Context:    did.IssuedDocumentContexts(),
-				ID:         ownerDID,
-				Controller: ownerDID,
-				VerificationMethod: []did.VerificationMethod{
-					mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub),
-					mustMultikeyVM(ownerDID+"#auth", ownerDID, identity),
-				},
-				AssertionMethod: []string{ownerDID + "#signing"},
-			}
-			if rel == "authentication" {
-				fields.Authentication = []string{ownerDID + "#auth"}
-			} else {
-				fields.AssertionMethod = append(fields.AssertionMethod, ownerDID+"#auth")
-			}
-			doc := signedOwnerDocFields(t, signer, fields)
+func TestRegisterOwner_RefusesInvalidKeyInAnyVerificationMethod(t *testing.T) {
+	keys := []struct {
+		name string
+		key  []byte
+		want error
+	}{
+		{"identity", mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000"), ed25519.ErrSmallOrder},
+		{"off the curve", mustHex(t, "0200000000000000000000000000000000000000000000000000000000000000"), ed25519.ErrInvalidPoint},
+		{"31 bytes", make([]byte, 31), ed25519.ErrPublicKeySize},
+	}
+	for _, k := range keys {
+		for _, rel := range []string{"authentication", "assertionMethod"} {
+			t.Run(k.name+"/"+rel, func(t *testing.T) {
+				svc, signer, signPub := newService(t)
+				fields := did.DocumentFields{
+					Context:    did.IssuedDocumentContexts(),
+					ID:         ownerDID,
+					Controller: ownerDID,
+					VerificationMethod: []did.VerificationMethod{
+						mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub),
+						rawMultikeyVM(ownerDID+"#auth", ownerDID, k.key),
+					},
+					AssertionMethod: []string{ownerDID + "#signing"},
+				}
+				if rel == "authentication" {
+					fields.Authentication = []string{ownerDID + "#auth"}
+				} else {
+					fields.AssertionMethod = append(fields.AssertionMethod, ownerDID+"#auth")
+				}
+				doc := signedOwnerDocFields(t, signer, fields)
 
-			_, err := svc.RegisterOwner(context.Background(), doc, nil)
-			if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, ed25519.ErrSmallOrder) {
-				t.Fatalf("err = %v, want ErrInvalidArgument wrapping ErrSmallOrder", err)
-			}
-			if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
-				t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
-			}
-		})
+				_, err := svc.RegisterOwner(context.Background(), doc, nil)
+				if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, did.ErrInvalidPublicKey) || !errors.Is(err, k.want) {
+					t.Fatalf("err = %v, want ErrInvalidArgument wrapping did.ErrInvalidPublicKey and %v", err, k.want)
+				}
+				if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+					t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
+				}
+			})
+		}
+	}
+}
+
+// The proof's own key is held to the same rule as every other listed key: an
+// owner document whose #signing key is unusable is an invalid argument, with
+// the key's error kept, and the owner is never served.
+func TestRegisterOwner_RefusesInvalidSigningKeyAsInvalidArgument(t *testing.T) {
+	identity := mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")
+	svc, signer, _ := newService(t)
+	doc := signedOwnerDocFields(t, signer, did.DocumentFields{
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 ownerDID,
+		Controller:         ownerDID,
+		VerificationMethod: []did.VerificationMethod{rawMultikeyVM(ownerDID+"#signing", ownerDID, identity)},
+		AssertionMethod:    []string{ownerDID + "#signing"},
+	})
+
+	_, err := svc.RegisterOwner(context.Background(), doc, nil)
+	if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, did.ErrInvalidPublicKey) || !errors.Is(err, ed25519.ErrSmallOrder) {
+		t.Fatalf("err = %v, want ErrInvalidArgument wrapping did.ErrInvalidPublicKey and ErrSmallOrder", err)
+	}
+	if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+		t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
 	}
 }

@@ -36,7 +36,8 @@ var (
 	// tolerance allows.
 	ErrFromFuture = errors.New("wireauth: proof from the future")
 	// ErrKeyResolution is a failure resolving the signer's #auth key (resolver
-	// miss, key not under the authentication relationship, controller mismatch).
+	// miss, key not under the authentication relationship, controller mismatch,
+	// an unusable key — did.ErrInvalidPublicKey).
 	// It is a DEFINITIVE identity failure (→ Unauthenticated), distinct from
 	// ErrResolverUnavailable below.
 	ErrKeyResolution = errors.New("wireauth: cannot resolve signer auth key")

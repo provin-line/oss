@@ -117,6 +117,25 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   keys of `IssuePipeline` / `IssueProcess` (replacing the all-zero check), and an
   owner document in `RegisterOwner` that carries one in any verification method
   listed under `authentication` or `assertionMethod`; both are `ErrInvalidArgument`.
+- `did.ExtractPublicKey` and `did.ExtractPublicKeyAndEncoding` refuse an Ed25519
+  key, in either encoding (Multikey or JWK), that `ed25519.ValidatePublicKey`
+  refuses, with an error wrapping the new constant `did.ErrInvalidPublicKey`
+  (of the new type `did.Error`) and the `ed25519` sentinel. Every reader of keys
+  from DID documents in this repository (credential, delegation,
+  wire-authentication, transparency-log and organization-fingerprint
+  verification, and the DID registry's check of an owner document's own proof)
+  therefore refuses such a key when it extracts it. `did.EncodeEd25519Multikey`
+  and `did.NewMultikeyVerificationMethod` refuse the same keys.
+- A JWK verification method's `x` must be the canonical unpadded base64url
+  spelling of the key (zero trailing bits, no line breaks); another spelling of
+  the same bytes is refused.
+- `RegisterOwner` checks the keys of an owner document before its proof, so an
+  unusable key that a reader could extract through `authentication` or
+  `assertionMethod` — the proof's own `#signing` included, which was
+  `ErrUnauthorized` — is `ErrInvalidArgument` wrapping `did.ErrInvalidPublicKey`.
+  Such a key of the wrong size is now refused the same way (it was skipped). A
+  method no reader can extract (an id shared by two methods, an unreadable
+  encoding) is still not refused.
 
 ## [0.3.0] - 2026-08-05
 

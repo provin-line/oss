@@ -454,7 +454,11 @@ func TestVerify_TamperedDIDDocument(t *testing.T) {
 		// A validly-encoded DIFFERENT key: the honest tamper is substitution,
 		// not corruption — an undecodable value would fail earlier for a
 		// different reason than the signature mismatch this test pins.
-		mb, err := did.EncodeEd25519Multikey([]byte(strings.Repeat("k", 32)))
+		other, err := ed25519.Generator{}.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mb, err := did.EncodeEd25519Multikey(other.PublicKey)
 		if err != nil {
 			t.Fatal(err)
 		}

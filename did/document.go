@@ -2,13 +2,13 @@ package did
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/multibase"
 )
 
@@ -294,6 +294,13 @@ const (
 // controller is not the document subject, is rejected (key-confusion and
 // cross-document injection defense). The method type and its key encoding are
 // enforced as mutually exclusive — see decodeVMPublicKey.
+//
+// The key must be a usable Ed25519 public key: one that
+// ed25519.ValidatePublicKey accepts. A key of the wrong size, of small order,
+// off the curve, or not canonically encoded is refused with an error wrapping
+// ErrInvalidPublicKey and that function's sentinel, so a caller can tell an
+// unusable key from a method that is absent, unlisted, or malformed in another
+// way.
 func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationship) ([]byte, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("did: nil document")
@@ -501,8 +508,8 @@ var ed25519PubMulticodec = []byte{0xed, 0x01}
 
 // decodeEd25519Multikey extracts the 32-byte Ed25519 public key from a
 // Multikey publicKeyMultibase value: multibase base58btc ("z" prefix) over
-// the ed25519-pub multicodec prefix + raw key. Any other multibase base,
-// multicodec, or key length fails closed.
+// the ed25519-pub multicodec prefix + raw key. Any other multibase base or
+// multicodec, and any key checkEd25519PublicKey refuses, fails closed.
 func decodeEd25519Multikey(s string) ([]byte, error) {
 	raw, err := multibase.DecodeBase58Btc(s)
 	if err != nil {
@@ -512,10 +519,23 @@ func decodeEd25519Multikey(s string) ([]byte, error) {
 		return nil, fmt.Errorf("did: publicKeyMultibase is not an ed25519-pub Multikey (want multicodec 0xed01 prefix)")
 	}
 	key := raw[len(ed25519PubMulticodec):]
-	if len(key) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	if err := checkEd25519PublicKey(key); err != nil {
+		return nil, err
 	}
 	return key, nil
+}
+
+// checkEd25519PublicKey refuses what ed25519.ValidatePublicKey refuses — a
+// wrong size, a point of small order, a value off the curve, a non-canonical
+// encoding — with an error wrapping ErrInvalidPublicKey and its sentinel. Every
+// Ed25519 key this package reads or writes passes through it, so no reader of a
+// DID document is handed a key whose signatures prove nothing about who made
+// them.
+func checkEd25519PublicKey(key []byte) error {
+	if err := ed25519.ValidatePublicKey(key); err != nil {
+		return fmt.Errorf("%w: Ed25519: %w", ErrInvalidPublicKey, err)
+	}
+	return nil
 }
 
 // absoluteKeyID resolves a DID URL key reference to its absolute form against
@@ -540,6 +560,9 @@ func fragmentOf(ref string) string {
 }
 
 // decodeEd25519JWK extracts the 32-byte Ed25519 public key from an OKP JWK.
+// x must be the one spelling of the key — unpadded base64url with zero trailing
+// bits and no line breaks, as RFC 8037 encodes it — so one key cannot appear
+// under several x values. Any key checkEd25519PublicKey refuses fails closed.
 func decodeEd25519JWK(jwk map[string]any) ([]byte, error) {
 	if jwk == nil {
 		return nil, fmt.Errorf("did: verification method has no publicKeyJwk")
@@ -558,8 +581,11 @@ func decodeEd25519JWK(jwk map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("did: JWK x is not valid base64url: %w", err)
 	}
-	if len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("did: Ed25519 public key length %d, want %d", len(raw), ed25519.PublicKeySize)
+	if base64.RawURLEncoding.EncodeToString(raw) != x {
+		return nil, fmt.Errorf("did: JWK x is not the canonical unpadded base64url spelling of its bytes")
+	}
+	if err := checkEd25519PublicKey(raw); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }
@@ -616,17 +642,19 @@ func deepCopyValue(v any) any {
 // publicKeyMultibase value: multibase base58btc ("z") over the ed25519-pub
 // multicodec prefix + the raw key. It is the inverse of the decoder above, and
 // exists as the one place issuance builds the value — a second, hand-rolled
-// encoder is how a key that cannot be read back gets published.
+// encoder is how a key that cannot be read back gets published. For the same
+// reason it refuses every key the decoder refuses, with the same error.
 func EncodeEd25519Multikey(key []byte) (string, error) {
-	if len(key) != ed25519.PublicKeySize {
-		return "", fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	if err := checkEd25519PublicKey(key); err != nil {
+		return "", err
 	}
 	return multibase.EncodeBase58Btc(append(append([]byte{}, ed25519PubMulticodec...), key...)), nil
 }
 
 // NewMultikeyVerificationMethod builds a Multikey verification method for an
 // Ed25519 key — the encoding the W3C eddsa-jcs-2022 suite requires
-// (signer.suite.eddsa-jcs-2022).
+// (signer.suite.eddsa-jcs-2022). It refuses the keys EncodeEd25519Multikey
+// refuses, with the same error.
 func NewMultikeyVerificationMethod(id, controller string, key []byte) (VerificationMethod, error) {
 	mb, err := EncodeEd25519Multikey(key)
 	if err != nil {
