@@ -1043,6 +1043,7 @@ func TestRegisterOwner_RefusesKeysNoReaderHereExtracts(t *testing.T) {
 		auth        []string
 		mutate      func(body map[string]any)
 		unusableKey bool
+		reason      string // a part of the error the case must fail with; empty for any
 	}{
 		{name: "an unlisted method with a usable key", vms: func(p []byte) []did.VerificationMethod {
 			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), mustMultikeyVM(ownerDID+"#spare", ownerDID, other.PublicKey)}
@@ -1095,6 +1096,57 @@ func TestRegisterOwner_RefusesKeysNoReaderHereExtracts(t *testing.T) {
 		{name: "the legacy publicKey member", mutate: func(b map[string]any) {
 			b["publicKey"] = []any{multikeyMap(ownerDID+"#legacy", ownerDID, other.PublicKey)}
 		}},
+		{name: "a method whose id names another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(otherOrg+"#signing", ownerDID, other.PublicKey))
+			b["authentication"] = []any{otherOrg + "#signing"}
+		}},
+		{name: "a method id with two fragments", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#x#auth", ownerDID, other.PublicKey))
+			b["authentication"] = []any{ownerDID + "#x#auth"}
+		}},
+		{name: "a reference with two fragments that resolves to #signing here", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["authentication"] = []any{"#x#signing"}
+		}},
+		{name: "a bare reference without #", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["authentication"] = []any{"signing"}
+		}},
+		{name: "a reference with an empty fragment", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["capabilityInvocation"] = []any{ownerDID + "#"}
+		}},
+		{name: "a percent-encoded fragment read elsewhere as #signing", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sign%69ng", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), "#sign%69ng")
+		}},
+		{name: "a fragment with a tab", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sig\tning", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#sig\tning")
+		}},
+		{name: "a fragment with a trailing space", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#signing ", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#signing ")
+		}},
+		{name: "a non-ASCII fragment", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sígning", ownerDID, other.PublicKey))
+			b["authentication"] = []any{ownerDID + "#sígning"}
+		}},
+		{name: "a capabilityDelegation reference to another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["capabilityDelegation"] = []any{otherOrg + "#signing"}
+		}},
+		{name: "a keyAgreement reference to another DID", reason: "spelled #fragment", mutate: func(b map[string]any) {
+			b["keyAgreement"] = []any{otherOrg + "#agree"}
+		}},
+		{name: "keyAgreement as a single embedded method", mutate: func(b map[string]any) {
+			b["keyAgreement"] = multikeyMap(ownerDID+"#agree", ownerDID, other.PublicKey)
+		}},
+		{name: "capabilityInvocation as a single reference to another DID", mutate: func(b map[string]any) {
+			b["capabilityInvocation"] = otherOrg + "#signing"
+		}},
+		{name: "capabilityDelegation as a single embedded method", mutate: func(b map[string]any) {
+			b["capabilityDelegation"] = multikeyMap(ownerDID+"#delegate", ownerDID, identity)
+		}},
+		{name: "publicKey as a single method", mutate: func(b map[string]any) {
+			b["publicKey"] = multikeyMap(ownerDID+"#legacy", ownerDID, other.PublicKey)
+		}},
 		{name: "a verificationMethod entry that is not an object", mutate: func(b map[string]any) {
 			b["verificationMethod"] = append(b["verificationMethod"].([]any), ownerDID+"#signing")
 		}},
@@ -1120,6 +1172,9 @@ func TestRegisterOwner_RefusesKeysNoReaderHereExtracts(t *testing.T) {
 			}
 			if got := errors.Is(err, did.ErrInvalidPublicKey); got != tc.unusableKey {
 				t.Errorf("errors.Is(err, did.ErrInvalidPublicKey) = %v, want %v (err = %v)", got, tc.unusableKey, err)
+			}
+			if tc.reason != "" && !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want one about %q", err, tc.reason)
 			}
 			if strings.Contains(err.Error(), "\n") {
 				t.Errorf("the error spans lines: %q", err)
@@ -1154,7 +1209,13 @@ func TestRegisterOwner_AcceptsDocumentsWhoseKeysAllExtract(t *testing.T) {
 		},
 		AssertionMethod: []string{ownerDID + "#signing", ownerDID + "#both"},
 		Authentication:  []string{ownerDID + "#auth", "#both"},
-	}, nil)
+	}, func(b map[string]any) {
+		// A relative method id, and a reference to an own key under another
+		// relationship.
+		vms := b["verificationMethod"].([]any)
+		vms[1].(map[string]any)["id"] = "#auth"
+		b["keyAgreement"] = []any{ownerDID + "#auth"}
+	})
 	if _, err := svc.RegisterOwner(context.Background(), doc, nil); err != nil {
 		t.Fatalf("RegisterOwner: %v", err)
 	}

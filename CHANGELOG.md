@@ -176,7 +176,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Such documents were stored and served to outside resolvers, whose readers may
   pick among those keys differently. A duplicated `#signing`, or one controlled
   by another DID, was `ErrUnauthorized` and is now `ErrInvalidArgument`.
-  Documents stored before this change are not checked again.
+  Documents stored before this change are not checked again. Every method id
+  and every relationship reference must name a key of the document, spelled
+  `#fragment` or `<the document's DID>#fragment` with a single `#` and a
+  fragment of `[A-Za-z0-9._-]`: an id under another DID, `#x#signing` (read
+  here as `#signing`), a bare `signing`, and a fragment that URL parsers read
+  differently (`#sign%69ng`, whitespace, other characters) are refused. A member that carries keys
+  (`authentication`, `assertionMethod`, `keyAgreement`, `capabilityInvocation`,
+  `capabilityDelegation`, `publicKey`) must be a list when present.
 
 ## [0.3.0] - 2026-08-05
 

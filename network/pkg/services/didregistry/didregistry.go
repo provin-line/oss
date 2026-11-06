@@ -630,6 +630,28 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 // through.
 var keyRelationships = []did.VerificationRelationship{did.RelationshipAuthentication, did.RelationshipAssertionMethod}
 
+// isOwnKeyID reports whether id names a key of the document subject as
+// "#fragment" or "<subject>#fragment", with a single "#" and a fragment of
+// [A-Za-z0-9._-] that is not only dots (dplaax.IsSafeSegment, the rule of the
+// DID's own segments). A fragment outside that set — percent-encoded, with
+// whitespace or other characters — can be read by URL parsers elsewhere as
+// another fragment ("#sign%69ng" and "#signing " as "#signing").
+//
+// This rule belongs to did.ExtractPublicKey, which reads "#x#signing" and a
+// bare "signing" as "#signing" for every reader in this repository; it is here
+// until did refuses those spellings itself, and goes when it does.
+func isOwnKeyID(subject, id string) bool {
+	prefix, fragment, found := strings.Cut(id, "#")
+	return found && dplaax.IsSafeSegment(fragment) && (prefix == "" || prefix == subject)
+}
+
+// relationshipMembers are the five DID Core verification relationships.
+var relationshipMembers = []string{string(did.RelationshipAuthentication), string(did.RelationshipAssertionMethod), "keyAgreement", "capabilityInvocation", "capabilityDelegation"}
+
+// keyMembers are the members of a DID document that carry keys: the
+// relationships and the legacy publicKey list.
+var keyMembers = append(append([]string{}, relationshipMembers...), "publicKey")
+
 // otherKeyMembers are the members of a DID document that carry keys no reader
 // here extracts: the other DID Core verification relationships, which may embed
 // methods, and the legacy publicKey list.
@@ -646,7 +668,13 @@ var otherKeyMembers = []string{"keyAgreement", "capabilityInvocation", "capabili
 //     resolves that way (no embedded method, no reference to a missing or
 //     foreign key);
 //   - no other member carries a key: no embedded method under another
-//     relationship, no legacy publicKey list.
+//     relationship, no legacy publicKey list;
+//   - every method id and every reference names a key of this document,
+//     spelled "#fragment" or "<this DID>#fragment" with a single "#" and a
+//     fragment of [A-Za-z0-9._-] (isOwnKeyID). A reader elsewhere
+//     dereferences an id of another DID against that DID's document, and reads
+//     "#x#signing", a bare "signing" or "#sign%69ng" differently from this
+//     repository's readers.
 //
 // The registry serves the document to resolvers outside this repository, whose
 // readers may pick among other keys differently. Every refusal is
@@ -655,6 +683,30 @@ var otherKeyMembers = []string{"keyAgreement", "capabilityInvocation", "capabili
 // key to the same rule.
 func validateDocumentKeys(doc *did.DIDDocument) error {
 	body := doc.Body()
+	subject := doc.ID()
+	// A member that carries keys is a list or absent. A single value (an
+	// object, a string, null) is not read here, and a reader elsewhere may
+	// take it as a method or a reference.
+	for _, member := range keyMembers {
+		if v, present := body[member]; present {
+			if _, ok := v.([]any); !ok {
+				return fmt.Errorf("%w: %s is not a list", ErrInvalidArgument, member)
+			}
+		}
+	}
+	for _, vm := range doc.VerificationMethod() {
+		if !isOwnKeyID(subject, vm.ID) {
+			return fmt.Errorf("%w: verification method id %q is not a key of %s spelled #fragment or <DID>#fragment", ErrInvalidArgument, vm.ID, subject)
+		}
+	}
+	for _, member := range relationshipMembers {
+		refs, _ := body[member].([]any)
+		for i, ref := range refs {
+			if s, ok := ref.(string); ok && !isOwnKeyID(subject, s) {
+				return fmt.Errorf("%w: %s entry %d %q is not a key of %s spelled #fragment or <DID>#fragment", ErrInvalidArgument, member, i, s, subject)
+			}
+		}
+	}
 	if methods, ok := body["verificationMethod"].([]any); ok {
 		for i, m := range methods {
 			if _, ok := m.(map[string]any); !ok {
