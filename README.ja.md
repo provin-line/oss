@@ -64,6 +64,7 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `tlog/` | 組織ごとの transparency log: append-only・改竄検出可能なレコード列（監査基盤） |
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
+| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・拒否だけ・要約・なし） |
 
 ライブラリ層内部の依存 DAG:
 
@@ -75,6 +76,7 @@ resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
+decisionrecord ──► canon
 ```
 
 ## Pipeline プロセスモデル

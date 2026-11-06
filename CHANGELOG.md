@@ -14,6 +14,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `decisionrecord`: the record a deciding party writes for each decision
+  (`Record`: id, deciding party, time, accepted or refused, the refusing check
+  and reason, the parties it is attributed to, what was decided on as an
+  ordered list of content addresses, the party's own fields — never a payload;
+  a decision is refused if any of its records is), and `Filter`, which writes
+  it at a level chosen explicitly: `all`, `refusals`, `summary` (`Summary`,
+  each decision counted once per window, through `SummaryRecorder`) or `none`;
+  the zero level and a `Filter` not made by `NewFilter` are refused. At `all` a
+  record the sink does not accept is an error, so the deciding party refuses
+  the decision; at other levels it is a warning. Sinks: JSON lines
+  (`NewJSONLines`) and structured log (`NewLog`). No decision point in this
+  repository writes records yet.
+
 - `vc.IssuerVerifier`, `vc.WithIssuerVerifier`, `vc.NewDIDDocumentIssuers`,
   `vc.IssuerKey`, and the constant `vc.ErrIssuerNotFound` (of the new type
   `vc.Error`): how a `vc.Verifier` establishes an issuer — the key its proof

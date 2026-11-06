@@ -12,7 +12,8 @@ Guidance for AI agents and contributors working on provin OSS.
 ## Layer rules (enforced by review)
 
 1. Library packages (top-level domain libraries: `vc/`, `canon/`, `crypto/`, `did/`,
-   `delegation/`, `resolver/`, `keystore/`, `tlog/`, `hoconconfig/`, `orgverify/` —
+   `delegation/`, `resolver/`, `keystore/`, `tlog/`, `hoconconfig/`, `orgverify/`,
+   `decisionrecord/` —
    the catalog lives in [README.md](README.md)) are pure domain: no imports of
    `gen/`, `network/`, `pipeline/`, `cmd/`.
 2. `network/` and `pipeline/` never import each other; they interact over the wire.
