@@ -413,6 +413,149 @@ func TestStatusList_TakesALaterListThatAddsARevocation(t *testing.T) {
 	}
 }
 
+// A kept list is restored as held after a restart however old it is: past
+// its freshness it is still the issuer's word on which entries were marked,
+// so a later list that clears one is refused and one that keeps them is
+// taken. A restored list does not decide: past its freshness, VerifyBinding
+// refuses it as stale.
+func TestRestoreStatusList_RestoresAnOldListAsTheFloorOfItsMarks(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	from := t0.Add(time.Hour)
+	kept := f.list(t, issuerDID, "issuer", from, 3, 131071)
+	restart := from.Add(5 * 24 * time.Hour)
+	if _, err := f.v.VerifyStatusList(ctx, kept, f.anchor, nil, restart); !errors.Is(err, keybinding.ErrStatusListStale) {
+		t.Fatalf("the kept list verified at the restart: err = %v, want ErrStatusListStale", err)
+	}
+	held, err := f.v.RestoreStatusList(ctx, kept, f.anchor, restart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.ID() != listID || held.Issuer() != issuerDID || !held.ValidFrom().Equal(from) {
+		t.Errorf("restored %s of %s from %s", held.ID(), held.Issuer(), held.ValidFrom())
+	}
+	if got, err := held.Revoked(131071); err != nil || !got {
+		t.Errorf("Revoked(131071) = %v, %v; want true", got, err)
+	}
+
+	b := sampleBinding()
+	b.ValidFrom, b.ValidUntil = restart.Add(-time.Hour), restart.Add(time.Hour)
+	binding, err := keybinding.Issue(f.signer, issuerDID, "issuer", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.v.VerifyBinding(ctx, binding, f.anchor, held, restart); !errors.Is(err, keybinding.ErrStatusListStale) {
+		t.Errorf("a binding against the restored list: err = %v, want ErrStatusListStale", err)
+	}
+	if _, err := f.v.VerifyStatusList(ctx, kept, f.anchor, held, restart); !errors.Is(err, keybinding.ErrStatusListStale) {
+		t.Errorf("the kept list again, held restored: err = %v, want ErrStatusListStale", err)
+	}
+
+	now := restart.Add(-time.Minute)
+	if _, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", now, 3), f.anchor, held, restart); !errors.Is(err, keybinding.ErrStatusListRevocationCleared) {
+		t.Errorf("a later list without mark 131071: err = %v, want ErrStatusListRevocationCleared", err)
+	}
+	later, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", now, 3, 131071), f.anchor, held, restart)
+	if err != nil || later == held {
+		t.Fatalf("a later list that keeps the marks = %v, %v; want the new list", later, err)
+	}
+	if _, err := f.v.VerifyBinding(ctx, binding, f.anchor, later, restart); err != nil {
+		t.Errorf("a binding against the later list: %v", err)
+	}
+}
+
+// A list whose signing key has left the anchor is not restored (the key may
+// have left because it leaked, so its marks are not believed); nothing is
+// held then. Otherwise a restored list is checked as VerifyStatusList checks
+// it, except for its freshness: it is not dated after at, and an issuer
+// unavailable now is not a forgery.
+func TestRestoreStatusList_RefusesWhatIsNotTheIssuersWord(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	from := t0.Add(time.Hour)
+	restart := from.Add(5 * 24 * time.Hour)
+	kept := f.list(t, issuerDID, "issuer", from, 3)
+
+	rotated := f.anchor
+	rotated.IssuanceKeys = []string{issuerDID + "#signing"}
+	if _, err := f.v.RestoreStatusList(ctx, kept, rotated, restart); !errors.Is(err, keybinding.ErrSignature) {
+		t.Errorf("a list whose key left the anchor: err = %v, want ErrSignature", err)
+	}
+
+	foreignID, err := keybinding.IssueStatusList(f.signer, issuerDID, "issuer", otherDID+"#key-binding-status-list", from, from.Add(time.Hour), nil, keybinding.MinStatusListSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		at   time.Time
+		want error
+	}{
+		"signed with a key not for issuing": {f.list(t, issuerDID, "signing", from), restart, keybinding.ErrSignature},
+		"of another issuer":                 {f.list(t, otherDID, "issuer", from), restart, keybinding.ErrSignature},
+		"tampered":                          {mutate(t, kept, func(m map[string]any) { m["validUntil"] = "2027-01-01T00:00:00Z" }), restart, keybinding.ErrSignature},
+		"a list id of another DID":          {foreignID, restart, keybinding.ErrMalformed},
+		"dated after at":                    {kept, from.Add(-2 * time.Minute), keybinding.ErrStatusListStale},
+		"no time":                           {kept, time.Time{}, keybinding.ErrStatusListStale},
+	} {
+		if _, err := f.v.RestoreStatusList(ctx, tc.raw, f.anchor, tc.at); !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
+		}
+	}
+	if _, err := f.v.RestoreStatusList(ctx, kept, f.anchor, from.Add(-30*time.Second)); err != nil {
+		t.Errorf("dated after at within the skew: %v", err)
+	}
+
+	v, err := keybinding.NewVerifier(vc.NewVerifier(outage{}, ossed.Verifier{}), audience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.RestoreStatusList(ctx, kept, f.anchor, restart); !errors.Is(err, keybinding.ErrSignatureUnestablished) {
+		t.Errorf("an issuer unavailable now: err = %v, want ErrSignatureUnestablished", err)
+	}
+	if _, err := v.RestoreStatusList(ctx, kept, f.anchor, time.Time{}); !errors.Is(err, keybinding.ErrStatusListStale) {
+		t.Errorf("no time, the issuer unavailable: err = %v, want ErrStatusListStale", err)
+	}
+
+	// The key is still in the anchor but no longer in the issuer's document.
+	pub := f.signer[issuerDID+"#signing"].Public().(stded25519.PublicKey)
+	vm, err := did.NewMultikeyVerificationMethod(issuerDID+"#signing", issuerDID, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := local.New()
+	r.Add(did.New(did.DocumentFields{Context: did.IssuedDocumentContexts(), ID: issuerDID, Controller: issuerDID, VerificationMethod: []did.VerificationMethod{vm}, AssertionMethod: []string{issuerDID + "#signing"}}))
+	removed, err := keybinding.NewVerifier(vc.NewVerifier(r, ossed.Verifier{}), audience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removed.RestoreStatusList(ctx, kept, f.anchor, restart); !errors.Is(err, keybinding.ErrSignature) {
+		t.Errorf("a list whose key left the issuer's document: err = %v, want ErrSignature", err)
+	}
+}
+
+// A held list whose signing key has left the anchor is not held, in a
+// running process as after a restart: its marks are not believed, so a later
+// list that clears one is taken.
+func TestStatusList_AHeldListWhoseKeyLeftTheAnchorIsNotHeld(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	at := t0.Add(time.Hour)
+	held, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "issuer", at.Add(-30*time.Minute), 3, 5), f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := f.anchor
+	rotated.IssuanceKeys = []string{issuerDID + "#signing"}
+	later, err := f.v.VerifyStatusList(ctx, f.list(t, issuerDID, "signing", at.Add(-10*time.Minute), 3), rotated, held, at)
+	if err != nil || later == held {
+		t.Fatalf("a later list without mark 5, its held key gone = %v, %v; want the new list", later, err)
+	}
+	if got, err := later.Revoked(5); err != nil || got {
+		t.Errorf("Revoked(5) = %v, %v; want false", got, err)
+	}
+}
+
 // An encoded list that expands past the limit is refused, not expanded.
 func TestStatusList_RefusesAnOversizedExpansion(t *testing.T) {
 	f := newFixture(t)
@@ -581,6 +724,9 @@ func TestZeroValues(t *testing.T) {
 	}
 	if _, err := v.VerifyStatusList(context.Background(), nil, keybinding.Anchor{}, nil, t0); err == nil {
 		t.Error("a zero Verifier verified a list")
+	}
+	if _, err := v.RestoreStatusList(context.Background(), nil, keybinding.Anchor{}, t0); err == nil {
+		t.Error("a zero Verifier restored a list")
 	}
 	var l *keybinding.StatusList
 	if _, err := l.Revoked(0); err == nil {

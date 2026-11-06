@@ -16,12 +16,21 @@ revocation list it already holds; it does not ask the issuer at decision time.
   held one (a revocation is not reversible; a mark past the end of a shorter
   list counts as cleared), a list dated in the future is not taken, and a
   list's id is a DID URL of its issuer. A `StatusList` cannot be changed once
-  verified, and it counts only while its signing key is among the anchor's
-  issuance keys. Keep the raw list and verify it again after a restart: with
-  no held list, any current list is accepted. A kept list that no longer
-  verifies (older than the anchor's maximum age, or its key gone from the
-  anchor) guards none of its marks; keeping the marks seen is then the
-  relying party's.
+  verified, and it counts — to decide, and as the held list — only while its
+  signing key is among the anchor's issuance keys. With no held list, any
+  current list is accepted.
+- `Verifier.RestoreStatusList` rebuilds the held list after a restart from the
+  last raw list the relying party held (an older one lowers the floor):
+  checked as `VerifyStatusList` checks it, and not dated after the given time,
+  but however old (neither its age nor its `validUntil` is checked). Past its
+  freshness a list is still the issuer's word on which entries were marked, so
+  it is the floor a later list must keep; `VerifyBinding` takes it only while
+  it is current, as any list. A list whose signing key has left the anchor is
+  not restored (`ErrSignature`): the key may have left because it leaked, so
+  its marks are not believed. Nothing is held then, and the next list is not
+  compared with the marks seen before. The anchor decides which keys count.
+  `ErrSignatureUnestablished` or a context error means restore again later;
+  until then, verify no later list with no held list.
 - `Verifier.VerifyBinding` checks, in order: the anchor's issuer signed it with
   an issuance key, under the W3C eddsa-jcs-2022 contract; it is well formed
   and carries no unsafe number; the time is within its period and the period

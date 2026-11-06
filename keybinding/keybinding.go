@@ -510,13 +510,13 @@ func parseTime(v any) (time.Time, error) {
 	return t, nil
 }
 
-// StatusList is a verified revocation list. Only VerifyStatusList makes one;
-// its fields cannot be changed. A relying party keeps the raw list it was made
-// from (a StatusList is not serialized) and verifies it again after a restart:
-// with no held list, any current list is accepted. A kept list that no longer
-// verifies (older than the anchor's maximum age, or its key gone from the
-// anchor) is not held, so it guards none of its marks: keeping the marks seen
-// is then the relying party's.
+// StatusList is a verified revocation list. Only VerifyStatusList and
+// RestoreStatusList make one; its fields cannot be changed. A relying party
+// keeps the raw list it was made from (a StatusList is not serialized) and,
+// after a restart, restores it with RestoreStatusList as held: with no held
+// list, any current list is accepted. A list whose signing key has left the
+// anchor is not held, in a running process or restored, so it guards none of
+// its marks.
 type StatusList struct {
 	issuer     string
 	id         string
@@ -613,29 +613,25 @@ func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string
 // list that leaves unmarked an entry held marks (an entry past its end is
 // unmarked) is ErrStatusListRevocationCleared: a revocation is not reversible,
 // so an issuer restored to an older state cannot undo one in the list held
-// (only a held list guards its marks; see StatusList). Whatever it returns is
-// current at at.
+// (only a held list guards its marks; see StatusList). A held list whose
+// signing key has left the anchor is not held: raw is checked as with none.
+// Whatever it returns is current at at.
 func (v *Verifier) VerifyStatusList(ctx context.Context, raw []byte, a Anchor, held *StatusList, at time.Time) (*StatusList, error) {
 	if v == nil || v.sig == nil {
 		return nil, errNotMade
 	}
-	body, hash, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContexts)
+	l, err := v.signedList(ctx, raw, a)
 	if err != nil {
 		return nil, err
 	}
-	l, err := readStatusList(body)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
-	}
-	if abs, err := did.AbsoluteKeyID(a.Issuer, l.id); err != nil || abs != l.id {
-		return nil, fmt.Errorf("%w: the list id %q is not a DID URL <%s>#fragment", ErrMalformed, l.id, a.Issuer)
-	}
-	l.signer, l.hash = signer, hash
 	out := l
 	if held != nil {
 		switch {
 		case held.issuer != a.Issuer || held.id != l.id:
 			return nil, fmt.Errorf("%w: list %q of %s, held %q of %s", ErrMalformed, l.id, a.Issuer, held.id, held.issuer)
+		case !slices.Contains(a.IssuanceKeys, held.signer):
+			// Its key has left the anchor: its marks are not believed, and
+			// it is not held, as RestoreStatusList would not restore it.
 		case l.validFrom.Equal(held.validFrom) && l.hash == held.hash:
 			out = held
 		case !l.validFrom.After(held.validFrom):
@@ -650,6 +646,64 @@ func (v *Verifier) VerifyStatusList(ctx context.Context, raw []byte, a Anchor, h
 		return nil, err
 	}
 	return out, nil
+}
+
+// RestoreStatusList rebuilds the held list after a restart from raw, the last
+// list the relying party held (an older one lowers the floor to its marks).
+// It checks raw as VerifyStatusList does — signed by the anchor's issuer with
+// one of the anchor's issuance keys, a well-formed revocation list whose id is
+// a DID URL of the issuer, within MaxStatusListBytes — and that it is valid
+// from no later than at (within the Verifier's clock skew), so a list dated in
+// the future never becomes held. Neither its age nor its validUntil is
+// checked: past its freshness, a list is still the issuer's word on which
+// entries were marked.
+//
+// The list returned serves as held for VerifyStatusList, the floor of the
+// marks a later list must keep. VerifyBinding takes it only while it is
+// current, as any list; past its freshness it serves only as held.
+//
+// A list whose signing key has left the anchor is ErrSignature and is not
+// restored: the key may have left because it leaked, so its marks are not
+// believed. Nothing is held then, and the next list is not compared with the
+// marks seen before. The anchor decides which keys count: a vc.IssuerVerifier
+// that resolves the issuer's keys as of the proof's time restores a list
+// whose key is still in the anchor though gone from the issuer's document.
+// ErrSignatureUnestablished (the issuer's document unavailable now) and a
+// context error are not that refusal: restore again later, and until then
+// verify no later list with no held list, which would skip the floor.
+func (v *Verifier) RestoreStatusList(ctx context.Context, raw []byte, a Anchor, at time.Time) (*StatusList, error) {
+	if v == nil || v.sig == nil {
+		return nil, errNotMade
+	}
+	if at.IsZero() {
+		return nil, fmt.Errorf("%w: no time to restore the list at", ErrStatusListStale)
+	}
+	l, err := v.signedList(ctx, raw, a)
+	if err != nil {
+		return nil, err
+	}
+	if at.Before(l.validFrom.Add(-v.skew)) {
+		return nil, fmt.Errorf("%w: the list is valid only from %s", ErrStatusListStale, l.validFrom.Format(timeLayout))
+	}
+	return l, nil
+}
+
+// signedList reads raw as the anchor's issuer's revocation list: signed (see
+// signed), well formed, and its id a DID URL of the issuer.
+func (v *Verifier) signedList(ctx context.Context, raw []byte, a Anchor) (*StatusList, error) {
+	body, hash, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContexts)
+	if err != nil {
+		return nil, err
+	}
+	l, err := readStatusList(body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if abs, err := did.AbsoluteKeyID(a.Issuer, l.id); err != nil || abs != l.id {
+		return nil, fmt.Errorf("%w: the list id %q is not a DID URL <%s>#fragment", ErrMalformed, l.id, a.Issuer)
+	}
+	l.signer, l.hash = signer, hash
+	return l, nil
 }
 
 // firstCleared returns the first entry held marks and l does not; an entry
