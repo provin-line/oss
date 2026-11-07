@@ -389,11 +389,22 @@ func decodeManifest(raw []byte) (*Manifest, error) {
 		V int `json:"v"`
 	}
 	if err := canon.NewStrictDecoder(raw).Decode(&probe); err != nil {
+		var dup *canon.DuplicateKeyError
+		if errors.As(err, &dup) {
+			// Keys of one object that collide, exactly or by case, are damage,
+			// as listed paths that collide by case are.
+			return nil, fmt.Errorf("%w: manifest: %v", ErrBundleIntegrity, err)
+		}
 		return nil, fmt.Errorf("bundle: parse manifest: %w", err)
 	}
 	v := probe.V
 	strictInto := func(dst any) error {
-		// decoder-hygiene-exempt: unknown-field rejection layered over the canon strict probe above.
+		// The strict decoder refuses a key that matches a field of dst only
+		// by case; encoding/json then refuses unknown members.
+		if err := canon.NewStrictDecoder(raw).Decode(dst); err != nil {
+			return err
+		}
+		// decoder-hygiene-exempt: unknown-field rejection layered over the canon strict decode above.
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		return dec.Decode(dst)
@@ -402,7 +413,7 @@ func decodeManifest(raw []byte) (*Manifest, error) {
 	case 1:
 		var w manifestWireV1
 		if err := strictInto(&w); err != nil {
-			return nil, fmt.Errorf("bundle: parse v1 manifest: %w", err)
+			return nil, manifestError("v1", err)
 		}
 		if w.Scope != ScopeLinear {
 			return nil, fmt.Errorf("bundle: unsupported scope %q for manifest v1", w.Scope)
@@ -412,7 +423,7 @@ func decodeManifest(raw []byte) (*Manifest, error) {
 	case 2:
 		var w manifestWireV2
 		if err := strictInto(&w); err != nil {
-			return nil, fmt.Errorf("bundle: parse v2 manifest: %w", err)
+			return nil, manifestError("v2", err)
 		}
 		if w.Scope != ScopeAggregateComplete {
 			return nil, fmt.Errorf("bundle: unsupported scope %q for manifest v2", w.Scope)
@@ -557,4 +568,15 @@ func (a *archiveResolver) Resolve(_ context.Context, didStr string) (*did.DIDDoc
 		return nil, fmt.Errorf("bundle: no document archived for %s: %w", didStr, resolver.ErrNotFound)
 	}
 	return doc, nil
+}
+
+// manifestError reports a manifest that does not decode as version v: keys
+// that collide, exactly or by case (also with a field of the manifest), are
+// damage, as listed paths that collide by case are.
+func manifestError(v string, err error) error {
+	var dup *canon.DuplicateKeyError
+	if errors.As(err, &dup) {
+		return fmt.Errorf("%w: %s manifest: %v", ErrBundleIntegrity, v, err)
+	}
+	return fmt.Errorf("bundle: parse %s manifest: %w", v, err)
 }

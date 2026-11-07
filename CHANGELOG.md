@@ -115,6 +115,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `vc` supports the cryptosuite. Its decoding is bounded as
   `multibase.DecodeBase58Btc` bounds it. `vc.VerifyProof` and
   `vc.VerifyProofUnderContract` decode through it.
+- `canon.DuplicateKeyError.Other`: for a key refused because it differs from
+  another key, or from a struct field, only in case (see Changed), that other
+  key or field name. Empty for an exact duplicate, as before.
 
 ### Changed
 
@@ -321,6 +324,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   deeper than 512 levels, or whose JSON values times the schema's `enum`
   entries and `const` values exceed 2 000 000; the error names the bound.
   `schema/README.md` lists the bounds.
+- **BREAKING (Go API)** `canon.StrictDecoder` refuses, as a
+  `*canon.DuplicateKeyError` naming both, two keys of one object that differ
+  only in case as encoding/json folds names (also the Kelvin and long-s
+  signs), whatever the target; and, where the target holds a struct, a key
+  that matches one of its fields only that way (`"V"` for a field `v`).
+  Fields are resolved by encoding/json's rules, through pointers and through
+  an interface already holding a pointer; a type that decodes itself
+  (`json.Unmarshaler`, `encoding.TextUnmarshaler`) is outside the check.
+  Keys that match exactly, and keys no field has, are read as before. An
+  unkeyed composite literal of `canon.DuplicateKeyError` no longer compiles
+  (it gained `Other`). `bundle.Verify` decodes the manifest's wire struct
+  through the strict decoder too, and reports a manifest whose keys collide,
+  exactly or by case, as `ErrBundleIntegrity`.
+- **BREAKING (wire)** Since the strict decoder refuses keys that differ only in
+  case whatever the target, so do the paths that decode others' JSON with it
+  into maps: the push ingress (`apipush`, now HTTP 400) and the ingest loop,
+  the jsonata filter and converter, the DID registry, the VC resolver, and
+  JSON Schema documents and payloads. No fixture here has such keys.
 
 ### Security
 
@@ -598,6 +619,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   lists every failure and could run to hundreds of megabytes). These are
   partial: they do not bound the library's work for every schema and payload,
   which needs a work budget inside the library.
+- `canon.StrictDecoder` no longer lets two keys that differ only in case into
+  one object, nor a key that matches a struct field only by case. encoding/json
+  reads both into the same struct field, the later one winning, and reads
+  `"V"` into a field `v`; a reader that tells case apart sees two keys, or
+  none. The strict decoder refused only exact duplicates.
 
 ## [0.3.0] - 2026-08-05
 
