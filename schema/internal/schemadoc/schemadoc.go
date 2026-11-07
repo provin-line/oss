@@ -16,6 +16,7 @@ package schemadoc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ const admissionResourceID = "urn:dplaax:schema-doc:document"
 // well-formedness verdict (Validate) share it, so the admission policy cannot
 // drift between them.
 func Compile(id string, document []byte) (*Schema, error) {
-	doc, err := decode(document)
+	doc, _, err := decode(document)
 	if err != nil {
 		return nil, err
 	}
@@ -66,25 +67,74 @@ func Compile(id string, document []byte) (*Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schemadoc: compile: %w", err)
 	}
-	return &Schema{compiled: compiled}, nil
+	return &Schema{compiled: compiled, entries: enumEntries(doc)}, nil
 }
 
 // Schema is a compiled schema.
 type Schema struct {
 	compiled *jsonschema.Schema
+	entries  int // enum entries and const values in the schema document
 }
 
+// The library's work on a payload is not bounded by its size alone: it checks
+// a value against enum by comparing it with each entry in turn (a number is
+// read as an exact rational again for each comparison), and hashes every
+// subtree of an array under uniqueItems at each level of a recursive schema.
+// So a payload is refused when it is nested deeper than maxPayloadDepth, or
+// when its values times the schema's enum entries and const values exceed
+// maxComparisons. The error names the bound.
+//
+// These bounds cut two shapes of that work; they do not bound the library's
+// work for every schema and payload, which needs a budget inside the library.
+// They stand in for limits santhosh-tekuri/jsonschema does not have: when it
+// can bound its work (or take a context to stop it), Validate uses that and
+// these bounds go.
+const (
+	maxPayloadDepth = 512
+	maxComparisons  = 2_000_000
+)
+
 // Validate decodes payload as Compile decodes a schema (strictly, within the
-// number bounds) and validates it against the schema.
+// number bounds), refuses one beyond the work bounds above, and validates it
+// against the schema.
 func (s *Schema) Validate(payload []byte) error {
-	inst, err := decode(payload)
+	inst, shape, err := decode(payload)
 	if err != nil {
 		return err
 	}
+	if shape.depth > maxPayloadDepth {
+		return fmt.Errorf("schemadoc: payload nested %d deep, beyond the bound of %d levels", shape.depth, maxPayloadDepth)
+	}
+	if n := uint64(shape.values) * uint64(s.entries); n > maxComparisons {
+		return fmt.Errorf("schemadoc: payload of %d values against a schema of %d enum entries and const values: %d comparisons, beyond the bound of %d (values × entries)", shape.values, s.entries, n, maxComparisons)
+	}
 	if err := s.compiled.Validate(inst); err != nil {
-		return fmt.Errorf("schemadoc: does not conform: %w", err)
+		return fmt.Errorf("schemadoc: does not conform: %s", firstFailure(err))
 	}
 	return nil
+}
+
+// maxFailureBytes bounds the text of a conformance error.
+const maxFailureBytes = 1 << 10
+
+// firstFailure states the first place the payload fails to conform, in at
+// most maxFailureBytes. The library's own text lists every failure, each with
+// its location, which for a large payload runs to hundreds of megabytes.
+func firstFailure(err error) string {
+	var ve *jsonschema.ValidationError
+	text := ""
+	if errors.As(err, &ve) {
+		for len(ve.Causes) > 0 {
+			ve = ve.Causes[0]
+		}
+		text = ve.Error()
+	} else {
+		text = err.Error()
+	}
+	if len(text) > maxFailureBytes {
+		text = text[:maxFailureBytes] + "…"
+	}
+	return text
 }
 
 // The library reads every number as an exact rational (math/big), at a cost
@@ -101,31 +151,42 @@ const (
 	maxExponent    = 400
 )
 
-// decode strict-decodes document and refuses a number beyond the bounds the
-// library reads in bounded time (maxNumberBytes, maxExponent). Compile and
-// Schema.Validate decode every JSON value the library reads here.
-func decode(document []byte) (any, error) {
-	var v any
-	if err := canon.NewStrictDecoder(document).Decode(&v); err != nil {
-		return nil, fmt.Errorf("schemadoc: not strict-decodable JSON: %w", err)
-	}
-	if err := checkNumbers(v); err != nil {
-		return nil, err
-	}
-	return v, nil
+// shape is what decode measures of a document: its JSON values, and the
+// depth of its deepest one (a scalar at the top is depth 1).
+type shape struct {
+	values int
+	depth  int
 }
 
-func checkNumbers(v any) error {
+// decode strict-decodes document, refuses a number beyond the bounds the
+// library reads in bounded time (maxNumberBytes, maxExponent), and measures
+// the document's shape. Compile and Schema.Validate decode every JSON value
+// the library reads here.
+func decode(document []byte) (any, shape, error) {
+	var v any
+	if err := canon.NewStrictDecoder(document).Decode(&v); err != nil {
+		return nil, shape{}, fmt.Errorf("schemadoc: not strict-decodable JSON: %w", err)
+	}
+	var sh shape
+	if err := walk(v, 1, &sh); err != nil {
+		return nil, shape{}, err
+	}
+	return v, sh, nil
+}
+
+func walk(v any, depth int, sh *shape) error {
+	sh.values++
+	sh.depth = max(sh.depth, depth)
 	switch t := v.(type) {
 	case map[string]any:
 		for _, e := range t {
-			if err := checkNumbers(e); err != nil {
+			if err := walk(e, depth+1, sh); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for _, e := range t {
-			if err := checkNumbers(e); err != nil {
+			if err := walk(e, depth+1, sh); err != nil {
 				return err
 			}
 		}
@@ -133,6 +194,32 @@ func checkNumbers(v any) error {
 		return checkNumber(string(t))
 	}
 	return nil
+}
+
+// enumEntries counts the entries of every "enum" array and every "const" in
+// a schema document. A property named "const" counts too, which only
+// overstates the work.
+func enumEntries(v any) int {
+	n := 0
+	switch t := v.(type) {
+	case map[string]any:
+		for k, e := range t {
+			switch k {
+			case "enum":
+				if list, ok := e.([]any); ok {
+					n += len(list)
+				}
+			case "const":
+				n++
+			}
+			n += enumEntries(e)
+		}
+	case []any:
+		for _, e := range t {
+			n += enumEntries(e)
+		}
+	}
+	return n
 }
 
 func checkNumber(n string) error {

@@ -206,3 +206,81 @@ func TestValidate_DoesNotDecodeContent(t *testing.T) {
 		t.Errorf("content string: %v", err)
 	}
 }
+
+// validatorFor registers doc and returns its validator and reference.
+func validatorFor(t *testing.T, doc string) (*local.Validator, vc.SchemaRef) {
+	t.Helper()
+	v := local.New()
+	if err := v.Add("schema:bound", []byte(doc)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	return v, ref("schema:bound", []byte(doc))
+}
+
+// A payload nested deeper than 512 levels is refused, naming the bound; one
+// of 512 is validated.
+func TestValidate_BoundsThePayloadDepth(t *testing.T) {
+	v, r := validatorFor(t, `{"uniqueItems": true, "items": {"$ref": "#"}}`)
+	nested := func(depth int) []byte {
+		return []byte(strings.Repeat("[", depth-1) + "0" + strings.Repeat("]", depth-1))
+	}
+	if err := v.Validate(context.Background(), nested(512), r); err != nil {
+		t.Errorf("512 deep: %v", err)
+	}
+	err := v.Validate(context.Background(), nested(513), r)
+	if err == nil || !strings.Contains(err.Error(), "bound of 512 levels") {
+		t.Errorf("513 deep: err = %v, want the depth bound named", err)
+	}
+}
+
+// A payload whose values times the schema's enum entries and const values
+// exceed 2 000 000 is refused, naming the bound; one at the bound is
+// validated.
+func TestValidate_BoundsTheEnumComparisons(t *testing.T) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprint(i)
+	}
+	v, r := validatorFor(t, `{"type": "array", "items": {"enum": [`+strings.Join(entries, ",")+`]}}`)
+	array := func(items int) []byte {
+		return []byte("[" + strings.TrimSuffix(strings.Repeat("7,", items), ",") + "]")
+	}
+	if err := v.Validate(context.Background(), array(19_999), r); err != nil { // 20 000 values × 100
+		t.Errorf("at the bound: %v", err)
+	}
+	err := v.Validate(context.Background(), array(20_000), r)
+	if err == nil || !strings.Contains(err.Error(), "beyond the bound of 2000000") {
+		t.Errorf("past the bound: err = %v, want the comparison bound named", err)
+	}
+}
+
+// const counts as one entry each.
+func TestValidate_CountsConstAsAnEntry(t *testing.T) {
+	v, r := validatorFor(t, `{"type": "array", "items": {"anyOf": [{"const": 1}, {"const": 2}]}}`)
+	array := func(items int) []byte {
+		return []byte("[" + strings.TrimSuffix(strings.Repeat("1,", items), ",") + "]")
+	}
+	if err := v.Validate(context.Background(), array(999_999), r); err != nil { // 1 000 000 values × 2
+		t.Errorf("at the bound: %v", err)
+	}
+	err := v.Validate(context.Background(), array(1_000_000), r)
+	if err == nil || !strings.Contains(err.Error(), "beyond the bound") {
+		t.Errorf("1 000 001 values × 2 const: err = %v, want the comparison bound", err)
+	}
+}
+
+// A conformance error states the first failure only, in at most 1 KiB, however
+// many values fail.
+func TestValidate_StatesOnlyTheFirstFailure(t *testing.T) {
+	v, r := validatorFor(t, `{"type": "array", "items": {"type": "string"}}`)
+	err := v.Validate(context.Background(), []byte("["+strings.TrimSuffix(strings.Repeat("1,", 50_000), ",")+"]"), r)
+	if err == nil {
+		t.Fatal("50 000 numbers against strings: want error")
+	}
+	if n := len(err.Error()); n > 2<<10 {
+		t.Errorf("error of %d bytes, want at most about 1 KiB", n)
+	}
+	if !strings.Contains(err.Error(), "/0") {
+		t.Errorf("error does not name the first failure: %.200s", err)
+	}
+}

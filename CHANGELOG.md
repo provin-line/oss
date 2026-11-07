@@ -317,6 +317,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   NATS subject or account key, or a DID uses. It is the publisher's fault
   (`ErrRemotePeer`): the remote registration is undone and nothing is
   imported or stored.
+- **BREAKING (Go API)** `(*local.Validator).Validate` refuses a payload nested
+  deeper than 512 levels, or whose JSON values times the schema's `enum`
+  entries and `const` values exceed 2 000 000; the error names the bound.
+  `schema/README.md` lists the bounds.
 
 ### Security
 
@@ -587,6 +591,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   frame, and keeps only the stall bound for the payload frames after it. The
   deployment guide gives the limits and says to set a rate or time limit for
   `RetainPayload` at the proxy in front where one is wanted.
+- The JSON Schema payload check refuses two shapes of payload that cost
+  `santhosh-tekuri/jsonschema` far more than their size (many values against
+  a large `enum`, deep nesting under a recursive schema), and a conformance
+  error states only the first failure, in at most 1 KiB (the library's text
+  lists every failure and could run to hundreds of megabytes). These are
+  partial: they do not bound the library's work for every schema and payload,
+  which needs a work budget inside the library.
 
 ## [0.3.0] - 2026-08-05
 

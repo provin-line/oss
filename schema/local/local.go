@@ -15,7 +15,9 @@
 // rejected here exactly as elsewhere in the stack; the validator never approves
 // ambiguous bytes the codec would refuse. A number longer than 256 bytes, or
 // whose exponent part lies beyond ±400, is refused in either, as the library
-// would read it slowly. Schema-document compilation (strict decode, number
+// would read it slowly; so is a payload nested deeper than 512 levels, or
+// whose values times the schema's enum entries and const values exceed
+// 2 000 000 (see schema/README.md). Schema-document compilation (strict decode, number
 // bounds, Draft 2020-12 pin, external-$ref denial) is the shared
 // schema/internal/schemadoc policy, the same one schema.ValidateJSONSchema
 // applies at registry admission, so a stored schema is exactly one the registry
