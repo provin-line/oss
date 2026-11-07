@@ -26,6 +26,10 @@ import (
 // depends on map order and this labelling gives one of its answers, always
 // the same one.
 //
+// The spelling is json-gold's, which is URDNA2015's. Canonicalize refuses,
+// before labelling, every term URDNA2015 and RDFC-1.0 write differently, so on
+// every dataset labelled here the spelling is also RDFC-1.0's.
+//
 // When json-gold can bound its calls to Hash N-Degree Quads, Canonicalize
 // hands the labelling back to json-gold with that bound and this file goes.
 // Its bound need not refuse the same datasets; the canonical bytes of every

@@ -466,6 +466,23 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   copied the path once per level, so refusing a number 10 000 levels deep,
   which `canon.StrictDecoder` lets through, allocated 160 MB before any
   signature was checked; it now allocates about 1 MB.
+- `canon/urdna2015` keeps the canonical N-Quads one-to-one. It refuses a
+  document whose dataset holds an IRI, wherever it sits in a quad (subject,
+  predicate, object, graph name, datatype), that is not valid UTF-8 or holds
+  a character N-Quads' IRIREF excludes unescaped and an RFC 3987 IRI cannot
+  hold: a space, `<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` `` or `\` (control
+  characters were already refused). Such an IRI was written as it was, which
+  broke the N-Quads line; with a space or `>`, two documents of different
+  meaning could have the same canonical bytes, and an eddsa-rdfc-2022 proof
+  over one verified over the other. It also refuses a literal that is not
+  valid UTF-8 or holds a character RDFC-1.0 (Appendix A) writes escaped and
+  URDNA2015 writes as it is (BS, FF, U+0000–U+0007, VT, U+000E–U+001F, DEL,
+  U+FFFE and U+FFFF), and a literal typed `rdf:langString` without a
+  language tag, which was written as no N-Quads parser reads it. So the bytes
+  signed are RDFC-1.0's canonical form of the dataset, and no byte the frozen
+  v0 wire signs changes. `vc.CreateProof` and every verify function in `vc`
+  refuse such a document under eddsa-rdfc-2022; eddsa-jcs-2022 is not
+  affected.
 
 ## [0.3.0] - 2026-08-05
 
