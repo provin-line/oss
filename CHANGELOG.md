@@ -124,6 +124,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   bundle manifest decoded with encoding/json is read as `bundle.Verify` reads
   it, strictly and in the exact shape of its version, and is written in that
   shape, as `bundle.Export` writes it.
+- `appraisal.SpineEntry.Extensions` (`map[string]any`, as
+  `appraisal.Manifest.Extensions`): the members of a spine entry other than
+  `bodyAddress` and `wireVariantId`, which the dPLaaX schema admits. They are
+  kept when a manifest is read and are in its identity (`ID`). An extension
+  that is one of the two fields, exactly or in another case, gets no identity
+  (`Validate`). `SpineEntry` has its own `MarshalJSON` and `UnmarshalJSON`,
+  which read and write an entry as a manifest does.
 
 ### Changed
 
@@ -372,6 +379,29 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   writes the shape of its version: a v2 manifest always has `receipts`
   (`null` when it has none), and a v1 manifest with receipts, or one of a
   version no shape names, is an error where it was written as given.
+- **BREAKING (wire)** An evaluation view manifest is read member by member,
+  exactly as named (`appraisal.Manifest`'s `UnmarshalJSON`), and refused
+  (`ErrInvalidManifest`) where it was read before: a member that is a known
+  field in another case (`"HEAD"`, or `"BodyAddress"` in a spine entry), and
+  `null` for the manifest, a spine entry, or a known field (it was read as
+  empty). Every other member, at the top or in a spine entry, is kept as an
+  extension, in the identity, so a manifest whose spine entries carry other
+  members has a different `EvidenceViewID` than before, and one stored for it
+  no longer passes `ValidateID`. A number in an extension that
+  `canon.AdmitSafeNumbers` refuses gets no identity, as on the other identity
+  paths: `ID`, `CanonicalBytes`, `NewView` and `View.ValidateShape` refuse it.
+- **BREAKING (Go API)** `appraisal.SpineEntry` holds a map (`Extensions`), so
+  it is no longer comparable: `==` on it and its use as a map key no longer
+  compile, and neither does an unkeyed composite literal with its two values.
+  A decoded entry's `Extensions` is an empty map, not nil, so a deep
+  comparison with an entry built without one differs. A `SpineEntry` decoded
+  on its own is read as a manifest reads it (duplicate keys, a field in
+  another case, and `null` are refused; other members are kept). A manifest
+  built in Go gets no identity, and is not encoded, with an extension that is
+  a field in another case; it gets no identity with an extension value that
+  is not a JSON value as decoding gives it, or a Go integer (a `float32` is
+  canonicalized widened but encoded short, so its identity would not be that
+  of its encoding).
 
 ### Security
 
@@ -662,6 +692,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   duplicate keys, a key in another case read as the field, and invalid UTF-8
   or an unpaired surrogate replaced with U+FFFD, where the strict paths refuse
   all three.
+- An `appraisal.Manifest`'s identity (`ID`) covers every member it was read
+  from. It re-read the members into the struct through encoding/json, which
+  matched names case-insensitively and dropped unknown members: a member of a
+  spine entry the struct lacks left `ID` unchanged, and `"HEAD"` was read as
+  the head while also kept as an extension. A spine entry's other members are
+  now in the identity, and a member that is a field in another case is
+  refused. A number in an extension is admitted before it is canonicalized,
+  as on the other identity paths, so the identity holds the number the
+  manifest carries.
 
 ## [0.3.0] - 2026-08-05
 

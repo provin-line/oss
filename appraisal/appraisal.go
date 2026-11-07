@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/provin-line/oss/canon"
@@ -63,9 +65,57 @@ const (
 )
 
 // SpineEntry fixes one selected signed wire variant in origin-to-head order.
+// Extensions are its other members, preserved and included in the manifest's
+// identity as Manifest.Extensions are: the dPLaaX schema admits members of a
+// spine entry beyond its two fields.
 type SpineEntry struct {
-	BodyAddress   string `json:"bodyAddress"`
-	WireVariantID string `json:"wireVariantId"`
+	BodyAddress   string         `json:"bodyAddress"`
+	WireVariantID string         `json:"wireVariantId"`
+	Extensions    map[string]any `json:"-"`
+}
+
+var spineEntryFields = map[string]bool{"bodyAddress": true, "wireVariantId": true}
+
+// UnmarshalJSON reads the entry as a manifest reads it: its two fields from
+// their own names (one spelled in another case is refused), and every other
+// member kept as an extension. Duplicate keys are refused. On an error the
+// entry is left as it was.
+func (e *SpineEntry) UnmarshalJSON(data []byte) error {
+	var raw any
+	if err := canon.NewStrictDecoder(data).Decode(&raw); err != nil {
+		return fmt.Errorf("%w: spine entry: decode: %v", ErrInvalidManifest, err)
+	}
+	entry, err := readSpineEntry("spine entry", raw)
+	if err != nil {
+		return err
+	}
+	*e = entry
+	return nil
+}
+
+// MarshalJSON writes the entry's two fields and its extensions.
+func (e SpineEntry) MarshalJSON() ([]byte, error) {
+	projection, err := e.projection("spine entry")
+	if err != nil {
+		return nil, err
+	}
+	// Display/transport serialization; the identity digest hashes the
+	// manifest's CanonicalBytes, never these bytes (canonicalizer-hygiene-exempt).
+	return json.Marshal(projection)
+}
+
+func (e SpineEntry) projection(where string) (map[string]any, error) {
+	if err := validExtensions(where+" extension", e.Extensions, spineEntryFields); err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"bodyAddress":   e.BodyAddress,
+		"wireVariantId": e.WireVariantID,
+	}
+	for key, value := range e.Extensions {
+		out[key] = value
+	}
+	return out, nil
 }
 
 // Manifest fixes all inputs on which an evaluation depends. Extensions are
@@ -88,33 +138,131 @@ var manifestFields = map[string]bool{
 	"schemaVersion": true, "inputSnapshotDigests": true,
 }
 
-// UnmarshalJSON preserves extension members and rejects duplicate JSON keys.
+// UnmarshalJSON reads each member exactly as named: a known field from its
+// own name (one spelled in another case is refused, not read as the field),
+// a spine entry from exactly its two members, and every other top-level
+// member kept as an extension, in the identity. So no member is read under
+// another spelling, and none is dropped. Duplicate keys are refused.
 func (m *Manifest) UnmarshalJSON(data []byte) error {
 	var raw map[string]any
 	if err := canon.NewStrictDecoder(data).Decode(&raw); err != nil {
 		return fmt.Errorf("%w: decode: %v", ErrInvalidManifest, err)
 	}
-	// Decode intermediary only: these bytes feed json.Unmarshal for field
-	// extraction and are never hashed or signed (canonicalizer-hygiene-exempt).
-	known, err := json.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("%w: normalize: %v", ErrInvalidManifest, err)
+	if raw == nil {
+		return fmt.Errorf("%w: null, want an object", ErrInvalidManifest)
 	}
-	type plain Manifest
-	var decoded plain
-	// known is re-marshaled from a map the StrictDecoder above already
-	// checked; duplicate keys are impossible here (decoder-hygiene-exempt).
-	if err := json.Unmarshal(known, &decoded); err != nil {
-		return fmt.Errorf("%w: fields: %v", ErrInvalidManifest, err)
-	}
-	decoded.Extensions = make(map[string]any)
-	for key, value := range raw {
-		if !manifestFields[key] {
-			decoded.Extensions[key] = value
+	out := Manifest{Extensions: map[string]any{}}
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		value := raw[key]
+		var err error
+		switch key {
+		case "head":
+			out.Head, err = manifestString(key, value)
+		case "claimContractId":
+			out.ClaimContractID, err = manifestString(key, value)
+		case "canonicalizerId":
+			out.CanonicalizerID, err = manifestString(key, value)
+		case "cryptosuiteId":
+			out.CryptosuiteID, err = manifestString(key, value)
+		case "schemaVersion":
+			out.SchemaVersion, err = manifestString(key, value)
+		case "spine":
+			out.Spine, err = manifestSpine(value)
+		case "inputSnapshotDigests":
+			out.InputSnapshotDigests, err = manifestDigests(value)
+		default:
+			if name, ok := foldsTo(key, manifestFields); ok {
+				return fmt.Errorf("%w: member %q is %q in another case", ErrInvalidManifest, key, name)
+			}
+			out.Extensions[key] = value
+		}
+		if err != nil {
+			return err
 		}
 	}
-	*m = Manifest(decoded)
+	*m = out
 	return nil
+}
+
+// foldsTo reports the field of fields that key equals only as encoding/json
+// folds names (strings.EqualFold), if any: such a member is read as that field
+// by a reader that folds names, so it cannot be an extension.
+func foldsTo(key string, fields map[string]bool) (string, bool) {
+	for name := range fields {
+		if key != name && strings.EqualFold(key, name) {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func manifestString(key string, value any) (string, error) {
+	s, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%w: %s is %T, want a string", ErrInvalidManifest, key, value)
+	}
+	return s, nil
+}
+
+func manifestSpine(value any) ([]SpineEntry, error) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: spine is %T, want an array", ErrInvalidManifest, value)
+	}
+	spine := make([]SpineEntry, len(list))
+	for i, item := range list {
+		entry, err := readSpineEntry(fmt.Sprintf("spine[%d]", i), item)
+		if err != nil {
+			return nil, err
+		}
+		spine[i] = entry
+	}
+	return spine, nil
+}
+
+// readSpineEntry reads one decoded spine entry; where names it in errors.
+func readSpineEntry(where string, value any) (SpineEntry, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return SpineEntry{}, fmt.Errorf("%w: %s is %T, want an object", ErrInvalidManifest, where, value)
+	}
+	entry := SpineEntry{Extensions: map[string]any{}}
+	for _, key := range slices.Sorted(maps.Keys(obj)) {
+		v := obj[key]
+		var err error
+		switch key {
+		case "bodyAddress":
+			entry.BodyAddress, err = manifestString(where+".bodyAddress", v)
+		case "wireVariantId":
+			entry.WireVariantID, err = manifestString(where+".wireVariantId", v)
+		default:
+			if name, ok := foldsTo(key, spineEntryFields); ok {
+				return SpineEntry{}, fmt.Errorf("%w: %s member %q is %q in another case", ErrInvalidManifest, where, key, name)
+			}
+			entry.Extensions[key] = v
+		}
+		if err != nil {
+			return SpineEntry{}, err
+		}
+	}
+	return entry, nil
+}
+
+func manifestDigests(value any) (map[string]string, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: inputSnapshotDigests is %T, want an object", ErrInvalidManifest, value)
+	}
+	digests := make(map[string]string, len(obj))
+	for _, key := range slices.Sorted(maps.Keys(obj)) {
+		v := obj[key]
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: inputSnapshotDigests[%q] is %T, want a string", ErrInvalidManifest, key, v)
+		}
+		digests[key] = s
+	}
+	return digests, nil
 }
 
 // MarshalJSON retains extension members. Canonical identity uses CanonicalBytes.
@@ -152,7 +300,10 @@ func (m Manifest) ID() (string, error) {
 	return jcs.HashRFC8785(projection)
 }
 
-// Validate checks the manifest invariants needed for unambiguous identity.
+// Validate checks the manifest invariants needed for unambiguous identity. A
+// number in an extension, at the top or in a spine entry, must be one
+// canon.AdmitSafeNumbers admits before it is canonicalized, as on the other
+// identity paths (canon.number.raw-token-guard).
 func (m Manifest) Validate() error {
 	if !contentAddressPattern.MatchString(m.Head) {
 		return fmt.Errorf("%w: head is not a content address", ErrInvalidManifest)
@@ -172,6 +323,12 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("%w: repeated spine body %s", ErrInvalidManifest, entry.BodyAddress)
 		}
 		seen[entry.BodyAddress] = true
+		if err := validExtensions(fmt.Sprintf("spine[%d] extension", i), entry.Extensions, spineEntryFields); err != nil {
+			return err
+		}
+		if err := canon.AdmitSafeNumbers(entry.Extensions); err != nil {
+			return fmt.Errorf("%w: spine[%d] extension: %w", ErrInvalidManifest, i, err)
+		}
 	}
 	if m.Spine[len(m.Spine)-1].BodyAddress != m.Head {
 		return fmt.Errorf("%w: final spine entry is not head", ErrInvalidManifest)
@@ -196,12 +353,61 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("%w: invalid input snapshot %q", ErrInvalidManifest, name)
 		}
 	}
-	for key := range m.Extensions {
-		if manifestFields[key] {
-			return fmt.Errorf("%w: extension collides with %q", ErrInvalidManifest, key)
+	if err := validExtensions("extension", m.Extensions, manifestFields); err != nil {
+		return err
+	}
+	if err := canon.AdmitSafeNumbers(m.Extensions); err != nil {
+		return fmt.Errorf("%w: extension: %w", ErrInvalidManifest, err)
+	}
+	return nil
+}
+
+// validExtensions refuses an extension that is one of fields, exactly or in
+// another case (a reader would take it for that field), and one whose value
+// is not a JSON value (jsonValue). Keys are checked in sorted order, so the
+// refusal reported does not depend on map order.
+func validExtensions(what string, extensions map[string]any, fields map[string]bool) error {
+	for _, key := range slices.Sorted(maps.Keys(extensions)) {
+		if fields[key] {
+			return fmt.Errorf("%w: %s collides with %q", ErrInvalidManifest, what, key)
+		}
+		if name, ok := foldsTo(key, fields); ok {
+			return fmt.Errorf("%w: %s %q is %q in another case", ErrInvalidManifest, what, key, name)
+		}
+		if err := jsonValue(extensions[key]); err != nil {
+			return fmt.Errorf("%w: %s %q %v", ErrInvalidManifest, what, key, err)
 		}
 	}
 	return nil
+}
+
+// jsonValue refuses a value that is neither one decoding JSON gives (nil,
+// bool, string, json.Number, float64, []any, map[string]any) nor a Go integer.
+// The JSON form of any other value reads back as another value (a float32 is
+// widened when canonicalized but written short), so the identity would not be
+// that of the document the manifest encodes to.
+func jsonValue(v any) error {
+	switch t := v.(type) {
+	case nil, bool, string, json.Number, float64,
+		int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return nil
+	case []any:
+		for _, e := range t {
+			if err := jsonValue(e); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			if err := jsonValue(t[k]); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("holds a %T, not a JSON value", v)
+	}
 }
 
 func (m Manifest) projection() (map[string]any, error) {
@@ -214,10 +420,11 @@ func (m Manifest) projection() (map[string]any, error) {
 	}
 	spine := make([]any, len(m.Spine))
 	for i, entry := range m.Spine {
-		spine[i] = map[string]any{
-			"bodyAddress":   entry.BodyAddress,
-			"wireVariantId": entry.WireVariantID,
+		p, err := entry.projection(fmt.Sprintf("spine[%d]", i))
+		if err != nil {
+			return nil, err
 		}
+		spine[i] = p
 	}
 	out["spine"] = spine
 	snapshots := make(map[string]any, len(m.InputSnapshotDigests))
@@ -225,10 +432,10 @@ func (m Manifest) projection() (map[string]any, error) {
 		snapshots[key] = value
 	}
 	out["inputSnapshotDigests"] = snapshots
+	if err := validExtensions("extension", m.Extensions, manifestFields); err != nil {
+		return nil, err
+	}
 	for key, value := range m.Extensions {
-		if manifestFields[key] {
-			return nil, fmt.Errorf("%w: extension collides with %q", ErrInvalidManifest, key)
-		}
 		out[key] = value
 	}
 	return out, nil
