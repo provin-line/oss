@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/schema/local"
@@ -139,5 +141,68 @@ func TestValidate_FormatIsAnnotationOnly(t *testing.T) {
 	}
 	if err := v.Validate(context.Background(), []byte(`{"email":"not-an-email"}`), ref("schema:email", doc)); err != nil {
 		t.Errorf("format must be annotation-only (no assertion), got error: %v", err)
+	}
+}
+
+// numbersSchema makes the library read each payload number: minimum and
+// multipleOf compare it, and uniqueItems over more than 20 items hashes it.
+var numbersSchema = []byte(`{
+	"type": "array",
+	"uniqueItems": true,
+	"items": {"type": "number", "minimum": -1e400, "multipleOf": 1e-400}
+}`)
+
+// payloadOf is an array of 21 distinct numbers, the last one n.
+func payloadOf(n string) []byte {
+	var b strings.Builder
+	b.WriteString("[")
+	for i := range 20 {
+		fmt.Fprintf(&b, "%d,", i)
+	}
+	return []byte(b.String() + n + "]")
+}
+
+// A payload number the JSON Schema library would read slowly, or cannot read
+// (one whose exponent is beyond ±10^6 made validation panic), is refused
+// before the library reads the payload; one within the bounds is validated as
+// before.
+func TestValidate_RefusesAPayloadNumberBeyondTheBounds(t *testing.T) {
+	v := local.New()
+	if err := v.Add("schema:numbers", numbersSchema); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	r := ref("schema:numbers", numbersSchema)
+	for _, n := range []string{"1e999999", "1e-999999", "1e401", "1e1000001", "1e-1000001", strings.Repeat("7", 257)} {
+		if err := v.Validate(context.Background(), payloadOf(n), r); err == nil {
+			t.Errorf("payload number %.40s: want error", n)
+		}
+	}
+	for _, n := range []string{"1e400", "1e-400", strings.Repeat("7", 256)} {
+		if err := v.Validate(context.Background(), payloadOf(n), r); err != nil {
+			t.Errorf("payload number %.40s: %v", n, err)
+		}
+	}
+}
+
+// A schema number beyond the bounds is refused when the schema is added,
+// also one the library cannot read and dropped from the schema.
+func TestAdd_RefusesASchemaNumberBeyondTheBounds(t *testing.T) {
+	for _, n := range []string{"1e999999", "1e1000001", "1e-1000001"} {
+		if err := local.New().Add("schema:big", []byte(`{"type":"number","maximum":`+n+`}`)); err == nil {
+			t.Errorf("maximum %s: want error", n)
+		}
+	}
+}
+
+// Content assertion is off: a string the schema says holds JSON is not
+// decoded by the library, so its numbers are not read either.
+func TestValidate_DoesNotDecodeContent(t *testing.T) {
+	doc := []byte(`{"type":"string","contentMediaType":"application/json"}`)
+	v := local.New()
+	if err := v.Add("schema:content", doc); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := v.Validate(context.Background(), []byte(`"{\"a\": 1e1000001"`), ref("schema:content", doc)); err != nil {
+		t.Errorf("content string: %v", err)
 	}
 }

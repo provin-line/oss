@@ -13,8 +13,9 @@ import (
 )
 
 // ValidateJSONSchema reports whether document is a well-formed, self-contained
-// JSON Schema: it must strict-decode, compile under Draft 2020-12, and reference
-// no external $ref. This is the registry-admission check — the schema registry
+// JSON Schema: it must strict-decode, hold no number longer than 256 bytes or
+// whose exponent part lies beyond ±400, compile under Draft 2020-12, and
+// reference no external $ref. This is the registry-admission check — the schema registry
 // rejects any document this rejects, so it never holds a schema a downstream
 // Validator would refuse — and the precondition the local Validator enforces
 // before storing. It registers nothing and resolves no reference. (JSON Schema

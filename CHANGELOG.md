@@ -288,6 +288,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `unsafe-integer` now covering such non-integers. The callers here refuse
   the same numbers: `vc.CreateProof`, `keybinding`, the DID registry, the VC
   resolver's `StoreVC`, and `resolver/cache`, which does not cache them.
+- **BREAKING (Go API)** `schema.ValidateJSONSchema`, `(*local.Validator).Add`
+  and `(*local.Validator).Validate` refuse a schema or payload holding a number
+  longer than 256 bytes, or whose exponent part (after `e` or `E`) lies beyond
+  ±400 (`1e401`, `1e-401`, `0e999999`). Every number of at most 256 bytes
+  whose exponent part lies within ±400 is read as before; that includes every
+  binary64 value as `encoding/json` and RFC 8785 write it. The schema
+  registry's `RegisterSchema` refuses such a schema too; a schema stored
+  before the upgrade is not checked again.
 
 ### Security
 
@@ -506,6 +514,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
     endpoint did.
   - The SSRF-guarded HTTP client (`core.URLGuard.HTTPClient`) takes at most
     64 KiB of response headers (net/http's default is 10 MiB).
+- The JSON Schema checks read numbers in bounded time.
+  `santhosh-tekuri/jsonschema` reads every number as an exact rational, at a
+  cost that grows steeply with its exponent: `1e999999` alone took about
+  10 ms, so a megabyte of such numbers, in a schema sent to `RegisterSchema`
+  (compiled before it is stored) or in a payload checked by `schema/local`,
+  could cost minutes. A number whose exponent is beyond ±10^6 the library
+  cannot read at all: a schema bound holding one was silently dropped, and a
+  payload holding one made validation panic. Numbers beyond the bounds above
+  are now refused before the library reads them; within them, a 1 MiB
+  payload of numbers at the bounds takes about 0.2 s.
 
 ## [0.3.0] - 2026-08-05
 
