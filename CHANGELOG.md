@@ -568,6 +568,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   written as a byte sequence allocated about 1.3 KB per byte (about 1.4 GB
   for a 1 MiB schema) on every read; written as base64 it allocates about
   76 bytes per byte, 17 times less.
+- `canon/urdna2015` spells the path to a refused value only into the error.
+  It built the path string at every value, which cost the number of values
+  times their depth before any signature was checked: an eddsa-rdfc-2022
+  document nested 8000 deep allocated 546 MB, and now 53 MB (json-gold's
+  expansion is the rest). The walk now costs the same per value at any depth
+  or width. The error text is unchanged.
 
 ## [0.3.0] - 2026-08-05
 

@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -137,13 +138,13 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	case map[string]any:
 		// A JSON-LD document object.
 	case []any:
-		if err := requireNodeObjects(t, "(top level)"); err != nil {
+		if err := requireNodeObjects(t, func() string { return "(top level)" }); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("urdna2015: input must be a JSON object or array, got %T", v)
 	}
-	if err := rejectSilentDrops(v, ""); err != nil {
+	if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
 		return nil, err
 	}
 
@@ -227,47 +228,75 @@ func (l *offlineLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
 // requireNodeObjects fails unless every element of a node-array position
 // (the top-level array, an @graph value) is a JSON object — expansion drops
 // scalar entries in those positions silently (see Canonicalize step 1).
-func requireNodeObjects(list []any, where string) error {
+func requireNodeObjects(list []any, where func() string) error {
 	for i, e := range list {
 		if _, ok := e.(map[string]any); !ok {
-			return fmt.Errorf("urdna2015: element %d of %s is %T, want a JSON object — expansion drops scalar node-array entries silently (an unsigned rider)", i, where, e)
+			return fmt.Errorf("urdna2015: element %d of %s is %T, want a JSON object — expansion drops scalar node-array entries silently (an unsigned rider)", i, where(), e)
 		}
 	}
 	return nil
 }
 
+// jsonPath is the location of a value in the input, one segment a level: an
+// array element's index (index ≥ 0), or an object member's key (index −1).
+// The walk pushes and pops one shared stack and spells it only into an error,
+// so walking a document costs no more than its size, however deep or wide.
+type jsonPath []pathSegment
+
+type pathSegment struct {
+	key   string
+	index int
+}
+
+func (p *jsonPath) String() string {
+	var b strings.Builder
+	for _, s := range *p {
+		b.WriteByte('/')
+		if s.index >= 0 {
+			b.WriteString(strconv.Itoa(s.index))
+		} else {
+			b.WriteString(s.key)
+		}
+	}
+	return b.String()
+}
+
 // rejectSilentDrops walks the raw input and fails on every value expansion
 // would discard or mutate without an error: numerics (Canonicalize step 2),
 // nulls (step 3), and non-object @graph entries (step 1). path is the
-// JSON-pointer-ish location for the error.
-func rejectSilentDrops(v any, path string) error {
+// JSON-pointer-ish location of v, for the error.
+func rejectSilentDrops(v any, path *jsonPath) error {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, e := range t {
+			*path = append(*path, pathSegment{key: k, index: -1})
 			if k == "@graph" {
 				if list, ok := e.([]any); ok {
-					if err := requireNodeObjects(list, path+"/@graph"); err != nil {
+					if err := requireNodeObjects(list, path.String); err != nil {
 						return err
 					}
 				}
 			}
-			if err := rejectSilentDrops(e, path+"/"+k); err != nil {
+			if err := rejectSilentDrops(e, path); err != nil {
 				return err
 			}
+			*path = (*path)[:len(*path)-1]
 		}
 	case []any:
 		for i, e := range t {
-			if err := rejectSilentDrops(e, fmt.Sprintf("%s/%d", path, i)); err != nil {
+			*path = append(*path, pathSegment{index: i})
+			if err := rejectSilentDrops(e, path); err != nil {
 				return err
 			}
+			*path = (*path)[:len(*path)-1]
 		}
 	case string, bool:
 		// The value types the RDFC path canonicalizes losslessly.
 	case nil:
-		return fmt.Errorf("urdna2015: refusing null at %q: JSON-LD expansion drops null members and null array entries silently (an unsigned rider) — omit the member instead", path)
+		return fmt.Errorf("urdna2015: refusing null at %q: JSON-LD expansion drops null members and null array entries silently (an unsigned rider) — omit the member instead", path.String())
 	default:
 		// json.Number, float64, and every other scalar type land here.
-		return fmt.Errorf("urdna2015: refusing value of type %T at %q: JSON numbers are rejected on the RDFC path (integers above 2^53 are silently truncated in JSON-LD processing) — encode numeric values as strings", v, path)
+		return fmt.Errorf("urdna2015: refusing value of type %T at %q: JSON numbers are rejected on the RDFC path (integers above 2^53 are silently truncated in JSON-LD processing) — encode numeric values as strings", v, path.String())
 	}
 	return nil
 }
