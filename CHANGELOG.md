@@ -717,6 +717,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `VerifyConsistency` compared heads as text for equal sizes but as bytes
   otherwise. Each value now has one spelling, and a value in another is
   refused.
+- A page token has one spelling: `pagination.DecodeToken` refuses
+  (`ErrInvalidToken`, so `InvalidArgument` from every listing RPC) a token
+  not spelled as `EncodeToken` writes it. Base64 decoding skipped line breaks
+  and ignored the unused bits of the last character, so one cursor had many
+  tokens.
 
 ## [0.3.0] - 2026-08-05
 

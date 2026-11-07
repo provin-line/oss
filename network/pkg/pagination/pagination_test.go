@@ -74,3 +74,28 @@ func TestToken_MalformedRejected(t *testing.T) {
 		}
 	}
 }
+
+// A token has one spelling, the one EncodeToken writes: a line break, which
+// base64 decoding skips, or a last character whose unused bits are not zero
+// is refused, so one cursor has one token.
+func TestToken_OnlyItsOneSpellingDecodes(t *testing.T) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	// "c" and "cu" give tokens whose last character has 4 and 2 unused bits.
+	for _, cursor := range []string{"c", "cu"} {
+		tok := pagination.EncodeToken("svc.List", cursor, "f")
+		if got, err := pagination.DecodeToken("svc.List", tok, "f"); err != nil || got != cursor {
+			t.Fatalf("%q as written: %q, %v", cursor, got, err)
+		}
+		last := strings.IndexByte(alphabet, tok[len(tok)-1])
+		for name, bad := range map[string]string{
+			"a line break":         tok[:4] + "\n" + tok[4:],
+			"CR LF":                tok[:4] + "\r\n" + tok[4:],
+			"a trailing line feed": tok + "\n",
+			"nonzero unused bits":  tok[:len(tok)-1] + string(alphabet[last+1]),
+		} {
+			if _, err := pagination.DecodeToken("svc.List", bad, "f"); !errors.Is(err, pagination.ErrInvalidToken) {
+				t.Errorf("%q, %s: err=%v, want ErrInvalidToken", cursor, name, err)
+			}
+		}
+	}
+}
