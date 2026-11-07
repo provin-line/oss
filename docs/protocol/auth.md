@@ -44,6 +44,9 @@ Facts a deployment must internalize:
   authenticates nothing, so `provin.network.auth.cedar.jwt.*` (issuer,
   audience, and exactly one of `jwks-url` / `secret`) is required, and the
   principal asked about is the verified token's `sub` (which must be non-empty).
+  The token must be a compact JWS in its one spelling, and its claims are read
+  under the repository's strict JSON rules (no duplicate keys, valid Unicode,
+  no keys of one object that differ only in case).
   The JWKS is cached 10 minutes and refetched at most every 30 seconds; while a
   refetch fails, the expired set still verifies known `kid`s for another 30
   minutes, so a withdrawn key can be trusted for up to 40 minutes during a JWKS

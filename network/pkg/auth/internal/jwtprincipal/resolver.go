@@ -3,17 +3,20 @@
 // whatever principal it is given and authenticates nothing, so the token is
 // verified here before the agent is asked.
 //
-// A token is accepted only when its signature verifies against the configured
-// key, it carries an expiry that has not passed, it is not used before its
-// not-before time, its issuer equals the configured issuer, its audience
-// contains the configured audience, and it has a subject. The principal is
-// that subject. Everything else is refused; there is no partial acceptance.
+// A token is accepted only when it is a compact JWS in its one spelling, its
+// signature verifies against the configured key, its claims read under
+// canon.StrictDecoder's rules, it carries an expiry that has not passed, it is
+// not used before its not-before time, its issuer equals the configured
+// issuer, its audience contains the configured audience, and it has a
+// subject. The principal is that subject. Everything else is refused; there
+// is no partial acceptance.
 package jwtprincipal
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -21,6 +24,8 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/provin-line/oss/canon"
 )
 
 const (
@@ -169,7 +174,72 @@ type verifier struct {
 	now              func() time.Time
 }
 
+// compactJWS reports whether token is a compact JWS as RFC 7515 writes it:
+// three non-empty base64url segments without padding, each in its one
+// spelling (the unused bits of its last character zero). Base64 decoding
+// skips line breaks and ignores those bits, so without this one signed token
+// would have several spellings. It reads each byte once, before anything is
+// authenticated.
+func compactJWS(token string) bool {
+	segments, start := 0, 0
+	for i := 0; i <= len(token); i++ {
+		if i < len(token) && token[i] != '.' {
+			if base64URLValue(token[i]) < 0 {
+				return false
+			}
+			continue
+		}
+		if !canonicalSegment(token[start:i]) {
+			return false
+		}
+		segments++
+		start = i + 1
+	}
+	return segments == 3
+}
+
+// canonicalSegment reports whether seg, already in the base64url alphabet, is
+// non-empty and has the unused bits of its last character zero.
+func canonicalSegment(seg string) bool {
+	switch len(seg) % 4 {
+	case 0:
+		return seg != ""
+	case 1:
+		return false
+	case 2:
+		return base64URLValue(seg[len(seg)-1])&0x0f == 0
+	default:
+		return base64URLValue(seg[len(seg)-1])&0x03 == 0
+	}
+}
+
+// base64URLValue is c's value in the base64url alphabet, or -1.
+func base64URLValue(c byte) int {
+	switch {
+	case 'A' <= c && c <= 'Z':
+		return int(c - 'A')
+	case 'a' <= c && c <= 'z':
+		return int(c-'a') + 26
+	case '0' <= c && c <= '9':
+		return int(c-'0') + 52
+	case c == '-':
+		return 62
+	case c == '_':
+		return 63
+	}
+	return -1
+}
+
+// Principal returns the subject of token once its form, signature and claims
+// check out. The claims are read under canon.StrictDecoder's rules as well:
+// no duplicate keys, valid Unicode, and no two keys of one object that differ
+// only in case. So a subject whose bytes are not valid Unicode is refused
+// rather than read with U+FFFD, and two different sub values are not read as
+// one.
 func (v *verifier) Principal(ctx context.Context, token string) (string, error) {
+	if !compactJWS(token) {
+		return "", errors.New("token is not a compact JWS (three base64url segments)")
+	}
 	tok, err := jwt.ParseSigned(token, v.algs)
 	if err != nil {
 		return "", fmt.Errorf("parse token: %w", err)
@@ -182,8 +252,12 @@ func (v *verifier) Principal(ctx context.Context, token string) (string, error) 
 		return "", err
 	}
 	var claims jwt.Claims
-	if err := tok.Claims(key, &claims); err != nil {
+	var payload json.RawMessage
+	if err := tok.Claims(key, &claims, &payload); err != nil {
 		return "", fmt.Errorf("verify signature: %w", err)
+	}
+	if err := canon.NewStrictDecoder(payload).Decode(new(struct{})); err != nil {
+		return "", fmt.Errorf("read claims: %w", err)
 	}
 	if claims.Expiry == nil {
 		return "", errors.New("token has no exp claim")

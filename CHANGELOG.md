@@ -570,8 +570,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   if the token has one, an `nbf` that has (both with 30 s of leeway), an
   `iss` equal to the configured issuer, an `aud` that contains the
   configured audience, and a non-empty `sub`, which it gives the agent as
-  the principal. A token that fails any check is refused. The configuration
-  this needs (`provin.network.auth.cedar.jwt.*`) is under Changed.
+  the principal. The token must be a compact JWS in its one spelling (three
+  base64url segments without padding, the unused bits of each segment's last
+  character zero: a line break, which base64 decoding skips, or nonzero
+  unused bits, which it ignores, are refused), and its claims are read under
+  `canon.StrictDecoder`'s rules (no duplicate keys at any depth, valid
+  Unicode, no two keys of one object that differ only in case), so a `sub`
+  whose bytes are not valid Unicode is refused rather than read with U+FFFD,
+  and two different `sub` values are not read as one. A token that fails any
+  check is refused. The configuration this needs
+  (`provin.network.auth.cedar.jwt.*`) is under Changed.
 - What `canon.AdmitSafeNumbers` admits, RFC 8785 writes within ±(2^53−1), so
   a check of the canonical bytes RFC 8785 defines agrees with the check of
   the value. A
