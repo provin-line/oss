@@ -237,6 +237,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   https for a non-loopback issuer; the issuer is an identifier, not a URL
   anything dials). An existing `.env` that sets `OAUTH_JWT_SECRET` or
   `OAUTH_JWT_ISSUER` must meet the same rules.
+- `vc.VerifyProof` and `vc.VerifyProofUnderContract`, and through them
+  `vc.VerifyProofWithContract`, decode `proofValue` before they canonicalize
+  the proof configuration and the document. A `proofValue` that does not
+  decode (not base58btc, or longer than `multibase.DecodeBase58Btc` allows)
+  is refused without canonicalizing anything: an eddsa-rdfc-2022 proof over
+  an ordinary credential took about 560 µs and 400 KB to refuse this way,
+  and takes about 1 µs. A `proofValue` that decodes still costs a
+  canonicalization before its signature is checked, so this does not bound
+  the work a forged proof can cause. A proof whose `proofValue` does not
+  decode, over a document that does not canonicalize, is now refused with
+  the decode error rather than the canonicalization error.
 
 ### Security
 

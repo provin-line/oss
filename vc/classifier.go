@@ -9,7 +9,6 @@ import (
 	"github.com/provin-line/oss/canon/urdna2015"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
-	"github.com/provin-line/oss/multibase"
 )
 
 // SuiteContract is the claim contract a proof is verified under — the exact
@@ -159,22 +158,7 @@ func VerifyProofUnderContract(
 	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
-	hd, err := proofHashDataFunc(canonFn, cfg, document)
-	if err != nil {
-		return err
-	}
-	sig, err := multibase.DecodeBase58Btc(proof.ProofValue)
-	if err != nil {
-		return fmt.Errorf("vc: decode proofValue: %w", err)
-	}
-	ok, err := verifier.Verify(publicKey, hd, sig)
-	if err != nil {
-		return fmt.Errorf("vc: verify proof signature: %w", err)
-	}
-	if !ok {
-		return errors.New("vc: proof signature does not verify")
-	}
-	return nil
+	return verifyProofValue(verifier, publicKey, proof.ProofValue, canonFn, cfg, document)
 }
 
 // requireProofContextMirrorsDocument enforces, for the W3C contract, that the

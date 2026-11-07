@@ -15,7 +15,7 @@ import (
 // provinDocument builds a real-shape provin credential body (the frozen
 // 3-context wire form) without a proof — the document eddsa-rdfc-2022 must
 // handle end to end.
-func provinDocument(t *testing.T) map[string]any {
+func provinDocument(t testing.TB) map[string]any {
 	t.Helper()
 	cred, err := vc.New(vc.CredentialFields{
 		Issuer:    issuerDID,

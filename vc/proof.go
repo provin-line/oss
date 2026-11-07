@@ -132,14 +132,24 @@ func VerifyProof(
 	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
+	return verifyProofValue(verifier, publicKey, proof.ProofValue, c.Canonicalize, cfg, document)
+}
 
-	hd, err := proofHashData(c, cfg, document)
-	if err != nil {
-		return err
-	}
-	sig, err := multibase.DecodeBase58Btc(proof.ProofValue)
+// verifyProofValue verifies proofValue over the hashData of proofConfig and
+// document. It decodes proofValue before it canonicalizes proofConfig and
+// document: a value that does not decode is refused at the cost of reading
+// it, where canonicalizing a document not yet authenticated can cost far
+// more. A value that decodes still costs the canonicalization. VerifyProof
+// and VerifyProofUnderContract both verify through it, so both decode,
+// canonicalize and verify in the same order.
+func verifyProofValue(verifier crypto.Verifier, publicKey []byte, proofValue string, canonFn canonicalizerFunc, proofConfig, document map[string]any) error {
+	sig, err := multibase.DecodeBase58Btc(proofValue)
 	if err != nil {
 		return fmt.Errorf("vc: decode proofValue: %w", err)
+	}
+	hd, err := proofHashDataFunc(canonFn, proofConfig, document)
+	if err != nil {
+		return err
 	}
 	ok, err := verifier.Verify(publicKey, hd, sig)
 	if err != nil {
