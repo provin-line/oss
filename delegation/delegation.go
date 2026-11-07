@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
@@ -64,6 +65,25 @@ type DelegationCredential struct {
 	ValidFrom         time.Time              `json:"validFrom"`
 	CredentialSubject DelegationSubject      `json:"credentialSubject"`
 	Proof             *vc.DataIntegrityProof `json:"proof,omitempty"`
+}
+
+// UnmarshalJSON reads c under canon.StrictDecoder's rules (duplicate keys,
+// invalid Unicode, trailing data), so a delegation credential is read as
+// strictly by encoding/json as by the registry that decodes it strictly.
+//
+// Members the document omits keep the values c had. On an error no member of
+// c is assigned, though elements of a slice c already holds may have been
+// overwritten. A struct that embeds DelegationCredential gets this method, so
+// encoding/json hands it the whole object and does not decode the struct's
+// own fields: such a struct needs its own UnmarshalJSON.
+func (c *DelegationCredential) UnmarshalJSON(data []byte) error {
+	type plain DelegationCredential
+	v := plain(*c)
+	if err := canon.NewStrictDecoder(data).Decode(&v); err != nil {
+		return fmt.Errorf("delegation: decode: %w", err)
+	}
+	*c = DelegationCredential(v)
+	return nil
 }
 
 // Build constructs and signs a delegation credential with the owner's key. The

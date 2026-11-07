@@ -535,18 +535,26 @@ func deepCopyValue(v any) any {
 // or breaking the signature: malleability on exactly the row that cannot pin
 // the member. No contract accepts the shape, so the parse is where it dies —
 // null is not absence.
+//
+// A proof is read under canon.StrictDecoder's rules on every path, also when
+// encoding/json reaches it inside another value: duplicate keys and invalid
+// Unicode are refused here, whoever decodes the enclosing document.
+//
+// The proof is read afresh: a member the document omits is zero, whatever p
+// held, so an absent @context is nil, the shape that classifies a proof.
+// On an error p is left as it was.
 func (p *DataIntegrityProof) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+	if err := canon.NewStrictDecoder(data).Decode(&raw); err != nil {
+		return fmt.Errorf("vc: proof: %w", err)
 	}
 	if ctx, present := raw[keyContext]; present && string(ctx) == "null" {
 		return errors.New("vc: proof carries \"@context\": null (present-but-null is no contract's shape; omit the member instead)")
 	}
 	type plain DataIntegrityProof
 	var v plain
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
+	if err := canon.NewStrictDecoder(data).Decode(&v); err != nil {
+		return fmt.Errorf("vc: proof: %w", err)
 	}
 	*p = DataIntegrityProof(v)
 	return nil

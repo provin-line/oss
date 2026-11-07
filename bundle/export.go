@@ -314,22 +314,9 @@ func Export(ctx context.Context, dir, head string, creds CredentialSource, docs 
 // v1 manifest can never grow a v2-only member (and stays byte-identical to
 // the shipped format).
 func encodeManifest(m *Manifest) ([]byte, error) {
-	var wire any
-	switch m.V {
-	case 1:
-		wire = &manifestWireV1{
-			V: m.V, Scope: m.Scope, Head: m.Head, Chain: m.Chain,
-			DIDDocuments: m.DIDDocuments, Files: m.Files,
-			CreatedAt: m.CreatedAt, Source: m.Source,
-		}
-	case 2:
-		wire = &manifestWireV2{
-			V: m.V, Scope: m.Scope, Head: m.Head, Chain: m.Chain,
-			DIDDocuments: m.DIDDocuments, Files: m.Files,
-			CreatedAt: m.CreatedAt, Source: m.Source, Receipts: m.Receipts,
-		}
-	default:
-		return nil, fmt.Errorf("bundle: unsupported manifest version %d", m.V)
+	wire, err := m.wire()
+	if err != nil {
+		return nil, err
 	}
 	raw, err := json.MarshalIndent(wire, "", "  ")
 	if err != nil {

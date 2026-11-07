@@ -118,6 +118,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `canon.DuplicateKeyError.Other`: for a key refused because it differs from
   another key, or from a struct field, only in case (see Changed), that other
   key or field name. Empty for an exact duplicate, as before.
+- `(*delegation.DelegationCredential).UnmarshalJSON`: a delegation credential
+  is read under `canon.StrictDecoder`'s rules by encoding/json too.
+- `(*bundle.Manifest).UnmarshalJSON` and `bundle.Manifest.MarshalJSON`: a
+  bundle manifest decoded with encoding/json is read as `bundle.Verify` reads
+  it, strictly and in the exact shape of its version, and is written in that
+  shape, as `bundle.Export` writes it.
 
 ### Changed
 
@@ -342,6 +348,30 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   into maps: the push ingress (`apipush`, now HTTP 400) and the ingest loop,
   the jsonata filter and converter, the DID registry, the VC resolver, and
   JSON Schema documents and payloads. No fixture here has such keys.
+- **BREAKING (Go API)** `vc.DataIntegrityProof` and
+  `delegation.DelegationCredential` are read under `canon.StrictDecoder`'s
+  rules on every path: decoding one with encoding/json (also inside another
+  value) refuses a duplicate key or invalid Unicode (invalid UTF-8 or an
+  unpaired surrogate) where it took the last value or replaced the bytes with
+  U+FFFD, and a key that differs from another key, or from a field, only in
+  case, where it read it as the field. A number inside a proof's `@context` is now a `json.Number`, as in a
+  document decoded strictly, where it was a `float64`: the bytes the
+  `@context` mirror check compares are the same, and a number a `float64`
+  cannot hold is refused when the proof is verified rather than when it is
+  decoded. A struct that embeds `delegation.DelegationCredential` now gets its
+  `UnmarshalJSON`, so encoding/json no longer decodes that struct's own
+  fields; such a struct needs its own `UnmarshalJSON`.
+- **BREAKING (Go API)** Decoding a `bundle.Manifest` with encoding/json reads
+  it as `bundle.Verify` does. It refuses what `Verify` refuses: a document the
+  strict rules refuse (keys that collide, exactly or by case, are
+  `ErrBundleIntegrity`), an unknown member or a member of another version (a
+  v1 manifest with `receipts`), a scope its version does not name, and an
+  unknown version. The manifest is read afresh: a member the document omits
+  is zero, where encoding/json kept the receiver's value. A struct that embeds
+  `bundle.Manifest` needs its own `UnmarshalJSON`, as above. Encoding one
+  writes the shape of its version: a v2 manifest always has `receipts`
+  (`null` when it has none), and a v1 manifest with receipts, or one of a
+  version no shape names, is an error where it was written as given.
 
 ### Security
 
@@ -624,6 +654,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   reads both into the same struct field, the later one winning, and reads
   `"V"` into a field `v`; a reader that tells case apart sees two keys, or
   none. The strict decoder refused only exact duplicates.
+- A bundle manifest decoded with encoding/json goes through the strict and
+  per-version checks `bundle.Verify` runs; a caller's decode skipped them.
+- A Data Integrity proof and a delegation credential are read as strictly by
+  any decoder that honours `json.Unmarshaler` as by the strict paths that
+  check them. A caller that decoded one with encoding/json got the last of two
+  duplicate keys, a key in another case read as the field, and invalid UTF-8
+  or an unpaired surrogate replaced with U+FFFD, where the strict paths refuse
+  all three.
 
 ## [0.3.0] - 2026-08-05
 
