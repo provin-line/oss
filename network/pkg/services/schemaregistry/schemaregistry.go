@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
@@ -153,13 +153,16 @@ func (s *Service) Deprecate(ctx context.Context, name, version string) error {
 	return s.store.Deprecate(name, version)
 }
 
-// validSegment reports whether s is safe to use as a name/version key: a
-// non-empty token with no path separators or traversal. This is domain input
-// validation (the store enforces its own path-safety guard independently as
-// defense-in-depth).
+// validSegment reports whether s may be a name, version or prerelease: 1 to
+// 128 characters of [A-Za-z0-9._-], the first a letter or digit. So it is one
+// path segment that cannot traverse, and the store keeps it as written: no
+// control character, space or YAML-special form (".nan", "? a") is a segment.
+// The store's own path guard and fidelity check stay as defense in depth.
 func validSegment(s string) bool {
-	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`+"\x00")
+	return segmentPattern.MatchString(s)
 }
+
+var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // version computes "YYYY-MM-DD-{hash16}". The hash is over the documented wire
 // contract: SHA-256 of length-prefixed (format, body, prerelease) in that exact

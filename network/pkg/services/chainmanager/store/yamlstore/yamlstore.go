@@ -29,6 +29,8 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/yamlrecord"
+
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
@@ -61,9 +63,10 @@ func (s *SubscriptionStore) Save(sub *store.Subscription) error {
 	if err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(toSubRecord(sub))
+	rec := toSubRecord(sub)
+	data, err := yamlrecord.Encode(&rec)
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal subscription: %w", err)
+		return fmt.Errorf("yamlstore: subscription: %w", err)
 	}
 	return atomicWrite(p, data)
 }
@@ -171,9 +174,10 @@ func (s *AllowListStore) Save(pipelineDID string, rules []store.AllowRule) error
 	if err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(toAllowRecord(rules))
+	rec := toAllowRecord(rules)
+	data, err := yamlrecord.Encode(&rec)
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal allow-list: %w", err)
+		return fmt.Errorf("yamlstore: allow-list: %w", err)
 	}
 	return atomicWrite(p, data)
 }
@@ -221,7 +225,7 @@ func toSubRecord(s *store.Subscription) subRecord {
 		PublishType:     s.PublishType,
 		PayloadDelivery: s.PayloadDelivery,
 		ConnectionInfo:  s.ConnectionInfo,
-		Created:         s.Created,
+		Created:         s.Created.UTC(),
 		Direction:       s.Direction,
 		RemoteID:        s.RemoteID,
 	}

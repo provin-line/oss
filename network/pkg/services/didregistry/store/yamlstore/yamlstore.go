@@ -35,6 +35,8 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/yamlrecord"
+
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
@@ -65,15 +67,15 @@ type statusRecord struct {
 	Status string `yaml:"status"`
 }
 
-// eventRecord is the on-disk lifecycle-event shape. OutwardSnapshot is []byte so
-// an opaque outward document round-trips faithfully (YAML base64-encodes it).
+// eventRecord is the on-disk lifecycle-event shape. OutwardSnapshot is written
+// as one base64 string, so an opaque outward document round-trips faithfully.
 type eventRecord struct {
-	EventType       string    `yaml:"eventType"`
-	DIDDocSnapshot  string    `yaml:"didDocSnapshot"`
-	OutwardSnapshot []byte    `yaml:"outwardSnapshot,omitempty"`
-	WitnessSource   string    `yaml:"witnessSource"`
-	WitnessedAt     time.Time `yaml:"witnessedAt"`
-	PrevEventHash   string    `yaml:"prevEventHash,omitempty"`
+	EventType       string           `yaml:"eventType"`
+	DIDDocSnapshot  string           `yaml:"didDocSnapshot"`
+	OutwardSnapshot yamlrecord.Bytes `yaml:"outwardSnapshot,omitempty"`
+	WitnessSource   string           `yaml:"witnessSource"`
+	WitnessedAt     time.Time        `yaml:"witnessedAt"`
+	PrevEventHash   string           `yaml:"prevEventHash,omitempty"`
 }
 
 // nodeDir builds the directory for d from validated segments. The fixed
@@ -171,9 +173,9 @@ func (s *Store) saveNode(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.De
 			return err
 		}
 	}
-	statusBytes, err := yaml.Marshal(statusRecord{Status: string(store.StatusActive)})
+	statusBytes, err := yamlrecord.Encode(&statusRecord{Status: string(store.StatusActive)})
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal status: %w", err)
+		return fmt.Errorf("yamlstore: status: %w", err)
 	}
 	if err := writeFileSync(filepath.Join(tmp, statusFile), statusBytes); err != nil {
 		return err
@@ -318,9 +320,10 @@ func (s *Store) AppendLifecycleEvent(d *dplaax.DID, ev store.LifecycleEvent) err
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("yamlstore: mkdir lifecycle: %w", err)
 	}
-	data, err := yaml.Marshal(toEventRecord(ev))
+	rec := toEventRecord(ev)
+	data, err := yamlrecord.Encode(&rec)
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal event: %w", err)
+		return fmt.Errorf("yamlstore: event: %w", err)
 	}
 	seq, err := s.eventCount(logDir)
 	if err != nil {
@@ -391,9 +394,9 @@ func (s *Store) eventCount(logDir string) (int, error) {
 func eventFileName(seq int) string { return fmt.Sprintf("%06d.yaml", seq) }
 
 func (s *Store) writeStatus(dir string, status store.DIDStatus) error {
-	data, err := yaml.Marshal(statusRecord{Status: string(status)})
+	data, err := yamlrecord.Encode(&statusRecord{Status: string(status)})
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal status: %w", err)
+		return fmt.Errorf("yamlstore: status: %w", err)
 	}
 	return atomicWrite(filepath.Join(dir, statusFile), data)
 }
@@ -414,9 +417,9 @@ func toEventRecord(ev store.LifecycleEvent) eventRecord {
 	return eventRecord{
 		EventType:       ev.EventType,
 		DIDDocSnapshot:  ev.DIDDocSnapshot,
-		OutwardSnapshot: ev.OutwardSnapshot,
+		OutwardSnapshot: yamlrecord.Bytes(ev.OutwardSnapshot),
 		WitnessSource:   ev.WitnessSource,
-		WitnessedAt:     ev.WitnessedAt,
+		WitnessedAt:     ev.WitnessedAt.UTC(),
 		PrevEventHash:   ev.PrevEventHash,
 	}
 }
@@ -425,7 +428,7 @@ func fromEventRecord(r eventRecord) store.LifecycleEvent {
 	return store.LifecycleEvent{
 		EventType:       r.EventType,
 		DIDDocSnapshot:  r.DIDDocSnapshot,
-		OutwardSnapshot: r.OutwardSnapshot,
+		OutwardSnapshot: []byte(r.OutwardSnapshot),
 		WitnessSource:   r.WitnessSource,
 		WitnessedAt:     r.WitnessedAt,
 		PrevEventHash:   r.PrevEventHash,

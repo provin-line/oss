@@ -296,6 +296,27 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   binary64 value as `encoding/json` and RFC 8785 write it. The schema
   registry's `RegisterSchema` refuses such a schema too; a schema stored
   before the upgrade is not checked again.
+- The YAML stores (the chain manager's subscriptions and allow lists, the
+  schema registry's versions, the DID registry's status and lifecycle events)
+  refuse to write a record whose YAML would not read back as written, and
+  write a byte field (a schema body, an outward DID document snapshot) as one
+  base64 string instead of a sequence of one integer per byte. A record an
+  earlier version wrote with its bytes as such a sequence still reads, at the
+  earlier cost; one an earlier version stored that does not read back (a
+  key `<<`, for example) still fails as before. A refused record surfaces as
+  an error the handlers report as `Internal` and the node logs: the entry
+  points below admit only values that read back, so a refusal means a check
+  before the store let one through. Times are stored in UTC.
+- **BREAKING (wire)** The schema registry admits a schema name or prerelease
+  (and looks up a version) only of 1 to 128 characters of `[A-Za-z0-9._-]`,
+  the first a letter or digit; anything else is `InvalidArgument`. It admitted
+  any string without `/`, `\` or NUL.
+- `chainmanager` `Subscribe` refuses a publisher's connection info with a key
+  other than `subject`, `account`, `url` and `publishType`, or a value other
+  than empty or a letter or digit followed by up to 999 characters a URL, a
+  NATS subject or account key, or a DID uses. It is the publisher's fault
+  (`ErrRemotePeer`): the remote registration is undone and nothing is
+  imported or stored.
 
 ### Security
 
@@ -539,6 +560,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   requests (also one asking to upgrade to h2c); it covered only HTTP/1
   requests there, and each handler's own limit (connect's read limit per
   RPC, the push handler's) was the only bound on an HTTP/2 stream.
+- The YAML stores hold only records that read back as written, so a stored
+  value, also one another organization sent, cannot change when it is read or
+  make reading the store fail: the schema registry and the chain manager hold
+  what they store to forms that read back, and the stores refuse anything
+  else. Reading a schema body or an outward snapshot
+  written as a byte sequence allocated about 1.3 KB per byte (about 1.4 GB
+  for a 1 MiB schema) on every read; written as base64 it allocates about
+  76 bytes per byte, 17 times less.
 
 ## [0.3.0] - 2026-08-05
 
