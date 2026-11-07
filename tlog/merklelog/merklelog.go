@@ -19,6 +19,7 @@
 package merklelog
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -26,7 +27,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -136,7 +136,7 @@ func (l *Log) replay(path string) error {
 		// Unterminated final fragment: appends fsync line-complete writes,
 		// so this is provably an uncommitted append from a crash. Truncate
 		// it loudly instead of refusing to open.
-		cut := strings.LastIndexByte(string(raw), '\n') + 1
+		cut := bytes.LastIndexByte(raw, '\n') + 1
 		if err := l.file.Truncate(int64(cut)); err != nil {
 			return fmt.Errorf("merklelog: truncate torn tail of %s: %w", path, err)
 		}
@@ -146,7 +146,7 @@ func (l *Log) replay(path string) error {
 	}
 	line := 0
 	for len(raw) > 0 {
-		nl := strings.IndexByte(string(raw), '\n')
+		nl := bytes.IndexByte(raw, '\n')
 		lineBytes := raw[:nl]
 		raw = raw[nl+1:]
 		line++

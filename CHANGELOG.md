@@ -574,6 +574,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   document nested 8000 deep allocated 546 MB, and now 53 MB (json-gold's
   expansion is the rest). The walk now costs the same per value at any depth
   or width. The error text is unchanged.
+- `tlog/filelog` and `tlog/merklelog` read their file in time and memory
+  linear in its size when they open it. Finding each line copied the rest of
+  the file, so the cost was the size times the number of lines: an
+  80 000-record, 10 MB log took about 10 s to open, now about 0.2 s, and a
+  1.4 MB one allocated 184 MB, now about 11 MB.
 
 ## [0.3.0] - 2026-08-05
 
