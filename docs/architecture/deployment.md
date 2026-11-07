@@ -196,6 +196,23 @@ enforcement**: you MUST make the cleartext backend reachable **only from the
 terminator** (bind loopback in a shared network namespace, a private network,
 or firewall / security-group rules). The guard cannot verify that isolation.
 
+
+## Request read bounds
+
+The node takes at most 64 KiB of request headers, and drops a request whose
+body stalls while it is read (delivers nothing for 30 seconds or, chunked on
+HTTP/1, fewer than 16 KiB) or is not read to its end within 60 seconds of the
+request's start. The 60 seconds are fixed: raising `max-credential-size`,
+`max-push-body-size`, `max-retain-chunk-size` or `tlog-mirror.max-batch-bytes`
+raises the upload rate a client needs (size ÷ 60 s).
+
+`RetainPayload` (`PayloadStoreService`, the one client-streaming RPC) lifts
+the 60-second limit once its caller, past L1 authorization, has proven its DID
+in the first frame; its payload frames are then held to the stall bound only,
+as a retained payload arrives as it is sent. Where a minimum upload rate or an
+overall time limit is wanted for it, set one at the proxy or load balancer in
+front.
+
 ## Metrics
 
 `GET /metrics` serves OpenTelemetry counters in Prometheus exposition format,

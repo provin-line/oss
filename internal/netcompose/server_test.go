@@ -14,6 +14,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nats-io/nkeys"
 	"github.com/o3co/protobuf.interceptors/endpoint"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
@@ -32,6 +34,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -643,5 +646,42 @@ func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
 	gotMirror := OuterRequestCapBytes(4<<10, 4<<10, 4<<10, maxBatchBytes)
 	if gotMirror <= maxBatchBytes+maxProofRequestBytes {
 		t.Errorf("outer cap %d does not cover MirrorLogSegment's derived read cap %d", gotMirror, maxBatchBytes+maxProofRequestBytes)
+	}
+}
+
+// Every client-streaming RPC of the dplaax API, and no other route, is marked
+// httpserve.StreamingBody: the others are held to the whole-body read limit.
+func TestBuildHandler_MarksExactlyTheClientStreamingRoutes(t *testing.T) {
+	h, _, _ := assembledHandler(t)
+	mux, ok := h.(*http.ServeMux)
+	if !ok {
+		t.Fatalf("BuildHandler returned %T, want *http.ServeMux", h)
+	}
+	streaming := 0
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		if !strings.HasPrefix(string(fd.Package()), "dplaax.") {
+			return true
+		}
+		for i := range fd.Services().Len() {
+			svc := fd.Services().Get(i)
+			for j := range svc.Methods().Len() {
+				m := svc.Methods().Get(j)
+				path := "/" + string(svc.FullName()) + "/" + string(m.Name())
+				got, _ := mux.Handler(httptest.NewRequest(http.MethodPost, path, nil))
+				if httpserve.IsStreamingBody(got) != m.IsStreamingClient() {
+					t.Errorf("%s: StreamingBody = %v, client-streaming = %v", path, !m.IsStreamingClient(), m.IsStreamingClient())
+				}
+				if m.IsStreamingClient() {
+					streaming++
+				}
+			}
+		}
+		return true
+	})
+	if streaming == 0 {
+		t.Fatal("no client-streaming RPC found: the registry walk saw no dplaax service")
+	}
+	if got, _ := mux.Handler(httptest.NewRequest(http.MethodGet, "/healthz", nil)); httpserve.IsStreamingBody(got) {
+		t.Error("/healthz marked StreamingBody")
 	}
 }

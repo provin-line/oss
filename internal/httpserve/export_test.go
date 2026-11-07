@@ -8,3 +8,10 @@ func SetBodyStallTimeout(d time.Duration) (restore func()) {
 	bodyStallTimeout = d
 	return func() { bodyStallTimeout = old }
 }
+
+// SetBodyReadTimeout sets the whole-body read limit for one test.
+func SetBodyReadTimeout(d time.Duration) (restore func()) {
+	old := bodyReadTimeout
+	bodyReadTimeout = d
+	return func() { bodyReadTimeout = old }
+}

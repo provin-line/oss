@@ -67,6 +67,14 @@ push が無い時の症状: `chain subscribe` は成功する（コントロー�
 
 **(b) 前段の TLS terminator。** reverse proxy / LB で TLS を終端し、`provin.network.core.tls.allow-cleartext = true` で平文 listener を承認する。これは**承認であって強制ではない**: 平文 backend が **terminator からのみ到達可能**になるようにする責務が運用側にある（shared netns での loopback bind、private network、firewall / security group）。guard はこの隔離を検証できない。
 
+
+
+## 要求を読む限り
+
+node は、要求の header を 64 KiB まで受け、本体を読む間に止まった（30 秒の間なにも届かない、または HTTP/1 の chunked で 16 KiB 届かない）要求と、要求の始まりから 60 秒の内に本体を読み終えられない要求を断る。60 秒は固定で、`max-credential-size`、`max-push-body-size`、`max-retain-chunk-size`、`tlog-mirror.max-batch-bytes` を上げると、client に要る送りの速さ（大きさ ÷ 60 秒）も上がる。
+
+`RetainPayload`（`PayloadStoreService`、唯一の client streaming の RPC）は、L1 の認可を通った呼び手が最初の frame で自分の DID を証してから、60 秒の限りを外す。その後の payload の frame は、預ける payload が送られるにつれて届くので、止まった時の限りだけを持つ。これに最低の速さや全体の時間の限りが要るなら、前に置く proxy や load balancer で持たせる。
+
 ## Metrics
 
 `GET /metrics` は OpenTelemetry counter を Prometheus exposition 形式で返す。`provin.network.core.metrics.enabled` でゲート（**default `false`**: このエンドポイントは serving listener 上で無認証であり、loop 名・流量・失敗率・判定率を露出する — `/healthz` より情報量が多い。listener のネットワークが信頼できる場所でのみ有効化する。quickstart compose は有効化済み）。

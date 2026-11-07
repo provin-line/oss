@@ -579,6 +579,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the file, so the cost was the size times the number of lines: an
   80 000-record, 10 MB log took about 10 s to open, now about 0.2 s, and a
   1.4 MB one allocated 184 MB, now about 11 MB.
+- The node's HTTP server drops a request whose body is not read to its end
+  within 60 seconds of the request's start, whatever its pace, so it spends a
+  bounded time reading one request's body. `RetainPayload`
+  (`PayloadStoreService`), the one client-streaming RPC, lifts that limit
+  once its caller, past L1 authorization, has proven its DID in the first
+  frame, and keeps only the stall bound for the payload frames after it. The
+  deployment guide gives the limits and says to set a rate or time limit for
+  `RetainPayload` at the proxy in front where one is wanted.
 
 ## [0.3.0] - 2026-08-05
 

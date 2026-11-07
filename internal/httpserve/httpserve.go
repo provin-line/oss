@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -27,14 +28,22 @@ const shutdownTimeout = 15 * time.Second
 // or, chunked on HTTP/1, fewer than stallReadBytes. As with HTTP2Server's
 // WriteByteTimeout, the bound is on progress, not on rate: a body trickled a
 // byte at a time is not dropped. The body has no deadline between reads, so a
-// large body sent at a steady pace, or a long response streamed after the
-// body, is not cut.
+// long response streamed after the body is not cut.
+//
+// Besides, the body must be read to its end within bodyReadTimeout of the
+// request's start, whatever its pace, so the server spends a bounded time
+// reading one request's body. A handler wrapped in StreamingBody, one that
+// reads a long body as it arrives, may lift that limit (LiftBodyReadLimit)
+// and keep the stall bound only.
 const (
 	maxHeaderBytes = 64 << 10
 	stallReadBytes = 16 << 10
 )
 
-var bodyStallTimeout = 30 * time.Second
+var (
+	bodyStallTimeout = 30 * time.Second
+	bodyReadTimeout  = 60 * time.Second
+)
 
 // BuildServer assembles the HTTP server, its listen function, and a serving-mode
 // label from the transport posture (F6). It serves TLS directly when
@@ -84,28 +93,88 @@ func BuildServer(coreCfg *core.CoreConfig, tlsConf *tls.Config, handler http.Han
 	return srv, srv.ListenAndServe, mode, nil
 }
 
-// boundReads bounds a request body to maxBytes (http.MaxBytesReader) and each
-// read of it to bodyStallTimeout. A body the handler leaves unread, which
-// net/http then discards on HTTP/1 before the next request, gets one stall
-// window for that too.
+// boundReads bounds a request body to maxBytes (http.MaxBytesReader), each
+// read of it to bodyStallTimeout, and the whole of it to bodyReadTimeout. A
+// body the handler leaves unread, which net/http then discards on HTTP/1
+// before the next request, gets the stall window or the time left of the
+// whole-body limit, whichever is shorter, for that too.
 func boundReads(handler http.Handler, maxBytes int) http.Handler {
-	stall := bodyStallTimeout
+	stall, whole := bodyStallTimeout, bodyReadTimeout
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hasBody := r.Body != nil && r.Body != http.NoBody
 		rc := http.NewResponseController(w)
-		bounded := *r
 		var body *stallBoundedBody
+		bounded := r
 		if hasBody {
-			body = &stallBoundedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(maxBytes)), rc: rc, timeout: stall}
+			body = &stallBoundedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(maxBytes)), rc: rc, timeout: stall, end: time.Now().Add(whole)}
+			// Inherit the bodies already bounded only when this request's body
+			// is the last of them (the cleartext path's HTTP/1 request, bounded
+			// around h2c and inside it). An upgraded h2c connection serves its
+			// streams under the upgrade request's context, whose body is not
+			// theirs.
+			outer := boundBodies(r.Context())
+			if n := len(outer); n > 0 && io.ReadCloser(outer[n-1]) != r.Body {
+				outer = nil
+			}
+			bounded = r.WithContext(context.WithValue(r.Context(), boundBodiesKey{}, append(slices.Clone(outer), body)))
 			bounded.Body = body
 		} else {
+			shallow := *r
+			bounded = &shallow
 			bounded.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 		}
-		handler.ServeHTTP(w, &bounded)
+		handler.ServeHTTP(w, bounded)
 		if body != nil && !body.ended && r.ProtoMajor == 1 {
-			_ = rc.SetReadDeadline(time.Now().Add(stall))
+			_ = rc.SetReadDeadline(body.deadline(time.Now()))
 		}
 	})
+}
+
+// StreamingBody marks handler as one that reads a long request body as it
+// arrives (a client-streaming RPC): once the handler calls LiftBodyReadLimit,
+// its body is held to the stall bound only, not to bodyReadTimeout. Which
+// routes stream, and when their caller is trusted enough for the lift, is for
+// the code that assembles them to say; httpserve knows neither.
+func StreamingBody(handler http.Handler) http.Handler {
+	return streamingBody{handler}
+}
+
+// IsStreamingBody reports whether handler is a value StreamingBody returned
+// (a handler wrapped further reports false).
+func IsStreamingBody(handler http.Handler) bool {
+	_, ok := handler.(streamingBody)
+	return ok
+}
+
+// LiftBodyReadLimit lifts the whole-body read limit of the request ctx belongs
+// to, if its route was marked by StreamingBody; otherwise it does nothing. It
+// is meant for the handler's goroutine, which reads the body.
+func LiftBodyReadLimit(ctx context.Context) {
+	if lift, _ := ctx.Value(liftableKey{}).(bool); !lift {
+		return
+	}
+	for _, b := range boundBodies(ctx) {
+		b.end = time.Time{}
+	}
+}
+
+type streamingBody struct{ http.Handler }
+
+func (s streamingBody) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.Handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), liftableKey{}, true)))
+}
+
+// liftableKey marks, in a request's context, a route StreamingBody wraps.
+type liftableKey struct{}
+
+// boundBodiesKey holds, in a request's context, the bodies boundReads bounds
+// (one, or two on the cleartext path's HTTP/1 requests), so
+// LiftBodyReadLimit can lift their whole-body limit.
+type boundBodiesKey struct{}
+
+func boundBodies(ctx context.Context) []*stallBoundedBody {
+	b, _ := ctx.Value(boundBodiesKey{}).([]*stallBoundedBody)
+	return b
 }
 
 // stallBoundedBody sets a read deadline only while a read of the body is in
@@ -119,7 +188,18 @@ type stallBoundedBody struct {
 	io.ReadCloser
 	rc      *http.ResponseController
 	timeout time.Duration
+	end     time.Time // the whole-body limit; zero for a Streaming handler
 	ended   bool
+}
+
+// deadline is the read deadline for a read starting at now: the stall bound,
+// or the whole-body limit if that comes first.
+func (b *stallBoundedBody) deadline(now time.Time) time.Time {
+	d := now.Add(b.timeout)
+	if !b.end.IsZero() && b.end.Before(d) {
+		return b.end
+	}
+	return d
 }
 
 func (b *stallBoundedBody) Read(p []byte) (int, error) {
@@ -129,7 +209,7 @@ func (b *stallBoundedBody) Read(p []byte) (int, error) {
 	if len(p) > stallReadBytes {
 		p = p[:stallReadBytes]
 	}
-	_ = b.rc.SetReadDeadline(time.Now().Add(b.timeout))
+	_ = b.rc.SetReadDeadline(b.deadline(time.Now()))
 	n, err := b.ReadCloser.Read(p)
 	_ = b.rc.SetReadDeadline(time.Time{})
 	if err != nil {

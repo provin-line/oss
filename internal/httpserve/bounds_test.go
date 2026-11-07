@@ -327,3 +327,166 @@ func TestBuildServer_BoundsTheDiscardOfAnUnreadBody(t *testing.T) {
 		t.Fatal("connection still held after 5s")
 	}
 }
+
+// steadyUpload sends 256 KiB to addr at 1 KiB every 5 ms (about 1.3 s), as
+// one HTTP/1 chunk or as an HTTP/2 stream.
+func steadyUpload(t *testing.T, addr string, http2 bool) {
+	t.Helper()
+	piece := strings.Repeat("x", 1<<10)
+	if http2 {
+		pr, pw := io.Pipe()
+		go func() {
+			for range 256 {
+				if _, err := io.WriteString(pw, piece); err != nil {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			pw.Close()
+		}()
+		go func() {
+			if resp, err := h2cClient().Post("http://"+addr+"/", "application/octet-stream", pr); err == nil {
+				resp.Body.Close()
+			}
+		}()
+		return
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n", 256<<10)
+		for range 256 {
+			if _, err := io.WriteString(conn, piece); err != nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		io.WriteString(conn, "\r\n0\r\n\r\n")
+	}()
+}
+
+// readAll reports the error of reading a body to its end, or of reading
+// fewer than 256 KiB.
+func readAll(read chan<- error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err == nil && len(b) != 256<<10 {
+			err = fmt.Errorf("read %d bytes", len(b))
+		}
+		read <- err
+	}
+}
+
+func waitRead(t *testing.T, name string, read <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-read:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: handler still reading after 10s", name)
+		return nil
+	}
+}
+
+// A body not read to its end within the read timeout of the request's start
+// is dropped, however steadily it arrives, on HTTP/1 and HTTP/2.
+func TestBuildServer_DropsABodyNotReadWithinTheReadTimeout(t *testing.T) {
+	defer httpserve.SetBodyReadTimeout(300 * time.Millisecond)()
+	for _, h2 := range []bool{false, true} {
+		read := make(chan error, 1)
+		addr := serve(t, readAll(read), 1<<20)
+		steadyUpload(t, addr, h2)
+		if err := waitRead(t, fmt.Sprintf("HTTP/2=%v", h2), read); err == nil {
+			t.Errorf("HTTP/2=%v: a 1.3 s body read to its end under a 300 ms read timeout", h2)
+		}
+	}
+}
+
+// lifting reads its body after lifting the whole-body read limit.
+func lifting(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpserve.LiftBodyReadLimit(r.Context())
+		h(w, r)
+	}
+}
+
+// A handler marked StreamingBody that lifts the read limit reads a long body
+// as it arrives, past the read timeout, on HTTP/1 and HTTP/2.
+func TestBuildServer_StreamingBodyReadsPastTheReadTimeoutOnceLifted(t *testing.T) {
+	defer httpserve.SetBodyReadTimeout(300 * time.Millisecond)()
+	for _, h2 := range []bool{false, true} {
+		read := make(chan error, 1)
+		addr := serve(t, httpserve.StreamingBody(lifting(readAll(read))), 1<<20)
+		steadyUpload(t, addr, h2)
+		if err := waitRead(t, fmt.Sprintf("HTTP/2=%v", h2), read); err != nil {
+			t.Errorf("HTTP/2=%v: streaming handler: %v", h2, err)
+		}
+	}
+}
+
+// Until the handler lifts it, a StreamingBody route keeps the read limit; and
+// lifting outside such a route does nothing.
+func TestBuildServer_TheReadLimitStandsUntilAStreamingBodyRouteLiftsIt(t *testing.T) {
+	defer httpserve.SetBodyReadTimeout(300 * time.Millisecond)()
+	for _, name := range []string{"marked, not lifted", "lifted, not marked"} {
+		read := make(chan error, 1)
+		var h http.Handler = httpserve.StreamingBody(readAll(read))
+		if name == "lifted, not marked" {
+			h = lifting(readAll(read))
+		}
+		addr := serve(t, h, 1<<20)
+		steadyUpload(t, addr, false)
+		if err := waitRead(t, name, read); err == nil {
+			t.Errorf("%s: a 1.3 s body read to its end under a 300 ms read timeout", name)
+		}
+	}
+}
+
+// Lifting the read limit keeps the stall bound: a stalled body is still
+// dropped.
+func TestBuildServer_StreamingBodyKeepsTheStallBound(t *testing.T) {
+	defer httpserve.SetBodyStallTimeout(100 * time.Millisecond)()
+	read := make(chan error, 1)
+	addr := serve(t, httpserve.StreamingBody(lifting(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		read <- err
+	})), 1<<20)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nabc")
+	waitReadError(t, "streaming", read)
+}
+
+func TestIsStreamingBody(t *testing.T) {
+	if !httpserve.IsStreamingBody(httpserve.StreamingBody(http.NotFoundHandler())) || httpserve.IsStreamingBody(http.NotFoundHandler()) {
+		t.Error("IsStreamingBody does not tell a StreamingBody handler")
+	}
+}
+
+// A body left unread is discarded within what is left of the whole-body
+// limit, when that is shorter than the stall window.
+func TestBuildServer_BoundsTheDiscardOfAnUnreadBodyByTheReadLimit(t *testing.T) {
+	defer httpserve.SetBodyReadTimeout(300 * time.Millisecond)()
+	addr := serve(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		w.WriteHeader(http.StatusUnauthorized)
+	}), 1<<20)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\nabc")
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, _ = io.ReadAll(conn)
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("connection held %v after the read limit had passed", d)
+	}
+}

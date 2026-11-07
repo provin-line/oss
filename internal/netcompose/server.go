@@ -18,6 +18,7 @@ import (
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -458,7 +459,11 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		// requiring owner_did to equal the proven signer DID. peerVerifier is
 		// reused (same DID-resolution + nonce-store infra as the L2-only
 		// surfaces below).
-		newPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, peerVerifier, uint64(maxRetainPayloadSize)), authz, retainChunkCap)),
+		// RetainPayload is client-streaming: a retained payload arrives as it
+		// is sent. Once its caller, past L1, proves its DID in the first frame,
+		// the body is held to the stall bound only, not to the whole-body read
+		// limit (httpserve.StreamingBody, liftOnProof).
+		streamingPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, liftOnProof{peerVerifier}, uint64(maxRetainPayloadSize)), authz, retainChunkCap)),
 	} {
 		mux.Handle(p.path, p.h)
 	}
@@ -555,6 +560,26 @@ type handlerPair struct {
 // returns into a struct for uniform mux registration.
 func newPair(path string, h http.Handler) handlerPair {
 	return handlerPair{path: path, h: h}
+}
+
+// streamingPair is newPair for a client-streaming RPC (see
+// httpserve.StreamingBody).
+func streamingPair(path string, h http.Handler) handlerPair {
+	return handlerPair{path: path, h: httpserve.StreamingBody(h)}
+}
+
+// liftOnProof is RetainPayload's verifier: once a caller's in-band wireauth
+// proof verifies, its stream's body is no longer held to the whole-body read
+// limit (httpserve.LiftBodyReadLimit). Before that, the first frame, which
+// carries the proof, is read under the limit like any request.
+type liftOnProof struct{ storehandler.Verifier }
+
+func (v liftOnProof) Verify(ctx context.Context, op string, fields map[string]any, proof wireauth.Proof, authorize wireauth.Authorizer) error {
+	if err := v.Verifier.Verify(ctx, op, fields, proof, authorize); err != nil {
+		return err
+	}
+	httpserve.LiftBodyReadLimit(ctx)
+	return nil
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
