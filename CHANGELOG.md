@@ -254,6 +254,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   which only a caller building one by hand can pass, is now refused as not a
   valid literal; some were admitted. `canon/testdata/number-literals.json`
   holds the gate's verdict on each boundary.
+- `canon.StrictDecoder` refuses a document nested deeper than 10000 arrays
+  and objects before walking it, and walks the rest in time linear in its
+  length. Built with Go 1.26 or earlier, about a megabyte of `[` made the
+  walk recurse until the goroutine stack overflowed, a fatal error that
+  stops the whole process, before any signature was checked
+  (`json.Decoder.Token` limits depth only from Go 1.27, where jsonv2 is the
+  default). The walk also copied the path to a value once for each of its
+  siblings, so siblings deep in a document each cost their depth: 823 KB
+  nested 8 704 deep took 8.5 s. `encoding/json` refused the same depth when
+  decoding, so no document that decoded is refused now. The refusal of a
+  too-deep document is a plain error naming the limit (`*json.SyntaxError`
+  before, and still from Go 1.27), also when a duplicate key follows the
+  too-deep part.
 - Ed25519 public keys are validated by the new `crypto/ed25519.ValidatePublicKey`
   (with the new constant error type `ed25519.Error`): a key must be 32 bytes,
   must not be of small order (the eight low-order points, in every encoding

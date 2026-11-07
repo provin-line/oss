@@ -34,6 +34,10 @@ func (e *DuplicateKeyError) Error() string {
 //     canonical hash derived from it — would diverge from the received
 //     bytes (RFC 8785 presumes valid Unicode; fail closed instead).
 //
+// A document nested deeper than 10000 arrays and objects is refused, as
+// encoding/json refuses it. The work is linear in the length of the document,
+// whatever its depth, so it can decode input not yet authenticated.
+//
 // Direct encoding/json decoding on a protocol path requires a
 // `decoder-hygiene-exempt` comment, enforced by `make lint`
 // (scripts/check-decoder-hygiene.sh).
@@ -63,7 +67,7 @@ func (d *StrictDecoder) Decode(v any) error {
 	// Pass 1: structural walk — duplicate keys and trailing data.
 	dec := json.NewDecoder(bytes.NewReader(d.data))
 	dec.UseNumber()
-	if err := walkValue(dec, nil); err != nil {
+	if err := walkValue(dec, new([]string)); err != nil {
 		return err
 	}
 	if tok, err := dec.Token(); err != io.EOF {
@@ -138,7 +142,17 @@ func readUnicodeEscape(data []byte, i int) (int, int, error) {
 	return int(cp), 6, nil
 }
 
-func walkValue(dec *json.Decoder, path []string) error {
+// maxNesting is the deepest nesting of arrays and objects the walk enters, as
+// deep as encoding/json decodes in the pass after it. The walk needs its own
+// bound: json.Decoder.Token does not limit depth in every Go release, and the
+// walk recurses once per level, so a megabyte of "[" would exhaust the
+// goroutine stack, a fatal error no recover catches.
+const maxNesting = 10000
+
+// walkValue walks the next value. path is the one path of the whole walk: a
+// member or index is pushed before its value is walked and popped after, and
+// only an error copies it, so the walk is linear in the document.
+func walkValue(dec *json.Decoder, path *[]string) error {
 	tok, err := dec.Token()
 	if err == io.EOF {
 		return errors.New("canon: empty JSON document")
@@ -149,10 +163,21 @@ func walkValue(dec *json.Decoder, path []string) error {
 	return walkFrom(dec, tok, path)
 }
 
-func walkFrom(dec *json.Decoder, tok json.Token, path []string) error {
+// walkChild walks the value of member or index step under path.
+func walkChild(dec *json.Decoder, path *[]string, step string) error {
+	*path = append(*path, step)
+	err := walkValue(dec, path)
+	*path = (*path)[:len(*path)-1]
+	return err
+}
+
+func walkFrom(dec *json.Decoder, tok json.Token, path *[]string) error {
 	delim, ok := tok.(json.Delim)
 	if !ok {
 		return nil // scalar
+	}
+	if len(*path) >= maxNesting {
+		return fmt.Errorf("canon: JSON document nested deeper than %d", maxNesting)
 	}
 	switch delim {
 	case '{':
@@ -167,10 +192,10 @@ func walkFrom(dec *json.Decoder, tok json.Token, path []string) error {
 				return fmt.Errorf("canon: non-string object key %v", keyTok)
 			}
 			if seen[key] {
-				return &DuplicateKeyError{Key: key, Path: append([]string(nil), path...)}
+				return &DuplicateKeyError{Key: key, Path: append([]string(nil), *path...)}
 			}
 			seen[key] = true
-			if err := walkValue(dec, append(path, key)); err != nil {
+			if err := walkChild(dec, path, key); err != nil {
 				return err
 			}
 		}
@@ -179,7 +204,7 @@ func walkFrom(dec *json.Decoder, tok json.Token, path []string) error {
 		}
 	case '[':
 		for i := 0; dec.More(); i++ {
-			if err := walkValue(dec, append(path, strconv.Itoa(i))); err != nil {
+			if err := walkChild(dec, path, strconv.Itoa(i)); err != nil {
 				return err
 			}
 		}
