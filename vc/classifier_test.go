@@ -3,6 +3,7 @@ package vc_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -333,6 +334,57 @@ func TestVerifyChain_ReportsTheHeadSuiteContract(t *testing.T) {
 	}
 	if res.SuiteContract != vc.ContractW3CEdDSAJCS2022 {
 		t.Errorf("chain SuiteContract = %q, want the head credential's %q", res.SuiteContract, vc.ContractW3CEdDSAJCS2022)
+	}
+}
+
+// VerifyProof pins the proof's @context to the document's in both
+// directions: a document with a @context needs a proof that mirrors it, so
+// a stripped proof.@context does not verify, and a document without one
+// needs a proof without one. For eddsa-rdfc-2022 the refusal of a stripped
+// proof is this package's RDFC contract, which requires the member;
+// vc-di-eddsa §3.2.1 does not add it.
+func TestVerifyProof_RequiresTheProofContextTheDocumentHas(t *testing.T) {
+	signer, pub, jcsDoc := fixture(t)
+	for suite, doc := range map[string]map[string]any{
+		vc.CryptosuiteEdDSAJCS2022:  jcsDoc,
+		vc.CryptosuiteEdDSARDFC2022: provinDocument(t),
+	} {
+		proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, suite)
+		if err != nil {
+			t.Fatalf("CreateProof(%s): %v", suite, err)
+		}
+		if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, doc); err != nil {
+			t.Fatalf("%s: the genuine proof: %v", suite, err)
+		}
+		stripped := *proof
+		stripped.Context = nil
+		if err := vc.VerifyProof(ed25519.Verifier{}, pub, &stripped, doc); err == nil || !strings.Contains(err.Error(), "does not mirror") {
+			t.Errorf("%s: a proof with its @context stripped: err = %v, want the mirror refusal", suite, err)
+		}
+	}
+
+	// An explicit null @context is present: the proof copies it, so it mirrors.
+	null := map[string]any{"@context": nil, "issuer": issuerDID, "credentialSubject": map[string]any{"id": "urn:x"}}
+	nullProof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, null, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof over a null @context: %v", err)
+	}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, nullProof, null); err != nil {
+		t.Errorf("a proof over a null @context: %v", err)
+	}
+
+	bare := map[string]any{"issuer": issuerDID, "credentialSubject": map[string]any{"id": "urn:x"}}
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, bare, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof over a document without @context: %v", err)
+	}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, bare); err != nil {
+		t.Errorf("a proof without @context over a document without one: %v", err)
+	}
+	added := *proof
+	added.Context = []any{"https://www.w3.org/ns/credentials/v2"}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, &added, bare); err == nil || !strings.Contains(err.Error(), "carries @context but the document has none") {
+		t.Errorf("a proof with @context over a document without one: err = %v, want that refusal", err)
 	}
 }
 

@@ -248,6 +248,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the work a forged proof can cause. A proof whose `proofValue` does not
   decode, over a document that does not canonicalize, is now refused with
   the decode error rather than the canonicalization error.
+- **BREAKING (Go API)** `vc.VerifyProof` refuses a proof without a
+  proof-local `@context` over a document with one. A legacy eddsa-jcs-2022
+  proof, which has none, is verified with `vc.VerifyProofWithContract` or
+  `vc.VerifyProofUnderContract`. An eddsa-rdfc-2022 proof without one, the
+  shape vc-di-eddsa §3.2.1 produces, is now refused by every verify function
+  in `vc`: this package's RDFC contract requires the member, and
+  `vc.VerifyProof` was the one path that accepted it.
 
 ### Security
 
@@ -389,6 +396,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   refused too, as the classifier refuses that shape.
   `vc.VerifyProofWithContract` now leaves the check to
   `vc.VerifyProofUnderContract`, and its answers are unchanged.
+- `vc.VerifyProof` requires the proof's `@context` to mirror the document's
+  whenever the document has one, so a proof whose `@context` was removed
+  after signing no longer verifies through it. It checked the member only
+  when the proof carried one: an eddsa-jcs-2022 proof with its `@context`
+  stripped verified here, though `vc.VerifyProofWithContract` and a W3C
+  verifier refuse it. Nothing the issuer signed could be changed. A document
+  without `@context` still needs a proof without one. The proofs this now
+  refuses are listed under Changed.
 
 ## [0.3.0] - 2026-08-05
 

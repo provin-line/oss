@@ -82,6 +82,16 @@ func CreateProof(
 // typed proof fields (cryptosuite, created, purpose, verificationMethod) breaks
 // the check.
 //
+// The proof's @context is not covered that way, because the config takes the
+// document's: so when the document has a @context, the proof's must mirror
+// it, and when the document has none, the proof must carry none. A proof
+// without a proof-local @context over a document with one is therefore
+// refused. A legacy eddsa-jcs-2022 proof, which has none, is verified under
+// its contract with VerifyProofWithContract or VerifyProofUnderContract. An
+// eddsa-rdfc-2022 proof without one is refused by every verify function in
+// this package, whose RDFC contract requires the member, though vc-di-eddsa
+// §3.2.1 does not add it.
+//
 // It deliberately does NOT do the following — these are the high-level
 // Verifier's obligations (see verifier.go), because VerifyProof is a primitive
 // handed an already-resolved key and a typed proof:
@@ -91,11 +101,11 @@ func CreateProof(
 //     supplied here; a caller passing a key unrelated to verificationMethod
 //     gets a meaningless verdict.
 //   - Reject a proof carrying members outside the typed DataIntegrityProof set
-//     (e.g. domain / challenge / a proof-local @context). The provin profile's
-//     proof is exactly {type, cryptosuite, verificationMethod, proofPurpose,
-//     created, proofValue}; any extra wire member is NOT covered by the
-//     signature and so would be malleable if a consumer ever trusted it. The
-//     Verifier MUST reject such proofs.
+//     (e.g. domain / challenge). The provin profile's proof is the six members
+//     {type, cryptosuite, verificationMethod, proofPurpose, created,
+//     proofValue} and the mirrored @context; any other wire member is NOT
+//     covered by the signature and so would be malleable if a consumer ever
+//     trusted it. The Verifier MUST reject such proofs.
 //   - Validate proof.type == "DataIntegrityProof", the proofPurpose policy, the
 //     cryptosuite lifecycle phase at proof.created, and that created is a
 //     well-formed, in-window datetime.
@@ -122,14 +132,13 @@ func VerifyProof(
 		return err
 	}
 	// The config below is rebuilt from the DOCUMENT's context, so the wire
-	// proof.@context member would otherwise ride outside this check — the same
-	// artifact could verify here and fail under VerifyProofWithContract. This
-	// path does not know the contract, so it pins the member only when the
-	// proof carries one; VerifyProofUnderContract pins it under every contract.
-	if proof.Context != nil {
+	// proof.@context is pinned to it here (see the doc above).
+	if _, docHas := document[keyContext]; docHas {
 		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
 			return err
 		}
+	} else if proof.Context != nil {
+		return errors.New("vc: the proof carries @context but the document has none")
 	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
