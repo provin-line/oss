@@ -425,6 +425,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   verifier refuse it. Nothing the issuer signed could be changed. A document
   without `@context` still needs a proof without one. The proofs this now
   refuses are listed under Changed.
+- The `cedar` PDP backend authenticates the caller. In 0.3.0 and earlier it
+  gave the Cedar agent the raw bearer token as the principal without
+  verifying it, so the principal was whatever string the caller sent. It now
+  verifies the bearer as a JWT: a signature by a key from the configured key
+  set or by the configured HS256 secret, an `exp` that has not passed and,
+  if the token has one, an `nbf` that has (both with 30 s of leeway), an
+  `iss` equal to the configured issuer, an `aud` that contains the
+  configured audience, and a non-empty `sub`, which it gives the agent as
+  the principal. A token that fails any check is refused. The configuration
+  this needs (`provin.network.auth.cedar.jwt.*`) is under Changed.
 
 ## [0.3.0] - 2026-08-05
 
