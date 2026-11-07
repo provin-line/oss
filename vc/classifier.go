@@ -142,6 +142,11 @@ func ClassifyProof(cryptosuite string, hasProofContext bool, encoding did.KeyEnc
 // deliberately cannot: it names what we issue, and letting it hand the
 // int64-verbatim deviation to a verification would resurrect the ambiguity the
 // contract exists to remove.
+//
+// The proof's @context is outside the signature on this path, so the
+// contract pins it: under a W3C contract it must mirror the document's (see
+// requireProofContextMirrorsDocument), and under the legacy contract the
+// proof must carry none.
 func VerifyProofUnderContract(
 	verifier crypto.Verifier,
 	publicKey []byte,
@@ -151,6 +156,21 @@ func VerifyProofUnderContract(
 ) error {
 	if proof == nil {
 		return errors.New("vc: nil proof")
+	}
+	switch contract {
+	case ContractW3CEdDSAJCS2022, ContractW3CEdDSARDFC2022:
+		// Both W3C contracts carry the proof-local @context, and on this verify
+		// path the wire member is otherwise outside the signature — the mirror
+		// is what pins it.
+		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
+			return err
+		}
+	case ContractLegacyProvinEdDSAJCSInt64:
+		// A legacy proof is the six typed members; a @context added to one
+		// would ride outside the signature.
+		if proof.Context != nil {
+			return errors.New("vc: a legacy proof carries no @context")
+		}
 	}
 	canonFn, err := contract.canonicalizer()
 	if err != nil {
@@ -175,9 +195,10 @@ func VerifyProofUnderContract(
 func requireProofContextMirrorsDocument(proof *DataIntegrityProof, document map[string]any) error {
 	docCtx, docHas := document[keyContext]
 	if !docHas {
-		// Unreachable for W3C-classified proofs issued by this profile (every
-		// signed document carries a context); kept as defense in depth.
-		return errors.New("vc: W3C proof carries @context but the document has none")
+		// A classified W3C proof never reaches this (the classifier requires a
+		// proof-local @context, and the proof copies the document's); a direct
+		// call of VerifyProofUnderContract under a W3C contract can.
+		return errors.New("vc: a W3C contract requires a document @context")
 	}
 	pb, err := jcs.CanonicalizeRFC8785(proof.Context)
 	if err != nil {
@@ -216,15 +237,6 @@ func VerifyProofWithContract(
 	contract, err := ClassifyProof(proof.Cryptosuite, proof.Context != nil, encoding)
 	if err != nil {
 		return "", err
-	}
-	switch contract {
-	case ContractW3CEdDSAJCS2022, ContractW3CEdDSARDFC2022:
-		// Both W3C contracts carry the proof-local @context, and on this verify
-		// path the wire member is otherwise outside the signature — the mirror
-		// is what pins it (see requireProofContextMirrorsDocument).
-		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
-			return "", err
-		}
 	}
 	if err := VerifyProofUnderContract(verifier, publicKey, proof, document, contract); err != nil {
 		return "", err

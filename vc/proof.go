@@ -123,8 +123,9 @@ func VerifyProof(
 	}
 	// The config below is rebuilt from the DOCUMENT's context, so the wire
 	// proof.@context member would otherwise ride outside this check — the same
-	// artifact could verify here and fail under VerifyProofWithContract. Every
-	// entry point pins the member the same way.
+	// artifact could verify here and fail under VerifyProofWithContract. This
+	// path does not know the contract, so it pins the member only when the
+	// proof carries one; VerifyProofUnderContract pins it under every contract.
 	if proof.Context != nil {
 		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
 			return err

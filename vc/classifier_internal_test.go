@@ -3,6 +3,7 @@ package vc
 import (
 	stded25519 "crypto/ed25519"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/canon/jcs"
@@ -57,13 +58,15 @@ func TestLegacyContract_VerifiesADocumentTheSuitesDisagreeOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
+	ctx := []any{"https://www.w3.org/ns/credentials/v2"}
 	doc := map[string]any{
-		"id": "urn:uuid:legacy-big-int",
-		"n":  json.Number("9007199254740993"),
+		"@context": ctx,
+		"id":       "urn:uuid:legacy-big-int",
+		"n":        json.Number("9007199254740993"),
 	}
 	created := "2026-01-01T00:00:00Z"
 	vm := "did:dplaax:o:p#signing"
-	cfg := proofConfigMap(proofType, CryptosuiteEdDSAJCS2022, vm, proofPurposeSign, created, nil, false)
+	cfg := proofConfigMap(proofType, CryptosuiteEdDSAJCS2022, vm, proofPurposeSign, created, ctx, true)
 	hd, err := proofHashData(jcs.Canonicalizer{}, cfg, doc)
 	if err != nil {
 		t.Fatalf("legacy hashData: %v", err)
@@ -81,7 +84,18 @@ func TestLegacyContract_VerifiesADocumentTheSuitesDisagreeOn(t *testing.T) {
 	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, ContractLegacyProvinEdDSAJCSInt64); err != nil {
 		t.Errorf("legacy contract rejected a genuine legacy artifact: %v", err)
 	}
-	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, ContractW3CEdDSAJCS2022); err == nil {
+	// The same proof with the proof-local @context the W3C contract requires:
+	// the mirror holds, so only the canonicalization can refuse it.
+	w3c := *proof
+	w3c.Context = ctx
+	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, &w3c, doc, ContractW3CEdDSAJCS2022); err == nil {
 		t.Error("the W3C contract verified an int64-verbatim signature — the two canonicalizations did not diverge where they must")
+	} else if strings.Contains(err.Error(), "@context") {
+		t.Errorf("the W3C contract refused at the @context check, not at the canonicalization: %v", err)
+	}
+	// A legacy proof is the six typed members: a @context added to it rides
+	// outside the signature.
+	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, &w3c, doc, ContractLegacyProvinEdDSAJCSInt64); err == nil {
+		t.Error("the legacy contract verified a legacy proof with an added @context")
 	}
 }

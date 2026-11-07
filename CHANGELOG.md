@@ -374,6 +374,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   differently (`#sign%69ng`, whitespace, other characters) are refused. A member that carries keys
   (`authentication`, `assertionMethod`, `keyAgreement`, `capabilityInvocation`,
   `capabilityDelegation`, `publicKey`) must be a list when present.
+- `vc.VerifyProofUnderContract` pins the proof's `@context` under every
+  contract, as `vc.VerifyProofWithContract` already did before calling it:
+  under the two W3C contracts (`vc.ContractW3CEdDSAJCS2022` and
+  `vc.ContractW3CEdDSARDFC2022`) it must mirror the document's, and under
+  `vc.ContractLegacyProvinEdDSAJCSInt64` the proof must carry none. The
+  proof configuration is rebuilt from the document's `@context`, so on this
+  path the wire `proof.@context` is outside the signature: a proof whose
+  `@context` was swapped, removed or added after signing verified when
+  `vc.VerifyProofUnderContract` was called directly. Nothing the issuer
+  signed could be changed, but one signed artifact verified in more than one
+  wire form, including eddsa-jcs-2022 forms a W3C verifier refuses. Called
+  directly under a W3C contract, a document without `@context` is now
+  refused too, as the classifier refuses that shape.
+  `vc.VerifyProofWithContract` now leaves the check to
+  `vc.VerifyProofUnderContract`, and its answers are unchanged.
 
 ## [0.3.0] - 2026-08-05
 

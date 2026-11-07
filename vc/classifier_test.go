@@ -144,6 +144,58 @@ func TestVerifyProofWithContract_RejectsSwappedProofContext(t *testing.T) {
 	}
 }
 
+// VerifyProofUnderContract pins the wire proof.@context under both W3C
+// contracts, as VerifyProofWithContract does: the proof config is rebuilt
+// from the document's @context, so a member swapped or removed after signing
+// would otherwise still verify.
+func TestVerifyProofUnderContract_RejectsAProofContextThatDoesNotMirror(t *testing.T) {
+	signer, pub, jcsDoc := fixture(t)
+	rdfcDoc := provinDocument(t)
+	for _, tc := range []struct {
+		contract    vc.SuiteContract
+		cryptosuite string
+		doc         map[string]any
+	}{
+		{vc.ContractW3CEdDSAJCS2022, vc.CryptosuiteEdDSAJCS2022, jcsDoc},
+		{vc.ContractW3CEdDSARDFC2022, vc.CryptosuiteEdDSARDFC2022, rdfcDoc},
+	} {
+		t.Run(string(tc.contract), func(t *testing.T) {
+			proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, tc.doc, tc.cryptosuite)
+			if err != nil {
+				t.Fatalf("CreateProof: %v", err)
+			}
+			if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, tc.doc, tc.contract); err != nil {
+				t.Fatalf("the genuine proof: %v", err)
+			}
+			for name, ctx := range map[string]any{
+				"swapped": []any{"https://attacker.example/context/v2"},
+				"removed": nil,
+			} {
+				tampered := *proof
+				tampered.Context = ctx
+				if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, &tampered, tc.doc, tc.contract); err == nil {
+					t.Errorf("a %s proof.@context verified", name)
+				}
+			}
+		})
+	}
+}
+
+// A W3C contract requires the proof-local @context, so a document without
+// one, and its proof without one, is refused when the contract is named
+// directly, as the classifier refuses the shape.
+func TestVerifyProofUnderContract_W3CRequiresADocumentContext(t *testing.T) {
+	signer, pub, doc := fixture(t)
+	delete(doc, "@context")
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, doc, vc.ContractW3CEdDSAJCS2022); err == nil {
+		t.Error("the W3C contract verified a proof over a document without @context")
+	}
+}
+
 func TestClassifyProof_RDFCRow(t *testing.T) {
 	// eddsa-rdfc-2022 is a production suite (v0-mandatory, p0-7/p0-12 ruling);
 	// the dispatch must route it, not reject it. Its W3C shape is the same as
