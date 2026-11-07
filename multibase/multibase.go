@@ -8,7 +8,8 @@
 // partition signature verification from key decoding, so the codec is
 // frozen here once. Decoding is fail-closed: a value that does not carry
 // the expected multibase prefix is rejected rather than mis-decoded under
-// another base.
+// another base, and a value too long to decode cheaply is rejected before
+// any of it is decoded.
 package multibase
 
 import (
@@ -23,8 +24,13 @@ const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwx
 // base58BtcPrefix is the multibase code for base58btc.
 const base58BtcPrefix = "z"
 
+// maxBase58BtcLength is the most characters after the prefix DecodeBase58Btc
+// decodes: about 6 KB, every byte string of up to 5998 bytes.
+const maxBase58BtcLength = 8192
+
 // EncodeBase58Btc encodes data as multibase base58btc ("z" prefix) — the
-// proofValue and publicKeyMultibase encoding.
+// proofValue and publicKeyMultibase encoding. Data of more than 5998 bytes
+// may encode to a value DecodeBase58Btc refuses.
 func EncodeBase58Btc(data []byte) string {
 	return base58BtcPrefix + base58Encode(data)
 }
@@ -32,10 +38,20 @@ func EncodeBase58Btc(data []byte) string {
 // DecodeBase58Btc decodes a multibase base58btc value. A value that does not
 // carry the "z" prefix is rejected rather than mis-decoded under another base
 // (defense against a verifier accepting a differently-encoded value).
+//
+// A value of more than 8192 characters after the prefix is refused before
+// any of it is decoded. Decoding base58 costs the square of the length, and
+// the value is read before its signature is checked; 8192 characters hold
+// every Ed25519, ECDSA and BLS key and signature, and ML-DSA's (up to 4627
+// bytes), but not SLH-DSA's (7856 bytes and more). A refusal quotes at most
+// the first 32 characters of the value.
 func DecodeBase58Btc(s string) ([]byte, error) {
 	rest, ok := strings.CutPrefix(s, base58BtcPrefix)
 	if !ok {
-		return nil, fmt.Errorf("multibase: value %q is not base58btc (missing %q prefix)", s, base58BtcPrefix)
+		return nil, fmt.Errorf("multibase: value %.32q is not base58btc (missing %q prefix)", s, base58BtcPrefix)
+	}
+	if len(rest) > maxBase58BtcLength {
+		return nil, fmt.Errorf("multibase: base58btc value of %d bytes is longer than %d", len(rest), maxBase58BtcLength)
 	}
 	return base58Decode(rest)
 }

@@ -267,6 +267,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   too-deep document is a plain error naming the limit (`*json.SyntaxError`
   before, and still from Go 1.27), also when a duplicate key follows the
   too-deep part.
+- `multibase.DecodeBase58Btc` refuses a value of more than 8192 characters
+  after the "z" prefix before decoding any of it. Decoding base58 costs the
+  square of the length, and `proofValue` is decoded before its signature is
+  checked: 700 KB took 7.8 s. 8192 characters hold every byte string of up to
+  5998 bytes — every Ed25519, ECDSA and BLS key and signature, and ML-DSA's
+  (up to 4627 bytes), but not SLH-DSA's (7856 bytes and more); a longer
+  value, which decoded before, is now refused. A value without the prefix is
+  refused quoting at most its first 32 characters (it was quoted whole).
 - Ed25519 public keys are validated by the new `crypto/ed25519.ValidatePublicKey`
   (with the new constant error type `ed25519.Error`): a key must be 32 bytes,
   must not be of small order (the eight low-order points, in every encoding
