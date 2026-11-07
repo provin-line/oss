@@ -402,6 +402,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   is not a JSON value as decoding gives it, or a Go integer (a `float32` is
   canonicalized widened but encoded short, so its identity would not be that
   of its encoding).
+- **BREAKING (Go API)** A tlog checkpoint has one spelling of what it signs:
+  `(*tlog.Checkpoint).SignedView` (and so `tlog.SignCheckpoint` and every
+  checkpoint verification) refuses a head with an upper-case letter, and a
+  timestamp not in UTC, with a fraction of a second, or outside the years
+  RFC 3339 writes (0000–9999). `tlog.SignCheckpoint` called with a time not
+  in UTC is refused, where the view used to carry its offset (the wire
+  carried UTC only, so such a signature did not verify after transport).
+  `tlog.VerifyConsistency` and `tlog.VerifyInclusion` refuse a head not in
+  lower case. The logs here stamp UTC whole seconds and write lower-case
+  heads, so nothing they write is refused.
 
 ### Security
 
@@ -701,6 +711,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   refused. A number in an extension is admitted before it is canonicalized,
   as on the other identity paths, so the identity holds the number the
   manifest carries.
+- Two tlog checkpoints whose timestamps differ by less than a second could
+  share one signature: the signed view writes the timestamp to the second.
+  One root in two spellings (a head in upper case) got two verdicts:
+  `VerifyConsistency` compared heads as text for equal sizes but as bytes
+  otherwise. Each value now has one spelling, and a value in another is
+  refused.
 
 ## [0.3.0] - 2026-08-05
 

@@ -268,15 +268,11 @@ type mirrorReqParams struct {
 	CheckpointSignerDID string
 	ProofSignerDID      string
 	Timestamp           time.Time
-	// CheckpointTSOverride, when non-nil, is the instant the CHECKPOINT is
-	// signed over (its zone preserved into SignedView), independent of the
-	// wireauth proof's Timestamp above. WireTSOverride, when non-empty, is the
-	// literal string placed on the wire checkpoint.timestamp field (instead of
-	// the default canonical-UTC form). Together they let a test build a
-	// genuinely-signed checkpoint whose wire timestamp carries a non-Z offset —
-	// the P1-A canonical-UTC-enforcement case.
-	CheckpointTSOverride *time.Time
-	WireTSOverride       string
+	// WireTSOverride, when non-empty, is the literal string placed on the wire
+	// checkpoint.timestamp field (instead of the default canonical-UTC form),
+	// so a test can ship a genuinely-signed checkpoint whose wire timestamp
+	// carries a non-Z offset — the P1-A canonical-UTC-enforcement case.
+	WireTSOverride string
 }
 
 // validParams returns the correctly-aligned, correctly-chained parameters
@@ -299,9 +295,6 @@ func validParams(logID string, fromIndex uint64, payloads [][]byte, tail, signer
 func (f *mirrorFixture) buildRequest(t *testing.T, p mirrorReqParams) *tlogpb.MirrorLogSegmentRequest {
 	t.Helper()
 	checkpointTS := p.Timestamp
-	if p.CheckpointTSOverride != nil {
-		checkpointTS = *p.CheckpointTSOverride
-	}
 	cp, err := tlog.SignCheckpoint(p.CheckpointSize, p.CheckpointHead, &tlog.CheckpointSigner{
 		Signer: f.ks, SignerDID: p.CheckpointSignerDID, KeyID: string(keystore.KeyIDSigning),
 		VerificationMethod: p.CheckpointSignerDID + "#signing", LogID: p.LogID,
@@ -381,20 +374,20 @@ func TestMirrorLogSegment_CanonicalUTCTimestampEnforced(t *testing.T) {
 	jst := time.FixedZone("JST", 9*3600)
 	plus9 := mirrorFixedClock().In(jst) // 2026-07-19T18:00:00+09:00 — SAME instant as the fixed clock
 	for _, tc := range []struct {
-		name       string
-		tsOverride *time.Time
-		wireTS     string
+		name   string
+		wireTS string
 	}{
-		{"plus-09:00", &plus9, plus9.Format(time.RFC3339)},
+		// tlog.SignCheckpoint refuses a time not in UTC, so the checkpoint is
+		// signed over "...Z" and only the wire string carries the offset.
+		{"plus-09:00", plus9.Format(time.RFC3339)},
 		// Signed over the canonical "...Z" but shipped as "+00:00": the parsed
 		// zero-offset time re-derives to "Z" so the signature still verifies —
 		// the non-canonical STRING is the only defect, which the fix rejects.
-		{"plus-00:00-not-Z", nil, "2026-07-19T09:00:00+00:00"},
+		{"plus-00:00-not-Z", "2026-07-19T09:00:00+00:00"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newMirrorFixture(t, 256, 4<<20)
 			p := validParams(mirrorPipelineA, 0, payloads(2), "", mirrorProcessA1)
-			p.CheckpointTSOverride = tc.tsOverride
 			p.WireTSOverride = tc.wireTS
 			if _, err := f.call(f.buildRequest(t, p)); connect.CodeOf(err) != connect.CodeInvalidArgument {
 				t.Fatalf("non-canonical UTC timestamp %q: code = %v, want InvalidArgument (err=%v)", tc.wireTS, connect.CodeOf(err), err)
