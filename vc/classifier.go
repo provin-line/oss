@@ -109,6 +109,9 @@ type canonicalizerFunc func(any) ([]byte, error)
 //     with a Multikey — reclassifying evidence on the strength of a change made
 //     after it was signed.
 func ClassifyProof(cryptosuite string, hasProofContext bool, encoding did.KeyEncoding) (SuiteContract, error) {
+	if !hasClaimContract(cryptosuite) {
+		return "", fmt.Errorf("vc: cryptosuite %q has no claim contract", cryptosuite)
+	}
 	switch cryptosuite {
 	case CryptosuiteEdDSAJCS2022:
 		switch {
@@ -131,8 +134,20 @@ func ClassifyProof(cryptosuite string, hasProofContext bool, encoding did.KeyEnc
 			"vc: proof shape does not match the %s contract (proof-local @context: %t, key encoding: %q)",
 			cryptosuite, hasProofContext, encoding)
 	default:
+		// A suite hasClaimContract names but no case handles: refuse it.
 		return "", fmt.Errorf("vc: cryptosuite %q has no claim contract", cryptosuite)
 	}
+}
+
+// hasClaimContract reports whether any claim contract names cryptosuite,
+// whatever the proof's shape and key. ClassifyProof refuses every other
+// cryptosuite first, so a proof under one verifies under no key.
+func hasClaimContract(cryptosuite string) bool {
+	switch cryptosuite {
+	case CryptosuiteEdDSAJCS2022, CryptosuiteEdDSARDFC2022:
+		return true
+	}
+	return false
 }
 
 // VerifyProofUnderContract verifies proof under an explicitly named claim
@@ -178,7 +193,7 @@ func VerifyProofUnderContract(
 	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
-	return verifyProofValue(verifier, publicKey, proof.ProofValue, canonFn, cfg, document)
+	return verifyProofValue(verifier, publicKey, proof, canonFn, cfg, document)
 }
 
 // requireProofContextMirrorsDocument enforces, for the W3C contract, that the

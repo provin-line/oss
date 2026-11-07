@@ -155,6 +155,11 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 	if !found || vmDID != cred.Issuer {
 		return fmt.Errorf("delegation: verificationMethod %q does not name the issuer %q", cred.Proof.VerificationMethod, cred.Issuer)
 	}
+	// A proofValue that does not decode verifies under no key, so it is
+	// refused before the issuer is resolved.
+	if _, err := cred.Proof.ProofValueBytes(); err != nil {
+		return fmt.Errorf("delegation: %w", err)
+	}
 	doc, err := r.Resolve(ctx, cred.Issuer)
 	if err != nil {
 		return fmt.Errorf("delegation: resolve issuer: %w", err)

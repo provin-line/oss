@@ -108,6 +108,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Applies to the `o3co`, `opa` and `cedar` backends; a malformed entry fails
   startup naming the key. The quickstart configs set it for
   `policy-verifier:3001`.
+- `(*vc.DataIntegrityProof).ProofValueBytes` returns the bytes a proof's
+  `proofValue` encodes, decoded by the encoding its cryptosuite sets:
+  multibase base58btc, carrying the signature, for eddsa-jcs-2022 and
+  eddsa-rdfc-2022. It verifies nothing: not the signature, and not whether
+  `vc` supports the cryptosuite. Its decoding is bounded as
+  `multibase.DecodeBase58Btc` bounds it. `vc.VerifyProof` and
+  `vc.VerifyProofUnderContract` decode through it.
 
 ### Changed
 
@@ -255,6 +262,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   shape vc-di-eddsa §3.2.1 produces, is now refused by every verify function
   in `vc`: this package's RDFC contract requires the member, and
   `vc.VerifyProof` was the one path that accepted it.
+- `vc.Verifier` (signer authenticity) refuses a proof no key can verify, one
+  under a cryptosuite no claim contract names or one whose `proofValue` does
+  not decode, before it looks up the suite's lifecycle phase or the issuer's
+  key; `delegation.Verify` refuses one whose `proofValue` does not decode
+  before it resolves the issuer. `vc.Verifier` now gives such a proof a
+  failed verdict where a transient issuer-key error made it indeterminate,
+  so a caller that retries indeterminate verdicts no longer retries it, and
+  it fails a proof under a suite no claim contract names whatever a
+  lifecycle registry says about the suite. `keybinding`, which maps those
+  verdicts, returns `keybinding.ErrSignature` for such a proof where it
+  returned `keybinding.ErrSignatureUnestablished`. `delegation.Verify` now
+  returns the decode error, without resolving, where it returned the
+  resolver's error (also one wrapping `resolver.ErrNotFound`) or the
+  key-extraction error.
 
 ### Security
 

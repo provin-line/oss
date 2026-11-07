@@ -13,6 +13,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/multibase"
 )
 
 // JSON-LD context IRIs embedded in every credential issued by New/Builder.
@@ -73,6 +74,26 @@ type DataIntegrityProof struct {
 	Created string `json:"created"`
 	// ProofValue is the base58btc ("z" multibase) encoded signature.
 	ProofValue string `json:"proofValue"`
+}
+
+// ProofValueBytes returns the bytes proofValue encodes, decoded by the
+// encoding the proof's cryptosuite sets. For the suites this package
+// verifies (eddsa-jcs-2022 and eddsa-rdfc-2022) that encoding is multibase
+// base58btc, and the bytes are the signature; ProofValueBytes decodes
+// base58btc, so a proofValue in another encoding is an error. It checks
+// neither the signature nor whether this package supports the cryptosuite,
+// so the bytes prove nothing about the document. Decoding is bounded as
+// multibase.DecodeBase58Btc bounds it: a value that function refuses is an
+// error, and so is a nil proof. Each call returns bytes of its own.
+func (p *DataIntegrityProof) ProofValueBytes() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("vc: nil proof")
+	}
+	sig, err := multibase.DecodeBase58Btc(p.ProofValue)
+	if err != nil {
+		return nil, fmt.Errorf("vc: decode proofValue: %w", err)
+	}
+	return sig, nil
 }
 
 // TransformationClaim is the boundary's claim about the output's

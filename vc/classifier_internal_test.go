@@ -8,6 +8,7 @@ import (
 
 	"github.com/provin-line/oss/canon/jcs"
 	ed25519lib "github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/multibase"
 )
 
@@ -97,5 +98,23 @@ func TestLegacyContract_VerifiesADocumentTheSuitesDisagreeOn(t *testing.T) {
 	// outside the signature.
 	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, &w3c, doc, ContractLegacyProvinEdDSAJCSInt64); err == nil {
 		t.Error("the legacy contract verified a legacy proof with an added @context")
+	}
+}
+
+// hasClaimContract answers for a cryptosuite what ClassifyProof answers for
+// some shape and key: whether any claim contract names it.
+func TestHasClaimContract_AgreesWithClassifyProof(t *testing.T) {
+	for _, suite := range []string{CryptosuiteEdDSAJCS2022, CryptosuiteEdDSARDFC2022, "ecdsa-rdfc-2019", "bbs-2023", "", "none"} {
+		classifies := false
+		for _, hasCtx := range []bool{true, false} {
+			for _, enc := range []did.KeyEncoding{did.EncodingMultikey, did.EncodingJWK} {
+				if _, err := ClassifyProof(suite, hasCtx, enc); err == nil {
+					classifies = true
+				}
+			}
+		}
+		if got := hasClaimContract(suite); got != classifies {
+			t.Errorf("hasClaimContract(%q) = %t, but ClassifyProof classifies it: %t", suite, got, classifies)
+		}
 	}
 }

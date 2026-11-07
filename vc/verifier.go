@@ -332,6 +332,17 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	if issuer == "" || !found || vmDID != issuer {
 		return failed
 	}
+	// A proof no key can verify — one under a cryptosuite no claim contract
+	// names, or one whose proofValue does not decode — is an established
+	// failure, decided before the lifecycle and issuer lookups, so that no
+	// lookup runs for it and a transient issuer-key error cannot make it
+	// indeterminate.
+	if !hasClaimContract(proof.Cryptosuite) {
+		return failed
+	}
+	if _, err := proof.ProofValueBytes(); err != nil {
+		return failed
+	}
 	// Cryptosuite lifecycle at proof.created (optional hardening layer; a nil
 	// registry means no lifecycle gating — a registered, non-no-op suite is
 	// acceptable, the registration gate alone applies). The phase is evaluated
