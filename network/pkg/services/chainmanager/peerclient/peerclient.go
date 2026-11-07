@@ -27,28 +27,45 @@ const (
 	opDisconnect           = "Disconnect"
 )
 
+// A publisher is another organization's server, so the client bounds what it
+// takes from one: it accepts no compression, maxResponseBytes bounds a
+// response (every ChainPeerService response is a few small fields, and a
+// publisher's handler reads requests within the same 256 KiB), and
+// callTimeout bounds a call whatever the caller's context (the subscriber's
+// compensating Disconnect runs under one that is never cancelled, while the
+// chain manager holds its lock).
+const (
+	maxResponseBytes = 256 << 10
+	callTimeout      = 30 * time.Second
+)
+
 // Client is a wireauth-signing ConnectRPC client for ChainPeerService. It signs
 // as a single configured identity (signerDID + signer); the remote enforces the
 // signer↔subscriber binding, so a request whose subscriber_did differs from
 // signerDID is rejected end-to-end.
 type Client struct {
-	signer     crypto.Signer
-	signerDID  string
-	httpClient connect.HTTPClient
+	signer      crypto.Signer
+	signerDID   string
+	httpClient  connect.HTTPClient
+	callTimeout time.Duration
 }
 
 // New returns a Client that signs as signerDID using signer and dials through
 // httpClient (supply an SSRF-guarded client, e.g. core.URLGuard.HTTPClient()).
 func New(signer crypto.Signer, signerDID string, httpClient connect.HTTPClient) *Client {
-	return &Client{signer: signer, signerDID: signerDID, httpClient: httpClient}
+	return &Client{signer: signer, signerDID: signerDID, httpClient: httpClient, callTimeout: callTimeout}
 }
 
 func (c *Client) peer(endpoint string) chainpbconnect.ChainPeerServiceClient {
-	return chainpbconnect.NewChainPeerServiceClient(c.httpClient, endpoint)
+	return chainpbconnect.NewChainPeerServiceClient(c.httpClient, endpoint,
+		connect.WithAcceptCompression("gzip", nil, nil),
+		connect.WithReadMaxBytes(maxResponseBytes))
 }
 
 // GetPublisherInfo discovers a publisher's transport + offered payload modes.
 func (c *Client) GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, publisherDID string) (string, []string, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
+	defer cancel()
 	ap, err := c.proof(opGetPublisherInfo, map[string]any{"publisher_did": publisherDID})
 	if err != nil {
 		return "", nil, err
@@ -67,6 +84,8 @@ func (c *Client) GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, 
 // requested mode rides verbatim (empty stays empty); the publisher normalizes
 // and returns the agreed mode.
 func (c *Client) RegisterSubscription(ctx context.Context, endpoint, subscriberDID, publisherDID, requestedMode string) (string, map[string]string, string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
+	defer cancel()
 	ap, err := c.proof(opRegisterSubscription, map[string]any{
 		"subscriber_did":   subscriberDID,
 		"publisher_did":    publisherDID,
@@ -91,6 +110,8 @@ func (c *Client) RegisterSubscription(ctx context.Context, endpoint, subscriberD
 // NotFound is surfaced as store.ErrNotFound so the domain can treat teardown as
 // idempotent.
 func (c *Client) Disconnect(ctx context.Context, endpoint, remoteSubscriptionID string) error {
+	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
+	defer cancel()
 	ap, err := c.proof(opDisconnect, map[string]any{"subscription_id": remoteSubscriptionID})
 	if err != nil {
 		return err

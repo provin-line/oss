@@ -290,3 +290,47 @@ func TestBoot_StoreVC_RejectsOverCap(t *testing.T) {
 		t.Fatal("over-cap StoreVC: want error, got nil")
 	}
 }
+
+// silentVCResolver never answers, and ignores the deadline the client sends:
+// each call waits until the test ends.
+type silentVCResolver struct {
+	vcpbconnect.UnimplementedVCResolverServiceHandler
+	release chan struct{}
+}
+
+func (s silentVCResolver) ResolveVC(context.Context, *connect.Request[vcpb.ResolveVCRequest]) (*connect.Response[vcpb.ResolveVCResponse], error) {
+	<-s.release
+	return nil, errors.New("released")
+}
+
+// A peer is another organization's server: a fetch from it ends within the
+// fetcher's timeout although the runner's context lives as long as the process.
+func TestPeerFetcher_FetchEndsWithinTheTimeout(t *testing.T) {
+	release := make(chan struct{})
+	_, h := vcpbconnect.NewVCResolverServiceHandler(silentVCResolver{release: release})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+	f := &peerFetcher{httpClient: srv.Client(), maxBytes: 1 << 20, timeout: 50 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.Fetch(context.WithoutCancel(context.Background()), srv.URL, "sha256:"+strings.Repeat("a", 64))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("silent peer: want error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("silent peer: still waiting after 5s")
+	}
+}
+
+// A fetcher without a timeout of its own, as BuildBatchResolver builds it,
+// bounds every fetch with peerFetchTimeout.
+func TestPeerFetcher_DefaultsToPeerFetchTimeout(t *testing.T) {
+	if got := (&peerFetcher{}).fetchTimeout(); got != peerFetchTimeout || got <= 0 {
+		t.Fatalf("fetchTimeout = %s, want peerFetchTimeout (%s)", got, peerFetchTimeout)
+	}
+}

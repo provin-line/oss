@@ -300,6 +300,7 @@ func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HT
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		httpClient, endpoint,
 		connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+		connect.WithAcceptCompression("gzip", nil, nil),
 		connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize),
 	))
 }
@@ -309,17 +310,30 @@ func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HT
 // fallback is needed before asynchronous predecessor replication has caught
 // up; every selected credential is still cryptographically verified and fixed
 // in the resulting EvidenceView.
+//
+// The upstream may be another organization's registry, so a call to it ends within
+// timeout (upstreamResolveTimeout when not positive), whatever the caller's context.
 type fallbackCredentialResolver struct {
 	local    *vcresolverclient.Resolver
 	upstream *vcresolverclient.Resolver
+	timeout  time.Duration
 }
+
+// upstreamResolveTimeout bounds one call to the declared upstream registry.
+const upstreamResolveTimeout = 30 * time.Second
 
 func (r fallbackCredentialResolver) ResolveCredential(ctx context.Context, contentAddress string) (*vc.PipelinePassCredential, error) {
 	credential, localErr := r.local.ResolveCredential(ctx, contentAddress)
 	if localErr == nil {
 		return credential, nil
 	}
-	credential, upstreamErr := r.upstream.ResolveCredential(ctx, contentAddress)
+	timeout := r.timeout
+	if timeout <= 0 {
+		timeout = upstreamResolveTimeout
+	}
+	upstreamCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	credential, upstreamErr := r.upstream.ResolveCredential(upstreamCtx, contentAddress)
 	if upstreamErr == nil {
 		return credential, nil
 	}

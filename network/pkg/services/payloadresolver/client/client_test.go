@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,19 +121,60 @@ func TestResolvePayload_EmptyChunkRejected(t *testing.T) {
 	}
 }
 
-// The assembled size is capped: frames summing over the cap abort.
+// The assembled size is capped: frames each within the cap but summing over it
+// abort with the max-bytes error.
 func TestResolvePayload_MaxBytesExceeded(t *testing.T) {
-	frames := [][]byte{make([]byte, 10), make([]byte, 10)} // 20 bytes total
-	for i := range frames {
-		for j := range frames[i] {
-			frames[i][j] = byte('x')
-		}
-	}
-	c, url := newClient(t, &fakeServer{frames: frames}, 16) // 16-byte cap
+	frames := [][]byte{bytes.Repeat([]byte("x"), 600), bytes.Repeat([]byte("y"), 600)}
+	c, url := newClient(t, &fakeServer{frames: frames}, 1000)
 	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
-	if err == nil {
-		t.Fatal("over cap: want error, got nil")
+	if err == nil || !strings.Contains(err.Error(), "exceeds max-bytes 1000") {
+		t.Fatalf("over cap: err = %v, want the max-bytes error", err)
+	}
+}
+
+// A payload of exactly the cap, in one frame, is accepted.
+func TestResolvePayload_AcceptsAPayloadOfExactlyTheCapInOneFrame(t *testing.T) {
+	want := bytes.Repeat([]byte("x"), 1000)
+	c, url := newClient(t, &fakeServer{frames: [][]byte{want}}, 1000)
+	got, err := c.ResolvePayload(context.Background(), url, "sha256:"+
+		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("payload of exactly the cap: %d bytes, err %v", len(got), err)
+	}
+}
+
+// One frame larger than the cap is refused by the transport without the client
+// holding it in memory: the upstream is another organization's server.
+func TestResolvePayload_RefusesAFrameOverTheCapWithoutHoldingIt(t *testing.T) {
+	c, url := newClient(t, &fakeServer{frames: [][]byte{bytes.Repeat([]byte("x"), 1100)}}, 1000)
+	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
+		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	if connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Fatalf("frame over the cap: err = %v, want resource_exhausted", err)
+	}
+}
+
+// The client accepts no compression from an upstream, so a frame takes in
+// memory what it takes on the wire.
+func TestResolvePayload_AcceptsNoCompression(t *testing.T) {
+	var accept string
+	srv := &fakeServer{frames: [][]byte{[]byte("data")}}
+	path, h := payloadpbconnect.NewPayloadServiceHandler(srv)
+	mux := http.NewServeMux()
+	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accept = r.Header.Get("Connect-Accept-Encoding") + "|" + r.Header.Get("Grpc-Accept-Encoding")
+		h.ServeHTTP(w, r)
+	}))
+	httpSrv := httptest.NewServer(mux)
+	t.Cleanup(httpSrv.Close)
+	c, _ := newClient(t, &fakeServer{}, 0)
+	if _, err := c.ResolvePayload(context.Background(), httpSrv.URL, "sha256:"+
+		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"); err != nil {
+		t.Fatalf("ResolvePayload: %v", err)
+	}
+	if strings.Contains(accept, "gzip") {
+		t.Errorf("client accepts compression: %q", accept)
 	}
 }
 

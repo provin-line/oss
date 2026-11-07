@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,38 @@ func TestClient_Disconnect_RemoteNotFound(t *testing.T) {
 	err := cli.Disconnect(context.Background(), url, "gone")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("err = %v, want store.ErrNotFound", err)
+	}
+}
+
+// oversized answers every call with a response larger than the client reads.
+type oversized struct {
+	chainpbconnect.UnimplementedChainPeerServiceHandler
+}
+
+const oversize = 300 << 10
+
+func (oversized) GetPublisherInfo(context.Context, *connect.Request[chainpb.GetPublisherInfoRequest]) (*connect.Response[chainpb.GetPublisherInfoResponse], error) {
+	return connect.NewResponse(&chainpb.GetPublisherInfoResponse{PublishType: strings.Repeat("x", oversize)}), nil
+}
+
+func (oversized) RegisterSubscription(context.Context, *connect.Request[chainpb.RegisterSubscriptionRequest]) (*connect.Response[chainpb.RegisterSubscriptionResponse], error) {
+	return connect.NewResponse(&chainpb.RegisterSubscriptionResponse{
+		SubscriptionId: "remote-9", ConnectionInfo: map[string]string{"subject": strings.Repeat("x", oversize)},
+	}), nil
+}
+
+// A publisher is another organization's server: the client refuses a response
+// larger than it reads instead of taking it whole.
+func TestClient_RefusesAnOversizedResponse(t *testing.T) {
+	_, h := chainpbconnect.NewChainPeerServiceHandler(oversized{})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	cli := peerclient.New(fakeSigner{}, subDID, core.NewURLGuard(core.WithAllowLoopback(true)).HTTPClient())
+
+	if _, _, err := cli.GetPublisherInfo(context.Background(), srv.URL, subDID, pubDID); connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Errorf("GetPublisherInfo: err = %v, want resource_exhausted", err)
+	}
+	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), srv.URL, subDID, pubDID, ""); connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Errorf("RegisterSubscription: err = %v, want resource_exhausted", err)
 	}
 }

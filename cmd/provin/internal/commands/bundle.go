@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -204,6 +205,32 @@ type wireConsumedSource struct {
 	// --did-base, so an attacker-influenced credential cannot drive a private
 	// probe through the open fallback.
 	closeUnmapped bool
+	// callTimeout bounds one call to an issuer's endpoint; issuerCallTimeout
+	// when not positive.
+	callTimeout time.Duration
+}
+
+// An issuer's #audit and #vc-resolver endpoints are other organizations'
+// servers, so a client for one accepts no compression and reads at most
+// issuerReadMaxBytes a response (a node stores no credential larger than its
+// 1 MiB max-credential-size default), and each call ends within
+// issuerCallTimeout.
+const (
+	issuerReadMaxBytes = 1 << 20
+	issuerCallTimeout  = 30 * time.Second
+)
+
+var issuerClientOptions = []connect.ClientOption{
+	connect.WithAcceptCompression("gzip", nil, nil),
+	connect.WithReadMaxBytes(issuerReadMaxBytes),
+}
+
+func (s *wireConsumedSource) issuerCall(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.callTimeout
+	if timeout <= 0 {
+		timeout = issuerCallTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // auditClient aliases the generated client interface for the cache map.
@@ -292,7 +319,7 @@ func (s *wireConsumedSource) FetchConsumed(ctx context.Context, issuerDID, headH
 		if err := s.guard.CheckURL(ctx, base); err != nil {
 			return nil, fmt.Errorf("bundle export: audit endpoint for %s rejected: %w", issuerDID, err)
 		}
-		c, err = client.Audit(s.guard.HTTPClient(), base, s.token)
+		c, err = client.Audit(s.guard.HTTPClient(), base, s.token, issuerClientOptions...)
 		if err != nil {
 			return nil, err
 		}
@@ -301,10 +328,12 @@ func (s *wireConsumedSource) FetchConsumed(ctx context.Context, issuerDID, headH
 	var consumed []string
 	pageToken := ""
 	for {
-		resp, err := c.GetConsumedSources(ctx, connect.NewRequest(&auditpb.GetConsumedSourcesRequest{
+		callCtx, cancel := s.issuerCall(ctx)
+		resp, err := c.GetConsumedSources(callCtx, connect.NewRequest(&auditpb.GetConsumedSourcesRequest{
 			HeadHash:  headHash,
 			PageToken: pageToken,
 		}))
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -333,7 +362,7 @@ func (s *wireConsumedSource) FetchSourceCredential(ctx context.Context, issuerDI
 		if err := s.guard.CheckURL(ctx, endpoint); err != nil {
 			return nil, fmt.Errorf("bundle export: #vc-resolver endpoint of %s rejected: %w", issuerDID, err)
 		}
-		c, err = client.VCResolver(s.guard.HTTPClient(), endpoint, s.token)
+		c, err = client.VCResolver(s.guard.HTTPClient(), endpoint, s.token, issuerClientOptions...)
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +370,9 @@ func (s *wireConsumedSource) FetchSourceCredential(ctx context.Context, issuerDI
 		// endpoint hold two clients — harmless.
 		s.vcs[issuerDID] = c
 	}
-	res, err := c.ResolveVC(ctx, connect.NewRequest(&vcpb.ResolveVCRequest{Hash: hash}))
+	callCtx, cancel := s.issuerCall(ctx)
+	defer cancel()
+	res, err := c.ResolveVC(callCtx, connect.NewRequest(&vcpb.ResolveVCRequest{Hash: hash}))
 	if err != nil {
 		return nil, err
 	}

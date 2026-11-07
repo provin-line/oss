@@ -281,10 +281,8 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 // compensationCtx returns a context detached from the caller's cancellation (but
 // preserving its values) for best-effort teardown after a remote side-effect has
 // already happened: a canceled/timed-out caller must not prevent the compensating
-// Disconnect/RemoveImport from reaching the publisher (D-s5; Codex P2). The
-// compensation calls are awaited synchronously, so the detached context needs no
-// explicit deadline here; bounding it belongs with the real (nats) transport in
-// C2, where the calls actually do I/O.
+// Disconnect/RemoveImport from reaching the publisher (D-s5). The detached
+// context has no deadline; peerclient bounds every call to a publisher itself.
 func compensationCtx(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }

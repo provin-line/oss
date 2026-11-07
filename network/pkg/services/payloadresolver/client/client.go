@@ -158,6 +158,10 @@ type Resolver struct {
 	retainClient payloadpbconnect.PayloadStoreServiceClient
 }
 
+// frameOverhead is the most a ResolvePayloadResponse adds to its chunk: the
+// field's tag and length (1 and at most 10 bytes).
+const frameOverhead = 16
+
 // New returns a Resolver from cfg, applying the Default* bounds for any
 // non-positive value.
 func New(cfg Config) *Resolver {
@@ -309,7 +313,14 @@ func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, cont
 		}()
 	}
 
-	svc := payloadpbconnect.NewPayloadServiceClient(r.httpClient, upstreamEndpoint)
+	// The upstream is another organization's server. Compression is not
+	// accepted, so a frame takes in memory what it takes on the wire, and a
+	// frame larger than the payload cap and its protobuf framing is refused
+	// without being held in memory; the running total below is the exact
+	// bound.
+	svc := payloadpbconnect.NewPayloadServiceClient(r.httpClient, upstreamEndpoint,
+		connect.WithAcceptCompression("gzip", nil, nil),
+		connect.WithReadMaxBytes(r.maxBytes+frameOverhead))
 	stream, err := svc.ResolvePayload(ctx, connect.NewRequest(&payloadpb.ResolvePayloadRequest{
 		AuthProof:   ap,
 		ContentHash: contentHash,

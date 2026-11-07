@@ -483,6 +483,29 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   v0 wire signs changes. `vc.CreateProof` and every verify function in `vc`
   refuse such a document under eddsa-rdfc-2022; eddsa-jcs-2022 is not
   affected.
+- The node's clients for other organizations' servers bound what they take
+  from one, so such a server cannot exhaust the node's memory or hold its
+  work indefinitely. None of them accepts compression any more, so what a
+  response takes in memory is what it takes on the wire.
+  - `chainmanager/peerclient`, which a subscriber uses to call a publisher,
+    reads a response of at most 256 KiB and ends every call within 30
+    seconds, whatever the caller's context. It read a response of any size
+    (connect's default) and waited as long as the publisher did, also for the
+    compensating `Disconnect`, which runs under a context that is never
+    cancelled while the chain manager holds its lock.
+  - `payloadresolver/client` refuses a streamed frame larger than its
+    `MaxBytes` (and the frame's protobuf framing) with
+    `connect.CodeResourceExhausted`, without holding it in memory. It read a
+    whole frame, of any size, before checking the total.
+  - The batch resolver's fetch from a peer, and a sink's fetch from its
+    declared upstream registry, end within 30 seconds; they waited as long
+    as the server did.
+  - `provin bundle export --aggregate-complete` reads at most 1 MiB a
+    response from an issuer's `#audit` and `#vc-resolver` endpoints, and each
+    call ends within 30 seconds; it read any size and waited as long as the
+    endpoint did.
+  - The SSRF-guarded HTTP client (`core.URLGuard.HTTPClient`) takes at most
+    64 KiB of response headers (net/http's default is 10 MiB).
 
 ## [0.3.0] - 2026-08-05
 

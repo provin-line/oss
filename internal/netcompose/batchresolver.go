@@ -2,6 +2,7 @@ package netcompose
 
 import (
 	"context"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -22,16 +23,34 @@ import (
 // the auth interceptor, so an unauthenticated fetch would be rejected and the chain would
 // never assemble. It reuses the same VCStoreBearer producing loops use to publish (17e) —
 // a single-realm PoC posture; per-peer / cross-realm audit authorization is a later slice.
+//
+// A peer is another organization's server, so a fetch accepts no compression, reads
+// at most maxBytes, and ends within the fetcher's timeout: the runner's context lives
+// as long as the process.
 type peerFetcher struct {
 	httpClient connect.HTTPClient // the SSRF-guarded client (guard.HTTPClient())
 	bearer     string             // the node's L1 PDP token (pipeline vc-store-bearer)
 	maxBytes   int                // per-credential read cap (D-17g-13)
+	timeout    time.Duration      // per-fetch bound; peerFetchTimeout when not positive
+}
+
+// peerFetchTimeout bounds one fetch from a peer: one small unary call.
+const peerFetchTimeout = 30 * time.Second
+
+func (f *peerFetcher) fetchTimeout() time.Duration {
+	if f.timeout > 0 {
+		return f.timeout
+	}
+	return peerFetchTimeout
 }
 
 func (f *peerFetcher) Fetch(ctx context.Context, endpoint, contentAddress string) (*vc.PipelinePassCredential, error) {
+	ctx, cancel := context.WithTimeout(ctx, f.fetchTimeout())
+	defer cancel()
 	c := vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		f.httpClient, endpoint,
 		connect.WithInterceptors(BearerInterceptor(f.bearer)),
+		connect.WithAcceptCompression("gzip", nil, nil),
 		connect.WithReadMaxBytes(f.maxBytes),
 	))
 	return c.ResolveCredential(ctx, contentAddress)

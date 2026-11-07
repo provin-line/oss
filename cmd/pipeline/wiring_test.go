@@ -28,6 +28,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
@@ -1252,4 +1253,45 @@ func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t 
 		t.Fatalf("server saw %d RegisterEvidence attempts, want 3 (2 failures + 1 success)", len(auditHandler.evidenceNonces))
 	}
 	assertDistinctNonces(t, auditHandler.evidenceNonces)
+}
+
+// silentVCResolver never answers ResolveVC, and ignores the deadline the
+// client sends: each call waits until the test ends.
+type silentVCResolver struct {
+	vcpbconnect.UnimplementedVCResolverServiceHandler
+	release chan struct{}
+}
+
+func (s silentVCResolver) ResolveVC(context.Context, *connect.Request[vcpb.ResolveVCRequest]) (*connect.Response[vcpb.ResolveVCResponse], error) {
+	<-s.release
+	return nil, errors.New("released")
+}
+
+// The declared upstream is another organization's registry: a call to it ends
+// within the resolver's timeout even under a context that is never cancelled.
+func TestFallbackCredentialResolver_UpstreamCallEndsWithinTheTimeout(t *testing.T) {
+	localStore, _, _ := newVCStoreAdapter(t)
+	release := make(chan struct{})
+	_, h := vcpbconnect.NewVCResolverServiceHandler(silentVCResolver{release: release})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+	resolver := fallbackCredentialResolver{
+		local:    localStore.client,
+		upstream: vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL)),
+		timeout:  50 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := resolver.ResolveCredential(context.WithoutCancel(context.Background()), addr("a"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("silent upstream: want error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("silent upstream: still waiting after 5s")
+	}
 }
