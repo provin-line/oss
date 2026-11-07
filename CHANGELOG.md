@@ -240,6 +240,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon.AdmitSafeNumbers` works in time linear in its input: it reads each
+  `json.Number` in time linear in its length, without `math/big`, and spells
+  the path to a number only into an error. A 9-byte literal such as
+  `1e-999999` cost about 10 ms, and a literal that is not an integer does not
+  stop the check, so a few kilobytes of numbers cost seconds before any
+  signature was checked; a 20 KB array nested 10 000 deep cost 158 MB of
+  path strings. Every RFC 8259 number keeps its verdict, including the
+  refusal as not a valid literal of an exponent beyond int64 and, for a
+  nonzero value, of an exponent net of the digits after the point beyond
+  ±10^6 (now documented), and every refusal keeps its `Path`. A `json.Number`
+  that is not an RFC 8259 number (`+1`, `.5`, `01`, `1_000`, `0x10`, `1/2`),
+  which only a caller building one by hand can pass, is now refused as not a
+  valid literal; some were admitted. `canon/testdata/number-literals.json`
+  holds the gate's verdict on each boundary.
 - Ed25519 public keys are validated by the new `crypto/ed25519.ValidatePublicKey`
   (with the new constant error type `ed25519.Error`): a key must be 32 bytes,
   must not be of small order (the eight low-order points, in every encoding

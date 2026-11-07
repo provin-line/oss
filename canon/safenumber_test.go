@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/canon"
@@ -122,5 +123,62 @@ func TestAdmitSafeNumbers_RawTokenGuard(t *testing.T) {
 	}
 	if err := canon.AdmitSafeNumbers(v); err == nil {
 		t.Error("gate inferred safety from a rounded value — the raw-token guard is not effective")
+	}
+}
+
+// The path to a refused number is spelled the same in every shape: members
+// joined by ".", indexes as "[i]", an empty member name contributing no
+// segment of its own at the root and an empty one after a dot elsewhere.
+func TestAdmitSafeNumbers_SpellsThePathInEveryShape(t *testing.T) {
+	unsafe := json.Number("1e30")
+	for _, c := range []struct {
+		in   any
+		path string
+	}{
+		{unsafe, ""},
+		{[]any{unsafe}, "[0]"},
+		{[]any{json.Number("1"), []any{json.Number("2"), unsafe}}, "[1][1]"},
+		{map[string]any{"a": []any{1, map[string]any{"b": []any{json.Number("1"), unsafe}}}}, "a[1].b[1]"},
+		{map[string]any{"": map[string]any{"x": unsafe}}, "x"},
+		{[]any{map[string]any{"": []any{unsafe}}}, "[0].[0]"},
+		{map[string]any{"n": uint64(1) << 60}, "n"},
+		{map[string]any{"f": []any{math.Inf(1)}}, "f[0]"},
+		{map[string]any{"i": []any{0, int64(-1) << 60}}, "i[1]"},
+	} {
+		var u *canon.UnsafeNumberError
+		if err := canon.AdmitSafeNumbers(c.in); !errors.As(err, &u) {
+			t.Errorf("AdmitSafeNumbers(%v) = %v, want *UnsafeNumberError", c.in, err)
+		} else if u.Path != c.path {
+			t.Errorf("AdmitSafeNumbers(%v): Path = %q, want %q", c.in, u.Path, c.path)
+		}
+	}
+}
+
+func nestedArray(depth int, leaf any) any {
+	v := leaf
+	for range depth {
+		v = []any{v}
+	}
+	return v
+}
+
+// The walk keeps one path for the whole value: depth costs no allocation per
+// level, and a refusal deep down still names its path.
+func TestAdmitSafeNumbers_DepthCostsNoAllocationPerLevel(t *testing.T) {
+	const depth = 10000
+	deep := nestedArray(depth, json.Number("1"))
+	if a := testing.AllocsPerRun(5, func() {
+		if err := canon.AdmitSafeNumbers(deep); err != nil {
+			t.Fatal(err)
+		}
+	}); a > 64 {
+		t.Errorf("AdmitSafeNumbers on %d nested arrays allocates %.0f times", depth, a)
+	}
+	var u *canon.UnsafeNumberError
+	if err := canon.AdmitSafeNumbers(nestedArray(depth, json.Number("1e30"))); !errors.As(err, &u) {
+		t.Fatalf("AdmitSafeNumbers admitted 1e30 nested %d deep: %v", depth, err)
+	}
+	if want := strings.Repeat("[0]", depth); u.Path != want {
+		t.Errorf("Path has %d bytes, want %d", len(u.Path), len(want))
 	}
 }
