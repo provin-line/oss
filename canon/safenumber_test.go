@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -32,7 +33,8 @@ func TestAdmitSafeNumbers_AdmitsSafeValues(t *testing.T) {
 		{"typed int", 1},
 		{"typed int64 in range", int64(9007199254740991)},
 		{"typed uint64 in range", uint64(9007199254740991)},
-		{"non-integer is not the gate's business", json.Number("4.50")},
+		{"non-integer below 2^53-0.5", json.Number("4.50")},
+		{"non-integer just below 2^53-0.5", json.Number("9007199254740991.4999")},
 		{"non-integer exponent", json.Number("2e-3")},
 		{"long fraction", json.Number("333333333.33333329")},
 		{"tiny fraction", json.Number("0.000000000000000000000000001")},
@@ -49,9 +51,9 @@ func TestAdmitSafeNumbers_AdmitsSafeValues(t *testing.T) {
 }
 
 func TestAdmitSafeNumbers_RejectsUnsafeIntegersInEverySpelling(t *testing.T) {
-	// The gate keys on the VALUE being integral and out of range, not on the
-	// spelling. A spelling-sensitive gate would be trivially bypassed by
-	// writing the same integer as an exponent or with a .0 tail.
+	// The gate keys on the VALUE's magnitude, not on the spelling. A
+	// spelling-sensitive gate would be trivially bypassed by writing the same
+	// number as an exponent or with a .0 tail.
 	tests := []struct {
 		name string
 		in   any
@@ -63,6 +65,8 @@ func TestAdmitSafeNumbers_RejectsUnsafeIntegersInEverySpelling(t *testing.T) {
 		{"exponent spelling of an unsafe integer", json.Number("9007199254740993e0")},
 		{"RFC example 1E30 is an unsafe integer", json.Number("1E30")},
 		{"fraction spelling of an unsafe integer", json.Number("9007199254740992.0")},
+		{"non-integer binary64 rounds to 2^53", json.Number("9007199254740991.5")},
+		{"non-integer in exponent spelling", json.Number("-9.0071992547409915e15")},
 		{"max int64 literal", json.Number("9223372036854775807")},
 		{"typed int64 above range", int64(9007199254740993)},
 		{"typed uint64 above range", uint64(9007199254740993)},
@@ -160,6 +164,24 @@ func nestedArray(depth int, leaf any) any {
 		v = []any{v}
 	}
 	return v
+}
+
+// A refusal deep in a document costs bytes linear in the depth: 10000 levels
+// make a path of 30000 bytes, spelled once rather than copied once a level.
+func TestAdmitSafeNumbers_SpellsADeepPathInLinearBytes(t *testing.T) {
+	const depth = 10000
+	deep := nestedArray(depth, json.Number("1e30"))
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	err := canon.AdmitSafeNumbers(deep)
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("AdmitSafeNumbers admitted 1e30")
+	}
+	if got, limit := after.TotalAlloc-before.TotalAlloc, uint64(256*depth); got > limit {
+		t.Errorf("refusing a number %d levels deep allocated %d bytes, want at most %d (256 a level)", depth, got, limit)
+	}
 }
 
 // The walk keeps one path for the whole value: depth costs no allocation per

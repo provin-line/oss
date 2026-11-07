@@ -276,6 +276,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   returns the decode error, without resolving, where it returned the
   resolver's error (also one wrapping `resolver.ErrNotFound`) or the
   key-extraction error.
+- **BREAKING (Go API)** `canon.AdmitSafeNumbers` refuses a number of
+  magnitude 2^53 − 0.5 or more, whether or not it is an integer: a
+  non-integer such as `9007199254740991.5`, which binary64 rounds to
+  9007199254740992, is now refused where it was admitted. Below the bound
+  nothing changes, nor do the refusals of a literal that is not an RFC 8259
+  number or whose exponent lies beyond the bounds. Every number refused for
+  its magnitude, integers included, has one new `UnsafeNumberError.Reason`
+  text, whatever its kind; code that matched the old text must change.
+  `canon/testdata/number-literals.json` gives the new verdicts, its
+  `unsafe-integer` now covering such non-integers. The callers here refuse
+  the same numbers: `vc.CreateProof`, `keybinding`, the DID registry, the VC
+  resolver's `StoreVC`, and `resolver/cache`, which does not cache them.
 
 ### Security
 
@@ -285,7 +297,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `1e-999999` cost about 10 ms, and a literal that is not an integer does not
   stop the check, so a few kilobytes of numbers cost seconds before any
   signature was checked; a 20 KB array nested 10 000 deep cost 158 MB of
-  path strings. Every RFC 8259 number keeps its verdict, including the
+  path strings. Every RFC 8259 number keeps its verdict (except where the
+  range changes, under Changed), including the
   refusal as not a valid literal of an exponent beyond int64 and, for a
   nonzero value, of an exponent net of the digits after the point beyond
   ±10^6 (now documented), and every refusal keeps its `Path`. A `json.Number`
@@ -435,6 +448,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   configured audience, and a non-empty `sub`, which it gives the agent as
   the principal. A token that fails any check is refused. The configuration
   this needs (`provin.network.auth.cedar.jwt.*`) is under Changed.
+- What `canon.AdmitSafeNumbers` admits, RFC 8785 writes within ±(2^53−1), so
+  a check of the canonical bytes RFC 8785 defines agrees with the check of
+  the value. A
+  non-integer of magnitude 2^53 − 0.5 or more (`9007199254740991.5`) passed
+  the check, and its canonical form, an integer beyond ±(2^53−1)
+  (`9007199254740992`), did not. So `vcresolver.StoreVC`, which every caller
+  here hands canonical bytes, could store such a credential on one node and
+  refuse it on the next (the batch resolver re-submits the canonical form of
+  what it fetches), or refuse to store a credential the node had verified;
+  `keybinding` refused a binding or status list that `vc.CreateProof` had
+  signed, when it came in canonical form; and `resolver/cache`, for a
+  document a registry served as written, could return on a hit another
+  spelling of the number than the miss had. The harm was to availability
+  and to the cache's fidelity: no signed byte could change.
+- `canon.AdmitSafeNumbers` spells the path to a refused number once. It
+  copied the path once per level, so refusing a number 10 000 levels deep,
+  which `canon.StrictDecoder` lets through, allocated 160 MB before any
+  signature was checked; it now allocates about 1 MB.
 
 ## [0.3.0] - 2026-08-05
 

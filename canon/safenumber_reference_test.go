@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	reasonUnsafeInteger  = "integer outside ±(2^53-1); values beyond it belong in the string domain under a versioned schema"
+	reasonUnsafeInteger  = "magnitude 2^53-0.5 or more, which binary64 makes an integer outside ±(2^53-1) or infinite; values beyond it belong in the string domain under a versioned schema"
 	reasonInvalidLiteral = "not a valid JSON number literal"
 )
 
@@ -26,7 +26,8 @@ var jsonNumberGrammar = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:
 // whose exponent overflows int64 or, for a nonzero value, whose exponent net
 // of the digits after its point lies beyond ±10^6. A spelling outside the RFC
 // 8259 grammar is refused before big.Rat sees it, since big.Rat also reads
-// spellings JSON does not have (+1, 0x10, 1/2). Its cost grows with the
+// spellings JSON does not have (+1, 0x10, 1/2). It refuses a value of
+// magnitude 2^53 - 1/2 or more, integer or not. Its cost grows with the
 // exponent, so it is a reference for answers, not for use. AdmitSafeNumbers
 // must agree with it on every literal.
 func referenceAdmitLiteral(lit string) error {
@@ -37,14 +38,15 @@ func referenceAdmitLiteral(lit string) error {
 	if !ok {
 		return &canon.UnsafeNumberError{Literal: lit, Reason: reasonInvalidLiteral}
 	}
-	if !r.IsInt() {
-		return nil
-	}
-	if i := r.Num(); i.IsInt64() && i.Int64() >= canon.MinSafeInteger && i.Int64() <= canon.MaxSafeInteger {
+	if new(big.Rat).Abs(r).Cmp(safeLimit) < 0 {
 		return nil
 	}
 	return &canon.UnsafeNumberError{Literal: lit, Reason: reasonUnsafeInteger}
 }
+
+// safeLimit is 2^53 - 1/2: binary64 rounds a value of this magnitude or more
+// to 2^53 or more (ties to even), and every value below it to 2^53 - 1 or less.
+var safeLimit = new(big.Rat).Sub(new(big.Rat).SetInt64(1<<53), big.NewRat(1, 2))
 
 // verdictOf names the outcome as the table in testdata/number-literals.json
 // does; anything else is reported as it is.
@@ -103,8 +105,8 @@ func literalTable(t testing.TB) []literalCase {
 	return table.Cases
 }
 
-// The table holds every boundary of the gate: ±(2^53-1) and the 16 digits
-// past it, one value in many spellings, zero with any exponent, the exponent
+// The table holds every boundary of the gate: ±(2^53-1), 2^53-0.5 and the
+// digits around it, one value in many spellings, zero with any exponent, the exponent
 // bounds, and spellings that are not RFC 8259 numbers. The gate and the
 // reference both give the table's verdict on each.
 func TestAdmitSafeNumbers_LiteralTable(t *testing.T) {

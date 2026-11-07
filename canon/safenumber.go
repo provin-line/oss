@@ -40,8 +40,11 @@ func (e *UnsafeNumberError) Error() string {
 // AdmitSafeNumbers reports whether v may be admitted as a new artifact
 // (canon.number.safe-integer). It rejects:
 //
-//   - an integer-valued number outside ±(2^53-1), in ANY spelling — 9007199254740993,
-//     1e21, 9007199254740993e0, and 9007199254740992.0 are the same rejection;
+//   - a number of magnitude 2^53-0.5 or more, integer or not, in ANY spelling,
+//     which binary64 makes an integer outside ±(2^53-1) or infinite (ties to
+//     even: 9007199254740991.5 becomes 9007199254740992). 9007199254740993,
+//     1e21, 9007199254740993e0, 9007199254740992.0 and 9007199254740991.5 are
+//     the same rejection;
 //   - NaN and Infinity, which have no JSON representation;
 //   - a json.Number that is not an RFC 8259 number (+1, .5, 01, 0x10, 1/2), or
 //     whose exponent, net of the digits after its point, lies beyond ±10^6
@@ -50,12 +53,22 @@ func (e *UnsafeNumberError) Error() string {
 //     10e-1000001 is refused where 1e-1000000 is admitted. A zero
 //     (0e999999999, -0) is admitted whatever its exponent within int64.
 //
-// Non-integral values (4.50, 2e-3) are not its business: they are lossy by
-// nature and RFC 8785 already fixes their canonical form.
+// Below 2^53-0.5, binary64 rounds every value correctly to one within
+// ±(2^53-1), so what it admits RFC 8785 writes within ±(2^53-1), and the
+// canonical form RFC 8785 defines is admitted again: a reader that checks
+// those canonical bytes agrees with the writer that checked the value. Non-integral values (4.50, 2e-3) below the
+// bound are admitted; they are lossy by nature and RFC 8785 fixes their
+// canonical form.
+//
+// v is a value tree as decoding JSON into any gives it (map[string]any,
+// []any, json.Number and the other scalars), and Go's numeric types are read
+// too. A value of any other type, a typed slice or a struct among them, is
+// not inspected and is admitted.
 //
 // Its work is linear in v and in the length of each literal, without
 // arbitrary-precision arithmetic, so it can run on input not yet
-// authenticated. The path to a refused number is spelled only for the error.
+// authenticated. The path to a refused number is spelled only for the error,
+// once.
 //
 // It runs at the raw-token stage, BEFORE canonicalization
 // (canon.number.raw-token-guard): decode through StrictDecoder, gate, then
@@ -138,24 +151,23 @@ func admitStep(v any, path *[]pathStep, step pathStep) error {
 }
 
 // spellPath spells a path as UnsafeNumberError.Path: members joined by ".",
-// indexes as "[i]".
+// indexes as "[i]". It writes each step once, so its work is linear in the
+// length of the path.
 func spellPath(steps []pathStep) string {
-	path := ""
+	var b strings.Builder
 	for _, s := range steps {
 		if s.index >= 0 {
-			path = fmt.Sprintf("%s[%d]", path, s.index)
-		} else {
-			path = joinPath(path, s.key)
+			b.WriteByte('[')
+			b.WriteString(strconv.Itoa(s.index))
+			b.WriteByte(']')
+			continue
 		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(s.key)
 	}
-	return path
-}
-
-func joinPath(path, key string) string {
-	if path == "" {
-		return key
-	}
-	return path + "." + key
+	return b.String()
 }
 
 // admitLiteral reads the raw token. Its value is decided from where its
@@ -169,27 +181,30 @@ func admitLiteral(lit string) *UnsafeNumberError {
 	if safe {
 		return nil
 	}
-	return &UnsafeNumberError{
-		Literal: lit,
-		Reason:  "integer outside ±(2^53-1); values beyond it belong in the string domain under a versioned schema",
-	}
+	return &UnsafeNumberError{Literal: lit, Reason: reasonOutOfRange}
 }
+
+// reasonOutOfRange is the Reason of every number refused for its magnitude.
+const reasonOutOfRange = "magnitude 2^53-0.5 or more, which binary64 makes an integer outside ±(2^53-1) or infinite; values beyond it belong in the string domain under a versioned schema"
 
 // maxLiteralExponent bounds a literal's exponent net of the digits after its
 // point: past it the literal is refused, whatever its value.
 const maxLiteralExponent = 1_000_000
 
-// safeDigits is the most digits an integer within ±(2^53-1) has.
-const safeDigits = 16
+// limitDigits are the significant digits of 2^53-0.5, 9007199254740991.5,
+// whose integer part has limitIntDigits digits.
+const (
+	limitDigits    = "90071992547409915"
+	limitIntDigits = 16
+)
 
 // safeLiteral reports whether lit is an RFC 8259 number,
 //
 //	-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
 //
-// within the exponent bound (ok), and if so whether it is admitted (safe): it
-// is zero, not an integer, or an integer within ±(2^53-1). Its work is linear
-// in the length of lit, and it does not allocate unless the exponent
-// overflows int64.
+// within the exponent bound (ok), and if so whether it is admitted (safe): its
+// magnitude is less than 2^53-0.5. Its work is linear in the length of lit,
+// and it does not allocate unless the exponent overflows int64.
 func safeLiteral(lit string) (safe, ok bool) {
 	i := 0
 	if i < len(lit) && lit[i] == '-' {
@@ -257,22 +272,29 @@ func safeLiteral(lit string) (safe, ok bool) {
 		end--
 	}
 	// The value is the significant digits digit(first..end-1) followed by
-	// zeros zeros; a negative zeros leaves digits after the point.
+	// zeros zeros; a negative zeros leaves digits after the point. Its
+	// integer part has intDigits digits, so it is compared with 2^53-0.5 by
+	// that count first, then digit by digit.
 	zeros := int64(n-end) + exp - int64(len(frac))
-	if zeros < 0 {
+	switch intDigits := int64(end-first) + zeros; {
+	case intDigits < limitIntDigits:
 		return true, true
-	}
-	if int64(end-first)+zeros > safeDigits {
+	case intDigits > limitIntDigits:
 		return false, true
 	}
-	var v uint64
-	for k := first; k < end; k++ {
-		v = v*10 + uint64(digit(k)-'0')
+	for k := 0; first+k < end || k < len(limitDigits); k++ {
+		d, l := byte('0'), byte('0')
+		if first+k < end {
+			d = digit(first + k)
+		}
+		if k < len(limitDigits) {
+			l = limitDigits[k]
+		}
+		if d != l {
+			return d < l, true
+		}
 	}
-	for ; zeros > 0; zeros-- {
-		v *= 10
-	}
-	return v <= uint64(MaxSafeInteger), true
+	return false, true // exactly 2^53-0.5
 }
 
 func skipDigits(s string, i int) int {
@@ -286,20 +308,14 @@ func admitInt64(v int64) *UnsafeNumberError {
 	if v >= MinSafeInteger && v <= MaxSafeInteger {
 		return nil
 	}
-	return &UnsafeNumberError{
-		Literal: fmt.Sprintf("%d", v),
-		Reason:  "integer outside ±(2^53-1); values beyond it belong in the string domain under a versioned schema",
-	}
+	return &UnsafeNumberError{Literal: fmt.Sprintf("%d", v), Reason: reasonOutOfRange}
 }
 
 func admitUint64(v uint64) *UnsafeNumberError {
 	if v <= uint64(MaxSafeInteger) {
 		return nil
 	}
-	return &UnsafeNumberError{
-		Literal: fmt.Sprintf("%d", v),
-		Reason:  "integer outside ±(2^53-1); values beyond it belong in the string domain under a versioned schema",
-	}
+	return &UnsafeNumberError{Literal: fmt.Sprintf("%d", v), Reason: reasonOutOfRange}
 }
 
 func admitFloat(f float64) *UnsafeNumberError {
@@ -309,14 +325,11 @@ func admitFloat(f float64) *UnsafeNumberError {
 			Reason:  "NaN and Infinity have no JSON representation",
 		}
 	}
-	// A float64 arrives already rounded, so its integrality is all that is left
-	// to check: an integral value outside the safe range cannot be trusted to
-	// mean what its source wrote.
-	if f == math.Trunc(f) && (f > float64(MaxSafeInteger) || f < float64(MinSafeInteger)) {
-		return &UnsafeNumberError{
-			Literal: strings.TrimSpace(fmt.Sprintf("%v", f)),
-			Reason:  "integer outside ±(2^53-1); values beyond it belong in the string domain under a versioned schema",
-		}
+	// A float64 arrives already rounded: no binary64 lies between 2^53-1 and
+	// 2^53, so one of magnitude 2^53-0.5 or more is one beyond ±(2^53-1), and
+	// it cannot be trusted to mean what its source wrote.
+	if math.Abs(f) > float64(MaxSafeInteger) {
+		return &UnsafeNumberError{Literal: strings.TrimSpace(fmt.Sprintf("%v", f)), Reason: reasonOutOfRange}
 	}
 	return nil
 }
