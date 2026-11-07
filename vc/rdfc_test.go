@@ -1,10 +1,13 @@
 package vc_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/canon/urdna2015"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/vc"
 )
@@ -133,5 +136,53 @@ func TestRDFC_NumericMember_Refused(t *testing.T) {
 	doc["credentialSubject"].(map[string]any)["schema"] = map[string]any{"version": float64(2)}
 	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); err == nil {
 		t.Error("CreateProof(rdfc) must refuse a numeric member")
+	}
+}
+
+// listDocument is a credential whose subject carries an @list of n equal
+// strings. Labelling it costs about n³, so a long one is too complex.
+func listDocument(n int) map[string]any {
+	steps := make([]any, n)
+	for i := range steps {
+		steps[i] = "pass"
+	}
+	return map[string]any{
+		"@context": []any{"https://www.w3.org/ns/credentials/v2", map[string]any{
+			"steps": map[string]any{"@id": "https://example.org/steps", "@container": "@list"},
+		}},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            issuerDID,
+		"validFrom":         "2026-01-01T00:00:00Z",
+		"credentialSubject": map[string]any{"steps": steps},
+	}
+}
+
+// Every primitive that canonicalizes refuses a document too complex to
+// label, and errors.Is reaches urdna2015.ErrTooComplex through vc's
+// wrapping.
+func TestRDFC_TooComplexToCanonicalizeReachesTheCaller(t *testing.T) {
+	signer, pub, _ := fixture(t)
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, listDocument(16), vc.CryptosuiteEdDSARDFC2022)
+	if err != nil {
+		t.Fatalf("CreateProof with 16 equal values: %v", err)
+	}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, listDocument(16)); err != nil {
+		t.Fatalf("VerifyProof with 16 equal values: %v", err)
+	}
+
+	doc := listDocument(64)
+	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
+		t.Errorf("CreateProof: err = %v, want urdna2015.ErrTooComplex", err)
+	}
+	// The genuine proof of the short list, presented with the long one: the
+	// proof config is the same, so only the document's labelling refuses it.
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, doc); !errors.Is(err, urdna2015.ErrTooComplex) {
+		t.Errorf("VerifyProof: err = %v, want urdna2015.ErrTooComplex", err)
+	}
+	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, proof, doc); !errors.Is(err, urdna2015.ErrTooComplex) {
+		t.Errorf("VerifyProofWithContract: err = %v, want urdna2015.ErrTooComplex", err)
+	}
+	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, doc, vc.ContractW3CEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
+		t.Errorf("VerifyProofUnderContract: err = %v, want urdna2015.ErrTooComplex", err)
 	}
 }

@@ -275,6 +275,27 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (up to 4627 bytes), but not SLH-DSA's (7856 bytes and more); a longer
   value, which decoded before, is now refused. A value without the prefix is
   refused quoting at most its first 32 characters (it was quoted whole).
+- `canon/urdna2015` labels the blank nodes of a dataset within a work bound,
+  as RDFC-1.0 §4.4.3 requires: a dataset whose blank nodes are so alike that
+  labelling them would take more than 262 144 steps and 64 per quad (a step
+  being of about the same time whatever the dataset) is refused with the new
+  `urdna2015.ErrTooComplex`, of the new constant error type
+  `urdna2015.Error`; `errors.Is` finds it through `vc.CreateProof`,
+  `vc.VerifyProof`, `vc.VerifyProofWithContract` and
+  `vc.VerifyProofUnderContract`. json-gold, which did the labelling, has no
+  bound, and its time grows exponentially with blank nodes no quad of their
+  own tells apart (7 in a 1 KB dataset took 240 ms, each one more about 9
+  times as long); an eddsa-rdfc-2022 proof (`vc.VerifyProofWithContract`,
+  `vc.VerifyProof`) canonicalizes its document before the signature is
+  checked. A refusal costs about 10–20 ms and 3.5 µs per quad. Refused: 6 or
+  more blank nodes all linked to each other, a ring of 56 or more, a list of
+  62 or more equal values, and two alike nodes each with 7 or more alike
+  leaves (json-gold took 24, 11, 13 and 61 ms on the smallest of these).
+  Every other dataset keeps its canonical bytes: the labelling is
+  json-gold's, done in `canon/urdna2015` until json-gold can bound it. Where
+  json-gold's own answer depends on map order (two blank nodes told apart
+  only by the blank graph a quad sits in), the labelling gives one of its
+  answers, always the same one.
 - Ed25519 public keys are validated by the new `crypto/ed25519.ValidatePublicKey`
   (with the new constant error type `ed25519.Error`): a key must be 32 bytes,
   must not be of small order (the eight low-order points, in every encoding

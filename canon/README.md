@@ -15,7 +15,7 @@ non-Go implementations (Java / Rust / JS).
 | Path | Algorithm | Status |
 | --- | --- | --- |
 | `canon/jcs` | RFC 8785 JSON Canonicalization Scheme (Phase 1 cryptosuite, MUST) | implemented |
-| `canon/urdna2015` | RDF Dataset Canonicalization (URDNA2015) for `eddsa-rdfc-2022` (Phase 2, MAY) | implemented — wraps `piprate/json-gold` behind an offline context allowlist (never the network) and fails closed on everything JSON-LD processing would silently drop from the signing scope: undefined terms, relative `@id`/`@type` values, and numeric members (2^53 truncation). Anchored to the official W3C vc-di-eddsa test vector |
+| `canon/urdna2015` | RDF Dataset Canonicalization (URDNA2015) for `eddsa-rdfc-2022` (Phase 2, MAY) | implemented — wraps `piprate/json-gold` behind an offline context allowlist (never the network) and fails closed on everything JSON-LD processing would silently drop from the signing scope: undefined terms, relative `@id`/`@type` values, and numeric members (2^53 truncation). Labels blank nodes within a work bound (RDFC-1.0 §4.4.3): a dataset too complex to label is refused with `urdna2015.ErrTooComplex`. Anchored to the official W3C vc-di-eddsa test vector |
 
 ## Hard rules
 

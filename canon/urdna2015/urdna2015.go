@@ -1,5 +1,7 @@
 // Package urdna2015 implements RDF Dataset Canonicalization (URDNA2015) for
-// the eddsa-rdfc-2022 cryptosuite, wrapping github.com/piprate/json-gold.
+// the eddsa-rdfc-2022 cryptosuite. github.com/piprate/json-gold expands the
+// document and builds its RDF dataset; the blank nodes are labelled here,
+// within a work bound (see label.go).
 //
 // JSON-LD contexts are resolved exclusively from an in-process allowlist of
 // embedded documents — never the network. Any context IRI outside the
@@ -28,6 +30,20 @@ import (
 
 // Name is the wire identifier of this canonicalization.
 const Name = "urdna2015"
+
+// Error is the type of the errors this package reports by value. Canonicalize
+// wraps them; match them with errors.Is.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
+// ErrTooComplex reports a document Canonicalize refuses because labelling its
+// blank nodes would take more work than it allows (RDFC-1.0 §4.4: the
+// algorithm "raises an error if the input dataset is determined to be overly
+// complex"). Canonicalize returns it for no other reason, and returns no
+// bytes with it. The bound's value is not part of this contract and may
+// change; the error's text reports it.
+const ErrTooComplex Error = "urdna2015: dataset too complex to canonicalize (RDFC-1.0 §4.4.3)"
 
 // Canonicalizer normalizes JSON-LD documents to canonical N-Quads bytes using
 // an offline document loader.
@@ -93,6 +109,13 @@ func (c *Canonicalizer) Name() string { return Name }
 // the root over derived_from and rejects a mismatch; wire-form validation
 // additionally couples the commitment fields together. JCS — the default
 // suite — signs the bytes verbatim either way.
+//
+// The blank nodes are labelled within a work bound, as RDFC-1.0 §4.4.3
+// requires (see label.go): a dataset whose blank nodes are so alike that
+// labelling them would take more than a fixed number of steps and a fixed
+// number per quad is refused with an error wrapping ErrTooComplex, so
+// labelling never costs more than that many steps of about the same time
+// each.
 func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	switch t := v.(type) {
 	case map[string]any:
@@ -118,24 +141,40 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 		return nil, err
 	}
 
-	normalized, err := proc.Normalize(expanded, opts)
+	dataset, err := datasetOf(proc, expanded, opts)
 	if err != nil {
-		return nil, fmt.Errorf("urdna2015: normalize: %w", err)
+		return nil, err
 	}
-	s, ok := normalized.(string)
-	if !ok {
-		return nil, fmt.Errorf("urdna2015: normalize returned %T, want application/n-quads string", normalized)
+	s, err := canonicalNQuads(dataset)
+	if err != nil {
+		return nil, err
 	}
 	return []byte(s), nil
 }
 
-// options pins every json-gold knob that could influence canonical bytes.
-// A fresh value per use keeps calls independent (the processor does not own
-// the options object).
+// datasetOf builds the RDF dataset of an expanded document as json-gold's
+// Normalize builds it, with the options it passes to toRDF.
+func datasetOf(proc *ld.JsonLdProcessor, expanded any, opts *ld.JsonLdOptions) (*ld.RDFDataset, error) {
+	toRDF := ld.NewJsonLdOptions(opts.Base)
+	toRDF.ProcessingMode = opts.ProcessingMode
+	toRDF.Format = ""
+	toRDF.DocumentLoader = opts.DocumentLoader
+	rdf, err := proc.ToRDF(expanded, toRDF)
+	if err != nil {
+		return nil, fmt.Errorf("urdna2015: normalize: %w", err)
+	}
+	dataset, ok := rdf.(*ld.RDFDataset)
+	if !ok {
+		return nil, fmt.Errorf("urdna2015: toRDF returned %T, want an RDF dataset", rdf)
+	}
+	return dataset, nil
+}
+
+// options pins every json-gold knob that could influence the expanded
+// document and its dataset. A fresh value per use keeps calls independent
+// (the processor does not own the options object).
 func (c *Canonicalizer) options() *ld.JsonLdOptions {
 	opts := ld.NewJsonLdOptions("")
-	opts.Algorithm = ld.AlgorithmURDNA2015
-	opts.Format = "application/n-quads"
 	opts.DocumentLoader = &offlineLoader{contexts: c.contexts}
 	// Safe mode turns expansion's silent drop of undefined terms into an
 	// error (see the package doc for why dropping is a signing hazard).

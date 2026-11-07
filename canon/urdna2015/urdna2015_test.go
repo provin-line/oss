@@ -2,6 +2,7 @@ package urdna2015_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -395,5 +396,36 @@ func TestNewCanonicalizer_DefensiveCopy(t *testing.T) {
 func TestName(t *testing.T) {
 	if got := w3cCanonicalizer(t).Name(); got != "urdna2015" {
 		t.Errorf("Name() = %q, want %q", got, "urdna2015")
+	}
+}
+
+// A document whose blank nodes are too alike to label within the work bound
+// is refused (RDFC-1.0 §4.4.3): here a list of 64 equal values, whose middle
+// nodes no quad of their own tells apart.
+func TestCanonicalize_RefusesADocumentTooComplexToLabel(t *testing.T) {
+	steps := make([]any, 64)
+	for i := range steps {
+		steps[i] = "pass"
+	}
+	doc := map[string]any{
+		"@context": []any{ctxCredentialsV2, ctxExamplesV2, map[string]any{
+			"steps": map[string]any{"@id": "https://example.org/steps", "@container": "@list"},
+		}},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            "did:example:issuer",
+		"validFrom":         "2026-01-01T00:00:00Z",
+		"credentialSubject": map[string]any{"steps": steps},
+	}
+	out, err := w3cCanonicalizer(t).Canonicalize(doc)
+	if !errors.Is(err, urdna2015.ErrTooComplex) {
+		t.Errorf("Canonicalize: err = %v, want urdna2015.ErrTooComplex", err)
+	}
+	if out != nil {
+		t.Errorf("Canonicalize returned %d bytes with its refusal", len(out))
+	}
+	steps = steps[:16]
+	doc["credentialSubject"] = map[string]any{"steps": steps}
+	if _, err := w3cCanonicalizer(t).Canonicalize(doc); err != nil {
+		t.Errorf("Canonicalize with 16 equal values: %v", err)
 	}
 }
