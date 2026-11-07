@@ -524,6 +524,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   payload holding one made validation panic. Numbers beyond the bounds above
   are now refused before the library reads them; within them, a 1 MiB
   payload of numbers at the bounds takes about 0.2 s.
+- The node's HTTP server bounds what a request makes it read before any
+  handler decides on it, so a client cannot hold the server's handlers with
+  a stalled request or its memory with an oversized one. It takes at most
+  64 KiB of request headers (net/http's default is 1 MiB). It drops a request
+  whose body stalls while it is read, on HTTP/1 and HTTP/2 alike: one that
+  delivers nothing for 30 seconds or, chunked on HTTP/1, fewer than 16 KiB;
+  and a body the handler leaves unread gets the same 30 seconds while
+  net/http discards it. As for writes, the bound is on progress, not rate: a
+  body trickled a byte at a time is not dropped. A large body sent at a
+  steady pace, and a response streamed after the body, are not cut. The
+  outer request-size bound (derived from the configured size limits) now
+  also covers HTTP/2 streams on the cleartext (h2c) listener, besides HTTP/1
+  requests (also one asking to upgrade to h2c); it covered only HTTP/1
+  requests there, and each handler's own limit (connect's read limit per
+  RPC, the push handler's) was the only bound on an HTTP/2 stream.
 
 ## [0.3.0] - 2026-08-05
 
