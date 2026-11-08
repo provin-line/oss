@@ -3,6 +3,7 @@ package canon_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -90,7 +91,8 @@ func checkRefusal(t *testing.T, kinds map[canon.Error][]string, want canon.Error
 }
 
 // A literal of a thousand digits reads as its value, or is refused when its
-// value is beyond the double range.
+// value is beyond the double range, named by its head within 128 bytes and
+// its length.
 func TestFloat64_ReadsLongLiterals(t *testing.T) {
 	long := strings.Repeat("3", 1000)
 	for lit, want := range map[string]float64{
@@ -106,6 +108,6 @@ func TestFloat64_ReadsLongLiterals(t *testing.T) {
 	kinds := map[canon.Error][]string{canon.ErrNotJSONNumber: nil, canon.ErrBeyondDoubleRange: nil}
 	for _, lit := range []string{"1" + strings.Repeat("0", 1000), long, "-" + long} {
 		_, err := canon.Float64(json.Number(lit))
-		checkRefusal(t, kinds, canon.ErrBeyondDoubleRange, lit, err, strconv.Quote(lit[:80])+"…")
+		checkRefusal(t, kinds, canon.ErrBeyondDoubleRange, lit, err, strconv.Quote(lit[:110])+fmt.Sprintf("… (%d bytes)", len(lit)))
 	}
 }

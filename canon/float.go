@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // ErrNotJSONNumber reports a json.Number that is not an RFC 8259 number.
@@ -22,15 +24,16 @@ const ErrBeyondDoubleRange Error = "canon: beyond the double range"
 // exponent is written, leading or trailing zeros); the sign of zero is kept.
 // A number that rounds to zero is ±0. Every error it returns wraps exactly
 // one of ErrNotJSONNumber, for anything that is not an RFC 8259 number, and
-// ErrBeyondDoubleRange, for a number that rounds to infinity, and names the
-// start of n. Its work is linear in the length of n.
+// ErrBeyondDoubleRange, for a number that rounds to infinity, and names n,
+// quoted, within 128 bytes: whole when it fits, else its head and its
+// length. Its work is linear in the length of n.
 //
 // Reading a JSON number as a double goes through here, so every reader in
 // this module takes one number as one double.
 func Float64(n json.Number) (float64, error) {
 	sc, ok := scanNumber(string(n))
 	if !ok {
-		return 0, fmt.Errorf("%w: %s", ErrNotJSONNumber, quoteStart(string(n)))
+		return 0, fmt.Errorf("%w: %s", ErrNotJSONNumber, excerpt.Quoted(string(n), quotedLimit))
 	}
 	zero := 0.0
 	if sc.neg {
@@ -52,7 +55,7 @@ func Float64(n json.Number) (float64, error) {
 	}
 	switch {
 	case point > 310:
-		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, quoteStart(string(n)))
+		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, excerpt.Quoted(string(n), quotedLimit))
 	case point < -330:
 		return zero, nil
 	}
@@ -72,17 +75,7 @@ func Float64(n json.Number) (float64, error) {
 	b = strconv.AppendInt(b, point, 10)
 	f, err := strconv.ParseFloat(string(b), 64)
 	if err != nil { // b is well formed, so the error is ErrRange: f rounds to ±Inf
-		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, quoteStart(string(n)))
+		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, excerpt.Quoted(string(n), quotedLimit))
 	}
 	return f, nil
-}
-
-// quoteStart quotes at most the first bytes of s: s may be any input,
-// however long.
-func quoteStart(s string) string {
-	const quoted = 80
-	if len(s) > quoted {
-		return strconv.Quote(s[:quoted]) + "…"
-	}
-	return strconv.Quote(s)
 }

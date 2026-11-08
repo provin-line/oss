@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // MaxSafeInteger and MinSafeInteger bound the integers an artifact may carry as
@@ -18,8 +20,12 @@ const (
 )
 
 // UnsafeNumberError reports a JSON number an artifact may not carry, with the
-// raw literal and the path to it. The literal is reported verbatim: a rounded
+// raw literal and the path to it. The fields hold both verbatim: a rounded
 // rendering would hide the very precision loss the gate exists to catch.
+// Error writes each of them within 128 bytes: whole when it fits, or else its
+// head and its length, "… (N bytes)", never a rounded value. It writes Reason,
+// which its maker chooses, whole. What is not UTF-8 in the three is written
+// as U+FFFD. So the size of the text does not follow the size of the input.
 type UnsafeNumberError struct {
 	// Path locates the number, e.g. "credentialSubject.counts[1]".
 	Path string
@@ -34,7 +40,9 @@ func (e *UnsafeNumberError) Error() string {
 	if where == "" {
 		where = "(root)"
 	}
-	return fmt.Sprintf("canon: unsafe number %s at %s: %s", e.Literal, where, e.Reason)
+	lit, _ := excerpt.Of(e.Literal, quotedLimit)
+	at, _ := excerpt.Of(where, quotedLimit)
+	return fmt.Sprintf("canon: unsafe number %s at %s: %s", lit, at, strings.ToValidUTF8(e.Reason, "\uFFFD"))
 }
 
 // AdmitSafeNumbers reports whether v may be admitted as a new artifact

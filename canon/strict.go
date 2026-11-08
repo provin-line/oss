@@ -13,6 +13,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // DuplicateKeyError reports a duplicate object key encountered during strict
@@ -21,7 +23,9 @@ import (
 // Key equals only as encoding/json folds names (case, and the Kelvin and long-s
 // signs), or the struct field Key matches only that way: encoding/json would
 // read both keys into one struct field, or Key into a field another reader does
-// not see.
+// not see. The fields hold the keys and the path verbatim; Error writes each
+// key, and the path, within 128 bytes: whole when it fits, or else its head
+// and its length, "… (N bytes)", with what is not UTF-8 written as U+FFFD.
 type DuplicateKeyError struct {
 	Key   string
 	Other string
@@ -29,10 +33,12 @@ type DuplicateKeyError struct {
 }
 
 func (e *DuplicateKeyError) Error() string {
+	key := excerpt.Quoted(e.Key, quotedLimit)
+	at, _ := excerpt.Of(fmt.Sprint(e.Path), quotedLimit)
 	if e.Other != "" {
-		return fmt.Sprintf("JSON key %q at %v differs from %q only in case, as encoding/json folds names", e.Key, e.Path, e.Other)
+		return fmt.Sprintf("JSON key %s at %s differs from %s only in case, as encoding/json folds names", key, at, excerpt.Quoted(e.Other, quotedLimit))
 	}
-	return fmt.Sprintf("duplicate JSON key %q at %v", e.Key, e.Path)
+	return fmt.Sprintf("duplicate JSON key %s at %s", key, at)
 }
 
 // StrictDecoder is the only JSON decode path permitted on protocol
@@ -78,7 +84,18 @@ func NewStrictDecoder(data []byte) *StrictDecoder { return &StrictDecoder{data: 
 
 // Decode decodes the document into v under the strict rules. A second call
 // returns io.EOF.
+//
+// The text of an error it returns is valid UTF-8 within 1024 bytes, whatever
+// the document. Its own errors name what they quote within 128 bytes; an
+// error whose text would be longer or not UTF-8 (encoding/json's, or a
+// type's own decoding's, which write a number's literal or a time's text) is
+// returned wrapped, its text cut as package excerpt cuts it. errors.Is and
+// errors.As find the error it wraps; a type assertion or == does not.
 func (d *StrictDecoder) Decode(v any) error {
+	return excerpt.OfError(d.decode(v), decodeErrorLimit)
+}
+
+func (d *StrictDecoder) decode(v any) error {
 	if d.used {
 		return io.EOF
 	}
@@ -101,7 +118,8 @@ func (d *StrictDecoder) Decode(v any) error {
 		if err != nil {
 			return fmt.Errorf("canon: trailing data after JSON document: %w", err)
 		}
-		return fmt.Errorf("canon: trailing data after JSON document (next token %v)", tok)
+		next, _ := excerpt.Of(fmt.Sprint(tok), quotedLimit)
+		return fmt.Errorf("canon: trailing data after JSON document (next token %s)", next)
 	}
 
 	// Pass 2: decode into v with precision preserved.
@@ -202,7 +220,8 @@ func walkChild(dec *json.Decoder, path *[]string, step string, d dest) error {
 
 func walkFrom(dec *json.Decoder, tok json.Token, path *[]string, d dest) error {
 	if d.unbounded {
-		return fmt.Errorf("canon: decode target at %v is reached through more than %d pointers and interfaces (as a target that holds itself is)", *path, maxIndirections)
+		at, _ := excerpt.Of(fmt.Sprint(*path), quotedLimit)
+		return fmt.Errorf("canon: decode target at %s is reached through more than %d pointers and interfaces (as a target that holds itself is)", at, maxIndirections)
 	}
 	delim, ok := tok.(json.Delim)
 	if !ok {

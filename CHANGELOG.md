@@ -854,6 +854,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   double nearest its value, whatever its spelling, and only RFC 8259 numbers
   are read; the jsonata filter and converter evaluate no number they cannot
   read as one.
+- The text of `canon`'s errors does not grow with the document it was given.
+  `canon.UnsafeNumberError` and `canon.DuplicateKeyError` write each literal,
+  key and path they name within 128 bytes: whole when it fits, or else its
+  head and its length, `… (N bytes)`, cut where a character starts, with
+  what is not UTF-8 written as U+FFFD. Their fields still hold the values
+  verbatim. `canon.StrictDecoder` names a trailing token and the path to a
+  decode target that holds itself the same way, and returns every error
+  within 1024 bytes: one whose text would be longer or not UTF-8
+  (encoding/json's, or a type's own decoding's, which write a number's
+  literal or a time's text) is returned wrapped, its text cut. `errors.Is`
+  and `errors.As` find the error it wraps; a type assertion or `==` does
+  not. `canon.Float64` names its literal, quoted, within 128 bytes the same
+  way; it named the first 80 bytes, which could end inside a character, and
+  not the length.
 
 ## [0.3.0] - 2026-08-05
 
