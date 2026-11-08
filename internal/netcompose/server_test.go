@@ -119,6 +119,7 @@ func assembledHandlerWith(t *testing.T, maxCredentialSize int) (http.Handler, cr
 		{Resource: "chain", Action: "read"},
 		{Resource: "chain", Action: "update-allowlist"},
 		{Resource: "chain", Action: "read-allowlist"},
+		{Resource: "payloads", Action: "retain"},
 	})
 	chainCfg := natsChainCfg(t)
 	guard, resolver, derr := NewDIDResolution(coreCfg, chainCfg)

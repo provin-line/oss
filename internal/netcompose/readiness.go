@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/auth"
 )
 
@@ -81,7 +83,7 @@ func runReadyChecks(ctx context.Context, checks []ReadinessCheck) readySnapshot 
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				log.Printf("readyz: check %s failed: %v", c.Name, err)
+				log.Printf("readyz: check %s failed: %s", c.Name, excerpt.Quoted(err.Error(), netexcerpt.TextLimit))
 				ready = false
 				results[c.Name] = struct {
 					Status string `json:"status"`

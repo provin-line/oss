@@ -1079,6 +1079,22 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   not. `canon.Float64` names its literal, quoted, within 128 bytes the same
   way; it named the first 80 bytes, which could end inside a character, and
   not the length.
+- The text of an error the network node answers a caller with does not grow
+  with the request. Every service the node serves, over the Connect, gRPC and
+  gRPC-Web protocols, answers within 1024 bytes of UTF-8 an error from its
+  handler, from an interceptor (L1 included) or from the decoding of a JSON
+  request (protojson's error quotes a token of the request): whole when it
+  fits, or else its head and its length, `… (N bytes)`, cut where a character
+  starts. Its code and details are kept, and the metadata of an error that is
+  not a wire error. A text that is not UTF-8 is sent as UTF-8, so over gRPC
+  such a text beside details keeps its code instead of being answered
+  `internal`. connect answers a protocol header, query parameter or method it
+  cannot read (a timeout, a compression name, the protocol version) before
+  the node sees the request, quoting the value with `%q`, which writes a byte
+  as `\xNN`: that text, at most four times the value sent, within four times
+  the 64 KiB of headers the server reads and connect's own words, goes to the
+  one who sent it alone and to no log. `/readyz` logs the error of a failed
+  check quoted, on one line, within 1024 bytes.
 
 ## [0.3.0] - 2026-08-05
 
