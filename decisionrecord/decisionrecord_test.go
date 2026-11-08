@@ -813,3 +813,178 @@ func TestFilter_SummaryWritesNoZeroCount(t *testing.T) {
 		t.Errorf("summaries = %+v, want %+v", sink.summaries, want)
 	}
 }
+
+// An unenforced record, like a refusal, carries the check that refused; a
+// summary counts it apart, with its check, ordered after refusals.
+func TestUnenforced_Validation(t *testing.T) {
+	if err := rec("1", "gate", decisionrecord.Unenforced, "route").Validate(); err != nil {
+		t.Errorf("an unenforced record with its check: %v", err)
+	}
+	if err := rec("1", "gate", decisionrecord.Unenforced, "").Validate(); err == nil {
+		t.Error("an unenforced record without its check: Validate = nil")
+	}
+	s := decisionrecord.Summary{Point: "gate", From: t0, Until: t0.Add(time.Minute), Counts: []decisionrecord.Count{
+		{Outcome: decisionrecord.Accepted, N: 1},
+		{Outcome: decisionrecord.Refused, Check: "route", N: 1},
+		{Outcome: decisionrecord.Unenforced, Check: "route", N: 1},
+	}}
+	if err := s.Validate(); err != nil {
+		t.Errorf("a summary counting unenforced decisions: %v", err)
+	}
+	s.Counts[2].Check = ""
+	if err := s.Validate(); err == nil {
+		t.Error("a count of unenforced decisions without their check: Validate = nil")
+	}
+	s.Counts[1], s.Counts[2] = decisionrecord.Count{Outcome: decisionrecord.Unenforced, Check: "route", N: 1}, s.Counts[1]
+	if err := s.Validate(); err == nil {
+		t.Error("unenforced counted before refusals: Validate = nil")
+	}
+}
+
+// The refusals level writes unenforced records too: a check refused, though
+// the deciding party did not enforce it.
+func TestFilter_RefusalsPassesUnenforced(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelRefusals, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []decisionrecord.Record{
+		rec("1", "gate", decisionrecord.Accepted, ""),
+		rec("1", "gate", decisionrecord.Unenforced, "route"),
+	} {
+		if err := f.Record(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sink.records) != 1 || sink.records[0].Outcome != decisionrecord.Unenforced {
+		t.Errorf("sink records = %+v, want the unenforced one", sink.records)
+	}
+}
+
+// The summary level counts an unenforced decision apart, with its check. An
+// accepted decision's unenforced record moves it there; one of a decision
+// not accepted in the window is counted as it comes and keeps no id, so
+// unenforced decisions, which any caller can cause where the deciding party
+// records only, do not grow its memory.
+func TestFilter_SummaryCountsUnenforced(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, r := range []decisionrecord.Record{
+		rec("1", "gate", decisionrecord.Accepted, ""),
+		rec("1", "gate", decisionrecord.Unenforced, "route"), // accepted, then unenforced
+		rec("2", "gate", decisionrecord.Accepted, ""),
+		rec("2", "gate", decisionrecord.Refused, "expired"), // accepted, then refused
+		rec("3", "gate", decisionrecord.Accepted, ""),
+	} {
+		if err := f.Record(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 100; i++ {
+		if err := f.Record(ctx, rec(fmt.Sprint("u", i), "gate", decisionrecord.Unenforced, "route")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := decisionrecord.KeptDecisionIDs(f); got != 3 {
+		t.Errorf("kept %d decision ids, want the 3 accepted ones", got)
+	}
+	if err := f.Flush(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	want := []decisionrecord.Count{
+		{Outcome: decisionrecord.Accepted, N: 1},
+		{Outcome: decisionrecord.Refused, Check: "expired", N: 1},
+		{Outcome: decisionrecord.Unenforced, Check: "route", N: 101},
+	}
+	if len(sink.summaries) != 1 || fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint(want) {
+		t.Errorf("summaries = %+v, want counts %v", sink.summaries, want)
+	}
+}
+
+// An unenforced decision goes ahead, so at the all level a failed write of its
+// record is an error, as for any record; below it, the write is a warning
+// and the decision goes ahead without its record.
+func TestFilter_UnenforcedRecordThatCannotBeWritten(t *testing.T) {
+	for _, lv := range []decisionrecord.Level{decisionrecord.LevelAll, decisionrecord.LevelRefusals} {
+		sink := &memSink{err: errors.New("disk full")}
+		warn, buf := quietLog()
+		f, err := decisionrecord.NewFilter(lv, sink, warn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = f.Record(context.Background(), rec("1", "gate", decisionrecord.Unenforced, "route"))
+		switch {
+		case lv == decisionrecord.LevelAll && err == nil:
+			t.Error("level all: a failed write of an unenforced record was not an error")
+		case lv != decisionrecord.LevelAll && (err != nil || !strings.Contains(buf.String(), "decision record")):
+			t.Errorf("level %s: Record = %v, log %q; want nil and a warning", lv, err, buf.String())
+		}
+	}
+}
+
+// An unenforced record is written with its outcome and check, and so is a
+// summary's count of unenforced decisions.
+func TestJSONLines_Unenforced(t *testing.T) {
+	var buf bytes.Buffer
+	r := rec("1", "gate", decisionrecord.Unenforced, "route")
+	r.Reason = "approval expired"
+	if err := decisionrecord.NewJSONLines(&buf).Record(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["outcome"] != "unenforced" || m["check"] != "route" || m["reason"] != "approval expired" {
+		t.Errorf("line = %s", buf.String())
+	}
+	buf.Reset()
+	s := decisionrecord.Summary{Point: "gate", From: t0, Until: t0.Add(time.Minute), Counts: []decisionrecord.Count{
+		{Outcome: decisionrecord.Unenforced, Check: "route", N: 2},
+	}}
+	if err := decisionrecord.NewJSONLines(&buf).Summary(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `{"check":"route","n":2,"outcome":"unenforced"}`) {
+		t.Errorf("summary line = %s", buf.String())
+	}
+}
+
+// A writer that breaks its rule makes the summary count a decision more than
+// once, never under a weaker outcome than its strongest record: an accepted
+// decision recorded unenforced, then refused, is counted refused.
+func TestFilter_SummaryNeverCountsAWeakerOutcome(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, r := range []decisionrecord.Record{
+		rec("1", "gate", decisionrecord.Accepted, ""),
+		rec("1", "gate", decisionrecord.Unenforced, "route"),
+		rec("1", "gate", decisionrecord.Refused, "expired"),
+		rec("2", "gate", decisionrecord.Accepted, ""),
+		rec("2", "gate", decisionrecord.Refused, "expired"),
+		rec("2", "gate", decisionrecord.Unenforced, "route"),
+	} {
+		if err := f.Record(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := decisionrecord.KeptDecisionIDs(f); got != 2 {
+		t.Errorf("kept %d decision ids, want 2", got)
+	}
+	if err := f.Flush(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	want := []decisionrecord.Count{{Outcome: decisionrecord.Refused, Check: "expired", N: 2}}
+	if len(sink.summaries) != 1 || fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint(want) {
+		t.Errorf("summaries = %+v, want counts %v", sink.summaries, want)
+	}
+}

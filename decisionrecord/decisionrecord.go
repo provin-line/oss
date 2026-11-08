@@ -1,7 +1,7 @@
 // Package decisionrecord is the record a deciding party — a gate, a boundary
 // stage, a delivery decision — writes for each decision it makes, and the
-// levels at which it is written: every decision, refusals only, counts per
-// window, or none. Configuration defaults to every decision; this package has
+// levels at which it is written: every decision, refused and unenforced
+// decisions only, counts per window, or none. Configuration defaults to every decision; this package has
 // no default level, so a level is in effect only when it is chosen. It is not
 // the record of used nonces a gate keeps to refuse replays; that is another
 // record with another purpose.
@@ -28,13 +28,35 @@ import (
 	"github.com/provin-line/oss/contentaddress"
 )
 
-// Outcome is what a decision decided.
+// Outcome is what a decision decided, and whether what it decided on went
+// ahead.
 type Outcome string
 
 const (
+	// Accepted: no check refused, and what the decision decided on went
+	// ahead.
 	Accepted Outcome = "accepted"
-	Refused  Outcome = "refused"
+	// Refused: a check that the deciding party enforces refused, and what the
+	// decision decided on did not go ahead.
+	Refused Outcome = "refused"
+	// Unenforced: only checks that the deciding party records without
+	// enforcing refused, so what the decision decided on went ahead.
+	Unenforced Outcome = "unenforced"
 )
+
+// rank orders the outcomes: a decision has the outcome of its record of the
+// highest rank. An unknown outcome has none.
+func rank(o Outcome) int {
+	switch o {
+	case Accepted:
+		return 1
+	case Unenforced:
+		return 2
+	case Refused:
+		return 3
+	}
+	return 0
+}
 
 // Evidence is one thing a decision was made on: its role (e.g. "approval",
 // "chain") and its content address. A role may repeat; the order is kept (a
@@ -46,25 +68,31 @@ type Evidence struct {
 
 // Record is the record of one decision.
 //
-// A decision refused after its record was written — an approval that expired
-// between the record and the execution, say — is recorded again with the same
-// DecisionID, Outcome Refused, its Check, and At the time of the refusal. A
-// decision is refused when any record of its DecisionID is refused, whatever
-// the order the records are read in.
+// A decision recorded accepted and refused afterwards — an approval that
+// expired between the record and the execution, say — is recorded again with
+// the same DecisionID, Outcome Refused, its Check, and At the time of the
+// refusal. A
+// decision has the strongest outcome among its records, whatever the order
+// they are read in: it is refused when any of them is refused; otherwise
+// unenforced when any of them is unenforced; otherwise accepted.
 //
 // A writer follows one rule for the records of a decision: it records the
-// decision refused at most once, and never records it accepted after that
-// refusal; it makes each record only once the previous one of the decision
-// has been taken (Filter.Record returned). Recording a decision accepted again
-// changes nothing. A writer that breaks the rule makes the summary level
-// count the decision more than once, and nothing else: no decision's outcome,
-// and no record, changes.
+// decision accepted any number of times, then unenforced or refused at most
+// once, and after that records nothing more of it; it makes each record only
+// once the previous one of the decision has been taken (Filter.Record
+// returned). The writer knows the outcome when it writes: refused when an
+// enforced check refused, unenforced when only checks it records without
+// enforcing did. Recording a decision accepted again changes nothing. A
+// writer that breaks the rule makes the summary level count the decision
+// more than once, or under the check of the first of its records of that
+// outcome, never under a weaker outcome than its strongest record; nothing
+// else changes: no decision's outcome, and no record.
 type Record struct {
 	DecisionID string    // unique per decision; made by the deciding party (128 random bits, say)
 	Point      string    // the deciding party's ID: a gate's, a boundary's
 	At         time.Time // when the decision was made
 	Outcome    Outcome
-	Check      string            // the check that refused: a fixed name, required on refusal, empty on acceptance
+	Check      string            // the check that refused: a fixed name, required unless Accepted
 	Reason     string            // for people
 	Actors     []string          // whom the decision is attributed to (a gate: the signers)
 	Evidence   []Evidence        // what was decided on, in order
@@ -73,8 +101,8 @@ type Record struct {
 
 // Validate checks the fields a reader keys on: a DecisionID and a Point, a
 // time within the years 0000–9999 (so it is written in RFC 3339 and sorts as
-// text), an outcome with a Check exactly when it is a refusal, each Evidence a
-// role and an address, each Actor and attribute name valid UTF-8 and not
+// text), an outcome with a Check exactly when a check refused (Refused or
+// Unenforced), each Evidence a role and an address, each Actor and attribute name valid UTF-8 and not
 // empty. Filter.Record and every Sink here check it, whatever the level: a
 // malformed record is its writer's error. Text for people (Reason, attribute
 // values) is not refused for invalid UTF-8; it is written with the invalid
@@ -89,12 +117,12 @@ func (r Record) Validate() error {
 		return errors.New("decisionrecord: record without a time")
 	case !writableTime(r.At):
 		return fmt.Errorf("decisionrecord: time %v outside the years 0000–9999", r.At)
-	case r.Outcome == Refused && r.Check == "":
-		return errors.New("decisionrecord: a refusal without the check that refused")
+	case rank(r.Outcome) == 0:
+		return fmt.Errorf("decisionrecord: record with outcome %q", r.Outcome)
+	case r.Outcome != Accepted && r.Check == "":
+		return fmt.Errorf("decisionrecord: record with outcome %s without the check that refused", r.Outcome)
 	case r.Outcome == Accepted && r.Check != "":
 		return errors.New("decisionrecord: an acceptance with a refusing check")
-	case r.Outcome != Accepted && r.Outcome != Refused:
-		return fmt.Errorf("decisionrecord: record with outcome %q", r.Outcome)
 	case !utf8.ValidString(r.Check):
 		return errors.New("decisionrecord: record with a Check that is not UTF-8")
 	}
@@ -132,14 +160,16 @@ const maxCount int64 = 1<<53 - 1
 type Summary struct {
 	Point       string
 	From, Until time.Time
-	Counts      []Count // ordered by outcome, then check
+	Counts      []Count // ordered by outcome, then check, each as text (accepted, refused, unenforced)
 }
 
 // Validate checks a summary as Record.Validate checks a record: a Point, a
 // window within the years 0000–9999 whose end is not before its start, and
-// each Count an outcome with a Check exactly when it counts refusals, and N
+// each Count an outcome with a Check exactly when it counts decisions a check
+// refused (Refused or Unenforced), and N
 // from 0 to 2^53−1, the Counts ordered by outcome, then check, with no two
-// alike. Every Sink here checks it.
+// alike; outcomes and checks are compared as text, so accepted, refused,
+// unenforced. Every Sink here checks it.
 func (s Summary) Validate() error {
 	switch {
 	case s.Point == "" || !utf8.ValidString(s.Point):
@@ -153,10 +183,10 @@ func (s Summary) Validate() error {
 	}
 	for i, c := range s.Counts {
 		switch {
-		case c.Outcome != Accepted && c.Outcome != Refused:
+		case rank(c.Outcome) == 0:
 			return fmt.Errorf("decisionrecord: count with outcome %q", c.Outcome)
-		case c.Outcome == Refused && c.Check == "":
-			return errors.New("decisionrecord: a count of refusals without their check")
+		case c.Outcome != Accepted && c.Check == "":
+			return fmt.Errorf("decisionrecord: count with outcome %s without its check", c.Outcome)
 		case c.Outcome == Accepted && c.Check != "":
 			return errors.New("decisionrecord: a count of acceptances with a refusing check")
 		case !utf8.ValidString(c.Check):
@@ -235,11 +265,14 @@ var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 // rule: if Record returns an error, refuse the decision. A malformed record
 // (Record.Validate) is an error at every level, LevelNone included: it is the
 // writer's error, not the sink's. At LevelAll, every record is given to the
-// sink and the sink's failure is returned, so no decision is accepted without
-// its record as far as the sink's nil means the record is kept (see Sink). At
-// LevelRefusals and LevelSummary, the sink's failure is logged as a warning
-// and Record returns nil: the decision does not change. At LevelNone nothing
-// is written. A Filter not made by NewFilter returns an error from every call.
+// sink and the sink's failure is returned, so no decision goes ahead
+// (accepted or unenforced) without its record as far as the sink's nil means
+// the record is kept (see Sink). At LevelRefusals and LevelSummary, the sink's
+// failure is logged as a warning and Record returns nil: the decision does
+// not change, so an unenforced decision goes ahead without its record. A
+// deciding party that must not let one go ahead unrecorded uses LevelAll. At
+// LevelNone nothing is written. A Filter not made by NewFilter returns an
+// error from every call.
 type Filter struct {
 	level Level
 	sink  Sink
@@ -258,13 +291,14 @@ type outcomeCheck struct {
 
 // window is one deciding party's tally at LevelSummary. It keeps the ids of
 // the decisions accepted in it only: an acceptance needs whatever the
-// deciding party checks for, while any caller can cause a refusal, so the
-// ids kept are bounded by what the deciding party admits. A refusal of a
+// deciding party checks for, while any caller can cause a refused or
+// unenforced record (where the deciding party records only), so the ids kept
+// are bounded by what the deciding party admits. A refusal or an unenforced
 // decision not accepted in it is counted as it comes and keeps no id. Its
 // counts are keyed by outcome and check, fixed names of the deciding party.
 type window struct {
 	counts   map[outcomeCheck]int64
-	accepted map[string]bool // DecisionID → still accepted (false once a refusal of it is counted)
+	accepted map[string]outcomeCheck // DecisionID of a decision accepted in the window → what it is counted as
 }
 
 // NewFilter returns a Filter at level, writing to sink. The zero Level is
@@ -302,7 +336,7 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 	case LevelAll:
 		return f.sink.Record(ctx, r)
 	case LevelRefusals:
-		if r.Outcome != Refused {
+		if r.Outcome == Accepted {
 			return nil
 		}
 		if err := f.sink.Record(ctx, r); err != nil {
@@ -314,11 +348,12 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 	return nil
 }
 
-// count adds r to the window. An accepted decision is counted once, however
-// often it is recorded accepted; a refusal of it then moves it to that
-// refusal's check. A refusal of a decision not accepted in the window is
-// counted as it comes: under the writer's rule (see Record) a decision is
-// refused at most once, so it is counted once.
+// count adds r to the window. A decision accepted in it is counted once, by
+// the strongest outcome of its records: a record of a stronger outcome moves
+// it there, with that record's check, and any other changes nothing. A
+// refused or unenforced record of a decision not accepted in the window is
+// counted as it comes and keeps no id: under the writer's rule (see Record)
+// a decision has at most one, so it is counted once.
 func (f *Filter) count(r Record) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -327,22 +362,21 @@ func (f *Filter) count(r Record) {
 	}
 	w := f.windows[r.Point]
 	if w == nil {
-		w = &window{counts: map[outcomeCheck]int64{}, accepted: map[string]bool{}}
+		w = &window{counts: map[outcomeCheck]int64{}, accepted: map[string]outcomeCheck{}}
 		f.windows[r.Point] = w
 	}
-	stillAccepted, seen := w.accepted[r.DecisionID]
+	k := outcomeCheck{outcome: r.Outcome, check: r.Check}
+	prev, seen := w.accepted[r.DecisionID]
 	switch {
-	case r.Outcome == Accepted && !seen:
-		w.accepted[r.DecisionID] = true
-		w.counts[outcomeCheck{outcome: Accepted}]++
-	case r.Outcome == Accepted:
-	case seen && stillAccepted:
-		w.accepted[r.DecisionID] = false
-		w.counts[outcomeCheck{outcome: Accepted}]--
-		w.counts[outcomeCheck{outcome: Refused, check: r.Check}]++
-	case seen:
-	default:
-		w.counts[outcomeCheck{outcome: Refused, check: r.Check}]++
+	case !seen:
+		if r.Outcome == Accepted {
+			w.accepted[r.DecisionID] = k
+		}
+		w.counts[k]++
+	case rank(r.Outcome) > rank(prev.outcome):
+		w.accepted[r.DecisionID] = k
+		w.counts[prev]--
+		w.counts[k]++
 	}
 }
 
