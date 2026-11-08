@@ -21,10 +21,12 @@ package urdna2015
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/piprate/json-gold/ld"
@@ -58,6 +60,16 @@ const ErrTooComplex Error = "urdna2015: dataset too complex to canonicalize"
 // an offline document loader.
 type Canonicalizer struct {
 	contexts map[string][]byte
+
+	served *servedRules
+}
+
+// servedRules is what the served contexts define (conserve.go), read once,
+// behind a pointer so a Canonicalizer copies as a value.
+type servedRules struct {
+	once  sync.Once
+	rules *contextRules
+	err   error
 }
 
 // NewCanonicalizer returns a Canonicalizer whose loader serves exactly the
@@ -73,7 +85,7 @@ func NewCanonicalizer(contexts map[string][]byte) *Canonicalizer {
 		copy(b, doc)
 		copied[iri] = b
 	}
-	return &Canonicalizer{contexts: copied}
+	return &Canonicalizer{contexts: copied, served: &servedRules{}}
 }
 
 // Name implements canon.Canonicalizer.
@@ -103,7 +115,7 @@ func (c *Canonicalizer) Name() string { return Name }
 //     silently: @id / @type / predicate values that are not absolute IRIs
 //     (or that fail json-gold's own quad-validity IRI check, mirrored via
 //     ld.InvalidNode), blank-node predicates, @index members (index maps
-//     emit no quads), @direction members (json-gold v0.8.0 does not
+//     emit no quads), @direction members (json-gold does not
 //     serialize base direction), and @language values failing json-gold's
 //     language grammar (an invalid tag drops the whole literal). The
 //     @language check mirrors json-gold's validity regex exactly, so
@@ -123,6 +135,30 @@ func (c *Canonicalizer) Name() string { return Name }
 //     RDFC-1.0 canonical form and no byte the v0 wire signs changes. A
 //     literal typed rdf:langString must carry a language tag of the N-Quads
 //     LANGTAG grammar, and no other literal may carry one.
+//  7. Above all, the document's values are counted through each stage
+//     (conserve.go), so a value JSON-LD processing would leave out is refused
+//     whatever the form that loses it. The document must use only forms where
+//     a value stays one value: no @index, @direction, JSON literal or blank
+//     node label; @language only in a value object, and a language tag, there
+//     or in a context, of ASCII letters, digits and hyphens; a value object's
+//     keys written as @value, @type and @language; at most one datatype, and
+//     on a boolean none but xsd:boolean; no RDF collection vocabulary written
+//     out (rdf:first or rdf:rest as a property, rdf:nil as an IRI), so a list
+//     comes only from @list; no context term with a map container, no alias of
+//     @value, no term aliasing two keywords, no @vocab beginning with @, and
+//     no @base. Its values must all reach the expanded form; there, each value
+//     must belong to a node's property, each node object must add a quad, and
+//     no node's property may hold one RDF term twice; and the dataset must
+//     hold exactly the quads those values make. What is signed is the dataset,
+//     so spellings JSON-LD gives one RDF term are signed as that term: an IRI
+//     written as a term, a compact IRI or in full; a language tag in any ASCII
+//     case; a string with xsd:string written or not; a boolean written as true
+//     or false, or as the string of its name typed xsd:boolean. The values of
+//     a property outside a list are signed as a set, in no order, so one
+//     written twice is refused (a node written out in full in two places, or a
+//     type repeated): write a node once and refer to it elsewhere by its @id.
+//     A context's own text is not signed: a term the document does not use
+//     adds nothing to the dataset.
 //
 // One drop shape is deliberately ALLOWED: a member whose value is an empty
 // array ("derived_from": []) contributes zero quads, so its presence is not
@@ -167,6 +203,10 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 		return nil, err
 	}
 	in := documentBytes(v)
+	values, err := c.dataValues(v)
+	if err != nil {
+		return nil, err
+	}
 
 	proc := ld.NewJsonLdProcessor()
 	opts := c.options()
@@ -177,12 +217,23 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	if err := rejectDroppableNodes(expanded); err != nil {
 		return nil, err
 	}
-	if err := boundNodeMapWork(expanded); err != nil {
+	if n := expandedValues(expanded); n != values {
+		return nil, fmt.Errorf("urdna2015: the document holds %d values, its expanded form %d: JSON-LD drops the others, so they would ride the document unsigned", values, n)
+	}
+	w := newNodeMapWork()
+	w.walk(expanded)
+	if err := w.bound(); err != nil {
+		return nil, err
+	}
+	if err := w.conserved(); err != nil {
 		return nil, err
 	}
 
 	dataset, err := datasetOf(proc, expanded, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err := w.holds(dataset); err != nil {
 		return nil, err
 	}
 	if err := boundCanonicalSize(dataset, in); err != nil {
@@ -196,6 +247,31 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(s), nil
+}
+
+// dataValues reads the contexts the document can use, the served ones and its
+// own, refusing one with a map container, and counts the document's values
+// (conserve.go).
+func (c *Canonicalizer) dataValues(v any) (int64, error) {
+	served := c.served
+	if served == nil {
+		served = &servedRules{}
+	}
+	served.once.Do(func() {
+		served.rules = newContextRules()
+		served.err = served.rules.readServed(c.contexts)
+	})
+	if served.err != nil {
+		return 0, served.err
+	}
+	rules := newContextRules()
+	for k, kw := range served.rules.aliases {
+		rules.aliases[k] = kw
+	}
+	if err := rules.readDocument(v); err != nil {
+		return 0, err
+	}
+	return rules.dataValues(v, new(jsonPath))
 }
 
 // datasetOf builds the RDF dataset of an expanded document as json-gold's
@@ -238,7 +314,7 @@ type offlineLoader struct {
 func (l *offlineLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
 	doc, ok := l.contexts[u]
 	if !ok {
-		return nil, fmt.Errorf("urdna2015: context %q is not in the embedded allowlist (network fetch refused)", u)
+		return nil, fmt.Errorf("urdna2015: context %s is not in the embedded allowlist (network fetch refused)", bounded(u))
 	}
 	// Plain unmarshal (numbers as float64), not a strict decoder: this parses
 	// the TRUSTED embedded context documents, whose "@version": 1.1 members
@@ -294,7 +370,8 @@ func (p *jsonPath) String() string {
 func rejectSilentDrops(v any, path *jsonPath) error {
 	switch t := v.(type) {
 	case map[string]any:
-		for k, e := range t {
+		for _, k := range sortedKeys(t) {
+			e := t[k]
 			*path = append(*path, pathSegment{key: k, index: -1})
 			if k == "@graph" {
 				if list, ok := e.([]any); ok {
@@ -432,9 +509,48 @@ func spelledApart(r rune) bool {
 	return r < 0x20
 }
 
+// rejectLossyValue refuses an expanded value object whose datatype json-gold
+// would not write as it is: more than one datatype (it keeps the first), a
+// JSON literal (@json or rdf:JSON: it rewrites the value as canonical JSON,
+// in time in the square of its members), or a datatype on a boolean other
+// than xsd:boolean (it writes the boolean as the string of its name with that
+// datatype, the same literal as that string's, so which of the two the
+// document holds would not be signed; with xsd:boolean the literal is the
+// boolean's own).
+func rejectLossyValue(value, datatype any) error {
+	if datatype == nil {
+		return nil
+	}
+	if _, ok := datatype.(string); !ok {
+		return fmt.Errorf("urdna2015: a value object with %s as its datatype: json-gold keeps one datatype, so the others would ride the document unsigned", bounded(fmt.Sprint(datatype)))
+	}
+	if datatype == "@json" || datatype == ld.RDFJSONLiteral {
+		return fmt.Errorf("urdna2015: a JSON literal (@json, rdf:JSON): json-gold rewrites it as canonical JSON, so how it is written would ride the document unsigned")
+	}
+	if _, ok := value.(bool); ok && datatype != xsdBoolean {
+		return fmt.Errorf("urdna2015: a boolean value with a datatype other than xsd:boolean: it is signed as the same literal as the string of its name, so which the document holds would ride it unsigned")
+	}
+	return nil
+}
+
+const (
+	xsdString  = "http://www.w3.org/2001/XMLSchema#string"
+	xsdBoolean = "http://www.w3.org/2001/XMLSchema#boolean"
+	rdfFirst   = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first"
+	rdfRest    = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest"
+	rdfNil     = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"
+)
+
+// collectionWrittenOut is the refusal of the RDF collection vocabulary
+// written out (see rejectDroppableNodes).
+const collectionWrittenOut = "urdna2015: rdf:first or rdf:rest as a property, or rdf:nil as an IRI: it would be signed as the list @list makes, which a JSON reader does not see; write a list with @list"
+
 // rejectDroppableNodes walks an EXPANDED JSON-LD document and fails on the
 // shapes toRDF discards without error even in safe mode (see Canonicalize
-// step 5). After expansion every key is an absolute IRI or a keyword, so the
+// step 5), and on the RDF collection vocabulary written out (rdf:first and
+// rdf:rest as properties, rdf:nil as an IRI): it would be signed as the list
+// @list makes, which a JSON reader does not see, so a list comes only from
+// @list. After expansion every key is an absolute IRI or a keyword, so the
 // walk needs no context awareness.
 func rejectDroppableNodes(v any) error {
 	switch t := v.(type) {
@@ -445,12 +561,24 @@ func rejectDroppableNodes(v any) error {
 			}
 		}
 	case map[string]any:
-		for k, e := range t {
+		if value, ok := t["@value"]; ok {
+			if err := rejectLossyValue(value, t["@type"]); err != nil {
+				return err
+			}
+		}
+		for _, k := range sortedKeys(t) {
+			e := t[k]
 			switch k {
 			case "@id":
 				id, ok := e.(string)
+				if ok && strings.HasPrefix(id, "_:") {
+					return fmt.Errorf("urdna2015: blank node label %s: RDFC-1.0 gives every blank node a label of its own, so the label would ride the document unsigned; write the node without @id", bounded(id))
+				}
+				if id == rdfNil {
+					return errors.New(collectionWrittenOut)
+				}
 				if !ok || !validEmittedIRI(id) {
-					return fmt.Errorf("urdna2015: @id %v is not a valid absolute IRI — toRDF would silently drop the node from the signing scope", e)
+					return fmt.Errorf("urdna2015: @id %s is not a valid absolute IRI — toRDF would silently drop the node from the signing scope", bounded(fmt.Sprint(e)))
 				}
 			case "@type":
 				// Covers both a node's types and a value object's datatype:
@@ -464,8 +592,14 @@ func rejectDroppableNodes(v any) error {
 				}
 				for _, tv := range types {
 					name, ok := tv.(string)
+					if ok && strings.HasPrefix(name, "_:") {
+						return fmt.Errorf("urdna2015: blank node label %s as a type: RDFC-1.0 gives every blank node a label of its own, so the label would ride the document unsigned", bounded(name))
+					}
+					if name == rdfNil {
+						return errors.New(collectionWrittenOut)
+					}
 					if !ok || !validEmittedIRI(name) {
-						return fmt.Errorf("urdna2015: type %v does not expand to a valid absolute IRI — toRDF would silently drop it from the signing scope", tv)
+						return fmt.Errorf("urdna2015: type %s does not expand to a valid absolute IRI — toRDF would silently drop it from the signing scope", bounded(fmt.Sprint(tv)))
 					}
 				}
 			case "@index":
@@ -473,24 +607,27 @@ func rejectDroppableNodes(v any) error {
 				// @index but toRDF emits nothing for it.
 				return fmt.Errorf("urdna2015: @index member — toRDF emits no quads for it, so it would ride the document unsigned")
 			case "@direction":
-				// json-gold v0.8.0 does not serialize base direction: value
+				// json-gold does not serialize base direction: value
 				// objects differing only in @direction canonicalize
 				// identically.
 				return fmt.Errorf("urdna2015: @direction member — json-gold does not serialize base direction, so it would ride the document unsigned")
 			case "@language":
 				lang, ok := e.(string)
 				if !ok || !validLanguageRegex.MatchString(lang) {
-					return fmt.Errorf("urdna2015: @language %v fails the quad-validity language grammar — toRDF would silently drop the whole literal from the signing scope", e)
+					return fmt.Errorf("urdna2015: @language %s fails the quad-validity language grammar — toRDF would silently drop the whole literal from the signing scope", bounded(fmt.Sprint(e)))
 				}
 			default:
 				// A blank-node predicate is dropped by toRDF (generalized
 				// RDF is off, pinned by options()); an IRI predicate failing
 				// quad sanitization drops its quads too.
+				if k == rdfFirst || k == rdfRest {
+					return errors.New(collectionWrittenOut)
+				}
 				if strings.HasPrefix(k, "_:") {
-					return fmt.Errorf("urdna2015: blank-node predicate %q — toRDF would silently drop it from the signing scope", k)
+					return fmt.Errorf("urdna2015: blank-node predicate %s — toRDF would silently drop it from the signing scope", bounded(k))
 				}
 				if !ld.IsKeyword(k) && !validEmittedIRI(k) {
-					return fmt.Errorf("urdna2015: predicate %q fails quad validation — toRDF would silently drop its quads from the signing scope", k)
+					return fmt.Errorf("urdna2015: predicate %s fails quad validation — toRDF would silently drop its quads from the signing scope", bounded(k))
 				}
 			}
 			if err := rejectDroppableNodes(e); err != nil {

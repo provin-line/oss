@@ -235,3 +235,76 @@ func TestRDFC_TooComplexToCanonicalizeReachesTheCaller(t *testing.T) {
 		}
 	}
 }
+
+// A credential holding a value its canonical form would not hold is refused
+// before its signature is checked, from every primitive: here a proof given
+// as an IRI on a subject typed VerifiableCredential, which the W3C context
+// puts in a graph of its own, where nothing names it.
+func TestRDFC_RefusesAValueItWouldNotSign(t *testing.T) {
+	signer, pub, _ := fixture(t)
+	credential := func(subject map[string]any) map[string]any {
+		return map[string]any{
+			"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
+			"type":              []any{"VerifiableCredential"},
+			"issuer":            issuerDID,
+			"validFrom":         "2026-01-01T00:00:00Z",
+			"credentialSubject": subject,
+		}
+	}
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, credential(map[string]any{"id": "did:example:s"}), vc.CryptosuiteEdDSARDFC2022)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := credential(map[string]any{"id": "did:example:s", "type": "VerifiableCredential", "proof": "https://example.org/a"})
+	const want = "in no quad"
+	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("CreateProof: %v, want the value refused", err)
+	}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProof: %v, want the value refused", err)
+	}
+	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProofWithContract: %v, want the value refused", err)
+	}
+	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, doc, vc.ContractW3CEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProofUnderContract: %v, want the value refused", err)
+	}
+}
+
+// A credential whose context sets @base is refused before its signature is
+// checked, from every primitive: the RDFC path resolves no relative IRI
+// against a base, so two spellings of one IRI would sign as one.
+func TestRDFC_RefusesAContextBase(t *testing.T) {
+	signer, pub, _ := fixture(t)
+	credential := func(ctx map[string]any) map[string]any {
+		return map[string]any{
+			"@context":          []any{"https://www.w3.org/ns/credentials/v2", ctx},
+			"type":              []any{"VerifiableCredential"},
+			"issuer":            issuerDID,
+			"validFrom":         "2026-01-01T00:00:00Z",
+			"credentialSubject": map[string]any{"id": "https://example.org/s"},
+		}
+	}
+	doc := credential(map[string]any{"@base": "https://example.org/"})
+	// A proof whose @context mirrors the document's, so that only the
+	// document's canonicalizing refuses it.
+	jcsProof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := *jcsProof
+	proof.Cryptosuite = vc.CryptosuiteEdDSARDFC2022
+	const want = "@base"
+	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("CreateProof: %v, want the @base refused", err)
+	}
+	if err := vc.VerifyProof(ed25519.Verifier{}, pub, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProof: %v, want the @base refused", err)
+	}
+	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProofWithContract: %v, want the @base refused", err)
+	}
+	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, &proof, doc, vc.ContractW3CEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("VerifyProofUnderContract: %v, want the @base refused", err)
+	}
+}

@@ -546,6 +546,49 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015` refuses a document some value of which its canonical
+  form would not hold, so every value of a document it accepts is signed by
+  an `eddsa-rdfc-2022` proof. JSON-LD processing leaves values out of the
+  dataset at several steps of its algorithms; rather than list those forms,
+  `Canonicalize` counts the document's values in the document, in its
+  expanded form and in the dataset, and refuses a document whose counts
+  disagree. So that each value stays one value at every stage, a document on
+  the RDFC path:
+  - may not use `@index`, `@direction`, JSON literals (`@json`, or the
+    `rdf:JSON` datatype) or blank node labels (`_:`; RDFC-1.0 gives every
+    blank node a label of its own, so a label would not be signed);
+  - may use `@language` only in a value object, and must write a value
+    object's keys as `@value`, `@type` and `@language` (not as aliases);
+  - must write a language tag, in a value object or a context, in ASCII
+    letters, digits and hyphens: json-gold lowercases a tag with Unicode case
+    mapping, so `İt` would be signed as `it`;
+  - may not write the RDF collection vocabulary out (`rdf:first` or
+    `rdf:rest` as a property, `rdf:nil` as an IRI): it would be signed as the
+    list `@list` makes. A list is written with `@list`;
+  - may give a value object at most one datatype, and a boolean none but
+    `xsd:boolean`;
+  - may not give one node's property the same RDF term twice, as when a node
+    is written out in full in two places or a type is repeated: write a node
+    once and refer to it elsewhere by its `@id`;
+  - may not hold a node object that adds no statement to the dataset;
+  - may not use a context (its own, or one the canonicalizer serves) that
+    sets `@base` or defines a term with an `@id`, `@type`, `@index` or
+    `@language` container, an alias of `@value`, one term as an alias of two
+    keywords, or a `@vocab` beginning with `@`. The RDFC path resolves no
+    relative IRI against a base, so two spellings of one IRI are not signed
+    as one.
+
+  What is signed is the document's meaning: spellings JSON-LD gives one RDF
+  term (an IRI through the contexts, a language tag in any ASCII case, a
+  string with `xsd:string` written or not, a boolean or the string of its name
+  typed `xsd:boolean`) are signed as that term, and the values of a property
+  outside a list are signed as a set, in no order. A context's own text is not
+  signed: a term the document does not use adds nothing. A document accepted
+  before that meets these keeps its canonical bytes; one that writes a value
+  twice is now refused, such as a self-issued credential whose issuer and
+  subject, one id, both carry the same `name`, or a `type` that lists
+  `VerifiableCredential` twice. `eddsa-jcs-2022`, the default, signs the
+  document's JSON bytes and is not affected.
 - `canon.AdmitSafeNumbers` works in time linear in its input: it reads each
   `json.Number` in time linear in its length, without `math/big`, and spells
   the path to a number only into an error. A 9-byte literal such as

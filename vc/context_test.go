@@ -179,3 +179,69 @@ func TestProvinContextDocumentMatchesProfileSpec(t *testing.T) {
 		t.Error("profile context is not @protected: it could redefine protocol terms")
 	}
 }
+
+// The contexts vc serves to RDFC hold only what the canonicalizer counts a
+// document's values by (urdna2015's conserve.go), scoped contexts included:
+// the keyword aliases id and type and no other, no map container (@id,
+// @type, @index or @language), and no reference to another context (a
+// string @context, or @import). A context added to the served set that
+// defines more fails here, where the counting would need to change with it.
+func TestServedContexts_HoldOnlyWhatCanonicalizationCounts(t *testing.T) {
+	for name, doc := range map[string][]byte{
+		"credentials/v2": vc.ContextCredentialsV2Document(),
+		"dplaax vc/v1":   vc.ContextDplaaxVCV1Document(),
+		"provin vc/v1":   vc.ContextProvinVCV1Document(),
+	} {
+		var d map[string]any
+		if err := json.Unmarshal(doc, &d); err != nil {
+			t.Fatalf("%s is not JSON: %v", name, err)
+		}
+		aliases := map[string]string{}
+		var read func(ctx any, path string)
+		read = func(ctx any, path string) {
+			switch c := ctx.(type) {
+			case string:
+				t.Errorf("%s: @context at %s names another context, %s", name, path, c)
+			case []any:
+				for i, x := range c {
+					read(x, fmt.Sprintf("%s[%d]", path, i))
+				}
+			case map[string]any:
+				for term, def := range c {
+					if term == "@import" {
+						t.Errorf("%s: @import at %s", name, path)
+					}
+					switch v := def.(type) {
+					case string:
+						if term[0] != '@' && v != "" && v[0] == '@' {
+							aliases[term] = v
+						}
+					case map[string]any:
+						if id, ok := v["@id"].(string); ok && term[0] != '@' && id != "" && id[0] == '@' {
+							aliases[term] = id
+						}
+						containers, ok := v["@container"].([]any)
+						if !ok {
+							containers = []any{v["@container"]}
+						}
+						for _, kind := range containers {
+							switch kind {
+							case "@id", "@type", "@index", "@language":
+								t.Errorf("%s: %s at %s has a %s container", name, term, path, kind)
+							}
+						}
+						if scoped, ok := v["@context"]; ok && scoped != nil {
+							read(scoped, path+"/"+term)
+						}
+					}
+				}
+			}
+		}
+		read(d["@context"], "")
+		for term, kw := range aliases {
+			if !(term == "id" && kw == "@id") && !(term == "type" && kw == "@type") {
+				t.Errorf("%s: %s is an alias of %s; the served contexts alias only id and type", name, term, kw)
+			}
+		}
+	}
+}

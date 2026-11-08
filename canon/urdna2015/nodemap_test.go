@@ -52,13 +52,8 @@ var shapes = map[string]func(n int) map[string]any{
 		return credential(map[string]any{"p": each(n, func(i int) any { return map[string]any{"@list": []any{fmt.Sprintf("v%d", i)}} })}, nil)
 	},
 	"one id spread": func(n int) map[string]any {
-		return credential(map[string]any{"p": each(n, func(i int) any {
+		return credential(map[string]any{"p": map[string]any{"id": "https://example.org/s"}, "@included": each(n, func(i int) any {
 			return map[string]any{"id": "https://example.org/s", "q": fmt.Sprintf("v%d", i)}
-		})}, nil)
-	},
-	"one blank node spread": func(n int) map[string]any {
-		return credential(map[string]any{"p": each(n, func(i int) any {
-			return map[string]any{"id": "_:s", "q": fmt.Sprintf("v%d", i)}
 		})}, nil)
 	},
 	"aliases": func(n int) map[string]any {
@@ -112,10 +107,18 @@ func TestCanonicalize_BoundsTheComparisonsOfTheNodeMap(t *testing.T) {
 }
 
 // Equal values are compared once each and gathered once: many copies of one
-// value are within the bound.
-func TestCanonicalize_EqualValuesAreWithinTheBound(t *testing.T) {
+// value are within the node map's bound. (Canonicalize refuses a value held
+// twice for what it would not sign; see conserve_test.go.)
+func TestNodeMapWork_EqualValuesAreWithinTheBound(t *testing.T) {
 	doc := credential(map[string]any{"p": each(3000, func(int) any { return "same" })}, nil)
-	if _, err := testContexts(t).Canonicalize(doc); err != nil {
+	c := testContexts(t)
+	expanded, err := ld.NewJsonLdProcessor().Expand(doc, c.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newNodeMapWork()
+	w.walk(expanded)
+	if err := w.bound(); err != nil {
 		t.Errorf("3,000 equal values: %v", err)
 	}
 }
@@ -196,7 +199,7 @@ func graphShapes(n int) map[string]map[string]any {
 			"@graph": []any{
 				map[string]any{"@id": "https://example.org/a", "p": values("v")},
 				map[string]any{"@id": "https://example.org/a", "p": values("w")},
-				map[string]any{"@id": "_:b", "p": values("v")},
+				map[string]any{"@id": "https://example.org/b", "p": values("v")},
 			},
 		},
 		"@included": credential(map[string]any{
@@ -332,7 +335,7 @@ func TestNodeMapWork_CountsTheMostAnyOrderOfTheValuesTakes(t *testing.T) {
 	} {
 		w := newNodeMapWork()
 		for _, v := range tc.values {
-			w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: v.key}, v.list)
+			w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: v.key}, v.list, -1, -1)
 		}
 		if got := w.comparisons(); got != tc.want {
 			t.Errorf("%v: %d comparisons, want %d", tc.values, got, tc.want)
@@ -346,7 +349,7 @@ func TestNodeMapWork_CountsEachNodesPropertyAlone(t *testing.T) {
 	w := newNodeMapWork()
 	for _, g := range []struct{ graph, node, property string }{{"@default", "s", "p"}, {"@default", "s", "q"}, {"@default", "t", "p"}, {"g", "s", "p"}} {
 		for _, v := range []string{"a", "b", "c"} {
-			w.add(w.id(g.graph), w.id(g.node), w.id(g.property), valueID{value: v}, false)
+			w.add(w.id(g.graph), w.id(g.node), w.id(g.property), valueID{value: v}, false, -1, -1)
 		}
 	}
 	if got := w.comparisons(); got != 4*3 {
@@ -362,7 +365,7 @@ func TestNodeMapWork_CountsEachNodesPropertyAlone(t *testing.T) {
 // int64.
 func TestNodeMapWork_PastTwoToThe31ValuesIsPastEveryBound(t *testing.T) {
 	w := newNodeMapWork()
-	w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: "a"}, false)
+	w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: "a"}, false, -1, -1)
 	w.added = 1<<31 + 1
 	if got := w.comparisons(); got != math.MaxInt64 {
 		t.Errorf("%d comparisons, want math.MaxInt64", got)
