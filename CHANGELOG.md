@@ -168,6 +168,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `provin bundle export --credential-origin <origin>` (repeatable): an origin
   (`scheme://host[:port]`) the `--token` may be shown to, besides
   `--registry`'s, read in the same spelling as `credential-origins`.
+- `canon.Float64(n json.Number) (float64, error)`: the IEEE 754 double
+  nearest the value of a JSON number (ties to even), read from the RFC 8259
+  grammar only, whatever its exponent; its value does not depend on how the
+  number is spelled, and its work is linear in the length of the literal. A
+  number that rounds to infinity is an error; one that rounds to zero is ±0.
+  Every `json.Number` this module reads as a double is read through it.
 
 ### Changed
 
@@ -487,6 +493,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Every CLI call that shows the token, to the registry included and in every
   command, follows no redirect. The quickstart, whose endpoints are all the
   registry's, needs no change.
+- `canon/jcs` and the jsonata filter and converter read a JSON number as a
+  double through `canon.Float64`. `jcs` refuses a `json.Number` that is not an
+  RFC 8259 number (`+1`, `.5`, `01`), in its RFC 8785 and legacy forms alike,
+  where it read Go's wider syntax; a number from a decoded document is always
+  one. The jsonata filter and converter refuse a document holding a number
+  beyond the double range, as an Apply or Convert error. Where the earlier
+  reading took a number's double from its spelling rather than its value,
+  the canonical form and the value an expression sees are now those of the
+  double nearest its value. `scripts/check-number-hygiene.sh` (in
+  `make lint`), a line-based textual check, flags any other `Float64` method
+  or `ParseFloat` outside `canon.Float64`.
 
 ### Security
 
@@ -817,6 +834,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   carries a credential follows a redirect, so the credential does not reach a
   server a named origin redirects to (net/http forwards an `Authorization`
   header to another port or a subdomain).
+- Every reader of a `json.Number` as a double in this module (the RFC 8785
+  and legacy canonicalizers, the jsonata filter and converter) reads it
+  through one helper, `canon.Float64`, so one number is read as the one
+  double nearest its value, whatever its spelling, and only RFC 8259 numbers
+  are read; the jsonata filter and converter evaluate no number they cannot
+  read as one.
 
 ## [0.3.0] - 2026-08-05
 

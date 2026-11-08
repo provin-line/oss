@@ -27,6 +27,8 @@ import (
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/provin-line/oss/canon"
 )
 
 // Name is the wire identifier of the legacy int64-verbatim canonicalization.
@@ -292,23 +294,24 @@ func writeUint(sb *strings.Builder, u uint64, mode numberMode) error {
 	return nil
 }
 
-// numberFromLiteral serializes a json.Number. Under modeLegacyInt64, 64-bit
-// integer literals emit their canonical decimal form verbatim (the historical
-// RFC 8785 deviation); everything else — and everything under modeRFC8785 —
-// goes through the IEEE double / ES6 path.
+// numberFromLiteral serializes a json.Number, read as canon.Float64 reads it
+// (the RFC 8259 grammar only). Under modeLegacyInt64, 64-bit integer literals
+// emit their canonical decimal form verbatim (the historical RFC 8785
+// deviation); everything else — and everything under modeRFC8785 — goes
+// through the IEEE double / ES6 path.
 func numberFromLiteral(n json.Number, mode numberMode) (string, error) {
-	s := string(n)
+	f, err := canon.Float64(n)
+	if err != nil {
+		return "", fmt.Errorf("jcs: %w", err)
+	}
 	if mode == modeLegacyInt64 {
+		s := string(n)
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return strconv.FormatInt(i, 10), nil
 		}
 		if u, err := strconv.ParseUint(s, 10, 64); err == nil {
 			return strconv.FormatUint(u, 10), nil
 		}
-	}
-	f, err := n.Float64()
-	if err != nil {
-		return "", fmt.Errorf("jcs: invalid number literal %q: %w", s, err)
 	}
 	return es6Number(f)
 }

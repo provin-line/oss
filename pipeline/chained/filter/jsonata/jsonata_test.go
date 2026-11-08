@@ -64,6 +64,24 @@ func TestApply(t *testing.T) {
 			wantPass: true,
 		},
 		{
+			name:     "a number reads as its value however it is spelled",
+			exprs:    []string{"n = 100", "m = 100", "k = 100"},
+			input:    `{"n":1.00e2,"m":1000e-1,"k":0.1e3}`,
+			wantPass: true,
+		},
+		{
+			name:     "a number that rounds to zero is falsy → Pass=false",
+			exprs:    []string{"n"},
+			input:    `{"n":1e-1000001}`,
+			wantPass: false,
+		},
+		{
+			name:    "a number beyond the double range is an Apply error",
+			exprs:   []string{"n"},
+			input:   `{"n":1e400}`,
+			wantErr: true,
+		},
+		{
 			name:     "all-truthy multiple expressions → Pass=true",
 			exprs:    []string{"payload.value > 10", "payload.status = \"active\""},
 			input:    `{"payload":{"value":20,"status":"active"}}`,

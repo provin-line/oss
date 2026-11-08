@@ -26,7 +26,8 @@
 // then normalized before passing to JSONata.
 //
 // Numeric model: json.Number values are normalized to int64 when integral and
-// fitting int64, else to float64. This preserves integer identity through the
+// fitting int64, else to the float64 canon.Float64 reads; a number beyond the
+// double range is an Apply error. This preserves integer identity through the
 // Go tree. Inside JSONata expressions, arithmetic and comparison operate in
 // float64 (jsonata-go's internal representation). Integers above 2^53 are
 // represented exactly in the decoded Go tree but lose precision once they
@@ -83,8 +84,9 @@ func New(exprs []string) (*Filter, error) {
 // Apply evaluates all expressions against data in order. Returns Pass=true
 // only if all expressions yield a truthy result. Short-circuits on the first
 // falsy result. Returns an error if data is not valid JSON (including duplicate
-// keys and trailing data), or if any expression raises an evaluation error
-// (distinct from undefined/no-match, which is treated as falsy).
+// keys and trailing data), if it holds a number beyond the double range, or if
+// any expression raises an evaluation error (distinct from undefined/no-match,
+// which is treated as falsy).
 func (f *Filter) Apply(_ context.Context, data []byte) (*filter.Result, error) {
 	// Decode via StrictDecoder: duplicate keys, trailing data, and invalid
 	// Unicode are rejected. Numbers decode as json.Number for precision.
@@ -100,7 +102,10 @@ func (f *Filter) Apply(_ context.Context, data []byte) (*filter.Result, error) {
 	// converts each json.Number to int64 (when integral and fitting int64) or
 	// float64, matching what json.Unmarshal would produce while preserving
 	// integer identity up to int64 range.
-	v = normalizeNumbers(v)
+	v, err := normalizeNumbers(v)
+	if err != nil {
+		return nil, fmt.Errorf("jsonata filter: %w", err)
+	}
 
 	for _, expr := range f.exprs {
 		result, err := expr.Eval(v)
@@ -124,31 +129,38 @@ func (f *Filter) Apply(_ context.Context, data []byte) (*filter.Result, error) {
 // json.Number to int64 (when the value is integral and fits int64) or float64
 // (otherwise). This is required because StrictDecoder uses UseNumber(), and
 // jsonata-go's reflect-based type system treats json.Number as a string kind,
-// causing numeric comparisons and $boolean() to misbehave.
-func normalizeNumbers(v interface{}) interface{} {
+// causing numeric comparisons and $boolean() to misbehave. A number
+// canon.Float64 does not read is an error: left as a json.Number it would
+// evaluate as a string.
+func normalizeNumbers(v interface{}) (interface{}, error) {
 	switch val := v.(type) {
 	case json.Number:
 		// Try int64 first to preserve integer identity.
 		if i, err := val.Int64(); err == nil {
-			return i
+			return i, nil
 		}
-		// Fall back to float64 for fractional or out-of-range values.
-		if f, err := val.Float64(); err == nil {
-			return f
-		}
-		// Malformed json.Number: leave as-is; jsonata-go will error on eval.
-		return val
+		// Fall back to float64 for fractional or out-of-range values, read as
+		// canon reads every JSON number.
+		return canon.Float64(val)
 	case map[string]interface{}:
 		for k, child := range val {
-			val[k] = normalizeNumbers(child)
+			n, err := normalizeNumbers(child)
+			if err != nil {
+				return nil, err
+			}
+			val[k] = n
 		}
-		return val
+		return val, nil
 	case []interface{}:
 		for i, child := range val {
-			val[i] = normalizeNumbers(child)
+			n, err := normalizeNumbers(child)
+			if err != nil {
+				return nil, err
+			}
+			val[i] = n
 		}
-		return val
+		return val, nil
 	default:
-		return v
+		return v, nil
 	}
 }

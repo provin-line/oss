@@ -161,6 +161,34 @@ func TestConvert_IntegerPrecision_Golden(t *testing.T) {
 	}
 }
 
+// TestConvert_NumberReading pins how a number that is not an int64 reaches
+// the expression: as the double nearest its value, whatever its spelling,
+// and an error when it lies beyond the double range.
+func TestConvert_NumberReading(t *testing.T) {
+	c, err := jsonata.New(`$`)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, tc := range []struct{ in, want string }{
+		{`{"n":1.00e2}`, `{"n":100}`},
+		{`{"n":1000e-1}`, `{"n":100}`},
+		{`{"n":0.5}`, `{"n":0.5}`},
+		{`{"n":1e-1000001}`, `{"n":0}`},
+	} {
+		got, err := c.Convert(context.Background(), []byte(tc.in))
+		if err != nil {
+			t.Errorf("Convert(%s): %v", tc.in, err)
+			continue
+		}
+		if string(got) != tc.want {
+			t.Errorf("Convert(%s) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+	if got, err := c.Convert(context.Background(), []byte(`{"n":1e400}`)); err == nil {
+		t.Errorf("Convert({\"n\":1e400}) = %s, want an error", got)
+	}
+}
+
 // TestConvert_RequireFields_Integration verifies that after a transformation
 // the output can be validated for expected fields using RequireFields.
 func TestConvert_RequireFields_Integration(t *testing.T) {

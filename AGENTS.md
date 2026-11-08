@@ -34,6 +34,10 @@ verification silently — treat them as hard rules:
   `canon/` (duplicate-key rejection, trailing-data rejection, `UseNumber`).
   Direct `json.Unmarshal` on protocol paths requires a `decoder-hygiene-exempt`
   comment explaining why precision/duplicates cannot matter there.
+- A `json.Number` is read as a double only through `canon.Float64` (the
+  RFC 8259 grammar, correctly rounded, whatever the spelling). Another
+  `Float64` method or `ParseFloat` requires a `number-hygiene-exempt` comment
+  explaining why the string is not a JSON number.
 - Integers above 2^53 must survive round-trips. Any proto/struct conversion that could
   lose precision must be guarded by a canonical-hash round-trip comparison.
 - JSON-LD contexts are embedded at compile time, never fetched at runtime.

@@ -32,7 +32,8 @@
 //
 // Numeric model: after strict decode the json.Number values in the decoded
 // tree are normalized — integral values that fit int64 become int64, all
-// others become float64. This normalization is required because jsonata-go
+// others become the float64 canon.Float64 reads, and a number beyond the
+// double range is a Convert error. This normalization is required because jsonata-go
 // treats json.Number as a string kind and rejects it in arithmetic and
 // comparison operators. Integer identity is preserved up to the int64 range
 // (2^63-1); arithmetic and comparisons on integers above 2^53 may lose
@@ -152,8 +153,8 @@ func NewSteps(steps []FieldStep) (*Converter, error) {
 // comparison operators work correctly.
 //
 // Returns an error if data is not valid JSON (including trailing data or
-// duplicate keys), if a JSONata expression returns undefined, or if any other
-// evaluation error occurs.
+// duplicate keys), if it holds a number beyond the double range, if a JSONata
+// expression returns undefined, or if any other evaluation error occurs.
 func (c *Converter) Convert(_ context.Context, data []byte) ([]byte, error) {
 	var v interface{}
 	if err := canon.NewStrictDecoder(data).Decode(&v); err != nil {
@@ -161,7 +162,10 @@ func (c *Converter) Convert(_ context.Context, data []byte) ([]byte, error) {
 	}
 
 	// Normalize json.Number → int64/float64 so jsonata-go operators work.
-	v = normalizeNumbers(v)
+	v, err := normalizeNumbers(v)
+	if err != nil {
+		return nil, fmt.Errorf("jsonata converter: %w", err)
+	}
 
 	switch c.mode {
 	case modeWholeDoc:
@@ -239,33 +243,42 @@ func toStringMap(v interface{}) (map[string]interface{}, bool) {
 //     up to the int64 range (2^63-1). json.Marshal encodes int64 as an exact
 //     decimal integer, so 9007199254740993 (2^53+1) round-trips without loss.
 //   - All other numbers (fractions, exponents, or integers that overflow
-//     int64) become float64. Arithmetic on integers above 2^53 loses precision
-//     at the float64 boundary — this is documented in the package comment.
-func normalizeNumbers(v interface{}) interface{} {
+//     int64) become the float64 canon.Float64 reads. Arithmetic on integers
+//     above 2^53 loses precision at the float64 boundary — this is documented
+//     in the package comment.
+//   - A number canon.Float64 does not read (beyond the double range) is an
+//     error, never left in the tree as a json.Number.
+func normalizeNumbers(v interface{}) (interface{}, error) {
 	switch val := v.(type) {
 	case json.Number:
 		s := string(val)
 		// Try integral parse first (no '.' or 'e'/'E').
 		if !containsAny(s, '.', 'e', 'E') {
 			if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-				return i
+				return i, nil
 			}
 		}
-		// Fall back to float64.
-		f, _ := val.Float64()
-		return f
+		return canon.Float64(val)
 	case map[string]interface{}:
 		for k, elem := range val {
-			val[k] = normalizeNumbers(elem)
+			n, err := normalizeNumbers(elem)
+			if err != nil {
+				return nil, err
+			}
+			val[k] = n
 		}
-		return val
+		return val, nil
 	case []interface{}:
 		for i, elem := range val {
-			val[i] = normalizeNumbers(elem)
+			n, err := normalizeNumbers(elem)
+			if err != nil {
+				return nil, err
+			}
+			val[i] = n
 		}
-		return val
+		return val, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 

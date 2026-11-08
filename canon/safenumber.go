@@ -198,16 +198,54 @@ const (
 	limitIntDigits = 16
 )
 
-// safeLiteral reports whether lit is an RFC 8259 number,
+// scannedNumber is an RFC 8259 number as scanNumber reads it: its sign, the
+// digits of its integer and fraction parts, its exponent, and the span
+// [first, end) of its significant digits within whole+frac (first == end for
+// zero). Its value is ±digits(first..end) × 10^scale(). expOverflow is the
+// sign (+1 or -1) of an exponent beyond int64, which leaves exp unset.
+type scannedNumber struct {
+	neg         bool
+	whole, frac string
+	exp         int64
+	expOverflow int
+	first, end  int
+}
+
+func (sc scannedNumber) digit(k int) byte {
+	if k < len(sc.whole) {
+		return sc.whole[k]
+	}
+	return sc.frac[k-len(sc.whole)]
+}
+
+func (sc scannedNumber) zero() bool { return sc.first == sc.end }
+
+// beyondBound reports whether the exponent, net of the digits after the
+// point, lies beyond ±maxLiteralExponent (or beyond int64) for a nonzero
+// number: the bound AdmitSafeNumbers refuses past.
+func (sc scannedNumber) beyondBound() bool {
+	if sc.expOverflow != 0 {
+		return true
+	}
+	return !sc.zero() && (sc.exp > maxLiteralExponent+int64(len(sc.frac)) || sc.exp < int64(len(sc.frac))-maxLiteralExponent)
+}
+
+// scale is the power of ten the significant digits are multiplied by.
+func (sc scannedNumber) scale() int64 {
+	return int64(len(sc.whole)+len(sc.frac)-sc.end) + sc.exp - int64(len(sc.frac))
+}
+
+// scanNumber reads lit as an RFC 8259 number,
 //
 //	-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
 //
-// within the exponent bound (ok), and if so whether it is admitted (safe): its
-// magnitude is less than 2^53-0.5. Its work is linear in the length of lit,
-// and it does not allocate unless the exponent overflows int64.
-func safeLiteral(lit string) (safe, ok bool) {
+// whatever its exponent: ok is false for anything else. Its work is linear in
+// the length of lit, and it does not allocate unless the exponent overflows
+// int64.
+func scanNumber(lit string) (sc scannedNumber, ok bool) {
 	i := 0
 	if i < len(lit) && lit[i] == '-' {
+		sc.neg = true
 		i++
 	}
 	start := i
@@ -217,18 +255,16 @@ func safeLiteral(lit string) (safe, ok bool) {
 	case i < len(lit) && '1' <= lit[i] && lit[i] <= '9':
 		i = skipDigits(lit, i+1)
 	default:
-		return false, false
+		return scannedNumber{}, false
 	}
-	whole := lit[start:i]
-	var frac string
+	sc.whole = lit[start:i]
 	if i < len(lit) && lit[i] == '.' {
 		j := skipDigits(lit, i+1)
 		if j == i+1 {
-			return false, false
+			return scannedNumber{}, false
 		}
-		frac, i = lit[i+1:j], j
+		sc.frac, i = lit[i+1:j], j
 	}
-	var exp int64
 	if i < len(lit) && (lit[i] == 'e' || lit[i] == 'E') {
 		j := i + 1
 		if j < len(lit) && (lit[j] == '+' || lit[j] == '-') {
@@ -236,56 +272,64 @@ func safeLiteral(lit string) (safe, ok bool) {
 		}
 		k := skipDigits(lit, j)
 		if k == j || k != len(lit) {
-			return false, false
+			return scannedNumber{}, false
 		}
 		e, err := strconv.ParseInt(lit[i+1:], 10, 64)
-		if err != nil {
-			return false, false // beyond int64
+		switch {
+		case err != nil && lit[i+1] == '-':
+			sc.expOverflow = -1
+		case err != nil:
+			sc.expOverflow = 1
+		default:
+			sc.exp = e
 		}
-		exp, i = e, k
+		i = k
 	}
 	if i != len(lit) {
-		return false, false
+		return scannedNumber{}, false
 	}
+	n := len(sc.whole) + len(sc.frac)
+	for sc.first < n && sc.digit(sc.first) == '0' {
+		sc.first++
+	}
+	sc.end = n
+	if sc.first == n {
+		return sc, true // zero, -0 included
+	}
+	for sc.digit(sc.end-1) == '0' {
+		sc.end--
+	}
+	return sc, true
+}
 
-	// The digits of whole and frac, read as one integer m, give the value
-	// m × 10^(exp − len(frac)).
-	n := len(whole) + len(frac)
-	digit := func(k int) byte {
-		if k < len(whole) {
-			return whole[k]
-		}
-		return frac[k-len(whole)]
-	}
-	first := 0
-	for first < n && digit(first) == '0' {
-		first++
-	}
-	if first == n {
-		return true, true // zero, -0 included
-	}
-	if exp > maxLiteralExponent+int64(len(frac)) || exp < int64(len(frac))-maxLiteralExponent {
+// safeLiteral reports whether lit is an RFC 8259 number within the exponent
+// bound (ok), and if so whether it is admitted (safe): its magnitude is less
+// than 2^53-0.5. Its work is linear in the length of lit.
+func safeLiteral(lit string) (safe, ok bool) {
+	sc, ok := scanNumber(lit)
+	if !ok || sc.expOverflow != 0 {
 		return false, false
 	}
-	end := n
-	for digit(end-1) == '0' {
-		end--
+	if sc.zero() {
+		return true, true
 	}
-	// The value is the significant digits digit(first..end-1) followed by
-	// zeros zeros; a negative zeros leaves digits after the point. Its
-	// integer part has intDigits digits, so it is compared with 2^53-0.5 by
-	// that count first, then digit by digit.
-	zeros := int64(n-end) + exp - int64(len(frac))
-	switch intDigits := int64(end-first) + zeros; {
+	if sc.beyondBound() {
+		return false, false
+	}
+	// The value is the significant digits followed by scale() zeros; a
+	// negative scale leaves digits after the point. Its integer part has
+	// intDigits digits, so it is compared with 2^53-0.5 by that count first,
+	// then digit by digit.
+	switch intDigits := int64(sc.end-sc.first) + sc.scale(); {
 	case intDigits < limitIntDigits:
 		return true, true
 	case intDigits > limitIntDigits:
 		return false, true
 	}
-	for k := 0; first+k < end || k < len(limitDigits); k++ {
+	for k := 0; sc.first+k < sc.end || k < len(limitDigits); k++ {
 		d, l := byte('0'), byte('0')
-		if first+k < end {
-			d = digit(first + k)
+		if sc.first+k < sc.end {
+			d = sc.digit(sc.first + k)
 		}
 		if k < len(limitDigits) {
 			l = limitDigits[k]
