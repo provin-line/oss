@@ -7,21 +7,30 @@ import (
 	"strconv"
 )
 
+// ErrNotJSONNumber reports a json.Number that is not an RFC 8259 number.
+const ErrNotJSONNumber Error = "canon: not a JSON number"
+
+// ErrBeyondDoubleRange reports a JSON number whose value rounds to infinity
+// as an IEEE 754 double.
+const ErrBeyondDoubleRange Error = "canon: beyond the double range"
+
 // Float64 returns the IEEE 754 double nearest the value of a JSON number
 // (ties to even), as RFC 8785 and every conformant JSON reader take it. It
 // reads only the RFC 8259 grammar — no sign "+", no leading zero, no bare
 // point, no hexadecimal, Inf or NaN — whatever the exponent, and its value
 // does not depend on how the number is spelled (where its point is, how its
 // exponent is written, leading or trailing zeros); the sign of zero is kept.
-// A number that rounds to infinity is an error; one that rounds to zero is
-// ±0. Its work is linear in the length of n.
+// A number that rounds to zero is ±0. Every error it returns wraps exactly
+// one of ErrNotJSONNumber, for anything that is not an RFC 8259 number, and
+// ErrBeyondDoubleRange, for a number that rounds to infinity, and names the
+// start of n. Its work is linear in the length of n.
 //
 // Reading a JSON number as a double goes through here, so every reader in
 // this module takes one number as one double.
 func Float64(n json.Number) (float64, error) {
 	sc, ok := scanNumber(string(n))
 	if !ok {
-		return 0, fmt.Errorf("canon: %s is not a JSON number", quoteStart(string(n)))
+		return 0, fmt.Errorf("%w: %s", ErrNotJSONNumber, quoteStart(string(n)))
 	}
 	zero := 0.0
 	if sc.neg {
@@ -43,7 +52,7 @@ func Float64(n json.Number) (float64, error) {
 	}
 	switch {
 	case point > 310:
-		return 0, fmt.Errorf("canon: %s is beyond the double range", quoteStart(string(n)))
+		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, quoteStart(string(n)))
 	case point < -330:
 		return zero, nil
 	}
@@ -62,8 +71,8 @@ func Float64(n json.Number) (float64, error) {
 	b = append(b, 'e')
 	b = strconv.AppendInt(b, point, 10)
 	f, err := strconv.ParseFloat(string(b), 64)
-	if err != nil {
-		return 0, fmt.Errorf("canon: %s is beyond the double range", quoteStart(string(n)))
+	if err != nil { // b is well formed, so the error is ErrRange: f rounds to ±Inf
+		return 0, fmt.Errorf("%w: %s", ErrBeyondDoubleRange, quoteStart(string(n)))
 	}
 	return f, nil
 }

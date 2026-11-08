@@ -2,9 +2,11 @@ package jsonata_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/chained/filter"
 	"github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 )
@@ -55,6 +57,7 @@ func TestApply(t *testing.T) {
 		exprs    []string
 		input    string
 		wantErr  bool
+		errIs    error // when set, the error must match it with errors.Is
 		wantPass bool
 	}{
 		{
@@ -80,6 +83,7 @@ func TestApply(t *testing.T) {
 			exprs:   []string{"n"},
 			input:   `{"n":1e400}`,
 			wantErr: true,
+			errIs:   canon.ErrBeyondDoubleRange,
 		},
 		{
 			name:     "all-truthy multiple expressions → Pass=true",
@@ -215,6 +219,9 @@ func TestApply(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
+				}
+				if tc.errIs != nil && !errors.Is(err, tc.errIs) {
+					t.Fatalf("error %v, want one wrapping %v", err, tc.errIs)
 				}
 				return
 			}

@@ -26,8 +26,9 @@
 // then normalized before passing to JSONata.
 //
 // Numeric model: json.Number values are normalized to int64 when integral and
-// fitting int64, else to the float64 canon.Float64 reads; a number beyond the
-// double range is an Apply error. This preserves integer identity through the
+// fitting int64, else to the float64 canon.Float64 reads; a number it cannot
+// read (beyond the double range) is an Apply error that errors.Is matches to
+// canon.ErrNotJSONNumber or canon.ErrBeyondDoubleRange. This preserves integer identity through the
 // Go tree. Inside JSONata expressions, arithmetic and comparison operate in
 // float64 (jsonata-go's internal representation). Integers above 2^53 are
 // represented exactly in the decoded Go tree but lose precision once they
@@ -84,9 +85,10 @@ func New(exprs []string) (*Filter, error) {
 // Apply evaluates all expressions against data in order. Returns Pass=true
 // only if all expressions yield a truthy result. Short-circuits on the first
 // falsy result. Returns an error if data is not valid JSON (including duplicate
-// keys and trailing data), if it holds a number beyond the double range, or if
-// any expression raises an evaluation error (distinct from undefined/no-match,
-// which is treated as falsy).
+// keys and trailing data), if it holds a number beyond the double range (an
+// error errors.Is matches to canon.ErrNotJSONNumber or
+// canon.ErrBeyondDoubleRange), or if any expression raises an evaluation
+// error (distinct from undefined/no-match, which is treated as falsy).
 func (f *Filter) Apply(_ context.Context, data []byte) (*filter.Result, error) {
 	// Decode via StrictDecoder: duplicate keys, trailing data, and invalid
 	// Unicode are rejected. Numbers decode as json.Number for precision.

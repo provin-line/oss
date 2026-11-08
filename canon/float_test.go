@@ -2,7 +2,9 @@ package canon_test
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -55,12 +57,35 @@ func TestFloat64_IsTheSameForEverySpellingOfANumber(t *testing.T) {
 }
 
 // Only the RFC 8259 grammar is read, and a number beyond the double range is
-// an error.
+// an error; errors.Is tells the two apart, and the message names the literal.
 func TestFloat64_RefusesWhatIsNotAJSONNumberOrADouble(t *testing.T) {
-	for _, lit := range []string{"", "+1", ".5", "01", "1.", "1e", "0x10", "Inf", "NaN", "1/2", " 1", "1e309", "-1e309", "1.7976931348623159e308", "1e1000001", "1e99999999999999999999"} {
-		if got, err := canon.Float64(json.Number(lit)); err == nil {
-			t.Errorf("Float64(%q) = %v, want an error", lit, got)
+	kinds := map[canon.Error][]string{
+		canon.ErrNotJSONNumber:     {"", "+1", ".5", "01", "1.", "1e", "0x10", "Inf", "NaN", "1/2", " 1"},
+		canon.ErrBeyondDoubleRange: {"1e309", "-1e309", "1.7976931348623159e308", "1e1000001", "1e99999999999999999999"},
+	}
+	for want, lits := range kinds {
+		for _, lit := range lits {
+			_, err := canon.Float64(json.Number(lit))
+			checkRefusal(t, kinds, want, lit, err, strconv.Quote(lit))
 		}
+	}
+}
+
+// checkRefusal reports unless err wraps want and no other kind, and its
+// message holds named.
+func checkRefusal(t *testing.T, kinds map[canon.Error][]string, want canon.Error, lit string, err error, named string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("Float64(%.12q…): no error, want %q", lit, want)
+		return
+	}
+	for kind := range kinds {
+		if errors.Is(err, kind) != (kind == want) {
+			t.Errorf("Float64(%.12q…): %v, want an error wrapping %q only", lit, err, want)
+		}
+	}
+	if !strings.Contains(err.Error(), named) {
+		t.Errorf("Float64(%.12q…): %q does not name the literal", lit, err)
 	}
 }
 
@@ -78,9 +103,9 @@ func TestFloat64_ReadsLongLiterals(t *testing.T) {
 			t.Errorf("Float64(%.12s…) = %v, %v; want %v", lit, got, err, want)
 		}
 	}
+	kinds := map[canon.Error][]string{canon.ErrNotJSONNumber: nil, canon.ErrBeyondDoubleRange: nil}
 	for _, lit := range []string{"1" + strings.Repeat("0", 1000), long, "-" + long} {
-		if got, err := canon.Float64(json.Number(lit)); err == nil {
-			t.Errorf("Float64(%.12s…) = %v, want an error", lit, got)
-		}
+		_, err := canon.Float64(json.Number(lit))
+		checkRefusal(t, kinds, canon.ErrBeyondDoubleRange, lit, err, strconv.Quote(lit[:80])+"…")
 	}
 }

@@ -3,9 +3,11 @@ package jsonata_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/chained/converter"
 	"github.com/provin-line/oss/pipeline/chained/converter/jsonata"
 )
@@ -184,8 +186,8 @@ func TestConvert_NumberReading(t *testing.T) {
 			t.Errorf("Convert(%s) = %s, want %s", tc.in, got, tc.want)
 		}
 	}
-	if got, err := c.Convert(context.Background(), []byte(`{"n":1e400}`)); err == nil {
-		t.Errorf("Convert({\"n\":1e400}) = %s, want an error", got)
+	if got, err := c.Convert(context.Background(), []byte(`{"n":1e400}`)); !errors.Is(err, canon.ErrBeyondDoubleRange) {
+		t.Errorf("Convert({\"n\":1e400}) = %s, %v; want an error wrapping canon.ErrBeyondDoubleRange", got, err)
 	}
 }
 

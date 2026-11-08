@@ -172,8 +172,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   nearest the value of a JSON number (ties to even), read from the RFC 8259
   grammar only, whatever its exponent; its value does not depend on how the
   number is spelled, and its work is linear in the length of the literal. A
-  number that rounds to infinity is an error; one that rounds to zero is ±0.
-  Every `json.Number` this module reads as a double is read through it.
+  number that rounds to zero is ±0. Every error it returns wraps exactly one
+  of `canon.ErrNotJSONNumber`, for anything that is not an RFC 8259 number,
+  and `canon.ErrBeyondDoubleRange`, for a number that rounds to infinity
+  (constants of the new type `canon.Error`, the errors canon reports by value;
+  match them with `errors.Is`). Every `json.Number` this module reads as a
+  double is read through it.
 
 ### Changed
 
@@ -498,7 +502,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   RFC 8259 number (`+1`, `.5`, `01`), in its RFC 8785 and legacy forms alike,
   where it read Go's wider syntax; a number from a decoded document is always
   one. The jsonata filter and converter refuse a document holding a number
-  beyond the double range, as an Apply or Convert error. Where the earlier
+  beyond the double range, as an Apply or Convert error. When `jcs`, the
+  filter or the converter cannot read a number, its error matches
+  `canon.ErrNotJSONNumber` or `canon.ErrBeyondDoubleRange` with `errors.Is`.
+  Where the earlier
   reading took a number's double from its spelling rather than its value,
   the canonical form and the value an expression sees are now those of the
   double nearest its value. `scripts/check-number-hygiene.sh` (in

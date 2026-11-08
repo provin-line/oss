@@ -13,6 +13,10 @@
 // the ES6 Number::toString algorithm exactly. The rule is deterministic
 // across implementations that adopt it; emitters must not rely on >2^53
 // integers interoperating with strict-ES6 JCS implementations.
+//
+// Every json.Number is read as canon.Float64 reads it. When a number cannot
+// be read, every function here returns an error that errors.Is matches to
+// canon.ErrNotJSONNumber or canon.ErrBeyondDoubleRange.
 package jcs
 
 import (

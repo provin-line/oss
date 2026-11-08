@@ -2,9 +2,11 @@ package jcs_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
 )
 
@@ -18,8 +20,8 @@ func TestCanonicalizeRFC8785_ReadsNumbersAsCanonFloat64(t *testing.T) {
 		}
 	}
 	for _, lit := range []string{"+1", ".5", "01"} {
-		if b, err := jcs.CanonicalizeRFC8785(map[string]any{"n": json.Number(lit)}); err == nil {
-			t.Errorf("%s: %s, want an error", lit, b)
+		if b, err := jcs.CanonicalizeRFC8785(map[string]any{"n": json.Number(lit)}); !errors.Is(err, canon.ErrNotJSONNumber) {
+			t.Errorf("%s: %s, %v; want an error wrapping canon.ErrNotJSONNumber", lit, b, err)
 		}
 	}
 }
@@ -32,8 +34,8 @@ func TestCanonicalize_ReadsOnlyJSONNumbers(t *testing.T) {
 		t.Errorf("9007199254740993: %s, %v; want {\"n\":9007199254740993}", b, err)
 	}
 	for _, lit := range []string{"+1", "01", "-01", ".5"} {
-		if b, err := jcs.Canonicalize(map[string]any{"n": json.Number(lit)}); err == nil {
-			t.Errorf("%s: %s, want an error", lit, b)
+		if b, err := jcs.Canonicalize(map[string]any{"n": json.Number(lit)}); !errors.Is(err, canon.ErrNotJSONNumber) {
+			t.Errorf("%s: %s, %v; want an error wrapping canon.ErrNotJSONNumber", lit, b, err)
 		}
 	}
 }
@@ -46,7 +48,7 @@ func TestCanonicalizeRFC8785_ReadsLongLiterals(t *testing.T) {
 	if err != nil || string(b) != `{"n":0.3333333333333333}` {
 		t.Errorf("0.333…: %s, %v; want {\"n\":0.3333333333333333}", b, err)
 	}
-	if b, err := jcs.CanonicalizeRFC8785(map[string]any{"n": json.Number(long)}); err == nil {
-		t.Errorf("333…: %s, want an error", b)
+	if b, err := jcs.CanonicalizeRFC8785(map[string]any{"n": json.Number(long)}); !errors.Is(err, canon.ErrBeyondDoubleRange) {
+		t.Errorf("333…: %s, %v; want an error wrapping canon.ErrBeyondDoubleRange", b, err)
 	}
 }

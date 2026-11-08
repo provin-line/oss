@@ -32,8 +32,9 @@
 //
 // Numeric model: after strict decode the json.Number values in the decoded
 // tree are normalized — integral values that fit int64 become int64, all
-// others become the float64 canon.Float64 reads, and a number beyond the
-// double range is a Convert error. This normalization is required because jsonata-go
+// others become the float64 canon.Float64 reads, and a number it cannot read
+// (beyond the double range) is a Convert error that errors.Is matches to
+// canon.ErrNotJSONNumber or canon.ErrBeyondDoubleRange. This normalization is required because jsonata-go
 // treats json.Number as a string kind and rejects it in arithmetic and
 // comparison operators. Integer identity is preserved up to the int64 range
 // (2^63-1); arithmetic and comparisons on integers above 2^53 may lose
@@ -153,8 +154,10 @@ func NewSteps(steps []FieldStep) (*Converter, error) {
 // comparison operators work correctly.
 //
 // Returns an error if data is not valid JSON (including trailing data or
-// duplicate keys), if it holds a number beyond the double range, if a JSONata
-// expression returns undefined, or if any other evaluation error occurs.
+// duplicate keys), if it holds a number beyond the double range (an error
+// errors.Is matches to canon.ErrNotJSONNumber or canon.ErrBeyondDoubleRange),
+// if a JSONata expression returns undefined, or if any other evaluation error
+// occurs.
 func (c *Converter) Convert(_ context.Context, data []byte) ([]byte, error) {
 	var v interface{}
 	if err := canon.NewStrictDecoder(data).Decode(&v); err != nil {
