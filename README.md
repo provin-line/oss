@@ -93,6 +93,7 @@ other — they interact exclusively over the wire (ConnectRPC / NATS).
 | `orgverify/` | DNS-based organization identity verification |
 | `keybinding/` | Key bindings (an issuer binds a key to a subject for a relying party) and the issuer's revocation list (W3C Bitstring Status List) |
 | `decisionrecord/` | The record of each decision a deciding party makes, and the levels it is written at (all, refusals, summary, none) |
+| `contentaddress/` | The content address (`sha256:` and 64 lowercase hex digits), as a type only its own functions make |
 
 Internal dependency DAG (within the library layer):
 
@@ -104,7 +105,7 @@ resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
-decisionrecord ──► canon
+decisionrecord ──► canon, contentaddress
 keybinding ──► vc, did, canon, crypto
 ```
 

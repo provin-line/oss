@@ -17,15 +17,23 @@ record never holds a payload.
 
 The zero level is refused, so a level is in effect only when it is chosen.
 A deciding party follows one rule: if `Filter.Record` returns an error, refuse.
+A malformed record (`Record.Validate`) is an error at every level, `none`
+included: it is the writer's error, not the sink's. Every sink here checks
+records and summaries (`Summary.Validate`) too, for a caller that writes to
+one directly.
 
 A decision refused after its record was written is recorded again with the same
 `DecisionID`. A decision is refused when **any** record of its id is refused,
 whatever order the records are read in; the summary level counts such a
 decision once, as refused. A refusal carries the check that refused, an
 acceptance none. `Evidence` is an ordered list of roles and content addresses
-(`sha256:` and 64 hex digits), never a value. Text taken from a decision's
-input (reason, actors, attribute values) is written with invalid UTF-8
-replaced, so a record is not lost to its own bytes.
+(`contentaddress.Address`), never a value. An actor is non-empty valid UTF-8,
+as the id and the deciding party are: a reader keys on it. Times are within
+the years 0000–9999. Text for people (the reason, attribute values) is
+written with invalid UTF-8 replaced, so a record is not lost to its own
+bytes. A count in a summary is from 0 to 2^53−1 (an `int64`), written as a
+JSON number, and the counts are ordered by outcome, then check, none
+repeated.
 
 Sinks must be safe for concurrent use, and at `all` return nil only once the
 record is kept (an unbuffered or synced writer):

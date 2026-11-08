@@ -58,9 +58,25 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   each decision counted once per window, through `SummaryRecorder`) or `none`;
   the zero level and a `Filter` not made by `NewFilter` are refused. At `all` a
   record the sink does not accept is an error, so the deciding party refuses
-  the decision; at other levels it is a warning. Sinks: JSON lines
-  (`NewJSONLines`) and structured log (`NewLog`). The purpose-first sink
-  writes its delivery decisions through it (see Changed).
+  the decision; at other levels it is a warning. A malformed record
+  (`Record.Validate` states the rules: what a reader keys on is present and
+  valid UTF-8, a time within the years 0000–9999, a check exactly on a
+  refusal, each evidence a role and an address) is an error at every level,
+  `none` included. A `Summary` follows the same kind of rules
+  (`Summary.Validate`), with each count from 0 to 2^53−1 (`Count.N` is an
+  `int64`) and the counts ordered by outcome, then check. Every sink in this
+  package checks records and summaries as well. Evidence addresses are
+  `contentaddress.Address`. Sinks: JSON lines (`NewJSONLines`) and
+  structured log (`NewLog`). The purpose-first sink writes its delivery
+  decisions through it (see Changed).
+
+- `contentaddress`: the content address of dPLaaX (`sha256:` and 64
+  lowercase hex digits) as a type, `Address`, that only `Of` (the address of
+  bytes) and `Parse` (that one spelling and nothing else) make. It is
+  comparable and a map key, the zero `Address` is no address (`IsZero`), and
+  it is written and read as JSON text in its one spelling (`MarshalText`,
+  `UnmarshalText`; the zero `Address` is not written, so a field that may
+  hold none is a pointer or carries `omitzero`).
 
 - `vc.IssuerVerifier`, `vc.WithIssuerVerifier`, `vc.NewDIDDocumentIssuers`,
   `vc.IssuerKey`, and the constant `vc.ErrIssuerNotFound` (of the new type

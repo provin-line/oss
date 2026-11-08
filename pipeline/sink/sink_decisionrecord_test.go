@@ -107,9 +107,8 @@ func TestProcess_DecisionRecord_Accepted(t *testing.T) {
 	if !r.At.Equal(recordClock) || r.At.Location() != time.UTC {
 		t.Errorf("At=%v (%v), want %v in UTC", r.At, r.At.Location(), recordClock)
 	}
-	wantEv := []decisionrecord.Evidence{{Role: "evidenceView", Address: view.EvidenceViewID}}
-	if len(r.Evidence) != 1 || r.Evidence[0] != wantEv[0] {
-		t.Errorf("Evidence=%+v, want %+v", r.Evidence, wantEv)
+	if len(r.Evidence) != 1 || r.Evidence[0].Role != "evidenceView" || r.Evidence[0].Address.String() != view.EvidenceViewID {
+		t.Errorf("Evidence=%+v, want the evidence view %s", r.Evidence, view.EvidenceViewID)
 	}
 	if r.Attributes["appraisalDecision"] != "ACCEPT" || r.Attributes["decisionProfile"] != testProfile || len(r.Attributes) != 2 {
 		t.Errorf("Attributes=%v", r.Attributes)
@@ -170,7 +169,7 @@ func TestProcess_DecisionRecord_NonAcceptAppraisalIsRefused(t *testing.T) {
 			if r.Attributes["appraisalDecision"] != tt.decision {
 				t.Errorf("Attributes=%v, want decision %q", r.Attributes, tt.decision)
 			}
-			if len(r.Evidence) != 1 || r.Evidence[0].Role != "evidenceView" || r.Evidence[0].Address != tt.view.EvidenceViewID {
+			if len(r.Evidence) != 1 || r.Evidence[0].Role != "evidenceView" || r.Evidence[0].Address.String() != tt.view.EvidenceViewID {
 				t.Errorf("Evidence=%+v", r.Evidence)
 			}
 		})
@@ -275,13 +274,13 @@ func TestProcess_DecisionRecord_LaterStageRecordsAgain(t *testing.T) {
 			hasPayload := false
 			for _, e := range second.Evidence {
 				if e.Role == "payload" {
-					hasPayload = e.Address == rawHash(payload)
+					hasPayload = e.Address.String() == rawHash(payload)
 				}
 			}
 			if hasPayload != tt.wantPayload {
 				t.Errorf("payload evidence present=%v, want %v: %+v", hasPayload, tt.wantPayload, second.Evidence)
 			}
-			if second.Evidence[0] != (decisionrecord.Evidence{Role: "evidenceView", Address: view.EvidenceViewID}) {
+			if second.Evidence[0].Role != "evidenceView" || second.Evidence[0].Address.String() != view.EvidenceViewID {
 				t.Errorf("second.Evidence=%+v", second.Evidence)
 			}
 			if second.Attributes["appraisalDecision"] != "ACCEPT" || second.Attributes["decisionProfile"] != view.PolicyDecision.DecisionProfileID {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/decisionrecord"
 )
 
@@ -34,7 +35,11 @@ func TestReject_AfterAcceptanceRecordsEveryReason(t *testing.T) {
 				t.Fatal(err)
 			}
 			p := &Processor{cfg: Config{DecisionRecorder: f, AgentBoundaryID: "provin-agent-delivery@1"}, logger: nopLogger(), now: fixedNow}
-			dec := &decision{id: "0123456789abcdef0123456789abcdef", view: "sha256:" + hex64, profile: "p@1", outcome: "ACCEPT"}
+			view, err := contentaddress.Parse("sha256:" + hex64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dec := &decision{id: "0123456789abcdef0123456789abcdef", view: view, profile: "p@1", outcome: "ACCEPT"}
 			p.reject(context.Background(), dec, reason, "refused", nil, "", "", "")
 			if len(rec.records) != 1 || rec.records[0].Outcome != decisionrecord.Refused || rec.records[0].Check != string(reason) || rec.records[0].DecisionID != dec.id {
 				t.Fatalf("records=%+v", rec.records)

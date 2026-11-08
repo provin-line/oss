@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/contentaddress"
 )
 
 // Outcome is what a decision decided.
@@ -41,7 +41,7 @@ const (
 // chain's records, a boundary stage's segment, in order).
 type Evidence struct {
 	Role    string
-	Address string // "sha256:" and 64 lowercase hex digits
+	Address contentaddress.Address
 }
 
 // Record is the record of one decision.
@@ -64,12 +64,15 @@ type Record struct {
 	Attributes map[string]string // the deciding party's own fields
 }
 
-var contentAddress = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-
-// validate checks the fields a reader keys on. Text a decision may take from
-// its input (Reason, Actors, Attribute values) is not refused for invalid
-// UTF-8; it is written with the invalid bytes replaced.
-func (r Record) validate() error {
+// Validate checks the fields a reader keys on: a DecisionID and a Point, a
+// time within the years 0000–9999 (so it is written in RFC 3339 and sorts as
+// text), an outcome with a Check exactly when it is a refusal, each Evidence a
+// role and an address, each Actor and attribute name valid UTF-8 and not
+// empty. Filter.Record and every Sink here check it, whatever the level: a
+// malformed record is its writer's error. Text for people (Reason, attribute
+// values) is not refused for invalid UTF-8; it is written with the invalid
+// bytes replaced.
+func (r Record) Validate() error {
 	switch {
 	case r.DecisionID == "" || !utf8.ValidString(r.DecisionID):
 		return errors.New("decisionrecord: record without a valid DecisionID")
@@ -77,6 +80,8 @@ func (r Record) validate() error {
 		return errors.New("decisionrecord: record without a valid Point")
 	case r.At.IsZero():
 		return errors.New("decisionrecord: record without a time")
+	case !writableTime(r.At):
+		return fmt.Errorf("decisionrecord: time %v outside the years 0000–9999", r.At)
 	case r.Outcome == Refused && r.Check == "":
 		return errors.New("decisionrecord: a refusal without the check that refused")
 	case r.Outcome == Accepted && r.Check != "":
@@ -87,8 +92,13 @@ func (r Record) validate() error {
 		return errors.New("decisionrecord: record with a Check that is not UTF-8")
 	}
 	for _, e := range r.Evidence {
-		if e.Role == "" || !utf8.ValidString(e.Role) || !contentAddress.MatchString(e.Address) {
+		if e.Role == "" || !utf8.ValidString(e.Role) || e.Address.IsZero() {
 			return fmt.Errorf("decisionrecord: evidence %q is not a role and a content address", e.Role)
+		}
+	}
+	for _, a := range r.Actors {
+		if a == "" || !utf8.ValidString(a) {
+			return errors.New("decisionrecord: an actor that is empty or not UTF-8")
 		}
 	}
 	for k := range r.Attributes {
@@ -103,8 +113,12 @@ func (r Record) validate() error {
 type Count struct {
 	Outcome Outcome
 	Check   string
-	N       int
+	N       int64 // from 0 to 2^53−1
 }
+
+// maxCount is the largest Count.N, 2^53−1: a count is written as a JSON
+// number, and every reader of one reads it exactly up to there.
+const maxCount int64 = 1<<53 - 1
 
 // Summary is what the summary level writes for a deciding party: the counts of
 // its decisions recorded from From until Until.
@@ -112,6 +126,57 @@ type Summary struct {
 	Point       string
 	From, Until time.Time
 	Counts      []Count // ordered by outcome, then check
+}
+
+// Validate checks a summary as Record.Validate checks a record: a Point, a
+// window within the years 0000–9999 whose end is not before its start, and
+// each Count an outcome with a Check exactly when it counts refusals, and N
+// from 0 to 2^53−1, the Counts ordered by outcome, then check, with no two
+// alike. Every Sink here checks it.
+func (s Summary) Validate() error {
+	switch {
+	case s.Point == "" || !utf8.ValidString(s.Point):
+		return errors.New("decisionrecord: summary without a valid Point")
+	case s.From.IsZero() || s.Until.IsZero():
+		return errors.New("decisionrecord: summary without its window")
+	case !writableTime(s.From) || !writableTime(s.Until):
+		return fmt.Errorf("decisionrecord: summary window %v–%v outside the years 0000–9999", s.From, s.Until)
+	case s.Until.Before(s.From):
+		return errors.New("decisionrecord: summary whose window ends before it starts")
+	}
+	for i, c := range s.Counts {
+		switch {
+		case c.Outcome != Accepted && c.Outcome != Refused:
+			return fmt.Errorf("decisionrecord: count with outcome %q", c.Outcome)
+		case c.Outcome == Refused && c.Check == "":
+			return errors.New("decisionrecord: a count of refusals without their check")
+		case c.Outcome == Accepted && c.Check != "":
+			return errors.New("decisionrecord: a count of acceptances with a refusing check")
+		case !utf8.ValidString(c.Check):
+			return errors.New("decisionrecord: count with a Check that is not UTF-8")
+		case c.N < 0 || c.N > maxCount:
+			return fmt.Errorf("decisionrecord: count %d outside 0 to %d", c.N, maxCount)
+		case i > 0 && !countBefore(s.Counts[i-1], c):
+			return fmt.Errorf("decisionrecord: counts not ordered by outcome, then check, or repeated at %d", i)
+		}
+	}
+	return nil
+}
+
+// countBefore reports whether a comes before b in a Summary's order: by
+// outcome, then check.
+func countBefore(a, b Count) bool {
+	if a.Outcome != b.Outcome {
+		return a.Outcome < b.Outcome
+	}
+	return a.Check < b.Check
+}
+
+// writableTime reports whether t's year in UTC is within 0000–9999, the years
+// the four-digit RFC 3339 form writes.
+func writableTime(t time.Time) bool {
+	y := t.UTC().Year()
+	return y >= 0 && y <= 9999
 }
 
 // Recorder takes records.
@@ -159,14 +224,15 @@ func ParseLevel(s string) (Level, error) {
 var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 
 // Filter writes records to a sink at a level. It is the one place the level
-// decides what a failure means, so that a deciding party follows one rule: if
-// Record returns an error, refuse the decision. At LevelAll, every record is
-// given to the sink and any failure — the sink's, or a malformed record — is
-// returned, so no decision is accepted without its record as far as the sink's
-// nil means the record is kept (see Sink). At LevelRefusals and
-// LevelSummary, a failure is logged as a warning and Record returns nil: the
-// decision does not change. At LevelNone nothing is looked at or written. A
-// Filter not made by NewFilter returns an error from every call.
+// decides what a sink's failure means, so that a deciding party follows one
+// rule: if Record returns an error, refuse the decision. A malformed record
+// (Record.Validate) is an error at every level, LevelNone included: it is the
+// writer's error, not the sink's. At LevelAll, every record is given to the
+// sink and the sink's failure is returned, so no decision is accepted without
+// its record as far as the sink's nil means the record is kept (see Sink). At
+// LevelRefusals and LevelSummary, the sink's failure is logged as a warning
+// and Record returns nil: the decision does not change. At LevelNone nothing
+// is written. A Filter not made by NewFilter returns an error from every call.
 type Filter struct {
 	level Level
 	sink  Sink
@@ -205,11 +271,8 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 	if f == nil || f.level == "" {
 		return errNotMade
 	}
-	if f.level == LevelNone {
-		return nil
-	}
-	if err := r.validate(); err != nil {
-		return f.failed(ctx, err)
+	if err := r.Validate(); err != nil {
+		return err
 	}
 	switch f.level {
 	case LevelAll:
@@ -219,7 +282,7 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 			return nil
 		}
 		if err := f.sink.Record(ctx, r); err != nil {
-			return f.failed(ctx, err)
+			f.notWritten(ctx, err)
 		}
 	case LevelSummary:
 		f.count(r)
@@ -277,7 +340,7 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	}
 	sort.Strings(points)
 	for _, p := range points {
-		n := map[Count]int{}
+		n := map[Count]int64{}
 		for _, c := range decisions[p] {
 			n[c]++
 		}
@@ -285,12 +348,7 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 		for k, c := range n {
 			s.Counts = append(s.Counts, Count{Outcome: k.Outcome, Check: k.Check, N: c})
 		}
-		sort.Slice(s.Counts, func(i, j int) bool {
-			if s.Counts[i].Outcome != s.Counts[j].Outcome {
-				return s.Counts[i].Outcome < s.Counts[j].Outcome
-			}
-			return s.Counts[i].Check < s.Counts[j].Check
-		})
+		sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
 		if err := f.sink.Summary(ctx, s); err != nil {
 			f.warn.WarnContext(ctx, "decision record: summary not written", "point", p, "err", err)
 		}
@@ -298,12 +356,10 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	return nil
 }
 
-func (f *Filter) failed(ctx context.Context, err error) error {
-	if f.level == LevelAll {
-		return err
-	}
+// notWritten warns that the sink did not write a record, at a level where
+// that does not change the decision.
+func (f *Filter) notWritten(ctx context.Context, err error) {
 	f.warn.WarnContext(ctx, "decision record: not written", "level", string(f.level), "err", err)
-	return nil
 }
 
 // formatVersion is the version of the JSON form of records and summaries, the
@@ -332,10 +388,16 @@ type jsonLines struct {
 }
 
 func (j *jsonLines) Record(_ context.Context, r Record) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
 	return j.write(recordMap(r))
 }
 
 func (j *jsonLines) Summary(_ context.Context, s Summary) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
 	return j.write(summaryMap(s))
 }
 
@@ -375,10 +437,16 @@ func NewLog(l *slog.Logger) Sink {
 type logSink struct{ l *slog.Logger }
 
 func (s logSink) Record(ctx context.Context, r Record) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
 	return s.emit(ctx, "decision record", recordMap(r))
 }
 
 func (s logSink) Summary(ctx context.Context, sum Summary) error {
+	if err := sum.Validate(); err != nil {
+		return err
+	}
 	return s.emit(ctx, "decision summary", summaryMap(sum))
 }
 
@@ -433,14 +501,14 @@ func recordMap(r Record) map[string]any {
 	if len(r.Actors) > 0 {
 		actors := make([]any, len(r.Actors))
 		for i, a := range r.Actors {
-			actors[i] = text(a)
+			actors[i] = a
 		}
 		m["actors"] = actors
 	}
 	if len(r.Evidence) > 0 {
 		ev := make([]any, len(r.Evidence))
 		for i, e := range r.Evidence {
-			ev[i] = map[string]any{"role": e.Role, "address": e.Address}
+			ev[i] = map[string]any{"role": e.Role, "address": e.Address.String()}
 		}
 		m["evidence"] = ev
 	}

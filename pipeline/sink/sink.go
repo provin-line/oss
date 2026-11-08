@@ -88,6 +88,7 @@ import (
 	"github.com/provin-line/oss/agentaccess"
 	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/appraisal"
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance"
@@ -681,14 +682,15 @@ const afterAcceptTimeout = 5 * time.Second
 // recorded as accepted: the identity its later records continue.
 type decision struct {
 	id      string
-	view    string
+	view    contentaddress.Address
 	profile string
 	outcome string
 }
 
-func (d *decision) record(at time.Time, point string, o decisionrecord.Outcome, check, reason, payload string) decisionrecord.Record {
+// record is a record of d; payload is the zero Address when there is none.
+func (d *decision) record(at time.Time, point string, o decisionrecord.Outcome, check, reason string, payload contentaddress.Address) decisionrecord.Record {
 	ev := []decisionrecord.Evidence{{Role: "evidenceView", Address: d.view}}
-	if payload != "" {
+	if !payload.IsZero() {
 		ev = append(ev, decisionrecord.Evidence{Role: "payload", Address: payload})
 	}
 	return decisionrecord.Record{
@@ -718,13 +720,17 @@ func (p *Processor) recordAccepted(ctx context.Context, view *appraisal.View) (*
 	if err != nil {
 		return nil, err
 	}
+	viewAddress, err := contentaddress.Parse(view.EvidenceViewID)
+	if err != nil {
+		return nil, fmt.Errorf("decision record: evidence view: %w", err)
+	}
 	d := &decision{
 		id:      id,
-		view:    view.EvidenceViewID,
+		view:    viewAddress,
 		profile: view.PolicyDecision.DecisionProfileID,
 		outcome: string(view.PolicyDecision.Decision),
 	}
-	if err := p.cfg.DecisionRecorder.Record(ctx, d.record(p.now(), p.cfg.AgentBoundaryID, decisionrecord.Accepted, "", "", "")); err != nil {
+	if err := p.cfg.DecisionRecorder.Record(ctx, d.record(p.now(), p.cfg.AgentBoundaryID, decisionrecord.Accepted, "", "", contentaddress.Address{})); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -739,9 +745,18 @@ func (p *Processor) recordAfterAccept(ctx context.Context, dec *decision, o deci
 	if dec == nil {
 		return
 	}
+	var payloadAddress contentaddress.Address
+	if payload != "" {
+		a, err := contentaddress.Parse(payload)
+		if err != nil {
+			p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", fmt.Errorf("payload: %w", err))
+			return
+		}
+		payloadAddress = a
+	}
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterAcceptTimeout)
 	defer cancel()
-	rec := dec.record(p.now(), p.cfg.AgentBoundaryID, o, check, reason, payload)
+	rec := dec.record(p.now(), p.cfg.AgentBoundaryID, o, check, reason, payloadAddress)
 	if err := p.cfg.DecisionRecorder.Record(detached, rec); err != nil {
 		p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", err)
 	}
@@ -780,7 +795,12 @@ func (p *Processor) recordUndecided(ctx context.Context, check string, view *app
 		Reason:     reason,
 	}
 	if view != nil {
-		rec.Evidence = []decisionrecord.Evidence{{Role: "evidenceView", Address: view.EvidenceViewID}}
+		viewAddress, err := contentaddress.Parse(view.EvidenceViewID)
+		if err != nil {
+			p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", fmt.Errorf("evidence view: %w", err))
+			return
+		}
+		rec.Evidence = []decisionrecord.Evidence{{Role: "evidenceView", Address: viewAddress}}
 		rec.Attributes = map[string]string{"appraisalDecision": appraised}
 		if view.PolicyDecision != nil {
 			rec.Attributes["decisionProfile"] = view.PolicyDecision.DecisionProfileID

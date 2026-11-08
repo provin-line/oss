@@ -95,8 +95,8 @@ and must evaluate that writer's authentication and persistence separately.
 
 **Delivery decision record.** Every delivery decision of this path is given to
 the decision recorder (`decisionrecord`; the keys are `provin.decision-record.*`,
-on by default — `level = none` turns it off; `refusals` and `summary` keep less,
-by design). At `all`, no payload is delivered without its accepted record;
+on by default — `level = none` writes nothing, though a malformed record is
+still refused; `refusals` and `summary` keep less, by design). At `all`, no payload is delivered without its accepted record;
 records of refusals are best effort (a failure is logged, the refusal stands). An envelope that does not decode is recorded
 refused with check `decode`. The appraisal's decision is recorded first:
 accepted on `ACCEPT`, otherwise refused with check `appraisal` (the record's
