@@ -22,7 +22,9 @@ import (
 // its property holds until one is equal, so a property of A values, D of them
 // distinct, takes at most D(D-1)/2 comparisons for the distinct ones and D
 // for each of the A-D repeats. Its time and memory are linear in the
-// expanded document: it keeps the document's strings, never copies of them.
+// expanded document: it keeps the document's strings, never copies of them,
+// and reads a node's or a graph's @id, and a property, once where the
+// document writes it, counting the values added by their numbers.
 //
 // The node map belongs to json-gold; this is a stopgap that follows its rules
 // (api_generate_node_map.go) and adds the bound. When json-gold finds a value
@@ -62,7 +64,7 @@ const (
 // document whose node map would compare more pairs of values than the bound.
 func boundNodeMapWork(expanded any) error {
 	w := newNodeMapWork()
-	w.element(expanded, "@default", "", false, "", false)
+	w.walk(expanded)
 	if limit := nodeMapBase + nodeMapPerValue*w.added; w.comparisons() > limit {
 		return fmt.Errorf("%w: node map: more than %d comparisons of values, for %d values", ErrTooComplex, limit, w.added)
 	}
@@ -74,16 +76,43 @@ func boundNodeMapWork(expanded any) error {
 // distinct.
 type nodeMapWork struct {
 	groups map[groupKey]*valueGroup
+	ids    map[string]int
+	names  []string // each node's or graph's @id, by its number; "\x00" for a node without one
 	added  int64
-	fresh  int // node objects without @id, each a node of its own
 }
 
 func newNodeMapWork() *nodeMapWork {
-	return &nodeMapWork{groups: map[groupKey]*valueGroup{}}
+	return &nodeMapWork{groups: map[groupKey]*valueGroup{}, ids: map[string]int{}}
 }
 
-// groupKey is a node's property in a graph: where the node map gathers values.
-type groupKey struct{ graph, node, property string }
+// id numbers a node's or a graph's @id, or a property. The walk reads each
+// here, once where the document writes it, and adds values by the numbers,
+// so its time does not grow with the length of an @id or a property many
+// values name.
+func (w *nodeMapWork) id(s string) int {
+	n, ok := w.ids[s]
+	if !ok {
+		n = len(w.names)
+		w.ids[s] = n
+		w.names = append(w.names, s)
+	}
+	return n
+}
+
+// fresh numbers a node object without @id, a node of its own.
+func (w *nodeMapWork) fresh() int {
+	w.names = append(w.names, "\x00")
+	return len(w.names) - 1
+}
+
+// walk walks an expanded document as GenerateNodeMap does.
+func (w *nodeMapWork) walk(expanded any) {
+	w.element(expanded, w.id("@default"), -1, false, -1, false)
+}
+
+// groupKey is a node's property in a graph, each by its number: where the
+// node map gathers values.
+type groupKey struct{ graph, node, property int }
 
 // valueGroup is the values added to a node's property, and how many of them
 // are distinct.
@@ -116,7 +145,7 @@ func (w *nodeMapWork) comparisons() int64 {
 // add adds a value to a node's property; it is a new one unless an equal one
 // (v) is there. A value no other equals (a list, as json-gold compares) is
 // always new.
-func (w *nodeMapWork) add(graph, node, property string, v valueID, unequal bool) {
+func (w *nodeMapWork) add(graph, node, property int, v valueID, unequal bool) {
 	k := groupKey{graph, node, property}
 	g := w.groups[k]
 	if g == nil {
@@ -136,7 +165,7 @@ func (w *nodeMapWork) add(graph, node, property string, v valueID, unequal bool)
 // element walks an element of the expanded document as GenerateNodeMap does:
 // in graph, as a value of subject's property (a reverse property when
 // reverse: the element's node gets subject as its value), or of a list.
-func (w *nodeMapWork) element(el any, graph, subject string, reverse bool, property string, inList bool) {
+func (w *nodeMapWork) element(el any, graph, subject int, reverse bool, property int, inList bool) {
 	switch t := el.(type) {
 	case []any:
 		for _, item := range t {
@@ -157,55 +186,56 @@ func (w *nodeMapWork) element(el any, graph, subject string, reverse bool, prope
 			}
 			return
 		}
-		id, ok := t["@id"].(string)
-		if !ok {
-			w.fresh++
-			id = "\x00" + strconv.Itoa(w.fresh) // no @id of the document starts with NUL
+		var id int
+		if s, ok := t["@id"].(string); ok {
+			id = w.id(s)
+		} else {
+			id = w.fresh()
 		}
 		switch {
 		case reverse:
-			w.add(graph, id, property, valueID{ref: true, value: subject}, false)
-		case property != "" && !inList:
-			w.add(graph, subject, property, valueID{ref: true, value: id}, false)
+			w.add(graph, id, property, valueID{ref: true, node: subject}, false)
+		case property >= 0 && !inList:
+			w.add(graph, subject, property, valueID{ref: true, node: id}, false)
 		}
 		switch types := t["@type"].(type) {
 		case []any:
 			for _, ty := range types {
 				s, ok := ty.(string)
-				w.add(graph, id, "@type", valueID{value: s}, !ok)
+				w.add(graph, id, w.id("@type"), valueID{value: s}, !ok)
 			}
 		case string:
-			w.add(graph, id, "@type", valueID{value: types}, false)
+			w.add(graph, id, w.id("@type"), valueID{value: types}, false)
 		}
 		if rev, ok := t["@reverse"].(map[string]any); ok {
 			for p, values := range rev {
-				w.element(values, graph, id, true, p, false)
+				w.element(values, graph, id, true, w.id(p), false)
 			}
 		}
 		if g, ok := t["@graph"]; ok {
-			w.element(g, id, "", false, "", false)
+			w.element(g, id, -1, false, -1, false)
 		}
 		if included, ok := t["@included"]; ok {
-			w.element(included, graph, "", false, "", false)
+			w.element(included, graph, -1, false, -1, false)
 		}
 		for p, v := range t {
 			switch p {
 			case "@id", "@type", "@index", "@reverse", "@graph", "@included":
 				continue
 			}
-			w.element(v, graph, id, false, p, false)
+			w.element(v, graph, id, false, w.id(p), false)
 		}
 	}
 }
 
-// valueID tells values apart as json-gold's CompareValues does, holding the
-// document's own strings rather than copies of them, so the walk's memory
-// does not grow with a string many values repeat: a node reference by its
-// @id (ref), a string such as a type by itself, a value object by its
+// valueID tells values apart as json-gold's CompareValues does, without
+// copying or rereading the document's strings: a node reference by its node's
+// number (ref), a string such as a type by itself, a value object by its
 // @value (of kind) and its @type, @language and @index (has says which it
 // has).
 type valueID struct {
 	ref                  bool
+	node                 int
 	value                string
 	kind                 byte
 	typ, language, index string

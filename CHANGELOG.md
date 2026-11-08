@@ -557,17 +557,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (up to 4627 bytes), but not SLH-DSA's (7856 bytes and more); a longer
   value, which decoded before, is now refused. A value without the prefix is
   refused quoting at most its first 32 characters (it was quoted whole).
-- `canon/urdna2015` canonicalizes a document within a work bound in both its
-  stages, building the dataset and labelling its blank nodes; an
-  eddsa-rdfc-2022 proof (`vc.VerifyProofWithContract`, `vc.VerifyProof`)
-  canonicalizes its document before the signature is checked. A document
-  past either bound is refused with the new `urdna2015.ErrTooComplex`
-  ("urdna2015: dataset too complex to canonicalize"), of the new constant
-  error type `urdna2015.Error`; `errors.Is` finds it through
-  `vc.CreateProof`, `vc.VerifyProof`, `vc.VerifyProofWithContract` and
+- `canon/urdna2015` canonicalizes a document within a work bound in each of
+  its stages: building the dataset, writing the canonical form, and
+  labelling its blank nodes. An eddsa-rdfc-2022 proof
+  (`vc.VerifyProofWithContract`, `vc.VerifyProof`) canonicalizes its
+  document before the signature is checked. A document past any of these
+  bounds is refused with the new `urdna2015.ErrTooComplex` ("urdna2015:
+  dataset too complex to canonicalize"), of the new constant error type
+  `urdna2015.Error`; `errors.Is` finds it through `vc.CreateProof`,
+  `vc.VerifyProof`, `vc.VerifyProofWithContract` and
   `vc.VerifyProofUnderContract`. The error wrapping it names the stage
-  ("node map:" or "labelling:") and the bound, for a person reading it; that
-  text is not part of the contract.
+  ("node map:", "canonical form:" or "labelling:") and the bound, for a
+  person reading it; that text is not part of the contract.
 
   Building the dataset: json-gold's node map compares each value one node's
   property gathers with those the property already holds. Before it runs,
@@ -578,6 +579,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   1,460 distinct values: a document with more is refused with
   `ErrTooComplex` both when a proof is created and when one is verified.
   Ordinary credentials use at most 2% of the bound.
+
+  Writing the canonical form: it writes each quad's IRIs whole, so it can be
+  many times the document's size. Once the dataset is built, and before its
+  blank nodes are labelled, a document whose canonical form, each blank
+  node's label counted at its longest, would be longer than 1 MiB plus 32
+  bytes per byte of the document (written as JSON) is refused. Ordinary credentials use at most 3% of the bound, and large
+  documents of the shapes measured have canonical forms of at most about 12
+  times their size.
 
   Labelling, as RDFC-1.0 §4.4.3 requires: a dataset whose blank nodes are so
   alike that labelling them would take more than 262 144 steps and 64 per

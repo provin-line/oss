@@ -43,14 +43,15 @@ func (e Error) Error() string { return string(e) }
 // it would take more work than Canonicalize allows: building its dataset
 // (the node map of JSON-LD 1.1 Processing Algorithms and API, Node Map
 // Generation, which compares each value a node's property gathers with those
-// before it), or labelling its blank nodes (RDFC-1.0 §4.4: the algorithm
-// "raises an error if the input dataset is determined to be overly
-// complex"). Canonicalize returns it for no other reason, and returns no
-// bytes with it. The error wrapping it names the stage ("node map:" or
-// "labelling:") and the bound, for a person reading it; neither that text
-// nor the bounds' values are part of this contract, and they may change.
-// errors.Is finds ErrTooComplex for either stage; the contract does not tell
-// the stages apart.
+// before it), writing a canonical form longer than a bound linear in the
+// document's size (each quad writes its IRIs whole), or labelling its blank
+// nodes (RDFC-1.0 §4.4: the algorithm "raises an error if the input dataset
+// is determined to be overly complex"). Canonicalize returns it for no other
+// reason, and returns no bytes with it. The error wrapping it names the
+// stage ("node map:", "canonical form:" or "labelling:") and the bound, for a
+// person reading it; neither that text nor the bounds' values are part of
+// this contract, and they may change. errors.Is finds ErrTooComplex for every
+// stage; the contract does not tell the stages apart.
 const ErrTooComplex Error = "urdna2015: dataset too complex to canonicalize"
 
 // Canonicalizer normalizes JSON-LD documents to canonical N-Quads bytes using
@@ -139,6 +140,12 @@ func (c *Canonicalizer) Name() string { return Name }
 // bound linear in its values is refused with an error wrapping
 // ErrTooComplex.
 //
+// The canonical form is bounded too (see size.go): it writes each quad's
+// IRIs whole, so once the dataset is built and before its blank nodes are
+// labelled, a dataset whose canonical form would be longer than a bound
+// linear in the document's size is refused with an error wrapping
+// ErrTooComplex.
+//
 // The blank nodes are labelled within a work bound, as RDFC-1.0 §4.4.3
 // requires (see label.go): a dataset whose blank nodes are so alike that
 // labelling them would take more than a fixed number of steps and a fixed
@@ -159,6 +166,7 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
 		return nil, err
 	}
+	in := documentBytes(v)
 
 	proc := ld.NewJsonLdProcessor()
 	opts := c.options()
@@ -175,6 +183,9 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 
 	dataset, err := datasetOf(proc, expanded, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err := boundCanonicalSize(dataset, in); err != nil {
 		return nil, err
 	}
 	if err := rejectUnspellable(dataset); err != nil {

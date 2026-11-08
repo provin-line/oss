@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/piprate/json-gold/ld"
 )
@@ -165,10 +166,10 @@ func gathered(t *testing.T, expanded any) groupSizes {
 // counted is what the walk counts of an expanded document.
 func counted(expanded any) groupSizes {
 	w := newNodeMapWork()
-	w.element(expanded, "@default", "", false, "", false)
+	w.walk(expanded)
 	s := groupSizes{named: map[string]int64{}}
 	for k, g := range w.groups {
-		s.put(k.graph, k.node, k.property, g.distinct)
+		s.put(w.names[k.graph], w.names[k.node], w.names[k.property], g.distinct)
 	}
 	sort.Slice(s.blank, func(i, j int) bool { return s.blank[i] < s.blank[j] })
 	return s
@@ -262,7 +263,7 @@ func TestNodeMapWork_OrdinaryDocumentsStayWellWithinTheBound(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		w := newNodeMapWork()
-		w.element(expanded, "@default", "", false, "", false)
+		w.walk(expanded)
 		pairs, limit := w.comparisons(), nodeMapBase+nodeMapPerValue*w.added
 		t.Logf("%-75s values %5d  pairs %6d  bound %7d  share %5.2f%%", name, w.added, pairs, limit, 100*float64(pairs)/float64(limit))
 		if 100*pairs > 2*limit {
@@ -299,7 +300,7 @@ func TestNodeMapWork_CountsADocumentTheSameEveryRun(t *testing.T) {
 	counts := map[int64]bool{}
 	for range 200 {
 		w := newNodeMapWork()
-		w.element(doc, "@default", "", false, "", false)
+		w.walk(doc)
 		counts[w.comparisons()] = true
 	}
 	if len(counts) != 1 {
@@ -331,7 +332,7 @@ func TestNodeMapWork_CountsTheMostAnyOrderOfTheValuesTakes(t *testing.T) {
 	} {
 		w := newNodeMapWork()
 		for _, v := range tc.values {
-			w.add("@default", "s", "p", valueID{value: v.key}, v.list)
+			w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: v.key}, v.list)
 		}
 		if got := w.comparisons(); got != tc.want {
 			t.Errorf("%v: %d comparisons, want %d", tc.values, got, tc.want)
@@ -343,9 +344,9 @@ func TestNodeMapWork_CountsTheMostAnyOrderOfTheValuesTakes(t *testing.T) {
 // node's property is counted alone, and the counts are added.
 func TestNodeMapWork_CountsEachNodesPropertyAlone(t *testing.T) {
 	w := newNodeMapWork()
-	for _, g := range []groupKey{{"@default", "s", "p"}, {"@default", "s", "q"}, {"@default", "t", "p"}, {"g", "s", "p"}} {
+	for _, g := range []struct{ graph, node, property string }{{"@default", "s", "p"}, {"@default", "s", "q"}, {"@default", "t", "p"}, {"g", "s", "p"}} {
 		for _, v := range []string{"a", "b", "c"} {
-			w.add(g.graph, g.node, g.property, valueID{value: v}, false)
+			w.add(w.id(g.graph), w.id(g.node), w.id(g.property), valueID{value: v}, false)
 		}
 	}
 	if got := w.comparisons(); got != 4*3 {
@@ -361,7 +362,7 @@ func TestNodeMapWork_CountsEachNodesPropertyAlone(t *testing.T) {
 // int64.
 func TestNodeMapWork_PastTwoToThe31ValuesIsPastEveryBound(t *testing.T) {
 	w := newNodeMapWork()
-	w.add("@default", "s", "p", valueID{value: "a"}, false)
+	w.add(w.id("@default"), w.id("s"), w.id("p"), valueID{value: "a"}, false)
 	w.added = 1<<31 + 1
 	if got := w.comparisons(); got != math.MaxInt64 {
 		t.Errorf("%d comparisons, want math.MaxInt64", got)
@@ -391,7 +392,7 @@ func TestNodeMapWork_DoesNotCopyTheIRIsItCounts(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 	w := newNodeMapWork()
-	w.element(doc, "@default", "", false, "", false)
+	w.walk(doc)
 	runtime.ReadMemStats(&after)
 	if got := after.TotalAlloc - before.TotalAlloc; got > 8<<20 {
 		t.Errorf("the walk allocated %d MB for 2,000 references to one IRI of 100 KB", got>>20)
@@ -447,6 +448,55 @@ func TestValueOf_IsOneOnlyForValuesJsonGoldFindsEqual(t *testing.T) {
 			if equal && okA && okB && !same && !zeros {
 				t.Errorf("%v and %v: json-gold finds them equal, but they have two valueIDs ", a, b)
 			}
+		}
+	}
+}
+
+// The walk takes time in the values it counts, not in the length of the IRIs
+// they name: it reads a node's or a graph's @id, and a property, once where
+// the document writes it, not at every value added to it, so an IRI 16 times as long
+// takes about as long (at most 4 times; reading it at every value would take
+// about 16).
+func TestNodeMapWork_TakesTimeInTheValuesNotInTheIRIs(t *testing.T) {
+	timeOf := func(doc []any) time.Duration {
+		best := time.Hour
+		for range 3 {
+			start := time.Now()
+			newNodeMapWork().walk(doc)
+			best = min(best, time.Since(start))
+		}
+		return best
+	}
+	inGraph := func(n, length int) []any {
+		return []any{map[string]any{
+			"@id": "urn:g:" + strings.Repeat("a", length),
+			"@graph": each(n, func(i int) any {
+				return map[string]any{"@id": fmt.Sprintf("urn:n:%d", i), "urn:p": []any{map[string]any{"@value": "v"}}}
+			}),
+		}}
+	}
+	namingMany := func(n, length int) []any {
+		targets := each(n, func(i int) any { return map[string]any{"@id": fmt.Sprintf("urn:t:%d", i)} })
+		return []any{map[string]any{
+			"@id":      "urn:x:" + strings.Repeat("a", length),
+			"urn:p":    targets,
+			"@reverse": map[string]any{"urn:q": targets},
+		}}
+	}
+	longPredicate := func(n, length int) []any {
+		return []any{map[string]any{
+			"@id":                                  "urn:s",
+			"urn:p:" + strings.Repeat("a", length): each(n, func(i int) any { return map[string]any{"@value": fmt.Sprintf("v%d", i)} }),
+		}}
+	}
+	for name, shape := range map[string]func(n, length int) []any{
+		"a node of a long IRI naming many, and named by them": namingMany,
+		"nodes in a graph of a long IRI":                      inGraph,
+		"many values of a long predicate":                     longPredicate,
+	} {
+		short, long := timeOf(shape(4000, 25_000)), timeOf(shape(4000, 400_000))
+		if ratio := float64(long) / float64(max(short, time.Microsecond)); ratio > 4 {
+			t.Errorf("%s: an IRI 16 times as long took %.1f times as long (%v, %v)", name, ratio, short, long)
 		}
 	}
 }
