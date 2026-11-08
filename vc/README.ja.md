@@ -16,7 +16,7 @@ hashData = SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document))
 proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 ```
 
-暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。`eddsa-jcs-2022` は init で登録し、発行の既定。`eddsa-rdfc-2022` は、process が `vc.RegisterEdDSARDFC2022` を、`main` か、main package の `init` 関数から 1 度呼んだ時だけ登録する。確かめると、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るので、それを負うのは verifier が選んだ時だけにする（手間の上限と、断る文書の形は、関数の doc に書いてある）。呼ぶまでは、どの関数もどの `Verifier` も、この suite の proof を断る。関数は `vc.ErrCryptosuiteNotRegistered` を包み、`vc.RegisterEdDSARDFC2022` の名前を出した誤りを返し、`Verifier` は issuer を引く前に、署名者の真正性を failed とする。呼んだ後は、発行者が `CreateProof` か `WithCryptosuite` にこの suite を渡した時に使う。この module の package はどれも呼ばない（`scripts/check-rdfc-registration.sh`）。その canonicalizer は、登録の時に **IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するより process がパニックする。
+暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。`eddsa-jcs-2022` は init で登録し、発行の既定。`eddsa-rdfc-2022` は、process が `vc.RegisterEdDSARDFC2022` を、`main` か、main package の `init` 関数から 1 度呼んだ時だけ登録する。確かめると、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るので、それを負うのは verifier が選んだ時だけにする（手間の上限と、断る文書の形は、関数の doc に書いてある）。文書の `@context` に置けるのは、`vc` が埋め込む 3 つの context の IRI だけ。文書に書いた context を、どの深さでも持つ文書は、正規化の前に断る。だから、文書が使う term はすべて、埋め込みの context が定める。呼ぶまでは、どの関数もどの `Verifier` も、この suite の proof を断る。関数は `vc.ErrCryptosuiteNotRegistered` を包み、`vc.RegisterEdDSARDFC2022` の名前を出した誤りを返し、`Verifier` は issuer を引く前に、署名者の真正性を failed とする。呼んだ後は、発行者が `CreateProof` か `WithCryptosuite` にこの suite を渡した時に使う。この module の package はどれも呼ばない（`scripts/check-rdfc-registration.sh`）。その canonicalizer は、登録の時に **IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するより process がパニックする。
 
 ## チェーントポロジー — 線形不変
 

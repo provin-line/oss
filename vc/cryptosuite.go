@@ -7,7 +7,6 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
-	"github.com/provin-line/oss/canon/urdna2015"
 )
 
 // Wire identifiers of the supported proof cryptosuites.
@@ -139,7 +138,10 @@ var registerRDFC sync.Once
 //     refused, and so are documents in forms the canonical N-Quads cannot
 //     write one-to-one (canon/urdna2015's package doc lists the forms). Only
 //     the three contexts this package embeds are resolved, never the
-//     network.
+//     network, and a document's @context may hold only their IRIs: a context
+//     written in the document, at any depth, is refused before the document
+//     is canonicalized, so every term it uses is defined in the embedded
+//     contexts.
 //
 // Call it once, from the program's main or an init function of its main
 // package, before the process issues or verifies a proof; a second call does
@@ -153,8 +155,9 @@ func RegisterEdDSARDFC2022() {
 	registerRDFC.Do(func() {
 		// URDNA2015 canonicalization over the three frozen context
 		// documents, resolved offline from the embedded copies: a credential
-		// referencing any other context IRI fails rather than fetches.
-		rdfc := urdna2015.NewCanonicalizer(map[string][]byte{
+		// holding any other context, an IRI or one written in it, is refused
+		// (servedContextsOnly).
+		rdfc := servedContextsOnly(map[string][]byte{
 			ContextCredentialsV2: contextCredentialsV2Document,
 			ContextDplaaxVCV1:    contextDplaaxVCV1Document,
 			ContextProvinVCV1:    contextProvinVCV1Document,

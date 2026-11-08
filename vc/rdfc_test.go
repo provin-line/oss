@@ -141,40 +141,37 @@ func TestRDFC_NumericMember_Refused(t *testing.T) {
 	}
 }
 
-// listDocument is a credential whose subject carries an @list of n equal
-// strings. Labelling it costs about n³, so a long one is too complex.
+// listDocument is a credential, of the served contexts alone, whose subject
+// carries an @list of n equal strings. Labelling it costs about n³, so a long
+// one is too complex.
 func listDocument(n int) map[string]any {
 	steps := make([]any, n)
 	for i := range steps {
 		steps[i] = "pass"
 	}
 	return map[string]any{
-		"@context": []any{"https://www.w3.org/ns/credentials/v2", map[string]any{
-			"steps": map[string]any{"@id": "https://example.org/steps", "@container": "@list"},
-		}},
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
 		"type":              []any{"VerifiableCredential"},
 		"issuer":            issuerDID,
 		"validFrom":         "2026-01-01T00:00:00Z",
-		"credentialSubject": map[string]any{"steps": steps},
+		"credentialSubject": map[string]any{"https://example.org/steps": map[string]any{"@list": steps}},
 	}
 }
 
-// valuesDocument is a credential whose subject has n distinct strings on one
-// property. json-gold's node map compares each with those before it, so a
-// long one is too complex.
+// valuesDocument is a credential, of the served contexts alone, whose subject
+// has n distinct strings on one property. json-gold's node map compares each
+// with those before it, so a long one is too complex.
 func valuesDocument(n int) map[string]any {
 	values := make([]any, n)
 	for i := range values {
 		values[i] = fmt.Sprintf("v%d", i)
 	}
 	return map[string]any{
-		"@context": []any{"https://www.w3.org/ns/credentials/v2", map[string]any{
-			"values": map[string]any{"@id": "https://example.org/values"},
-		}},
+		"@context":          []any{"https://www.w3.org/ns/credentials/v2"},
 		"type":              []any{"VerifiableCredential"},
 		"issuer":            issuerDID,
 		"validFrom":         "2026-01-01T00:00:00Z",
-		"credentialSubject": map[string]any{"values": values},
+		"credentialSubject": map[string]any{"https://example.org/values": values},
 	}
 }
 
@@ -271,40 +268,43 @@ func TestRDFC_RefusesAValueItWouldNotSign(t *testing.T) {
 	}
 }
 
-// A credential whose context sets @base is refused before its signature is
-// checked, from every primitive: the RDFC path resolves no relative IRI
-// against a base, so two spellings of one IRI would sign as one.
-func TestRDFC_RefusesAContextBase(t *testing.T) {
+// A credential holding a context written in it, rather than the IRI of one
+// the suite serves, is refused before its signature is checked, from every
+// primitive: here a context setting @base, and one defining a term. Its
+// proof's context mirrors the document's, so the proof is refused first.
+func TestRDFC_RefusesAContextWrittenInTheDocument(t *testing.T) {
 	signer, pub, _ := fixture(t)
-	credential := func(ctx map[string]any) map[string]any {
-		return map[string]any{
+	for name, ctx := range map[string]map[string]any{
+		"@base":  {"@base": "https://example.org/"},
+		"a term": {"amount": "https://example.org/amount"},
+	} {
+		doc := map[string]any{
 			"@context":          []any{"https://www.w3.org/ns/credentials/v2", ctx},
 			"type":              []any{"VerifiableCredential"},
 			"issuer":            issuerDID,
 			"validFrom":         "2026-01-01T00:00:00Z",
 			"credentialSubject": map[string]any{"id": "https://example.org/s"},
 		}
-	}
-	doc := credential(map[string]any{"@base": "https://example.org/"})
-	// A proof whose @context mirrors the document's, so that only the
-	// document's canonicalizing refuses it.
-	jcsProof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof := *jcsProof
-	proof.Cryptosuite = vc.CryptosuiteEdDSARDFC2022
-	const want = "@base"
-	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("CreateProof: %v, want the @base refused", err)
-	}
-	if err := vc.VerifyProof(ed25519.Verifier{}, pub, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("VerifyProof: %v, want the @base refused", err)
-	}
-	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("VerifyProofWithContract: %v, want the @base refused", err)
-	}
-	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, &proof, doc, vc.ContractW3CEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("VerifyProofUnderContract: %v, want the @base refused", err)
+		// A proof whose @context mirrors the document's, made under JCS,
+		// which signs the bytes and reads no context.
+		jcsProof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof := *jcsProof
+		proof.Cryptosuite = vc.CryptosuiteEdDSARDFC2022
+		const want = "only the IRIs of the contexts it serves"
+		if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: CreateProof: %v, want the context refused", name, err)
+		}
+		if err := vc.VerifyProof(ed25519.Verifier{}, pub, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: VerifyProof: %v, want the context refused", name, err)
+		}
+		if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, &proof, doc); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: VerifyProofWithContract: %v, want the context refused", name, err)
+		}
+		if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, &proof, doc, vc.ContractW3CEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: VerifyProofUnderContract: %v, want the context refused", name, err)
+		}
 	}
 }

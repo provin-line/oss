@@ -28,7 +28,11 @@ Cryptosuites: `eddsa-jcs-2022` (Phase 1, MUST), `eddsa-rdfc-2022` (Phase 2, MAY)
 `vc.RegisterEdDSARDFC2022`, once, from its `main` or an `init` function of its
 main package: verifying it runs JSON-LD processing on the untrusted document
 before its signature is checked, so a verifier takes that on only when it
-chooses to (the function's doc states the bounds and the forms refused). Until
+chooses to (the function's doc states the bounds and the forms refused). A
+document's `@context` may hold only the IRIs of the three contexts `vc`
+embeds: one holding a context written in it, at any depth, is refused before
+it is canonicalized, so every term it uses is defined in the embedded
+contexts. Until
 then every function that issues or verifies, and every `Verifier`, refuses a
 proof of the suite: the functions with an error that wraps
 `vc.ErrCryptosuiteNotRegistered` and names `vc.RegisterEdDSARDFC2022`, a

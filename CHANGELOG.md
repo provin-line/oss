@@ -209,6 +209,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the suite's name, and `scripts/check-rdfc-registration.sh` (`make lint`)
   keeps every package of this module from calling the function. This amends
   the v0.2.0 credential wire freeze, for security (below, under 0.2.0).
+- **BREAKING (Go API and wire)** `eddsa-rdfc-2022` accepts as `@context`
+  only the IRIs of the three contexts `vc` embeds (the W3C VC v2 context,
+  dplaax's and provin's): `vc.CreateProof`, the `vc.Builder` and every verify
+  function refuse a document, or a proof, holding a context written in it,
+  at any depth (a term's scoped context and an `@import` included), `null`,
+  or another IRI, before it is canonicalized (Security, below). Credentials,
+  presentations and provin's documents of the embedded contexts alone are
+  unchanged. `canon/urdna2015`'s `Canonicalize`, called by a program itself,
+  still reads a document's own contexts.
 - **BREAKING (wire)** provin's own binaries do not call
   `vc.RegisterEdDSARDFC2022`, so they refuse an `eddsa-rdfc-2022` credential
   they verified before; this release has no setting that turns the suite on
@@ -593,6 +602,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `eddsa-rdfc-2022` reads a document only through the contexts `vc` embeds
+  (Changed, BREAKING): a document can no longer define a term of its own, so
+  every term an `eddsa-rdfc-2022` proof is checked through is defined in
+  contexts this module holds, and a document that writes a context is
+  refused before JSON-LD processing runs on it.
 - `eddsa-rdfc-2022` is off until a program calls `vc.RegisterEdDSARDFC2022`
   (Changed, BREAKING): a verifier runs JSON-LD processing on an untrusted
   document, before its signature is checked, only when it chooses to.

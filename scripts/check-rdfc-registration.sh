@@ -6,7 +6,9 @@
 # but its definition in vc/cryptosuite.go; a program that wants the suite
 # calls it from its own main or an init function of its main package. And no
 # non-test package but vc and canon/urdna2015 imports canon/urdna2015 or
-# json-gold, so JSON-LD processing is reached only through vc.
+# json-gold, so JSON-LD processing is reached only through vc. And no
+# non-test file outside it imports internal/rdfccorpus, the documents the
+# RDFC tests read, or a package below it, so no program carries them.
 #
 # The check reads Go's lexical forms: comments (line and block) and string,
 # raw string and rune literals are skipped, across lines; a //go:linkname
@@ -76,6 +78,18 @@ if [ -n "$imports" ]; then
   printf '%s\n' "$imports" >&2
   echo "check-rdfc-registration: canon/urdna2015 or json-gold imported outside vc and canon/urdna2015." >&2
   echo "JSON-LD processing runs only through vc, where vc.RegisterEdDSARDFC2022 opens it." >&2
+  exit 1
+fi
+
+# The RDFC tests' documents are read only by tests: no non-test file but the
+# package's own imports it, or a package below it.
+corpus=$(find . -name '*.go' ! -name '*_test.go' ! -path './.git/*' \
+  ! \( -path './internal/rdfccorpus/*' ! -path './internal/rdfccorpus/*/*' \) -print0 |
+  xargs -0 grep -lE '"github\.com/provin-line/oss/internal/rdfccorpus(/[^"]*)?"' 2>/dev/null || true)
+if [ -n "$corpus" ]; then
+  printf '%s\n' "$corpus" >&2
+  echo "check-rdfc-registration: internal/rdfccorpus imported outside a test." >&2
+  echo "It holds the documents the RDFC tests read; only tests import it." >&2
   exit 1
 fi
 

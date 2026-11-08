@@ -28,7 +28,10 @@ the target:
   skipped, across lines; a `//go:linkname` directive is read as code. It
   also fails when a non-test package other than `vc` and `canon/urdna2015`
   imports `canon/urdna2015` or json-gold, so JSON-LD processing is reached
-  only through `vc`. Generated code is scanned too; there is no exemption.
+  only through `vc`, and when a non-test file outside it imports
+  `internal/rdfccorpus`, the documents the RDFC tests read, or a package
+  below it, so no program carries them. Generated
+  code is scanned too; there is no exemption.
 - `check-gofmt.sh` — all Go files, including generated `gen/`, are gofmt-clean.
 
 The decoder, canonicalizer and number checks skip `gen/` (generated code).

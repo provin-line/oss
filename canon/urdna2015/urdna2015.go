@@ -7,6 +7,10 @@
 // embedded documents — never the network. Any context IRI outside the
 // allowlist is an error, and a non-object input (which json-gold would treat
 // as a remote document URL) is rejected before it reaches the processor.
+// Canonicalize reads a context written in the document too, holding it to
+// the forms below. vc's eddsa-rdfc-2022 refuses such a document before it
+// is canonicalized, accepting as @context only the IRIs of the contexts it
+// serves; a program that calls this package itself gets no such refusal.
 //
 // Unlike JCS, which signs every member of the input bytes, RDF
 // canonicalization signs the RDF dataset the input EXPANDS to — and standard
