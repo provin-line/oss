@@ -23,10 +23,21 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 ```
 
 Cryptosuites: `eddsa-jcs-2022` (Phase 1, MUST), `eddsa-rdfc-2022` (Phase 2, MAY).
-Both are registered at init, so a verifier accepts proofs of either by default;
-an issuer uses `eddsa-rdfc-2022` only when it names that suite to `CreateProof`.
-New suites register in the dispatch table and must pass an **init-time IRI expansion
-probe** — the binary panics at startup rather than serve broken canonicalization.
+`eddsa-jcs-2022` is registered at init and is the issuance default.
+`eddsa-rdfc-2022` is registered only when the process calls
+`vc.RegisterEdDSARDFC2022`, once, from its `main` or an `init` function of its
+main package: verifying it runs JSON-LD processing on the untrusted document
+before its signature is checked, so a verifier takes that on only when it
+chooses to (the function's doc states the bounds and the forms refused). Until
+then every function that issues or verifies, and every `Verifier`, refuses a
+proof of the suite: the functions with an error that wraps
+`vc.ErrCryptosuiteNotRegistered` and names `vc.RegisterEdDSARDFC2022`, a
+`Verifier` by finding signer authenticity failed, before it looks up the
+issuer. Once it is called, an issuer uses the suite when it names it to
+`CreateProof` or `WithCryptosuite`. No package of this module calls it
+(`scripts/check-rdfc-registration.sh`). Its canonicalizer must pass an **IRI
+expansion probe** when it is registered — the process panics rather than serve
+broken canonicalization.
 
 ## Chain topology — linear invariant
 

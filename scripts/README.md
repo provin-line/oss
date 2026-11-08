@@ -20,6 +20,15 @@ the target:
   comment stating why the string is not a JSON number; `rand.Float64()` and a
   mention of `canon.Float64` pass. The check is line-based and textual: it
   does not resolve imports or types.
+- `check-rdfc-registration.sh` — no non-test file refers to
+  `vc.RegisterEdDSARDFC2022` but its definition in `vc/cryptosuite.go`. It
+  opens `eddsa-rdfc-2022` for the whole process, so only a program's own
+  `main` or an `init` function of its main package calls it, never a package
+  of this module. Comments and string, raw string and rune literals are
+  skipped, across lines; a `//go:linkname` directive is read as code. It
+  also fails when a non-test package other than `vc` and `canon/urdna2015`
+  imports `canon/urdna2015` or json-gold, so JSON-LD processing is reached
+  only through `vc`. Generated code is scanned too; there is no exemption.
 - `check-gofmt.sh` — all Go files, including generated `gen/`, are gofmt-clean.
 
 The decoder, canonicalizer and number checks skip `gen/` (generated code).

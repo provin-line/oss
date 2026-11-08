@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/canon/jcs"
 	ed25519lib "github.com/provin-line/oss/crypto/ed25519"
@@ -115,6 +116,60 @@ func TestHasClaimContract_AgreesWithClassifyProof(t *testing.T) {
 		}
 		if got := hasClaimContract(suite); got != classifies {
 			t.Errorf("hasClaimContract(%q) = %t, but ClassifyProof classifies it: %t", suite, got, classifies)
+		}
+	}
+}
+
+// A contract verifies a proof of its own suite only: one signed validly
+// under a contract's canonicalization but naming another suite is refused,
+// so a proof's suite says how it was signed whichever contract a caller
+// names.
+func TestVerifyProofUnderContract_RefusesAProofOfAnotherSuite(t *testing.T) {
+	kp, err := (ed25519lib.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	cred, err := New(CredentialFields{
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1",
+		ValidFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: CredentialSubjectFields{
+			PipelineID: "p1", ProcessID: "proc1", TransformationClaim: ClaimConvert,
+			InputHash: "sha256:" + probeHex, OutputHash: "sha256:" + probeHex,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := cred.Body()
+	ctx := doc[keyContext]
+	vm := "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1#signing"
+	for _, tc := range []struct {
+		suite    string
+		contract SuiteContract
+	}{
+		{CryptosuiteEdDSARDFC2022, ContractW3CEdDSAJCS2022},
+		{CryptosuiteEdDSARDFC2022, ContractLegacyProvinEdDSAJCSInt64},
+		{CryptosuiteEdDSAJCS2022, ContractW3CEdDSARDFC2022},
+	} {
+		canonFn, err := tc.contract.canonicalizer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		created := "2026-01-01T00:00:00Z"
+		cfg := proofConfigMap(proofType, tc.suite, vm, proofPurposeSign, created, ctx, true)
+		hd, err := proofHashDataFunc(canonFn, cfg, doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof := &DataIntegrityProof{
+			Type: proofType, Cryptosuite: tc.suite, VerificationMethod: vm, ProofPurpose: proofPurposeSign, Created: created,
+			ProofValue: multibase.EncodeBase58Btc(stded25519.Sign(stded25519.NewKeyFromSeed(kp.PrivateKey[:32]), hd)),
+		}
+		if tc.contract != ContractLegacyProvinEdDSAJCSInt64 {
+			proof.Context = ctx
+		}
+		if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, tc.contract); err == nil || !strings.Contains(err.Error(), "is not verified under contract") {
+			t.Errorf("a proof naming %s under %s: %v, want a refusal naming the contract", tc.suite, tc.contract, err)
 		}
 	}
 }

@@ -31,9 +31,12 @@ var (
 )
 
 // RegisterCryptosuite registers the canonicalizer backing a proof
-// cryptosuite. Registration is init-time only; RDF-based suites must pass an
-// IRI expansion probe over a real-shape credential or the process panics at
-// startup — a binary with broken canonicalization must not serve. No-op
+// cryptosuite. Registration is init-time only (main or init, before the
+// process serves). It does not check the canonicalizer: eddsa-rdfc-2022,
+// whose canonicalizer RegisterEdDSARDFC2022 checks against a full provin
+// credential, is registered only by that function, and a canonicalizer a
+// program registers here under another name is the program's to check
+// (RegisterEdDSARDFC2022's guarantee covers eddsa-rdfc-2022). No-op
 // identifiers ("", "none", "null", "identity") are rejected here and again
 // at verification time (JOSE alg:none class defense).
 //
@@ -42,9 +45,17 @@ var (
 // LifecycleRegistry (see lifecycle.go), whose published append-only form is
 // backed by tlog.
 //
-// A no-op identifier or a nil canonicalizer is a startup misconfiguration and
-// panics — registration runs at init, before the process serves traffic.
+// A no-op identifier, eddsa-rdfc-2022 or a nil canonicalizer is a startup
+// misconfiguration and panics — registration runs before the process serves
+// traffic.
 func RegisterCryptosuite(name string, c canon.Canonicalizer) {
+	if name == CryptosuiteEdDSARDFC2022 {
+		panic(fmt.Sprintf("vc: cryptosuite %q is registered by vc.RegisterEdDSARDFC2022", name))
+	}
+	registerCryptosuite(name, c)
+}
+
+func registerCryptosuite(name string, c canon.Canonicalizer) {
 	if noOpCryptosuites[name] {
 		panic(fmt.Sprintf("vc: refusing to register no-op cryptosuite %q (alg:none class)", name))
 	}
@@ -65,7 +76,12 @@ func RegisterCryptosuite(name string, c canon.Canonicalizer) {
 
 // canonicalizerFor returns the registered canonicalizer for a cryptosuite, or
 // an error. No-op identifiers are rejected here too — the verification-time
-// half of the alg:none defense, independent of what was registered.
+// half of the alg:none defense, independent of what was registered. Issuing a
+// proof (CreateProof), verifying one by its suite (VerifyProof), and
+// verifying one under the eddsa-rdfc-2022 contract take the canonicalizer
+// here, so that suite's canonicalization never runs while it is not
+// registered; the eddsa-jcs-2022 and legacy contracts bind their own
+// canonicalizers.
 func canonicalizerFor(name string) (canon.Canonicalizer, error) {
 	if noOpCryptosuites[name] {
 		return nil, fmt.Errorf("vc: cryptosuite %q is a no-op identifier (alg:none class), rejected", name)
@@ -73,8 +89,11 @@ func canonicalizerFor(name string) (canon.Canonicalizer, error) {
 	cryptosuitesMu.RLock()
 	c, ok := cryptosuites[name]
 	cryptosuitesMu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("vc: unknown cryptosuite %q", name)
+	switch {
+	case !ok && name == CryptosuiteEdDSARDFC2022:
+		return nil, fmt.Errorf("%w: %q: a process that issues or verifies it calls vc.RegisterEdDSARDFC2022 first", ErrCryptosuiteNotRegistered, name)
+	case !ok:
+		return nil, fmt.Errorf("%w: unknown cryptosuite %q", ErrCryptosuiteNotRegistered, name)
 	}
 	return c, nil
 }
@@ -89,24 +108,66 @@ func init() {
 	// int64-verbatim deviation goes through its claim contract instead
 	// (ContractLegacyProvinEdDSAJCSInt64) — the registry must not be able to
 	// hand the deviation to a new signature.
-	RegisterCryptosuite(CryptosuiteEdDSAJCS2022, jcs.RFC8785{})
+	registerCryptosuite(CryptosuiteEdDSAJCS2022, jcs.RFC8785{})
+}
 
-	// eddsa-rdfc-2022: URDNA2015 canonicalization over the three frozen
-	// context documents, resolved offline from the embedded copies — a
-	// credential referencing any other context IRI fails rather than fetches.
-	// The suite is registered only after the expansion probe passes.
-	rdfc := urdna2015.NewCanonicalizer(map[string][]byte{
-		ContextCredentialsV2: contextCredentialsV2Document,
-		ContextDplaaxVCV1:    contextDplaaxVCV1Document,
-		ContextProvinVCV1:    contextProvinVCV1Document,
+var registerRDFC sync.Once
+
+// RegisterEdDSARDFC2022 registers the eddsa-rdfc-2022 cryptosuite for this
+// process. Until it is called, no function or Verifier of this package issues
+// or verifies a proof of this suite, and none runs JSON-LD processing:
+// CreateProof, VerifyProof, VerifyProofUnderContract and
+// VerifyProofWithContract refuse such a proof before reading anything else of
+// it with an error that wraps ErrCryptosuiteNotRegistered and names this
+// function, and a Verifier finds its signer authenticity failed. Once it is
+// called, they issue and verify it, in every package of the process. (A
+// program that calls canon/urdna2015 itself runs JSON-LD processing by its
+// own choice.)
+//
+// Read before calling it:
+//
+//   - Verifying an eddsa-rdfc-2022 proof canonicalizes the document first:
+//     JSON-LD processing (expansion and RDF Dataset Canonicalization, through
+//     canon/urdna2015 and json-gold) runs on the untrusted document before
+//     its signature is checked.
+//   - That work is bounded: the comparisons the dataset's node map makes, the
+//     length of the canonical form, and the work of labelling blank nodes. A
+//     document past a bound is refused with an error wrapping
+//     urdna2015.ErrTooComplex, both when a proof is created and when one is
+//     verified.
+//   - A document some value of which the canonical form would not hold is
+//     refused, and so are documents in forms the canonical N-Quads cannot
+//     write one-to-one (canon/urdna2015's package doc lists the forms). Only
+//     the three contexts this package embeds are resolved, never the
+//     network.
+//
+// Call it once, from the program's main or an init function of its main
+// package, before the process issues or verifies a proof; a second call does
+// nothing. It holds for the whole process, so a library that called it would
+// open the suite for every program that imports it: no package of this
+// module calls it (scripts/check-rdfc-registration.sh). The canonicalizer is
+// checked against a full provin credential before it is registered; a
+// failure panics, so a process whose canonicalization cannot cover the wire
+// vocabulary does not start.
+func RegisterEdDSARDFC2022() {
+	registerRDFC.Do(func() {
+		// URDNA2015 canonicalization over the three frozen context
+		// documents, resolved offline from the embedded copies: a credential
+		// referencing any other context IRI fails rather than fetches.
+		rdfc := urdna2015.NewCanonicalizer(map[string][]byte{
+			ContextCredentialsV2: contextCredentialsV2Document,
+			ContextDplaaxVCV1:    contextDplaaxVCV1Document,
+			ContextProvinVCV1:    contextProvinVCV1Document,
+		})
+		probeRDFC(rdfc)
+		registerCryptosuite(CryptosuiteEdDSARDFC2022, rdfc)
 	})
-	probeRDFC(rdfc)
-	RegisterCryptosuite(CryptosuiteEdDSARDFC2022, rdfc)
 }
 
 // probeRDFC canonicalizes a full-shape provin credential (every wire member:
 // schema, hashes, chain link, source commitment) and its proof config through
-// c, panicking on any error. It runs at init: an embedded-context omission or
+// c, panicking on any error. It runs when the suite is registered
+// (RegisterEdDSARDFC2022): an embedded-context omission or
 // a wire term no frozen context defines must fail process startup loudly —
 // a binary whose RDF canonicalization cannot cover the wire vocabulary would
 // otherwise refuse (or worse, partition) every rdfc proof it touches at

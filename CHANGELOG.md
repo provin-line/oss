@@ -188,6 +188,31 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- **BREAKING (Go API)** `eddsa-rdfc-2022` is registered only when a process
+  calls the new `vc.RegisterEdDSARDFC2022`; `vc`'s init registers
+  `eddsa-jcs-2022` alone. Until then nothing in `vc` issues or verifies an
+  `eddsa-rdfc-2022` proof or runs JSON-LD processing: `vc.CreateProof`,
+  `vc.VerifyProof`, `vc.VerifyProofUnderContract` and
+  `vc.VerifyProofWithContract` refuse it before reading anything else of
+  the proof, and the `vc.Builder` where it creates the proof, with an error
+  that wraps the new `vc.ErrCryptosuiteNotRegistered` and names
+  `vc.RegisterEdDSARDFC2022`. `vc.CreateProof`, the `vc.Builder` and
+  `vc.VerifyProof` wrap it for any suite nothing registers too, in place of
+  their former "unknown cryptosuite" error. A `vc.Verifier` finds its signer
+  authenticity
+  failed before looking up the issuer. Verifying such a proof canonicalizes
+  the untrusted document before its signature is checked, so a verifier
+  takes that on only when it chooses to. A process that issues or verifies
+  the suite calls the function once, from its `main` or an `init` function
+  of its main package; a second call does nothing. The function's doc
+  states the bounds and the forms refused. `vc.RegisterCryptosuite` refuses
+  the suite's name, and `scripts/check-rdfc-registration.sh` (`make lint`)
+  keeps every package of this module from calling the function. This amends
+  the v0.2.0 credential wire freeze, for security (below, under 0.2.0).
+- **BREAKING (wire)** provin's own binaries do not call
+  `vc.RegisterEdDSARDFC2022`, so they refuse an `eddsa-rdfc-2022` credential
+  they verified before; this release has no setting that turns the suite on
+  in them. `eddsa-jcs-2022`, the issuance default, is unchanged.
 - **Delivery decisions are now recorded by default** (at `all`, no payload is
   delivered without its accepted record; refusal records are best effort; the
   other levels keep less). Every delivery decision of the purpose-first sink (a sink loop with an `agent-access` block;
@@ -546,6 +571,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `eddsa-rdfc-2022` is off until a program calls `vc.RegisterEdDSARDFC2022`
+  (Changed, BREAKING): a verifier runs JSON-LD processing on an untrusted
+  document, before its signature is checked, only when it chooses to.
+- `vc.VerifyProofUnderContract` verifies a proof only under the contract of
+  the suite it names: a proof of `eddsa-rdfc-2022` under an `eddsa-jcs-2022`
+  contract, or the reverse, is refused, so a proof's suite says how it was
+  signed whichever contract a caller names. `vc.VerifyProofWithContract` and
+  `vc.Verifier`, which take the contract from the proof, are unchanged.
 - `canon/urdna2015` refuses a document some value of which its canonical
   form would not hold, so every value of a document it accepts is signed by
   an `eddsa-rdfc-2022` proof. JSON-LD processing leaves values out of the
@@ -1068,6 +1101,16 @@ credentials and is a **next-MAJOR** change. The freeze is enforced by tests
 in this repository (W3C vectors, KATs, context digests), not by process.
 Exported Go API and configuration keys remain `0.x`-mutable; the wire freeze
 is deliberately stricter than the API surface.
+
+**Amended (Unreleased), for security, not compatibility:** `eddsa-rdfc-2022`
+stays frozen on the wire: for a document it accepts, the bytes it
+canonicalizes and signs do not change. It is now opt-in for verifying as well
+as for issuing: a process accepts it only once it calls
+`vc.RegisterEdDSARDFC2022`, since verifying it runs JSON-LD processing on the
+untrusted document before the signature is checked. `canon/urdna2015` also
+refuses a document some value of which the canonical form would not hold,
+and a document past its work bounds (Unreleased, Security), so a credential
+signed under the suite over such a document no longer verifies here.
 
 Out of scope of this declaration: the repository's OTHER signed views — the
 tlog checkpoint `SignedView`, the chain-manager/payload-resolver wire-auth

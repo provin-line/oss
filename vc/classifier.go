@@ -56,6 +56,30 @@ func (c SuiteContract) CanonicalizerID() string {
 	}
 }
 
+// cryptosuite is the suite a proof verified under the contract names.
+func (c SuiteContract) cryptosuite() string {
+	switch c {
+	case ContractW3CEdDSAJCS2022, ContractLegacyProvinEdDSAJCSInt64:
+		return CryptosuiteEdDSAJCS2022
+	case ContractW3CEdDSARDFC2022:
+		return CryptosuiteEdDSARDFC2022
+	default:
+		return ""
+	}
+}
+
+// requireRegistered refuses eddsa-rdfc-2022 while it is not registered
+// (RegisterEdDSARDFC2022), with the error that names the function; it allows
+// any other name. The verify functions call it before reading anything else
+// of a proof.
+func requireRegistered(cryptosuite string) error {
+	if cryptosuite != CryptosuiteEdDSARDFC2022 {
+		return nil
+	}
+	_, err := canonicalizerFor(cryptosuite)
+	return err
+}
+
 // canonicalizer returns the canonicalizer this contract is verified under.
 func (c SuiteContract) canonicalizer() (canonicalizerFunc, error) {
 	switch c {
@@ -63,7 +87,8 @@ func (c SuiteContract) canonicalizer() (canonicalizerFunc, error) {
 		return jcs.RFC8785{}.Canonicalize, nil
 	case ContractW3CEdDSARDFC2022:
 		// The registered suite canonicalizer: urdna2015 over the frozen embedded
-		// contexts, probed at init. The registry is safe to consult here because
+		// contexts, probed when RegisterEdDSARDFC2022 registers it (until then
+		// canonicalizerFor refuses). The registry is safe to consult here because
 		// it can only ever hold conformant canonicalizers — the legacy deviation
 		// is the one thing it structurally cannot hand out.
 		rc, err := canonicalizerFor(CryptosuiteEdDSARDFC2022)
@@ -158,10 +183,12 @@ func hasClaimContract(cryptosuite string) bool {
 // int64-verbatim deviation to a verification would resurrect the ambiguity the
 // contract exists to remove.
 //
-// The proof's @context is outside the signature on this path, so the
-// contract pins it: under a W3C contract it must mirror the document's (see
-// requireProofContextMirrorsDocument), and under the legacy contract the
-// proof must carry none.
+// A contract verifies a proof of its own suite only: the proof's cryptosuite
+// must be the one the contract names, so a proof's suite says how it was
+// signed whichever contract the caller names. The proof's @context is outside
+// the signature on this path, so the contract pins it: under a W3C contract
+// it must mirror the document's (see requireProofContextMirrorsDocument), and
+// under the legacy contract the proof must carry none.
 func VerifyProofUnderContract(
 	verifier crypto.Verifier,
 	publicKey []byte,
@@ -171,6 +198,15 @@ func VerifyProofUnderContract(
 ) error {
 	if proof == nil {
 		return errors.New("vc: nil proof")
+	}
+	if err := requireRegistered(contract.cryptosuite()); err != nil {
+		return err
+	}
+	if err := requireRegistered(proof.Cryptosuite); err != nil {
+		return err
+	}
+	if want := contract.cryptosuite(); want != "" && proof.Cryptosuite != want {
+		return fmt.Errorf("vc: a proof of cryptosuite %q is not verified under contract %q, which is %q's", proof.Cryptosuite, contract, want)
 	}
 	switch contract {
 	case ContractW3CEdDSAJCS2022, ContractW3CEdDSARDFC2022:
@@ -248,6 +284,9 @@ func VerifyProofWithContract(
 ) (SuiteContract, error) {
 	if proof == nil {
 		return "", errors.New("vc: nil proof")
+	}
+	if err := requireRegistered(proof.Cryptosuite); err != nil {
+		return "", err
 	}
 	contract, err := ClassifyProof(proof.Cryptosuite, proof.Context != nil, encoding)
 	if err != nil {

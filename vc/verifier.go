@@ -333,11 +333,12 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 		return failed
 	}
 	// A proof no key can verify — one under a cryptosuite no claim contract
-	// names, or one whose proofValue does not decode — is an established
-	// failure, decided before the lifecycle and issuer lookups, so that no
-	// lookup runs for it and a transient issuer-key error cannot make it
-	// indeterminate.
-	if !hasClaimContract(proof.Cryptosuite) {
+	// names or this process has not registered (eddsa-rdfc-2022 until
+	// RegisterEdDSARDFC2022), or one whose proofValue does not decode — is an
+	// established failure, decided before the lifecycle and issuer lookups, so
+	// that no lookup runs for it and a transient issuer-key error cannot make
+	// it indeterminate.
+	if !hasClaimContract(proof.Cryptosuite) || requireRegistered(proof.Cryptosuite) != nil {
 		return failed
 	}
 	if _, err := proof.ProofValueBytes(); err != nil {

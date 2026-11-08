@@ -15,3 +15,14 @@ func (e Error) Error() string { return string(e) }
 // and read as indeterminate (as resolver.ErrNotFound is reserved for a
 // definitive not-found).
 const ErrIssuerNotFound Error = "vc: issuer not found"
+
+// ErrCryptosuiteNotRegistered is wrapped by the error with which a proof is
+// refused because this process has not registered its cryptosuite. For
+// eddsa-rdfc-2022 before RegisterEdDSARDFC2022 is called, CreateProof, the
+// Builder, VerifyProof, VerifyProofUnderContract and VerifyProofWithContract
+// return it, the error naming that function; a Verifier, whose verdicts carry
+// no error, finds signer authenticity failed. For a suite nothing registers,
+// other than a no-op identifier (refused as alg:none), CreateProof, the
+// Builder and VerifyProof return it; the contract functions refuse such a
+// suite as one no claim contract names.
+const ErrCryptosuiteNotRegistered Error = "vc: cryptosuite not registered"

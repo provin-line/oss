@@ -103,9 +103,9 @@ keybinding ──► vc, did, canon, crypto
 - **v0 credential wire は凍結済み** — credential の署名に参加するすべての
   バイト: credential の `@context` セット（embed 済み・digest pin）、Data
   Integrity proof アルゴリズム、両暗号スイートとその正規化、source-commitment
-  の計算形。発行では `eddsa-jcs-2022` が既定で、`eddsa-rdfc-2022` は発行者が
-  選んだ時だけ使う。確かめでは、両方の proof を既定で受ける（`vc` が init で
-  両方を登録する）。
+  の計算形。発行では `eddsa-jcs-2022` が既定。`eddsa-rdfc-2022` は、発行にも
+  確かめにも、`vc.RegisterEdDSARDFC2022` を呼んだ process だけが使う。確かめる
+  と、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るため。
   これらの変更は発行済み credential との proof 互換性を壊すため**次 MAJOR**の
   変更となる。凍結はプロセスでなくテスト（公式 W3C vc-di-eddsa vector・KAT・
   context sha256 pin）が強制する — 正確なスコープ（本宣言が意図的にカバー

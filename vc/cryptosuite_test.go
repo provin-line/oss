@@ -1,6 +1,9 @@
 package vc
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/canon/jcs"
@@ -13,12 +16,13 @@ func TestRegisterCryptosuite_JCSRegisteredAtInit(t *testing.T) {
 	}
 }
 
-// The Phase-2 suite is registered by init() after passing the expansion
-// probe, backed by URDNA2015.
-func TestRegisterCryptosuite_RDFCRegisteredAtInit(t *testing.T) {
+// The Phase-2 suite is registered by RegisterEdDSARDFC2022 (these tests call
+// it at init: register_rdfc_test.go) after passing the expansion probe,
+// backed by URDNA2015.
+func TestRegisterEdDSARDFC2022_RegistersURDNA2015(t *testing.T) {
 	c, err := canonicalizerFor(CryptosuiteEdDSARDFC2022)
 	if err != nil {
-		t.Fatalf("eddsa-rdfc-2022 must be registered at init: %v", err)
+		t.Fatalf("eddsa-rdfc-2022 must be registered by RegisterEdDSARDFC2022: %v", err)
 	}
 	if got := c.Name(); got != "urdna2015" {
 		t.Errorf("eddsa-rdfc-2022 canonicalizer = %q, want urdna2015", got)
@@ -26,8 +30,8 @@ func TestRegisterCryptosuite_RDFCRegisteredAtInit(t *testing.T) {
 }
 
 func TestCanonicalizerFor_Unknown(t *testing.T) {
-	if _, err := canonicalizerFor("eddsa-nonexistent-9999"); err == nil {
-		t.Error("unregistered cryptosuite: want error")
+	if _, err := canonicalizerFor("eddsa-nonexistent-9999"); !errors.Is(err, ErrCryptosuiteNotRegistered) {
+		t.Errorf("unregistered cryptosuite: %v, want ErrCryptosuiteNotRegistered", err)
 	}
 }
 
@@ -72,4 +76,16 @@ func TestRegisterCryptosuite_DuplicateRejected(t *testing.T) {
 		}
 	}()
 	RegisterCryptosuite(CryptosuiteEdDSAJCS2022, jcs.Canonicalizer{})
+}
+
+// eddsa-rdfc-2022 is registered only through RegisterEdDSARDFC2022, which
+// probes its canonicalizer: RegisterCryptosuite refuses the name, naming the
+// function.
+func TestRegisterCryptosuite_RefusesRDFC(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "vc.RegisterEdDSARDFC2022") {
+			t.Errorf("RegisterCryptosuite(eddsa-rdfc-2022): %v, want a panic naming vc.RegisterEdDSARDFC2022", r)
+		}
+	}()
+	RegisterCryptosuite(CryptosuiteEdDSARDFC2022, jcs.Canonicalizer{})
 }

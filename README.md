@@ -133,10 +133,11 @@ stability promises:
   credential signature: the credential `@context` set (embedded,
   digest-pinned), the Data Integrity proof algorithm, both cryptosuites and
   their canonicalizations, and the source-commitment form. `eddsa-jcs-2022`
-  is the suite a proof is issued with by default, and `eddsa-rdfc-2022` only
-  when the issuer chooses it; a verifier accepts proofs of both by default
-  (`vc` registers both at init). Changing any of these
-  breaks proof compatibility with already-issued credentials and is a
+  is the suite a proof is issued with by default; `eddsa-rdfc-2022` is used,
+  to issue or to verify, only by a process that calls
+  `vc.RegisterEdDSARDFC2022`, since verifying it runs JSON-LD processing on
+  the untrusted document before its signature is checked. Changing any of
+  these breaks proof compatibility with already-issued credentials and is a
   next-MAJOR change. The freeze is enforced by tests (official W3C
   vc-di-eddsa vectors, KATs, context sha256 pins), not by process — see the
   freeze declaration in the CHANGELOG for the exact scope, including the
