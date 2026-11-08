@@ -24,9 +24,15 @@ one directly.
 
 A decision refused after its record was written is recorded again with the same
 `DecisionID`. A decision is refused when **any** record of its id is refused,
-whatever order the records are read in; the summary level counts such a
-decision once, as refused. A refusal carries the check that refused, an
-acceptance none. `Evidence` is an ordered list of roles and content addresses
+whatever order the records are read in. A writer records a decision refused
+at most once, never records it accepted after that refusal, and makes each
+record of a decision only once the previous one has been taken. Then the
+summary level counts each decision once. It keeps the ids of accepted
+decisions only, so its memory is bounded by what the deciding party admits,
+not by refusals, which any caller can cause; it counts any other refusal as
+it comes. A writer that breaks the rule makes the summary count a decision
+more than once, and nothing else changes. A refusal carries the check that
+refused, an acceptance none. `Evidence` is an ordered list of roles and content addresses
 (`contentaddress.Address`), never a value. An actor is non-empty valid UTF-8,
 as the id and the deciding party are: a reader keys on it. Times are within
 the years 0000–9999. Text for people (the reason, attribute values) is

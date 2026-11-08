@@ -50,8 +50,15 @@ type Evidence struct {
 // between the record and the execution, say — is recorded again with the same
 // DecisionID, Outcome Refused, its Check, and At the time of the refusal. A
 // decision is refused when any record of its DecisionID is refused, whatever
-// the order the records are read in; a refused decision is never recorded as
-// accepted again.
+// the order the records are read in.
+//
+// A writer follows one rule for the records of a decision: it records the
+// decision refused at most once, and never records it accepted after that
+// refusal; it makes each record only once the previous one of the decision
+// has been taken (Filter.Record returned). Recording a decision accepted again
+// changes nothing. A writer that breaks the rule makes the summary level
+// count the decision more than once, and nothing else: no decision's outcome,
+// and no record, changes.
 type Record struct {
 	DecisionID string    // unique per decision; made by the deciding party (128 random bits, say)
 	Point      string    // the deciding party's ID: a gate's, a boundary's
@@ -238,9 +245,26 @@ type Filter struct {
 	sink  Sink
 	warn  *slog.Logger
 
-	mu        sync.Mutex
-	from      time.Time
-	decisions map[string]map[string]Count // point → DecisionID → its outcome and check so far (N unused)
+	mu      sync.Mutex
+	from    time.Time
+	windows map[string]*window // point → its tally since from
+}
+
+// outcomeCheck is what a Count counts: an outcome and its refusing check.
+type outcomeCheck struct {
+	outcome Outcome
+	check   string
+}
+
+// window is one deciding party's tally at LevelSummary. It keeps the ids of
+// the decisions accepted in it only: an acceptance needs whatever the
+// deciding party checks for, while any caller can cause a refusal, so the
+// ids kept are bounded by what the deciding party admits. A refusal of a
+// decision not accepted in it is counted as it comes and keeps no id. Its
+// counts are keyed by outcome and check, fixed names of the deciding party.
+type window struct {
+	counts   map[outcomeCheck]int64
+	accepted map[string]bool // DecisionID → still accepted (false once a refusal of it is counted)
 }
 
 // NewFilter returns a Filter at level, writing to sink. The zero Level is
@@ -263,7 +287,7 @@ func NewFilter(level Level, sink Sink, warn *slog.Logger) (*Filter, error) {
 
 func (f *Filter) resetWindow(from time.Time) {
 	f.from = from
-	f.decisions = map[string]map[string]Count{}
+	f.windows = map[string]*window{}
 }
 
 // Record writes r as the level says.
@@ -290,33 +314,44 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 	return nil
 }
 
-// count adds r to the window, by decision: a decision's outcome in the window
-// is refused once any of its records is (with the first refusing check), and a
-// repeated record changes nothing, so each decision is counted once, whatever
-// the order its records arrive in.
+// count adds r to the window. An accepted decision is counted once, however
+// often it is recorded accepted; a refusal of it then moves it to that
+// refusal's check. A refusal of a decision not accepted in the window is
+// counted as it comes: under the writer's rule (see Record) a decision is
+// refused at most once, so it is counted once.
 func (f *Filter) count(r Record) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.from.IsZero() {
 		f.from = r.At
 	}
-	ids := f.decisions[r.Point]
-	if ids == nil {
-		ids = map[string]Count{}
-		f.decisions[r.Point] = ids
+	w := f.windows[r.Point]
+	if w == nil {
+		w = &window{counts: map[outcomeCheck]int64{}, accepted: map[string]bool{}}
+		f.windows[r.Point] = w
 	}
-	prev, seen := ids[r.DecisionID]
-	if seen && (prev.Outcome == Refused || r.Outcome == Accepted) {
-		return
+	stillAccepted, seen := w.accepted[r.DecisionID]
+	switch {
+	case r.Outcome == Accepted && !seen:
+		w.accepted[r.DecisionID] = true
+		w.counts[outcomeCheck{outcome: Accepted}]++
+	case r.Outcome == Accepted:
+	case seen && stillAccepted:
+		w.accepted[r.DecisionID] = false
+		w.counts[outcomeCheck{outcome: Accepted}]--
+		w.counts[outcomeCheck{outcome: Refused, check: r.Check}]++
+	case seen:
+	default:
+		w.counts[outcomeCheck{outcome: Refused, check: r.Check}]++
 	}
-	ids[r.DecisionID] = Count{Outcome: r.Outcome, Check: r.Check}
 }
 
 // Flush writes, at LevelSummary, one Summary per deciding party with the
 // counts of its decisions recorded since the last Flush (or the first record):
-// each decision once, by its outcome in the window. A decision whose records
-// fall in two windows is counted in each. It starts a new window
-// at until. A window without decisions writes nothing.
+// each decision once, by its outcome in the window, when its writer follows
+// the rule for a decision's records (see Record). A decision whose records
+// fall in two windows is counted in each. It starts a new window at until. A
+// window without decisions writes nothing.
 // until must not be zero or before the window's start. At other levels it does
 // nothing. A sink's failure is a warning; the decisions do not change.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
@@ -327,26 +362,28 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 		return nil
 	}
 	f.mu.Lock()
-	if until.IsZero() || (!f.from.IsZero() && until.Before(f.from)) {
+	windows, from := f.windows, f.from
+	if until.IsZero() {
 		f.mu.Unlock()
-		return fmt.Errorf("decisionrecord: flush until %v, before the window's start %v", until, f.from)
+		return errors.New("decisionrecord: flush until the zero time")
 	}
-	decisions, from := f.decisions, f.from
+	if !from.IsZero() && until.Before(from) {
+		f.mu.Unlock()
+		return fmt.Errorf("decisionrecord: flush until %v, before the window's start %v", until, from)
+	}
 	f.resetWindow(until)
 	f.mu.Unlock()
-	points := make([]string, 0, len(decisions))
-	for p := range decisions {
+	points := make([]string, 0, len(windows))
+	for p := range windows {
 		points = append(points, p)
 	}
 	sort.Strings(points)
 	for _, p := range points {
-		n := map[Count]int64{}
-		for _, c := range decisions[p] {
-			n[c]++
-		}
 		s := Summary{Point: p, From: from, Until: until}
-		for k, c := range n {
-			s.Counts = append(s.Counts, Count{Outcome: k.Outcome, Check: k.Check, N: c})
+		for k, n := range windows[p].counts {
+			if n > 0 {
+				s.Counts = append(s.Counts, Count{Outcome: k.outcome, Check: k.check, N: n})
+			}
 		}
 		sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
 		if err := f.sink.Summary(ctx, s); err != nil {

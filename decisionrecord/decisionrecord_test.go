@@ -46,6 +46,9 @@ func (m *memSink) Record(_ context.Context, r decisionrecord.Record) error {
 }
 
 func (m *memSink) Summary(_ context.Context, s decisionrecord.Summary) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -661,9 +664,9 @@ func TestFilter_SummaryUnderConcurrency(t *testing.T) {
 	}
 }
 
-// Within a window each decision is counted once: a refusal dominates in any
-// order, a repeat changes nothing, and the first refusing check is kept.
-func TestFilter_SummaryCountsEachDecisionOnceInAnyOrder(t *testing.T) {
+// A decision whose records follow the writer's rule (refused at most once,
+// never accepted after that) is counted once, by its outcome in the window.
+func TestFilter_SummaryCountsEachDecisionOnce(t *testing.T) {
 	sink := &memSink{}
 	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
 	if err != nil {
@@ -673,9 +676,7 @@ func TestFilter_SummaryCountsEachDecisionOnceInAnyOrder(t *testing.T) {
 	for _, r := range []decisionrecord.Record{
 		rec("a", "gate", decisionrecord.Accepted, ""),
 		rec("a", "gate", decisionrecord.Refused, "expired"),
-		rec("a", "gate", decisionrecord.Refused, "once"),
 		rec("b", "gate", decisionrecord.Refused, "route"),
-		rec("b", "gate", decisionrecord.Accepted, ""),
 		rec("c", "gate", decisionrecord.Accepted, ""),
 		rec("c", "gate", decisionrecord.Accepted, ""),
 	} {
@@ -693,5 +694,122 @@ func TestFilter_SummaryCountsEachDecisionOnceInAnyOrder(t *testing.T) {
 	}
 	if len(sink.summaries) != 1 || fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint(want) {
 		t.Errorf("counts = %+v, want %+v", sink.summaries, want)
+	}
+}
+
+// The summary window keeps the ids of accepted decisions only: a refusal of a
+// decision not accepted in the window is counted as it comes, so refusals,
+// which need no reservation, cannot grow the window's memory.
+func TestFilter_SummaryKeepsNoIDOfARefusal(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 10000; i++ {
+		if err := f.Record(ctx, rec(fmt.Sprint("r", i), "gate", decisionrecord.Refused, "route")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"a1", "a2", "a3"} {
+		if err := f.Record(ctx, rec(id, "gate", decisionrecord.Accepted, "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := decisionrecord.KeptDecisionIDs(f); n != 3 {
+		t.Errorf("the window keeps %d ids, want the 3 accepted", n)
+	}
+	if err := f.Flush(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	want := []decisionrecord.Count{{Outcome: decisionrecord.Accepted, N: 3}, {Outcome: decisionrecord.Refused, Check: "route", N: 10000}}
+	if len(sink.summaries) != 1 || fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint(want) {
+		t.Errorf("counts = %+v, want %+v", sink.summaries, want)
+	}
+	if n := decisionrecord.KeptDecisionIDs(f); n != 0 {
+		t.Errorf("after Flush the window keeps %d ids", n)
+	}
+}
+
+// A Flush refused for its time reads the window under the lock, while records
+// arrive (run with -race).
+func TestFilter_RefusedFlushDoesNotRaceRecord(t *testing.T) {
+	ctx := context.Background()
+	for i := 0; i < 50; i++ {
+		f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, &memSink{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := f.Flush(ctx, time.Time{}); err == nil {
+				t.Error("a flush until the zero time was taken")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := f.Record(ctx, rec("a", "gate", decisionrecord.Accepted, "")); err != nil {
+				t.Error(err)
+			}
+		}()
+		wg.Wait()
+	}
+}
+
+// A decision accepted in one window and refused in the next is counted in
+// each, by its outcome there, once.
+func TestFilter_SummaryCountsADecisionAcrossWindowsOnceInEach(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := f.Record(ctx, rec("a", "gate", decisionrecord.Accepted, "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Flush(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	refused := rec("a", "gate", decisionrecord.Refused, "expired")
+	refused.At = t0.Add(2 * time.Minute)
+	if err := f.Record(ctx, refused); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Flush(ctx, t0.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.summaries) != 2 ||
+		fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint([]decisionrecord.Count{{Outcome: decisionrecord.Accepted, N: 1}}) ||
+		fmt.Sprint(sink.summaries[1].Counts) != fmt.Sprint([]decisionrecord.Count{{Outcome: decisionrecord.Refused, Check: "expired", N: 1}}) {
+		t.Errorf("summaries = %+v", sink.summaries)
+	}
+}
+
+// A window in which every accepted decision was refused writes no count of
+// zero acceptances.
+func TestFilter_SummaryWritesNoZeroCount(t *testing.T) {
+	sink := &memSink{}
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, r := range []decisionrecord.Record{
+		rec("a", "gate", decisionrecord.Accepted, ""),
+		rec("a", "gate", decisionrecord.Refused, "expired"),
+	} {
+		if err := f.Record(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Flush(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if want := []decisionrecord.Count{{Outcome: decisionrecord.Refused, Check: "expired", N: 1}}; len(sink.summaries) != 1 || fmt.Sprint(sink.summaries[0].Counts) != fmt.Sprint(want) {
+		t.Errorf("summaries = %+v, want %+v", sink.summaries, want)
 	}
 }

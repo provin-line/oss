@@ -55,7 +55,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   ordered list of content addresses, the party's own fields — never a payload;
   a decision is refused if any of its records is), and `Filter`, which writes
   it at a level chosen explicitly: `all`, `refusals`, `summary` (`Summary`,
-  each decision counted once per window, through `SummaryRecorder`) or `none`;
+  each decision counted once per window, through `SummaryRecorder`, keeping
+  the ids of accepted decisions only, so a flood of refusals does not grow its
+  memory; a writer records a decision refused at most once, see `Record`) or
+  `none`;
   the zero level and a `Filter` not made by `NewFilter` are refused. At `all` a
   record the sink does not accept is an error, so the deciding party refuses
   the decision; at other levels it is a warning. A malformed record
