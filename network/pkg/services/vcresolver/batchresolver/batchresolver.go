@@ -23,6 +23,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/vc"
 )
@@ -135,7 +136,7 @@ func (r *Runner) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return nil
 				}
-				r.logger.Printf("batchresolver: drain tick: %v", err)
+				r.logger.Printf("batchresolver: drain tick: %s", netexcerpt.ErrorText(err))
 			}
 		}
 	}
@@ -193,7 +194,7 @@ func (r *Runner) resolveEntry(ctx context.Context, e vcresolver.UnresolvedEntry)
 		ep, err := r.deriveIssuerEndpoint(ctx, e.ReferrerIssuer)
 		switch {
 		case err != nil:
-			r.logger.Printf("batchresolver: %s: issuer %q endpoint derivation: %v", e.Hash, e.ReferrerIssuer, err)
+			r.logger.Printf("batchresolver: %s: issuer %s endpoint derivation: %s", e.Hash, netexcerpt.ValueText(e.ReferrerIssuer), netexcerpt.ErrorText(err))
 		case ep != "" && ep != e.UpstreamEndpoint:
 			tried = true
 			if done := r.tryEndpoint(ctx, e, ep); done {
@@ -215,7 +216,7 @@ func (r *Runner) resolveEntry(ctx context.Context, e vcresolver.UnresolvedEntry)
 func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, endpoint string) (done bool) {
 	if err := r.guard.CheckURL(ctx, endpoint); err != nil {
 		// An SSRF-unsafe endpoint is actively suspicious — terminal drop (D-17g-8).
-		r.logger.Printf("batchresolver: dropping %s: endpoint %q rejected by SSRF guard: %v", e.Hash, endpoint, err)
+		r.logger.Printf("batchresolver: dropping %s: endpoint %s rejected by SSRF guard: %s", e.Hash, netexcerpt.ValueText(endpoint), netexcerpt.ErrorText(err))
 		r.remove(e.Hash)
 		return true
 	}
@@ -227,7 +228,7 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 			r.retryOrDrop(e)
 			return true
 		case catTerminal:
-			r.logger.Printf("batchresolver: dropping %s: terminal fetch error from %q: %v", e.Hash, endpoint, err)
+			r.logger.Printf("batchresolver: dropping %s: terminal fetch error from %s: %s", e.Hash, netexcerpt.ValueText(endpoint), netexcerpt.ErrorText(err))
 			r.remove(e.Hash)
 			return true
 		default: // catConnection — let the caller try the next endpoint.
@@ -236,21 +237,21 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 	}
 	// Never trust the peer: the fetched body must hash to the requested address (D-17g-11).
 	if got, herr := cred.Hash(); herr != nil || got != e.Hash {
-		r.logger.Printf("batchresolver: dropping %s: peer %q served a mismatched body (got %q, err %v)", e.Hash, endpoint, got, herr)
+		r.logger.Printf("batchresolver: dropping %s: peer %s served a mismatched body (got %q, err %s)", e.Hash, netexcerpt.ValueText(endpoint), got, netexcerpt.ErrorText(herr))
 		r.remove(e.Hash)
 		return true
 	}
 	b, merr := cred.MarshalJSON()
 	if merr != nil {
 		// A local encode failure is not the endpoint's fault — retry the entry, no fallback.
-		r.logger.Printf("batchresolver: %s: marshal fetched credential: %v", e.Hash, merr)
+		r.logger.Printf("batchresolver: %s: marshal fetched credential: %s", e.Hash, netexcerpt.ErrorText(merr))
 		r.retryOrDrop(e)
 		return true
 	}
 	// Re-submit at this hole's depth: StoreVC fills the hole and enqueues the next-deeper
 	// predecessor at AssemblyDepth+1 (D-17g-5/D-17g-12).
 	if _, serr := r.sub.StoreVC(ctx, b, e.UpstreamEndpoint, e.AssemblyDepth); serr != nil {
-		r.logger.Printf("batchresolver: %s: store fetched predecessor: %v", e.Hash, serr)
+		r.logger.Printf("batchresolver: %s: store fetched predecessor: %s", e.Hash, netexcerpt.ErrorText(serr))
 		r.retryOrDrop(e)
 		return true
 	}
@@ -296,13 +297,13 @@ func (r *Runner) retryOrDrop(e vcresolver.UnresolvedEntry) {
 		return
 	}
 	if err := r.pool.IncrementRetry(e.Hash); err != nil {
-		r.logger.Printf("batchresolver: %s: increment retry: %v", e.Hash, err)
+		r.logger.Printf("batchresolver: %s: increment retry: %s", e.Hash, netexcerpt.ErrorText(err))
 	}
 }
 
 func (r *Runner) remove(hash string) {
 	if err := r.pool.Remove(hash); err != nil {
-		r.logger.Printf("batchresolver: %s: remove from pool: %v", hash, err)
+		r.logger.Printf("batchresolver: %s: remove from pool: %s", hash, netexcerpt.ErrorText(err))
 	}
 }
 

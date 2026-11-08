@@ -1136,6 +1136,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the 64 KiB of headers the server reads and connect's own words, goes to the
   one who sent it alone and to no log. `/readyz` logs the error of a failed
   check quoted, on one line, within 1024 bytes.
+- The network node's audit notations and its services' log lines do not
+  grow with what others sent. Each notation the auditor records, and each it
+  serves through `GetAuditStatus` and `ListAuditStatuses`, is within 1024
+  bytes of UTF-8, and a value the auditor names itself in one (a receipt
+  entry, a consumed hash, an unresolved predecessor) is quoted within 128
+  bytes; it cut a receipt entry at 80 bytes, which could end inside a
+  character. A record stored before is not rewritten; it is served bounded.
+  `auditor.ConsumeVerifier.Verify` bounds its verdict's `Notation` the same
+  way, and names a consumed hash that is not a content address within 128
+  bytes. The batch resolver's log lines name a DID or an endpoint within 128
+  bytes, and its and the auditor's an error within 1024, quoted, so neither
+  their length nor a line break in them reaches the log as it is.
+  `chainmanager` names a connection-info key it does not use within 128
+  bytes, with its length when it is cut.
 
 ## [0.3.0] - 2026-08-05
 

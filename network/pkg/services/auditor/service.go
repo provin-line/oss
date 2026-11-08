@@ -35,8 +35,9 @@ func NewStatusService(store StatusStore, receipts ReceiptReader) *StatusService 
 	return &StatusService{store: store, receipts: receipts}
 }
 
-// GetStatus returns the latest recorded verdict for headHash. A malformed content address
-// is ErrInvalidArgument; a well-formed head with no recorded verdict is ErrNotFound.
+// GetStatus returns the latest recorded verdict for headHash, each notation within 1024
+// bytes of UTF-8, whatever the store holds. A malformed content address is
+// ErrInvalidArgument; a well-formed head with no recorded verdict is ErrNotFound.
 func (s *StatusService) GetStatus(ctx context.Context, headHash string) (AuditRecord, error) {
 	if !isContentAddress(headHash) {
 		return AuditRecord{}, fmt.Errorf("%w: head_hash %q is not a sha256:<hex> content address", ErrInvalidArgument, headHash)
@@ -48,10 +49,11 @@ func (s *StatusService) GetStatus(ctx context.Context, headHash string) (AuditRe
 		// never as absence.
 		return AuditRecord{}, fmt.Errorf("audit status for %q: %w", headHash, err)
 	}
-	return rec, nil
+	return boundRecord(rec), nil
 }
 
-// ListStatuses returns one scan page of recorded verdicts: up to scanLimit
+// ListStatuses returns one scan page of recorded verdicts, their notations bounded as
+// GetStatus's are: up to scanLimit
 // store entries strictly after fromExclusive (lexicographic), narrowed to
 // those whose AuditedAt lies within [after, before] (inclusive; a zero bound
 // is open). The page is bounded by SCAN progress, not matches — lastScanned
@@ -80,6 +82,7 @@ func (s *StatusService) ListStatuses(ctx context.Context, fromExclusive string, 
 				continue
 			}
 		}
+		e.Record = boundRecord(e.Record)
 		entries = append(entries, e)
 	}
 	if len(page) == scanLimit {

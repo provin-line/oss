@@ -9,6 +9,7 @@ import (
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
@@ -370,7 +371,7 @@ var connectionInfoValue = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9._~:/?@!$
 func checkConnectionInfo(info map[string]string) error {
 	for k, v := range info {
 		if !connectionInfoKeys[k] {
-			return fmt.Errorf("publisher returned connection info with an unknown key %.64q", k)
+			return fmt.Errorf("publisher returned connection info with an unknown key %s", netexcerpt.ValueText(k))
 		}
 		if !connectionInfoValue.MatchString(v) {
 			return fmt.Errorf("publisher returned connection info %q with a value outside the allowed form", k)
