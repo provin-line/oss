@@ -23,6 +23,7 @@ import (
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -68,6 +69,7 @@ const (
 	// name the exact key in its own fatal message without duplicating the
 	// literal (this package already uses it below for the same reason).
 	VCStoreBearerKey           = pipelineKey + ".vc-store-bearer"
+	credentialOriginsKey       = pipelineKey + ".credential-origins"
 	maxCredentialSizeKey       = pipelineKey + ".max-credential-size"
 	maxPushBodySizeKey         = pipelineKey + ".max-push-body-size"
 	maxRetainChunkSizeKey      = pipelineKey + ".max-retain-chunk-size"
@@ -122,9 +124,16 @@ type Config struct {
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
 	// and whenever any consuming loop runs (the async batch resolver presents the same
-	// token for peer predecessor fetches) — a tokenless client would be rejected at
-	// runtime, so LoadPipelineConfig fails closed on both.
+	// token to the peers PresentsCredentialTo admits) — a tokenless client would be
+	// rejected at runtime, so LoadPipelineConfig fails closed on both.
 	VCStoreBearer string
+	// CredentialOrigins are origins, besides the destinations the operator configured
+	// (VCStoreEndpoint's and each loop's upstream endpoint), that VCStoreBearer may be
+	// shown to: peers the pipeline learns of at runtime (see PresentsCredentialTo).
+	// The loader writes each as "scheme://host[:port]", scheme and host lower case,
+	// without the scheme's default port; PresentsCredentialTo reads any spelling of an
+	// origin. Empty by default.
+	CredentialOrigins []string
 	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
 	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
 	// bloated body. Node-level: it governs every fetch/store, not just the async resolver.
@@ -506,6 +515,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
+	if out.CredentialOrigins, err = loadCredentialOrigins(cfg); err != nil {
+		return nil, err
+	}
 	if out.AuditRunner, err = loadAuditRunner(cfg); err != nil {
 		return nil, err
 	}
@@ -693,6 +705,56 @@ func loadBatchResolver(cfg *hoconconfig.Config) (BatchResolverConfig, error) {
 	}
 	br.Interval = interval
 	return br, nil
+}
+
+// loadCredentialOrigins reads credential-origins, each in its one spelling.
+func loadCredentialOrigins(cfg *hoconconfig.Config) ([]string, error) {
+	listed, err := cfg.StringList(credentialOriginsKey)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: config %s: %w", credentialOriginsKey, err)
+	}
+	var out []string
+	for _, o := range listed {
+		parsed, err := origin.Parse(o)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: config %s: %w", credentialOriginsKey, err)
+		}
+		out = append(out, parsed)
+	}
+	return out, nil
+}
+
+// PresentsCredentialTo reports whether a fetch the pipeline makes may present
+// VCStoreBearer to endpoint, whichever part of the pipeline makes it: whether
+// endpoint's origin is that of a destination the operator configured
+// (VCStoreEndpoint, or a loop's upstream endpoint) or one of CredentialOrigins.
+// Any other endpoint — one a StoreVC caller hints, or an issuer's DID document
+// names — is fetched from without it, so the node's L1 token reaches only the
+// parties the operator named. An endpoint that is not an http(s) URL, or that
+// carries user information, is presented nothing. A fetch that presents it
+// follows no redirect.
+func (c *Config) PresentsCredentialTo(endpoint string) bool {
+	return origin.In(endpoint, append(c.configuredDestinations(), c.CredentialOrigins...))
+}
+
+// configuredDestinations returns the origins of the endpoints the operator
+// configured: VCStoreEndpoint's and each loop's upstream endpoint's.
+func (c *Config) configuredDestinations() []string {
+	var out []string
+	add := func(endpoint string) {
+		if o, ok := origin.Of(endpoint); ok {
+			out = append(out, o)
+		}
+	}
+	add(c.VCStoreEndpoint)
+	for _, lc := range c.Loops {
+		add(lc.Sink.UpstreamEndpoint)
+		add(lc.Chained.UpstreamEndpoint)
+		for _, in := range lc.Aggregate.Ingresses {
+			add(in.UpstreamEndpoint)
+		}
+	}
+	return out
 }
 
 // producingIdentity extracts a producing loop's (output subject, issuer DID);

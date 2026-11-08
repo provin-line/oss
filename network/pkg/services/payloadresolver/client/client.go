@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 )
@@ -183,7 +185,13 @@ func New(cfg Config) *Resolver {
 	}
 	var retainClient payloadpbconnect.PayloadStoreServiceClient
 	if cfg.StoreEndpoint != "" {
-		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(cfg.HTTPClient, cfg.StoreEndpoint,
+		// The store client carries the bearer, so it follows no redirect: the
+		// bearer goes to StoreEndpoint's origin only.
+		storeClient := cfg.HTTPClient
+		if c, ok := storeClient.(*http.Client); ok {
+			storeClient = origin.Confine(c)
+		}
+		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(storeClient, cfg.StoreEndpoint,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)))
 	}
 	return &Resolver{

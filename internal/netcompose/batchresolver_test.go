@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -256,6 +259,7 @@ func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	resolver := didresolver.New(guard)
 	cfg := brConfig([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}, 5*time.Millisecond, 1<<20)
 	cfg.VCStoreBearer = token
+	cfg.CredentialOrigins = []string{peer.URL} // httptest's URL is an origin as the loader spells it
 	r, err := BuildBatchResolver(pool, svc, guard, resolver, cfg)
 	if err != nil || r == nil {
 		t.Fatalf("BuildBatchResolver: r=%v err=%v", r, err)
@@ -268,6 +272,74 @@ func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	waitPoolEmpty(t, pool)
 	if _, err := svc.ResolveVC(ctx, pAddr); err != nil {
 		t.Errorf("predecessor not assembled from authenticated peer (bearer not presented?): %v", err)
+	}
+}
+
+// The node's bearer goes only to an origin the operator listed: a peer named
+// by a StoreVC caller's hint, or by an issuer's DID document, is fetched
+// from without it.
+func TestBatchResolver_Integration_BearerOnlyToListedOrigins(t *testing.T) {
+	for _, listed := range []bool{false, true} {
+		ctx := context.Background()
+		const token = "audit-token"
+
+		var seen []string
+		var mu sync.Mutex
+		record := connect.WithInterceptors(connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+			return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+				mu.Lock()
+				seen = append(seen, req.Header().Get("Authorization"))
+				mu.Unlock()
+				return next(ctx, req)
+			}
+		}))
+		peerSvc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), memstore.NewPool())
+		_, ph := vcpbconnect.NewVCResolverServiceHandler(vchandler.New(peerSvc), record)
+		peer := httptest.NewServer(ph)
+		t.Cleanup(peer.Close)
+		p := brCred(t, "", "")
+		pAddr := brHash(t, p)
+		if _, err := peerSvc.StoreVC(ctx, brMarshal(t, p), "", 0); err != nil {
+			t.Fatalf("seed peer: %v", err)
+		}
+
+		pool := memstore.NewPool()
+		svc := vcresolver.New(vcresolver.NewVariantStore(memstore.NewBackend()), pool)
+		if _, err := svc.StoreVC(ctx, brMarshal(t, brCred(t, pAddr, "")), peer.URL, 0); err != nil {
+			t.Fatalf("seed local: %v", err)
+		}
+
+		guard := core.NewURLGuard(core.WithAllowLoopback(true))
+		cfg := brConfig([]pipelineconfig.LoopConfig{{Role: pipelineconfig.RoleSink}}, 5*time.Millisecond, 1<<20)
+		cfg.VCStoreBearer = token
+		cfg.VCStoreEndpoint = "https://store.example"
+		if listed {
+			cfg.CredentialOrigins = []string{peer.URL}
+		}
+		r, err := BuildBatchResolver(pool, svc, guard, didresolver.New(guard), cfg)
+		if err != nil {
+			t.Fatalf("BuildBatchResolver: %v", err)
+		}
+		runCtx, cancel := context.WithCancel(ctx)
+		go func() { _ = r.Run(runCtx) }()
+		waitPoolEmpty(t, pool)
+		cancel()
+
+		want := ""
+		if listed {
+			want = "Bearer " + token
+		}
+		mu.Lock()
+		got := append([]string(nil), seen...)
+		mu.Unlock()
+		if len(got) == 0 {
+			t.Fatalf("listed=%v: the peer was not asked", listed)
+		}
+		for _, h := range got {
+			if h != want {
+				t.Errorf("listed=%v: peer saw Authorization %q, want %q", listed, h, want)
+			}
+		}
 	}
 }
 
@@ -332,5 +404,34 @@ func TestPeerFetcher_FetchEndsWithinTheTimeout(t *testing.T) {
 func TestPeerFetcher_DefaultsToPeerFetchTimeout(t *testing.T) {
 	if got := (&peerFetcher{}).fetchTimeout(); got != peerFetchTimeout || got <= 0 {
 		t.Fatalf("fetchTimeout = %s, want peerFetchTimeout (%s)", got, peerFetchTimeout)
+	}
+}
+
+// A named peer that redirects does not pass the bearer on: the fetch that
+// shows the credential follows no redirect.
+func TestPeerFetcher_ShowsTheBearerToNoServerANamedPeerRedirectsTo(t *testing.T) {
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	named := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(named.Close)
+	f := &peerFetcher{
+		httpClient:           named.Client(),
+		bearer:               "node-token",
+		presentsCredentialTo: func(endpoint string) bool { return strings.HasPrefix(endpoint, named.URL) },
+		maxBytes:             1 << 20,
+	}
+	if _, err := f.Fetch(context.Background(), named.URL, "sha256:"+strings.Repeat("a", 64)); err == nil {
+		t.Error("a redirected fetch succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the named peer redirected to saw the bearer")
 	}
 }

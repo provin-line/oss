@@ -14,6 +14,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
@@ -772,7 +773,10 @@ func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstrea
 // transport whenever any loop is configured, and chainconfig.
 // LoadChainConfig requires node-did non-empty on that transport).
 func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID string) pipelineruntime.Deps {
-	httpClient := guard.HTTPClient()
+	// The clients built over httpClient present vc-store-bearer to a
+	// destination the operator configured, so none follows a redirect: the
+	// bearer goes to that destination's origin only.
+	httpClient := origin.Confine(guard.HTTPClient())
 
 	vcClient := newVCStoreClient(pipeCfg, httpClient)
 	store := vcStoreAdapter{client: vcClient}
@@ -785,7 +789,9 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		Bearer:     pipeCfg.VCStoreBearer,
 	})
 
-	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient, pipeCfg.MaxRetainChunkSize)
+	// The payload client confines its own bearer-carrying store client; its
+	// tokenless fetches from a publisher follow redirects as before.
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize)
 
 	return pipelineruntime.Deps{
 		Resolver:      didResolver,

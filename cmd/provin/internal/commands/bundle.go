@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/vc"
@@ -58,6 +59,12 @@ type BundleExportConfig struct {
 	// separately. Unmapped registries use the advertisement, then the
 	// legacy fallback (DIDBases → https://{registry}).
 	AuditBases map[string]string
+	// CredentialOrigins are the origins, besides the registry's, the caller's
+	// token may be shown to. An issuer's #audit or #vc-resolver endpoint, or
+	// a base mapped to one, at any other origin is called without the token:
+	// the token lets its holder act as the caller, and those endpoints are
+	// named by the chain being exported.
+	CredentialOrigins []string
 }
 
 // BundleExport archives head's chain and authority documents into cfg.Out
@@ -82,17 +89,22 @@ func BundleExport(ctx context.Context, env Env, cfg BundleExportConfig) error {
 	)
 	docs := didresolver.New(guard, didresolver.WithRegistryBaseURL(bundleRegistryBase(cfg.DIDBases, cfg.AllowPrivate)))
 
+	credentialOrigins, err := tokenOrigins(env.Registry, cfg.CredentialOrigins)
+	if err != nil {
+		return err
+	}
 	exportOpts := bundle.ExportOptions{MaxDepth: cfg.MaxDepth, Source: env.Registry, AggregateComplete: cfg.AggregateComplete}
 	if cfg.AggregateComplete {
 		exportOpts.Consumed = &wireConsumedSource{
-			token:      env.Token,
-			guard:      guard,
-			docs:       docs,
-			didBases:   cfg.DIDBases,
-			vcResolver: cfg.VCResolverBases,
-			auditBases: cfg.AuditBases,
-			audit:      map[string]auditClient{},
-			vcs:        map[string]vcpbconnect.VCResolverServiceClient{},
+			token:             env.Token,
+			credentialOrigins: credentialOrigins,
+			guard:             guard,
+			docs:              docs,
+			didBases:          cfg.DIDBases,
+			vcResolver:        cfg.VCResolverBases,
+			auditBases:        cfg.AuditBases,
+			audit:             map[string]auditClient{},
+			vcs:               map[string]vcpbconnect.VCResolverServiceClient{},
 
 			closeUnmapped: cfg.AllowPrivate,
 		}
@@ -192,14 +204,17 @@ func confidence(s vc.ConfidenceState) string {
 // --allow-loopback/--allow-private apply uniformly). Only the caller's own
 // --registry endpoint uses the environment client (explicit trust).
 type wireConsumedSource struct {
-	token      string
-	guard      *core.URLGuard
-	docs       *didresolver.Resolver
-	didBases   map[string]string
-	vcResolver map[string]string // registry -> #vc-resolver override (split-horizon)
-	auditBases map[string]string // registry -> #audit override (audit-specific split-horizon)
-	audit      map[string]auditClient
-	vcs        map[string]vcpbconnect.VCResolverServiceClient
+	token string
+	// credentialOrigins are the origins token is shown to: the registry's
+	// and the caller's --credential-origin values.
+	credentialOrigins []string
+	guard             *core.URLGuard
+	docs              *didresolver.Resolver
+	didBases          map[string]string
+	vcResolver        map[string]string // registry -> #vc-resolver override (split-horizon)
+	auditBases        map[string]string // registry -> #audit override (audit-specific split-horizon)
+	audit             map[string]auditClient
+	vcs               map[string]vcpbconnect.VCResolverServiceClient
 	// closeUnmapped mirrors --allow-private (F8): when set, an unmapped issuer
 	// registry does NOT fall back to https://{registry} — it must be mapped via
 	// --did-base, so an attacker-influenced credential cannot drive a private
@@ -223,6 +238,55 @@ const (
 var issuerClientOptions = []connect.ClientOption{
 	connect.WithAcceptCompression("gzip", nil, nil),
 	connect.WithReadMaxBytes(issuerReadMaxBytes),
+}
+
+// tokenOrigins returns the origins the token may be shown to: the registry's,
+// and each of named, in their one spelling.
+func tokenOrigins(registry string, named []string) ([]string, error) {
+	out := make([]string, 0, 1+len(named))
+	if o, ok := origin.Of(registry); ok {
+		out = append(out, o)
+	}
+	for _, n := range named {
+		o, err := origin.Parse(n)
+		if err != nil {
+			return nil, fmt.Errorf("bundle export: --credential-origin: %w", err)
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+// presentsCredentialTo reports whether the token may be shown to endpoint:
+// whether its origin is one of credentialOrigins.
+func (s *wireConsumedSource) presentsCredentialTo(endpoint string) bool {
+	return origin.In(endpoint, s.credentialOrigins)
+}
+
+// auditClientFor returns an AuditService client for base, with the token only
+// when base may be shown it, and then following no redirect, so the token
+// goes to base's origin only.
+func (s *wireConsumedSource) auditClientFor(base string) (auditClient, error) {
+	if s.presentsCredentialTo(base) {
+		return client.Audit(origin.Confine(s.guard.HTTPClient()), base, s.token, issuerClientOptions...)
+	}
+	if err := client.ValidateBaseURL(base); err != nil {
+		return nil, fmt.Errorf("client: audit base URL: %w", err)
+	}
+	return auditpbconnect.NewAuditServiceClient(s.guard.HTTPClient(), base, issuerClientOptions...), nil
+}
+
+// vcResolverClientFor returns a VCResolverService client for endpoint, with
+// the token only when endpoint may be shown it, and then following no
+// redirect, so the token goes to endpoint's origin only.
+func (s *wireConsumedSource) vcResolverClientFor(endpoint string) (vcpbconnect.VCResolverServiceClient, error) {
+	if s.presentsCredentialTo(endpoint) {
+		return client.VCResolver(origin.Confine(s.guard.HTTPClient()), endpoint, s.token, issuerClientOptions...)
+	}
+	if err := client.ValidateBaseURL(endpoint); err != nil {
+		return nil, fmt.Errorf("client: #vc-resolver endpoint URL: %w", err)
+	}
+	return vcpbconnect.NewVCResolverServiceClient(s.guard.HTTPClient(), endpoint, issuerClientOptions...), nil
 }
 
 func (s *wireConsumedSource) issuerCall(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -269,10 +333,9 @@ func (s *wireConsumedSource) registryBase(issuerDID string) (string, error) {
 // advertises none (documents embed services at issuance; older documents
 // carry no #audit). Exactly-one matching advertisement is enforced: two or
 // more is ambiguous, and a matching advertisement with an empty endpoint is
-// an error, never a silent fallback. Sending the bearer to the derived
-// endpoint is the same single-token PoC trust model as the #vc-resolver
-// derivation and the legacy fallback (all issuer-controlled destinations);
-// destination-scoped credentials are a post-v0 roadmap item.
+// an error, never a silent fallback. The endpoint is the issuer's to choose,
+// so it is shown the token only when its origin is the registry's or one the
+// caller named (see auditClientFor).
 func (s *wireConsumedSource) auditEndpoint(ctx context.Context, issuerDID string) (string, error) {
 	d, err := dplaax.Parse(issuerDID)
 	if err != nil {
@@ -319,7 +382,7 @@ func (s *wireConsumedSource) FetchConsumed(ctx context.Context, issuerDID, headH
 		if err := s.guard.CheckURL(ctx, base); err != nil {
 			return nil, fmt.Errorf("bundle export: audit endpoint for %s rejected: %w", issuerDID, err)
 		}
-		c, err = client.Audit(s.guard.HTTPClient(), base, s.token, issuerClientOptions...)
+		c, err = s.auditClientFor(base)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +425,7 @@ func (s *wireConsumedSource) FetchSourceCredential(ctx context.Context, issuerDI
 		if err := s.guard.CheckURL(ctx, endpoint); err != nil {
 			return nil, fmt.Errorf("bundle export: #vc-resolver endpoint of %s rejected: %w", issuerDID, err)
 		}
-		c, err = client.VCResolver(s.guard.HTTPClient(), endpoint, s.token, issuerClientOptions...)
+		c, err = s.vcResolverClientFor(endpoint)
 		if err != nil {
 			return nil, err
 		}

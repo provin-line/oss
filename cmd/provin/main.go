@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/cmd/provin/internal/commands"
+	"github.com/provin-line/oss/internal/origin"
 )
 
 func main() {
@@ -53,7 +54,7 @@ Implemented:
                       (--external-key: register locally-minted public keys instead of the registry's own KMS mint — see deploy/quickstart)
   bundle   export     --head <sha256:hex> --out <dir>        archive a chain + its authority documents
                       [--aggregate-complete=false] [--did-base <registry>=<url>]... [--vc-resolver-base <registry>=<url>]... [--audit-base <registry>=<url>]...
-                      [--allow-loopback] [--allow-private] [--max-depth <n>]
+                      [--allow-loopback] [--allow-private] [--max-depth <n>] [--credential-origin <origin>]...
   bundle   verify     --bundle <dir> --head <sha256:hex> and/or --digest <sha256:hex>
                                                               re-verify a bundle offline (no network)
   schema   register   --name <name> --format <format> --file <path|-> [--prerelease <label>]
@@ -232,6 +233,7 @@ type bundleExportOpts struct {
 	allowLoopback     *bool
 	allowPrivate      *bool
 	maxDepth          *int
+	credentialOrigins []string
 }
 
 func bundleExportFlagSet() (*flag.FlagSet, *bundleExportOpts) {
@@ -257,6 +259,14 @@ func bundleExportFlagSet() (*flag.FlagSet, *bundleExportOpts) {
 	o.allowLoopback = fs.Bool("allow-loopback", false, "permit loopback DID-resolution targets (local development)")
 	o.allowPrivate = fs.Bool("allow-private", false, "permit RFC 1918 private DID-resolution targets")
 	o.maxDepth = fs.Int("max-depth", 0, "chain walk bound (0 = default)")
+	fs.Func("credential-origin", "an origin (scheme://host[:port]) the --token may be shown to, besides --registry's (repeatable; any other endpoint an issuer advertises or a base maps to is called without it)", func(v string) error {
+		parsed, err := origin.Parse(v)
+		if err != nil {
+			return err
+		}
+		o.credentialOrigins = append(o.credentialOrigins, parsed)
+		return nil
+	})
 	return fs, o
 }
 
@@ -290,6 +300,7 @@ func bundleExport(ctx context.Context, args []string, stdout io.Writer) error {
 		AggregateComplete: *aggregateComplete,
 		VCResolverBases:   vcResolverBases,
 		AuditBases:        auditBases,
+		CredentialOrigins: o.credentialOrigins,
 	})
 }
 

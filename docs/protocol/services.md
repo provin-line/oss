@@ -137,6 +137,17 @@ outside (the quickstart advertises `http://network:8443`; a host-run CLI
 overrides with `--vc-resolver-base`/`--audit-base` to
 `http://localhost:8443`).
 
+**Who is shown the credential.** These endpoints are named by the chain
+being exported, or by a peer, so the caller's credential goes only to
+origins the caller named. `provin bundle export` shows `--token` to
+`--registry`'s origin and to each `--credential-origin` (repeatable,
+`scheme://host[:port]`); the node's batch resolver shows `vc-store-bearer`
+to `vc-store-endpoint`'s origin and to
+`provin.network.pipeline.credential-origins`. Any other
+endpoint is called without the credential, and a call that carries it
+(every CLI call to the registry included) follows no redirect, so it never
+reaches a server the named origin redirects to.
+
 ## Freeze boundary
 
 The **credential Data Integrity wire** (contexts, proof algorithm,

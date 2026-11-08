@@ -156,6 +156,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   that is one of the two fields, exactly or in another case, gets no identity
   (`Validate`). `SpineEntry` has its own `MarshalJSON` and `UnmarshalJSON`,
   which read and write an entry as a manifest does.
+- `provin.network.pipeline.credential-origins` (default `[]`): origins
+  (`scheme://host[:port]`) `vc-store-bearer` may be shown to besides the
+  destinations the operator configured (`vc-store-endpoint` and each loop's
+  `upstream-endpoint`, which are always included): peers the pipeline learns
+  of at runtime. In Go, `pipelineconfig.Config.CredentialOrigins` holds them
+  (the loader writes scheme and host lower case, without the default port),
+  and `(*pipelineconfig.Config).PresentsCredentialTo` reports whether any fetch
+  of the pipeline may present the bearer to an endpoint, reading any spelling
+  of a listed origin. A value that is not an http(s) origin fails startup.
+- `provin bundle export --credential-origin <origin>` (repeatable): an origin
+  (`scheme://host[:port]`) the `--token` may be shown to, besides
+  `--registry`'s, read in the same spelling as `credential-origins`.
 
 ### Changed
 
@@ -457,6 +469,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   judged differently; the tables guard against a later version.
   `go generate ./vc` rebuilds them, refusing UCD files whose SHA-256 is not
   the pinned one.
+- **BREAKING (config)** The batch resolver presents `vc-store-bearer` only to
+  the configured destinations' origins and to `credential-origins`, and fetches
+  from any other peer without it. A deployment whose batch resolver fetches
+  from L1-protected peers other than its configured destinations must list
+  them in `credential-origins` before upgrading: until then those fetches are
+  refused by the peer, and the resolver gives those holes up after its
+  retries (`batch-resolver.max-retries`). Every call of the node and the
+  pipeline that presents the bearer follows no redirect, so a destination
+  that redirects must be configured at its final URL. The quickstart, whose
+  only peer is its own VC store, needs no change.
+- **BREAKING (CLI)** `provin bundle export` shows `--token` only to
+  `--registry`'s origin and to `--credential-origin` origins, and calls an
+  issuer's advertised `#audit` or `#vc-resolver` endpoint (or a base mapped to
+  one) at any other origin without it. An export whose issuers' endpoints are
+  L1-protected at another origin must name it with `--credential-origin`.
+  Every CLI call that shows the token, to the registry included and in every
+  command, follows no redirect. The quickstart, whose endpoints are all the
+  registry's, needs no change.
 
 ### Security
 
@@ -775,6 +805,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   not spelled as `EncodeToken` writes it. Base64 decoding skipped line breaks
   and ignored the unused bits of the last character, so one cursor had many
   tokens.
+- The batch resolver presented the node's L1 bearer (`vc-store-bearer`) to
+  every peer it fetched from, including endpoints that others choose. It now
+  presents it only to the origins of the destinations the operator configured
+  and those listed in `credential-origins`, so the token, which lets its holder
+  call this node's L1-protected services as the node, reaches only parties the
+  operator named. `provin bundle export` showed the caller's
+  `--token` to every endpoint the exported chain's issuers advertise; it now
+  shows it only to `--registry`'s origin and to the origins named with
+  `--credential-origin`. No call of the node, the pipeline or the CLI that
+  carries a credential follows a redirect, so the credential does not reach a
+  server a named origin redirects to (net/http forwards an `Authorization`
+  header to another port or a subdomain).
 
 ## [0.3.0] - 2026-08-05
 

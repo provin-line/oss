@@ -254,7 +254,7 @@ func newRegistryDocResolver(env Env) (resolver.Resolver, error) {
 	if err := client.ValidateBaseURL(env.Registry); err != nil {
 		return nil, fmt.Errorf("resolve: registry URL: %w", err)
 	}
-	return &registryDocResolver{httpClient: env.httpClient(), registry: env.Registry}, nil
+	return &registryDocResolver{httpClient: env.publicHTTPClient(), registry: env.Registry}, nil
 }
 
 type registryDocResolver struct {

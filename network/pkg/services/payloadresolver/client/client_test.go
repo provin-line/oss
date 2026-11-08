@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -399,5 +400,39 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	}
 	if connErr.Code() != connect.CodePermissionDenied {
 		t.Errorf("code = %v, want CodePermissionDenied", connErr.Code())
+	}
+}
+
+// The store client carries the bearer, so it follows no redirect: a store that
+// redirects does not pass the bearer on.
+func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	mux := http.NewServeMux()
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	httpSrv, httpc := newH2CServer(t, mux)
+
+	ks := ksfilestore.New(t.TempDir())
+	kp, err := (ed25519.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL, Bearer: "node-token"})
+	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7); err == nil {
+		t.Error("a redirected retain succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the store redirected to saw the bearer")
 	}
 }

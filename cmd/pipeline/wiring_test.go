@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
@@ -1293,5 +1295,30 @@ func TestFallbackCredentialResolver_UpstreamCallEndsWithinTheTimeout(t *testing.
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("silent upstream: still waiting after 5s")
+	}
+}
+
+// The pipeline's calls that carry vc-store-bearer follow no redirect, so a
+// configured destination that redirects does not pass the bearer on.
+func TestBuildDeps_ShowsTheBearerToNoServerTheVCStoreRedirectsTo(t *testing.T) {
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(store.Close)
+	pipeCfg := &pipelineconfig.Config{VCStoreEndpoint: store.URL, VCStoreBearer: "node-token", MaxCredentialSize: 1 << 20, MaxRetainChunkSize: 1 << 20}
+	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme")
+	if _, err := deps.ChainResolver.ResolveCredential(context.Background(), addr("a")); err == nil {
+		t.Error("a redirected fetch succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the VC store redirected to saw the bearer")
 	}
 }
