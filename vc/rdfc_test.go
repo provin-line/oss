@@ -2,6 +2,7 @@ package vc_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -157,32 +158,60 @@ func listDocument(n int) map[string]any {
 	}
 }
 
+// valuesDocument is a credential whose subject has n distinct strings on one
+// property. json-gold's node map compares each with those before it, so a
+// long one is too complex.
+func valuesDocument(n int) map[string]any {
+	values := make([]any, n)
+	for i := range values {
+		values[i] = fmt.Sprintf("v%d", i)
+	}
+	return map[string]any{
+		"@context": []any{"https://www.w3.org/ns/credentials/v2", map[string]any{
+			"values": map[string]any{"@id": "https://example.org/values"},
+		}},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            issuerDID,
+		"validFrom":         "2026-01-01T00:00:00Z",
+		"credentialSubject": map[string]any{"values": values},
+	}
+}
+
 // Every primitive that canonicalizes refuses a document too complex to
-// label, and errors.Is reaches urdna2015.ErrTooComplex through vc's
-// wrapping.
+// canonicalize, in either stage, building its dataset or labelling it, and
+// errors.Is reaches urdna2015.ErrTooComplex through vc's wrapping.
 func TestRDFC_TooComplexToCanonicalizeReachesTheCaller(t *testing.T) {
 	signer, pub, _ := fixture(t)
-	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, listDocument(16), vc.CryptosuiteEdDSARDFC2022)
-	if err != nil {
-		t.Fatalf("CreateProof with 16 equal values: %v", err)
-	}
-	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, listDocument(16)); err != nil {
-		t.Fatalf("VerifyProof with 16 equal values: %v", err)
-	}
+	for _, tc := range []struct {
+		stage         string
+		short, long   map[string]any
+		shortN, longN int
+	}{
+		{"labelling, equal values in a list", listDocument(16), listDocument(64), 16, 64},
+		{"node map, distinct values on one property", valuesDocument(20), valuesDocument(3000), 20, 3000},
+	} {
+		proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, tc.short, vc.CryptosuiteEdDSARDFC2022)
+		if err != nil {
+			t.Fatalf("%s: CreateProof with %d values: %v", tc.stage, tc.shortN, err)
+		}
+		if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, tc.short); err != nil {
+			t.Fatalf("%s: VerifyProof with %d values: %v", tc.stage, tc.shortN, err)
+		}
 
-	doc := listDocument(64)
-	if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
-		t.Errorf("CreateProof: err = %v, want urdna2015.ErrTooComplex", err)
-	}
-	// The genuine proof of the short list, presented with the long one: the
-	// proof config is the same, so only the document's labelling refuses it.
-	if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, doc); !errors.Is(err, urdna2015.ErrTooComplex) {
-		t.Errorf("VerifyProof: err = %v, want urdna2015.ErrTooComplex", err)
-	}
-	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, proof, doc); !errors.Is(err, urdna2015.ErrTooComplex) {
-		t.Errorf("VerifyProofWithContract: err = %v, want urdna2015.ErrTooComplex", err)
-	}
-	if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, doc, vc.ContractW3CEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
-		t.Errorf("VerifyProofUnderContract: err = %v, want urdna2015.ErrTooComplex", err)
+		if _, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, tc.long, vc.CryptosuiteEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
+			t.Errorf("%s: CreateProof with %d values: err = %v, want urdna2015.ErrTooComplex", tc.stage, tc.longN, err)
+		}
+		// The genuine proof of the short document, presented with the long
+		// one: the proof config is the same, so only the document's
+		// canonicalizing refuses it.
+		if err := vc.VerifyProof(ed25519.Verifier{}, pub, proof, tc.long); !errors.Is(err, urdna2015.ErrTooComplex) {
+			t.Errorf("%s: VerifyProof: err = %v, want urdna2015.ErrTooComplex", tc.stage, err)
+		}
+		if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, did.EncodingMultikey, proof, tc.long); !errors.Is(err, urdna2015.ErrTooComplex) {
+			t.Errorf("%s: VerifyProofWithContract: err = %v, want urdna2015.ErrTooComplex", tc.stage, err)
+		}
+		if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, proof, tc.long, vc.ContractW3CEdDSARDFC2022); !errors.Is(err, urdna2015.ErrTooComplex) {
+			t.Errorf("%s: VerifyProofUnderContract: err = %v, want urdna2015.ErrTooComplex", tc.stage, err)
+		}
 	}
 }

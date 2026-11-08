@@ -557,20 +557,36 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (up to 4627 bytes), but not SLH-DSA's (7856 bytes and more); a longer
   value, which decoded before, is now refused. A value without the prefix is
   refused quoting at most its first 32 characters (it was quoted whole).
-- `canon/urdna2015` labels the blank nodes of a dataset within a work bound,
-  as RDFC-1.0 §4.4.3 requires: a dataset whose blank nodes are so alike that
-  labelling them would take more than 262 144 steps and 64 per quad (a step
-  being of about the same time whatever the dataset) is refused with the new
-  `urdna2015.ErrTooComplex`, of the new constant error type
-  `urdna2015.Error`; `errors.Is` finds it through `vc.CreateProof`,
-  `vc.VerifyProof`, `vc.VerifyProofWithContract` and
-  `vc.VerifyProofUnderContract`. json-gold, which did the labelling, has no
-  bound, and its time grows exponentially with blank nodes no quad of their
-  own tells apart (7 in a 1 KB dataset took 240 ms, each one more about 9
-  times as long); an eddsa-rdfc-2022 proof (`vc.VerifyProofWithContract`,
-  `vc.VerifyProof`) canonicalizes its document before the signature is
-  checked. A refusal costs about 10–20 ms and 3.5 µs per quad. Refused: 6 or
-  more blank nodes all linked to each other, a ring of 56 or more, a list of
+- `canon/urdna2015` canonicalizes a document within a work bound in both its
+  stages, building the dataset and labelling its blank nodes; an
+  eddsa-rdfc-2022 proof (`vc.VerifyProofWithContract`, `vc.VerifyProof`)
+  canonicalizes its document before the signature is checked. A document
+  past either bound is refused with the new `urdna2015.ErrTooComplex`
+  ("urdna2015: dataset too complex to canonicalize"), of the new constant
+  error type `urdna2015.Error`; `errors.Is` finds it through
+  `vc.CreateProof`, `vc.VerifyProof`, `vc.VerifyProofWithContract` and
+  `vc.VerifyProofUnderContract`. The error wrapping it names the stage
+  ("node map:" or "labelling:") and the bound, for a person reading it; that
+  text is not part of the contract.
+
+  Building the dataset: json-gold's node map compares each value one node's
+  property gathers with those the property already holds. Before it runs,
+  those comparisons are counted by the node map's own rules (one node per
+  `@id`, aliases as one property, `@type` and `@reverse`), as the most any
+  order of the values takes, and a document that would need more than 2^20
+  plus 16 per value is refused. One property of one node holds at most about
+  1,460 distinct values: a document with more is refused with
+  `ErrTooComplex` both when a proof is created and when one is verified.
+  Ordinary credentials use at most 2% of the bound.
+
+  Labelling, as RDFC-1.0 §4.4.3 requires: a dataset whose blank nodes are so
+  alike that labelling them would take more than 262 144 steps and 64 per
+  quad (a step being of about the same time whatever the dataset) is
+  refused. json-gold, which did the labelling, has no bound, and its time
+  grows exponentially with blank nodes no quad of their own tells apart (7
+  in a 1 KB dataset took 240 ms, each one more about 9 times as long). A
+  refusal costs about 10–20 ms and 3.5 µs per quad. Refused: 6 or more blank
+  nodes all linked to each other, a ring of 56 or more, a list of
   62 or more equal values, and two alike nodes each with 7 or more alike
   leaves (json-gold took 24, 11, 13 and 61 ms on the smallest of these).
   Every other dataset keeps its canonical bytes: the labelling is

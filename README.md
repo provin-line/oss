@@ -131,9 +131,11 @@ stability promises:
 
 - **The v0 credential wire is frozen** — every byte that participates in a
   credential signature: the credential `@context` set (embedded,
-  digest-pinned), the Data Integrity proof algorithm, both cryptosuites
-  (`eddsa-jcs-2022` default, `eddsa-rdfc-2022` opt-in) and their
-  canonicalizations, and the source-commitment form. Changing any of these
+  digest-pinned), the Data Integrity proof algorithm, both cryptosuites and
+  their canonicalizations, and the source-commitment form. `eddsa-jcs-2022`
+  is the suite a proof is issued with by default, and `eddsa-rdfc-2022` only
+  when the issuer chooses it; a verifier accepts proofs of both by default
+  (`vc` registers both at init). Changing any of these
   breaks proof compatibility with already-issued credentials and is a
   next-MAJOR change. The freeze is enforced by tests (official W3C
   vc-di-eddsa vectors, KATs, context sha256 pins), not by process — see the

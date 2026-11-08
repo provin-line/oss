@@ -355,7 +355,7 @@ func (l *labeller) nDegreeHash(id string, s *issuer) (string, *issuer, error) {
 func (l *labeller) spend(units int) error {
 	l.work += units
 	if l.work > l.budget {
-		return fmt.Errorf("%w: more than %d steps for %d quads", ErrTooComplex, l.budget, len(l.quads))
+		return fmt.Errorf("%w: labelling: more than %d steps for %d quads", ErrTooComplex, l.budget, len(l.quads))
 	}
 	return nil
 }

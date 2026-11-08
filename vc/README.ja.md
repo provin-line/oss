@@ -16,7 +16,7 @@ hashData = SHA-256(canon(proofConfig)) ‖ SHA-256(canon(document))
 proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 ```
 
-暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。新しいスイートはディスパッチテーブルに登録し、**初期化時の IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するよりバイナリ起動時にパニックする。
+暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。どちらも init で登録するので、確かめでは両方の proof を既定で受ける。発行で `eddsa-rdfc-2022` を使うのは、`CreateProof` にその suite を渡した時だけ。新しいスイートはディスパッチテーブルに登録し、**初期化時の IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するよりバイナリ起動時にパニックする。
 
 ## チェーントポロジー — 線形不変
 

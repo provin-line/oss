@@ -23,6 +23,8 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 ```
 
 Cryptosuites: `eddsa-jcs-2022` (Phase 1, MUST), `eddsa-rdfc-2022` (Phase 2, MAY).
+Both are registered at init, so a verifier accepts proofs of either by default;
+an issuer uses `eddsa-rdfc-2022` only when it names that suite to `CreateProof`.
 New suites register in the dispatch table and must pass an **init-time IRI expansion
 probe** — the binary panics at startup rather than serve broken canonicalization.
 

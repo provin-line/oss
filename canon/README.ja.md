@@ -12,7 +12,7 @@ JSON 署名スコープの決定論的なバイト表現と、それを保護す
 | パス | アルゴリズム | 状態 |
 | --- | --- | --- |
 | `canon/jcs` | RFC 8785 JSON Canonicalization Scheme（Phase 1 暗号スイート、MUST） | 実装済み |
-| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Canonicalization（URDNA2015）（Phase 2、MAY） | 実装済み — `piprate/json-gold` をオフラインの context allowlist（ネットワークには決して出ない）の背後にラップし、JSON-LD 処理が署名スコープから暗黙に落とすもの（未定義 term・相対 `@id`/`@type` 値・数値メンバー（2^53 切り捨て））はすべて fail-closed で拒否する。blank node の名付けは手間の上限の中で行い（RDFC-1.0 §4.4.3）、上限を超える dataset は `urdna2015.ErrTooComplex` で拒否する。正規の N-Quads が 1 対 1 に書けない IRI や literal、RDFC-1.0（Appendix A）と違う形に書く literal も拒否する。公式 W3C vc-di-eddsa test vector にアンカー |
+| `canon/urdna2015` | `eddsa-rdfc-2022` 向け RDF Dataset Canonicalization（URDNA2015）（Phase 2、MAY） | 実装済み — `piprate/json-gold` をオフラインの context allowlist（ネットワークには決して出ない）の背後にラップし、JSON-LD 処理が署名スコープから暗黙に落とすもの（未定義 term・相対 `@id`/`@type` 値・数値メンバー（2^53 切り捨て））はすべて fail-closed で拒否する。dataset を作る手間（json-gold の node map が、1 つの node の property に集まる値を比べる）に上限を置き、blank node の名付けも手間の上限の中で行う（RDFC-1.0 §4.4.3）。作るか名付けるのに上限を超える dataset は `urdna2015.ErrTooComplex` で拒否する。1 つの node の 1 つの property は、異なる値が約 1,460 まで。越える文書は、proof を作る時も確かめる時も `ErrTooComplex` で拒否する。`vc` が init でこの suite を登録するので、これを使う proof は既定で確かめる。発行で使うのは、発行者が選んだ時だけ。正規の N-Quads が 1 対 1 に書けない IRI や literal、RDFC-1.0（Appendix A）と違う形に書く literal も拒否する。公式 W3C vc-di-eddsa test vector にアンカー |
 
 ## 厳守ルール
 

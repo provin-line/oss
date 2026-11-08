@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -36,7 +37,7 @@ func labelNQuads(t testing.TB, nq string, base, perQuad int) (string, int, error
 }
 
 // unbounded is a budget no test dataset reaches.
-const unbounded = 1 << 40
+const unbounded = math.MaxInt
 
 // checkAgainstJSONGold compares the labelling with json-gold's. Where two
 // blank nodes no hash tells apart are not interchangeable, json-gold's answer

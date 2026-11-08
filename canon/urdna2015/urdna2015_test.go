@@ -417,8 +417,8 @@ func TestCanonicalize_RefusesADocumentTooComplexToLabel(t *testing.T) {
 		"credentialSubject": map[string]any{"steps": steps},
 	}
 	out, err := w3cCanonicalizer(t).Canonicalize(doc)
-	if !errors.Is(err, urdna2015.ErrTooComplex) {
-		t.Errorf("Canonicalize: err = %v, want urdna2015.ErrTooComplex", err)
+	if !errors.Is(err, urdna2015.ErrTooComplex) || !strings.Contains(err.Error(), "labelling:") {
+		t.Errorf("Canonicalize: err = %v, want urdna2015.ErrTooComplex, naming the labelling", err)
 	}
 	if out != nil {
 		t.Errorf("Canonicalize returned %d bytes with its refusal", len(out))
