@@ -3,6 +3,7 @@ package canon_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,26 +171,32 @@ func TestStrictDecoder_DoesNotCheckElementsAnArrayDrops(t *testing.T) {
 
 type selfPointer *selfPointer
 
-// A pointer type that points to itself does not trap the walk.
+// A pointer type that points to itself is refused, null included.
 func TestStrictDecoder_StopsAtAPointerTypeToItself(t *testing.T) {
 	var p selfPointer
 	done := make(chan error, 1)
 	go func() { done <- canon.NewStrictDecoder([]byte(`null`)).Decode(&p) }()
 	select {
-	case <-done:
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "pointers and interfaces") {
+			t.Errorf("err = %v, want the refusal of a target that holds itself", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Decode still running after 5s")
 	}
 }
 
-// An interface holding a pointer to itself does not trap the walk.
+// An interface holding a pointer to itself is refused.
 func TestStrictDecoder_StopsAtAnInterfaceHoldingItself(t *testing.T) {
 	var x any
 	x = &x
 	done := make(chan error, 1)
 	go func() { done <- canon.NewStrictDecoder([]byte(`{"a":1}`)).Decode(&x) }()
 	select {
-	case <-done:
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "pointers and interfaces") {
+			t.Errorf("err = %v, want the refusal of a target that holds itself", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Decode still running after 5s")
 	}

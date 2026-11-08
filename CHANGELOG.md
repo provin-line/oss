@@ -434,6 +434,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `tlog.VerifyConsistency` and `tlog.VerifyInclusion` refuse a head not in
   lower case. The logs here stamp UTC whole seconds and write lower-case
   heads, so nothing they write is refused.
+- **BREAKING (Go API)** `canon.StrictDecoder` refuses a decode target it
+  reaches through more than 64 pointers and interfaces, as one that holds
+  itself is (an interface holding a pointer to itself, interfaces holding
+  pointers to each other, a pointer type to itself), wherever the document
+  gives it a value, before anything is decoded. encoding/json follows such a
+  target without end: with Go 1.26 a pointer type to itself allocates without
+  end and interfaces holding pointers to each other loop without end
+  (encoding/json guards only an interface holding a pointer to itself); with
+  Go 1.27 every such target overflows the stack, a fatal error. A `null`
+  there, and a chain of more than 64 without a cycle, decoded before and are
+  refused too. The target is the caller's Go value, not input.
 
 ### Security
 

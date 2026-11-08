@@ -60,6 +60,11 @@ func (e *DuplicateKeyError) Error() string {
 // encoding/json refuses it. The work is linear in the length of the document,
 // whatever its depth, so it can decode input not yet authenticated.
 //
+// A decode target reached through more than 64 pointers and interfaces, as
+// one that holds itself is, is refused wherever the document gives it a
+// value, null included, before anything is decoded: encoding/json would
+// follow it without end.
+//
 // Direct encoding/json decoding on a protocol path requires a
 // `decoder-hygiene-exempt` comment, enforced by `make lint`
 // (scripts/check-decoder-hygiene.sh).
@@ -196,6 +201,9 @@ func walkChild(dec *json.Decoder, path *[]string, step string, d dest) error {
 }
 
 func walkFrom(dec *json.Decoder, tok json.Token, path *[]string, d dest) error {
+	if d.unbounded {
+		return fmt.Errorf("canon: decode target at %v is reached through more than %d pointers and interfaces (as a target that holds itself is)", *path, maxIndirections)
+	}
 	delim, ok := tok.(json.Delim)
 	if !ok {
 		return nil // scalar
@@ -290,10 +298,14 @@ var (
 // the value already there when the walk can see it (along struct fields,
 // pointers, and the elements a slice or array already has, from the decode
 // target; a map's values are new).
-// A zero dest is a place the walk does not follow.
+// A zero dest is a place the walk does not follow. An unbounded dest is one
+// reached through more than maxIndirections pointers and interfaces; the
+// bound is there for a target that holds itself, which encoding/json would
+// follow without end, and such a dest is refused.
 type dest struct {
-	t reflect.Type
-	v reflect.Value
+	t         reflect.Type
+	v         reflect.Value
+	unbounded bool
 }
 
 // destOf resolves where a decode into v puts a JSON value: through pointers,
@@ -317,8 +329,8 @@ func resolve(t reflect.Type, v reflect.Value) dest {
 	for hops := 0; t != nil; hops++ {
 		if hops > maxIndirections {
 			// A pointer type to itself (type P *P), or an interface holding a
-			// pointer to itself: the walk stops following it.
-			return dest{}
+			// pointer to itself.
+			return dest{unbounded: true}
 		}
 		switch t.Kind() {
 		case reflect.Pointer:
@@ -346,7 +358,8 @@ func resolve(t reflect.Type, v reflect.Value) dest {
 }
 
 // maxIndirections bounds the pointers and interfaces resolve follows to one
-// destination; a cycle among them ends the walk there.
+// destination; past it, as with a cycle among them, the destination is
+// refused.
 const maxIndirections = 64
 
 func decodesItself(t reflect.Type) bool {
