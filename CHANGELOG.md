@@ -602,6 +602,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015` and `vc`'s `eddsa-rdfc-2022` refuse a document nested
+  more than 10,000 objects and arrays deep, as deep as encoding/json and
+  `canon.StrictDecoder` decode, with an error wrapping
+  `urdna2015.ErrTooComplex` (its stage named "nesting:"), before the
+  canonicalization recurses into it: a document built in Go far deeper than
+  that could exhaust the goroutine stack, a fatal error. A document decoded
+  by encoding/json or `canon.StrictDecoder` is never deeper.
+  `vc.RegisterEdDSARDFC2022`'s doc states the work within the bounds:
+  linear in the document's size, about 1 s and 0.9 GB allocated for the
+  costliest 1 MiB shape measured; `vc` does not bound a document's size,
+  its caller does.
 - `eddsa-rdfc-2022` reads a document only through the contexts `vc` embeds
   (Changed, BREAKING): a document can no longer define a term of its own, so
   every term an `eddsa-rdfc-2022` proof is checked through is defined in

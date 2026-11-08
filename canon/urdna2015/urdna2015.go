@@ -46,16 +46,18 @@ type Error string
 func (e Error) Error() string { return string(e) }
 
 // ErrTooComplex reports a document Canonicalize refuses because canonicalizing
-// it would take more work than Canonicalize allows: building its dataset
-// (the node map of JSON-LD 1.1 Processing Algorithms and API, Node Map
-// Generation, which compares each value a node's property gathers with those
-// before it), writing a canonical form longer than a bound linear in the
-// document's size (each quad writes its IRIs whole), or labelling its blank
-// nodes (RDFC-1.0 §4.4: the algorithm "raises an error if the input dataset
-// is determined to be overly complex"). Canonicalize returns it for no other
-// reason, and returns no bytes with it. The error wrapping it names the
-// stage ("node map:", "canonical form:" or "labelling:") and the bound, for a
-// person reading it; neither that text nor the bounds' values are part of
+// it would take more work than Canonicalize allows: walking a document nested
+// deeper than encoding/json decodes (each walk recurses at least once per
+// level, and an exhausted goroutine stack is a fatal error), building its
+// dataset (the node map of JSON-LD 1.1 Processing Algorithms and API, Node
+// Map Generation, which compares each value a node's property gathers with
+// those before it), writing a canonical form longer than a bound linear in
+// the document's size (each quad writes its IRIs whole), or labelling its
+// blank nodes (RDFC-1.0 §4.4: the algorithm "raises an error if the input
+// dataset is determined to be overly complex"). Canonicalize returns it for
+// no other reason, and returns no bytes with it. The error wrapping it names
+// the stage ("nesting:", "node map:", "canonical form:" or "labelling:") and
+// the bound, for a person reading it; neither that text nor the bounds' values are part of
 // this contract, and they may change. errors.Is finds ErrTooComplex for every
 // stage; the contract does not tell the stages apart.
 const ErrTooComplex Error = "urdna2015: dataset too complex to canonicalize"
@@ -177,6 +179,12 @@ func (c *Canonicalizer) Name() string { return Name }
 // additionally couples the commitment fields together. JCS — the default
 // suite — signs the bytes verbatim either way.
 //
+// A document nested more than 10,000 objects and arrays deep (maxNesting),
+// deeper than encoding/json decodes, is refused with an error wrapping
+// ErrTooComplex before any walk of Canonicalize recurses into it: each walk,
+// and json-gold's, recurses at least once per level, and a goroutine stack
+// exhausted is a fatal error.
+//
 // Building the dataset is bounded too (see nodemap.go): json-gold compares
 // each value a node's property gathers with those before it, so before it
 // runs, a document whose node map would compare more pairs of values than a
@@ -205,6 +213,9 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 		}
 	default:
 		return nil, fmt.Errorf("urdna2015: input must be a JSON object or array, got %T", v)
+	}
+	if !nestedWithin(v, maxNesting) {
+		return nil, fmt.Errorf("%w: nesting: more than %d objects and arrays deep", ErrTooComplex, maxNesting)
 	}
 	if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
 		return nil, err
@@ -332,6 +343,45 @@ func (l *offlineLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
 		return nil, fmt.Errorf("urdna2015: embedded context %q is not valid JSON: %w", u, err)
 	}
 	return &ld.RemoteDocument{DocumentURL: u, Document: parsed}, nil
+}
+
+// maxNesting is the deepest nesting of objects and arrays Canonicalize
+// accepts, as deep as encoding/json and canon.StrictDecoder decode. Each walk
+// of the document, and json-gold's, recurses at least once per level, and a
+// goroutine stack exhausted is a fatal error no recover catches; a document
+// decoded by encoding/json or canon.StrictDecoder is never deeper, but one
+// built otherwise can be.
+const maxNesting = 10000
+
+// nestedWithin reports whether v nests at most limit objects and arrays deep.
+// It keeps its own stack rather than recursing, so it is safe at any depth.
+func nestedWithin(v any, limit int) bool {
+	type item struct {
+		v     any
+		depth int
+	}
+	stack := []item{{v, 1}}
+	for len(stack) > 0 {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch t := it.v.(type) {
+		case map[string]any:
+			if it.depth > limit {
+				return false
+			}
+			for _, x := range t {
+				stack = append(stack, item{x, it.depth + 1})
+			}
+		case []any:
+			if it.depth > limit {
+				return false
+			}
+			for _, x := range t {
+				stack = append(stack, item{x, it.depth + 1})
+			}
+		}
+	}
+	return true
 }
 
 // requireNodeObjects fails unless every element of a node-array position

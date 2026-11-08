@@ -2,6 +2,8 @@ package vc
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +237,37 @@ func TestRDFC_SignsEveryValueOfTheServedCorpusOrRefuses(t *testing.T) {
 	}
 	if served == 0 {
 		t.Error("no pair of the corpus holds only the served contexts")
+	}
+}
+
+// On the suite's path, a document nested as deep as encoding/json decodes,
+// 10,000 objects and arrays, is accepted; one deeper, however it was built,
+// is refused with an error wrapping urdna2015.ErrTooComplex. The suite's own
+// walk, which runs before canon/urdna2015's, refuses it before entering the
+// level past the bound.
+func TestRDFC_RefusesNestingPastTheBound(t *testing.T) {
+	canonicalize := registeredRDFC(t)
+	nested := func(depth int) map[string]any {
+		node := map[string]any{"@id": "urn:leaf", "https://e.x/q": "v"}
+		for i := 2; i < depth; i++ {
+			node = map[string]any{"@id": fmt.Sprintf("urn:d:%d", i), "https://e.x/p": node}
+		}
+		return map[string]any{"@context": ContextCredentialsV2, "@id": "urn:s", "https://e.x/p": node}
+	}
+	if _, err := canonicalize(nested(10000)); err != nil {
+		t.Fatalf("10,000 deep: %v", err)
+	}
+	for _, depth := range []int{10001, 30000} {
+		if _, err := canonicalize(nested(depth)); !errors.Is(err, urdna2015.ErrTooComplex) {
+			t.Errorf("%d deep: %v, want urdna2015.ErrTooComplex", depth, err)
+		}
+	}
+	walk := servedContextsOnly(map[string][]byte{ContextCredentialsV2: contextCredentialsV2Document}).(servedContexts).walk
+	for depth, refused := range map[int]bool{10000: false, 10001: true} {
+		var path []string
+		err := walk(nested(depth), &path)
+		if got := errors.Is(err, urdna2015.ErrTooComplex) && strings.HasPrefix(err.Error(), "vc: eddsa-rdfc-2022: "); got != refused || (!refused && err != nil) {
+			t.Errorf("the suite's walk, %d deep: %v, want refused: %v", depth, err, refused)
+		}
 	}
 }
