@@ -20,11 +20,14 @@ import (
 	"compress/gzip"
 	"context"
 	stdrsa "crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"slices"
 	"strconv"
@@ -316,43 +319,39 @@ func NewVerifier(sig *vc.Verifier, audience string, skew time.Duration) (*Verifi
 // signed reads raw and checks that the anchor's issuer signed it with one of
 // the anchor's issuance keys, under the W3C eddsa-jcs-2022 contract, that its
 // @context is contexts and its type is VerifiableCredential and typ, and that
-// it carries no unsafe number. It returns the body, its content address and
-// the verification method that signed it. An unestablished signature (the
+// it carries no unsafe number. It returns the body and the verification method
+// that signed it. An unestablished signature (the
 // issuer's document or the lifecycle unavailable) is
 // ErrSignatureUnestablished; a context error is returned as is.
-func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string, contexts []any) (map[string]any, string, string, error) {
+func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string, contexts []any) (map[string]any, string, error) {
 	var cred vc.Credential
 	if err := cred.UnmarshalJSON(raw); err != nil {
-		return nil, "", "", fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	res, err := v.sig.VerifySignerAuthenticity(ctx, &cred)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
 	switch {
 	case res.State == vc.ConfidenceIndeterminate:
-		return nil, "", "", fmt.Errorf("%w: %s", ErrSignatureUnestablished, cred.Issuer())
+		return nil, "", fmt.Errorf("%w: %s", ErrSignatureUnestablished, cred.Issuer())
 	case res.State != vc.ConfidenceVerified,
 		res.SuiteContract != vc.ContractW3CEdDSAJCS2022,
 		res.Issuer != a.Issuer,
 		!slices.Contains(a.IssuanceKeys, res.VerificationMethod):
-		return nil, "", "", fmt.Errorf("%w: %s (%v, %s, %s)", ErrSignature, cred.Issuer(), res.State, res.SuiteContract, res.VerificationMethod)
+		return nil, "", fmt.Errorf("%w: %s (%v, %s, %s)", ErrSignature, cred.Issuer(), res.State, res.SuiteContract, res.VerificationMethod)
 	}
 	body := cred.Body()
 	if err := canon.AdmitSafeNumbers(body); err != nil {
-		return nil, "", "", fmt.Errorf("%w: %v", ErrMalformed, err)
+		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if got, _ := body["@context"].([]any); !slices.Equal(got, contexts) {
-		return nil, "", "", fmt.Errorf("%w: @context is not %v", ErrMalformed, contexts)
+		return nil, "", fmt.Errorf("%w: @context is not %v", ErrMalformed, contexts)
 	}
 	if types := cred.Types(); len(types) != 2 || types[0] != "VerifiableCredential" || types[1] != typ {
-		return nil, "", "", fmt.Errorf("%w: type is not [VerifiableCredential %s]", ErrMalformed, typ)
+		return nil, "", fmt.Errorf("%w: type is not [VerifiableCredential %s]", ErrMalformed, typ)
 	}
-	hash, err := cred.Hash()
-	if err != nil {
-		return nil, "", "", fmt.Errorf("%w: %v", ErrMalformed, err)
-	}
-	return body, hash, res.VerificationMethod, nil
+	return body, res.VerificationMethod, nil
 }
 
 // VerifyBinding checks raw against the anchor and the held status list at at:
@@ -370,7 +369,7 @@ func (v *Verifier) VerifyBinding(ctx context.Context, raw []byte, a Anchor, list
 	if at.IsZero() {
 		return Binding{}, fmt.Errorf("%w: no time to verify at", ErrNotValidAt)
 	}
-	body, _, _, err := v.signed(ctx, raw, a, TypeKeyBinding, bindingContexts)
+	body, _, err := v.signed(ctx, raw, a, TypeKeyBinding, bindingContexts)
 	if err != nil {
 		return Binding{}, err
 	}
@@ -523,7 +522,7 @@ type StatusList struct {
 	validFrom  time.Time
 	validUntil time.Time
 	signer     string // the verification method that signed it
-	hash       string // the content address of its body, to tell a list from another with the same validFrom
+	hash       string // its content hash (statusListHash), to tell a list from another with the same validFrom
 	bits       []byte
 }
 
@@ -607,9 +606,12 @@ func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string
 // (<issuer>#fragment), within MaxStatusListBytes once expanded, and current
 // (at at, within the Verifier's clock skew of its validFrom and validUntil, and
 // no older than the anchor's maximum age) — and returns it, or held when raw is
-// held again (the same list is not a step back). held must be a list of the same id and issuer.
-// A list whose validFrom is not later than held's, or the same validFrom with
-// another body, is ErrStatusListRewound: a list only moves forward. A later
+// the held list again: the same validFrom and the same content, that is the
+// expanded bits however compressed and every other member (statusListHash).
+// The same list is not a step back. held must be a list of the same id and
+// issuer. A list whose validFrom is not later than held's, or the same
+// validFrom with another content, is ErrStatusListRewound: a list only moves
+// forward. A later
 // list that leaves unmarked an entry held marks (an entry past its end is
 // unmarked) is ErrStatusListRevocationCleared: a revocation is not reversible,
 // so an issuer restored to an older state cannot undo one in the list held
@@ -691,7 +693,7 @@ func (v *Verifier) RestoreStatusList(ctx context.Context, raw []byte, a Anchor, 
 // signedList reads raw as the anchor's issuer's revocation list: signed (see
 // signed), well formed, and its id a DID URL of the issuer.
 func (v *Verifier) signedList(ctx context.Context, raw []byte, a Anchor) (*StatusList, error) {
-	body, hash, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContexts)
+	body, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContexts)
 	if err != nil {
 		return nil, err
 	}
@@ -702,8 +704,31 @@ func (v *Verifier) signedList(ctx context.Context, raw []byte, a Anchor) (*Statu
 	if abs, err := did.AbsoluteKeyID(a.Issuer, l.id); err != nil || abs != l.id {
 		return nil, fmt.Errorf("%w: the list id %q is not a DID URL <%s>#fragment", ErrMalformed, l.id, a.Issuer)
 	}
+	hash, err := statusListHash(body, l.bits)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
 	l.signer, l.hash = signer, hash
 	return l, nil
+}
+
+// statusListHash is a list's content hash: the SHA-256 of the RFC 8785 form of
+// its body (the credential without its proof), with encodedList replaced by
+// "sha256:" and the lowercase hex SHA-256 of the expanded bits. gzip's bytes
+// differ between Go versions and between issuers, so the hash covers the
+// bits rather than their compression: the same list compressed otherwise has
+// the same hash, and every other member is covered as it is.
+func statusListHash(body map[string]any, bits []byte) (string, error) {
+	s, ok := body["credentialSubject"].(map[string]any)
+	if !ok {
+		return "", errors.New("credentialSubject is not an object")
+	}
+	sum := sha256.Sum256(bits)
+	subj := maps.Clone(s)
+	subj["encodedList"] = "sha256:" + hex.EncodeToString(sum[:])
+	view := maps.Clone(body)
+	view["credentialSubject"] = subj
+	return jcs.HashRFC8785(view)
 }
 
 // firstCleared returns the first entry held marks and l does not; an entry

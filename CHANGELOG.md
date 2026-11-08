@@ -30,8 +30,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (`ErrStatusListRevocationCleared`: a revocation is not reversible, so an
   issuer restored to an older state cannot undo one in the list held; a mark
   past the end of a shorter list counts as cleared), one not yet valid, and
-  one whose id is not a DID URL of its issuer. `Verifier.RestoreStatusList`
-  rebuilds the held list after a restart from the last raw list held, checked
+  one whose id is not a DID URL of its issuer. Two lists of the same
+  `validFrom` are the same list when their content hashes are equal: the
+  SHA-256 of the RFC 8785 form of the credential without its proof, with
+  `encodedList` replaced by `sha256:` and the lowercase hex SHA-256 of the
+  expanded bits. So the same list compressed otherwise (gzip's bytes differ
+  between Go versions and between issuers) is the same list, and every other
+  member is covered as it is. `Verifier.RestoreStatusList` rebuilds the held
+  list after a restart from the last raw list held, checked
   the same way but however old (not dated after the given time), as the floor
   of the marks a later list must keep; `VerifyBinding` takes it only while it
   is current. A list whose signing key has left the anchor is not held,

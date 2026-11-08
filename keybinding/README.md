@@ -12,7 +12,9 @@ revocation list it already holds; it does not ask the issuer at decision time.
   list of that id, and is not given to another binding.
 - `Verifier.VerifyStatusList` checks a list and returns it, current at the
   given time; a list never moves back (an older `validFrom`, or the same one
-  with another body, is refused), a later list never clears a mark of the
+  with another content, is refused: the content is compared without the
+  compression, on the expanded bits and every other member, so the same list
+  compressed otherwise is the same list), a later list never clears a mark of the
   held one (a revocation is not reversible; a mark past the end of a shorter
   list counts as cleared), a list dated in the future is not taken, and a
   list's id is a DID URL of its issuer. A `StatusList` cannot be changed once
