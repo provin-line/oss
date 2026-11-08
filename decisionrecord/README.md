@@ -6,11 +6,18 @@ the check that refused and why, whom the decision is attributed to,
 the content addresses of what was decided on, and the party's own fields. A
 record never holds a payload.
 
-| Outcome | Checks | What was decided on |
+| Outcome | Checks | The deciding party |
 | --- | --- | --- |
-| `accepted` | none refused | went ahead |
-| `refused` | an enforced check refused | did not go ahead |
-| `unenforced` | only checks recorded without enforcing refused | went ahead |
+| `accepted` | none refused | decided to accept what was decided on |
+| `refused` | an enforced check refused | refused what was decided on: it did not go ahead |
+| `unenforced` | only checks recorded without enforcing refused | did not enforce the refusal: what was decided on may have gone ahead |
+
+A record is written when the deciding party decides, before what was decided
+on is carried out, by the deciding party or by whoever it answers. A refused
+decision did not go ahead. Of an accepted or unenforced decision, a record
+does not say whether it went ahead, and a reader takes it as one that may
+have gone ahead. An accepted decision refused afterwards is recorded again
+(below).
 
 `Filter` writes records to a `Sink` at a level chosen explicitly:
 
@@ -24,8 +31,8 @@ record never holds a payload.
 The zero level is refused, so a level is in effect only when it is chosen.
 A deciding party follows one rule: if `Filter.Record` returns an error, refuse.
 Below `all`, a record that cannot be written changes no decision, so an
-unenforced decision goes ahead without its record; a deciding party that must
-not let one go ahead unrecorded uses `all`.
+unenforced decision may go ahead without its record; a deciding party that
+must not pass an unenforced decision unrecorded uses `all`.
 A malformed record (`Record.Validate`) is an error at every level, `none`
 included: it is the writer's error, not the sink's. Every sink here checks
 records and summaries (`Summary.Validate`) too, for a caller that writes to

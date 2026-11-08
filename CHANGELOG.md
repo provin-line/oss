@@ -52,13 +52,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `decisionrecord`: the record a deciding party writes for each decision
   (`Record`: id, deciding party, time, outcome — `Accepted`, `Refused`, or
   `Unenforced` when only checks the deciding party records without enforcing
-  refused, so what it decided on went ahead — the refusing check and reason,
-  the parties it is attributed to, what was decided on as an ordered list of
-  content addresses, the party's own fields — never a payload; a decision
-  has the strongest outcome of its records, refused over unenforced over
-  accepted), and `Filter`, which writes it at a level chosen explicitly:
-  `all`, `refusals` (refused and unenforced records), `summary` (`Summary`,
-  each decision counted once per window by its outcome, through
+  refused: the deciding party did not enforce the refusal, and a reader takes
+  what was decided on as one that may have gone ahead — the refusing check
+  and reason, the parties it is attributed to, what was decided on as an
+  ordered list of content addresses, the party's own fields — never a
+  payload; a decision has the strongest outcome of its records, refused over
+  unenforced over accepted), and `Filter`, which writes it at a level chosen
+  explicitly: `all`, `refusals` (refused and unenforced records), `summary`
+  (`Summary`, each decision counted once per window by its outcome, through
   `SummaryRecorder`, keeping the ids of accepted decisions only, so a flood
   of refusals or unenforced decisions does not grow its memory; a writer
   records a decision accepted any number of times, then unenforced or
@@ -66,7 +67,7 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the zero level and a `Filter` not made by `NewFilter` are refused. At `all` a
   record the sink does not accept is an error, so the deciding party refuses
   the decision; at other levels it is a warning, so an unenforced decision
-  goes ahead without its record. A malformed record (`Record.Validate` states
+  may go ahead without its record. A malformed record (`Record.Validate` states
   the rules: what a reader keys on is present and valid UTF-8, a time within
   the years 0000–9999, a check exactly on a refused or unenforced record,
   each evidence a role and an address) is an error at every level, `none`

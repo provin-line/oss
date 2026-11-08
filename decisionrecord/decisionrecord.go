@@ -28,19 +28,25 @@ import (
 	"github.com/provin-line/oss/contentaddress"
 )
 
-// Outcome is what a decision decided, and whether what it decided on went
-// ahead.
+// Outcome is what a decision decided. A record is written when the deciding
+// party decides, before what was decided on is carried out, by the deciding
+// party or by whoever it answers. A refused decision did not go ahead: the
+// deciding party enforces the check that refused. Of an accepted or
+// unenforced decision, a record does not say whether it went ahead, and a
+// reader takes it as one that may have.
 type Outcome string
 
 const (
-	// Accepted: no check refused, and what the decision decided on went
-	// ahead.
+	// Accepted: no check refused; the deciding party decided to accept what
+	// was decided on. If it refuses it afterwards, it records that too (see
+	// Record).
 	Accepted Outcome = "accepted"
-	// Refused: a check that the deciding party enforces refused, and what the
-	// decision decided on did not go ahead.
+	// Refused: a check that the deciding party enforces refused; the deciding
+	// party refused what was decided on, and it did not go ahead.
 	Refused Outcome = "refused"
 	// Unenforced: only checks that the deciding party records without
-	// enforcing refused, so what the decision decided on went ahead.
+	// enforcing refused; the deciding party did not enforce the refusal, so
+	// what was decided on may have gone ahead.
 	Unenforced Outcome = "unenforced"
 )
 
@@ -228,9 +234,9 @@ type SummaryRecorder interface {
 
 // Sink is where records and summaries are written. A Filter calls it from
 // many goroutines, so it must be safe for concurrent use. At LevelAll a nil
-// error from Record is what lets a decision be accepted, so a Sink returns nil
-// only once the record is written where it is kept (an unbuffered or synced
-// writer).
+// error from Record is what lets a decision be accepted, or passed with its
+// refusal unenforced, so a Sink returns nil only once the record is written
+// where it is kept (an unbuffered or synced writer).
 type Sink interface {
 	Recorder
 	SummaryRecorder
@@ -265,14 +271,14 @@ var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 // rule: if Record returns an error, refuse the decision. A malformed record
 // (Record.Validate) is an error at every level, LevelNone included: it is the
 // writer's error, not the sink's. At LevelAll, every record is given to the
-// sink and the sink's failure is returned, so no decision goes ahead
-// (accepted or unenforced) without its record as far as the sink's nil means
-// the record is kept (see Sink). At LevelRefusals and LevelSummary, the sink's
-// failure is logged as a warning and Record returns nil: the decision does
-// not change, so an unenforced decision goes ahead without its record. A
-// deciding party that must not let one go ahead unrecorded uses LevelAll. At
-// LevelNone nothing is written. A Filter not made by NewFilter returns an
-// error from every call.
+// sink and the sink's failure is returned, so no decision is accepted, or
+// passed with its refusal unenforced, without its record as far as the
+// sink's nil means the record is kept (see Sink). At LevelRefusals and
+// LevelSummary, the sink's failure is logged as a warning and Record returns
+// nil: the decision does not change, so an unenforced decision may go ahead
+// without its record. A deciding party that must not pass one unrecorded
+// uses LevelAll. At LevelNone nothing is written. A Filter not made by
+// NewFilter returns an error from every call.
 type Filter struct {
 	level Level
 	sink  Sink

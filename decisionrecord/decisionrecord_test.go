@@ -906,9 +906,9 @@ func TestFilter_SummaryCountsUnenforced(t *testing.T) {
 	}
 }
 
-// An unenforced decision goes ahead, so at the all level a failed write of its
-// record is an error, as for any record; below it, the write is a warning
-// and the decision goes ahead without its record.
+// An unenforced decision may go ahead, so at the all level a failed write of
+// its record is an error, as for any record; below it, the write is a
+// warning and the decision may go ahead without its record.
 func TestFilter_UnenforcedRecordThatCannotBeWritten(t *testing.T) {
 	for _, lv := range []decisionrecord.Level{decisionrecord.LevelAll, decisionrecord.LevelRefusals} {
 		sink := &memSink{err: errors.New("disk full")}
