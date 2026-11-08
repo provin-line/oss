@@ -9,6 +9,8 @@ import (
 	"github.com/provin-line/oss/canon"
 )
 
+//go:generate go run ./internal/unicode15gen -o charset_unicode15.go
+
 // Validate checks the claim against the protocol's claim grammar
 // (credential.claim.grammar, credential.claim.bare-rejected,
 // credential.claim.charset): a single <namespace>:<label> token with
@@ -17,10 +19,10 @@ import (
 // are display-spoofing vectors) and "+" (the deleted join operator's
 // surface form) are rejected per credential.claim.charset; character
 // classes beyond those — case, non-ASCII letters — are deliberately the
-// profile's call. The spec pins the property snapshot to Unicode 15.0;
-// this implementation judges via the Go unicode tables, which currently
-// match (guarded by a unicode.Version test — a toolchain table bump
-// requires re-auditing the class delta against the pinned snapshot).
+// profile's call. The spec pins the property snapshot to Unicode 15.0, and
+// so does this implementation: it judges with tables generated from UCD
+// 15.0.0 (charset_unicode15.go), not the Go unicode tables, so every build
+// judges a claim the same whatever Unicode version its toolchain carries.
 // Grammar says nothing about claim meaning; semantics are pinned per
 // claim by the profile that owns the namespace.
 func (tc TransformationClaim) Validate() error {
@@ -37,7 +39,7 @@ func (tc TransformationClaim) Validate() error {
 	}
 	for _, part := range []string{prefix, label} {
 		for _, r := range part {
-			if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '+' {
+			if unicode.Is(unicode15WhiteSpace, r) || unicode.Is(unicode15Cc, r) || unicode.Is(unicode15Cf, r) || r == '+' {
 				return fmt.Errorf("transformationClaim %q contains a character outside the token charset (credential.claim.charset)", s)
 			}
 		}

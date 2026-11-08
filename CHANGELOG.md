@@ -445,6 +445,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Go 1.27 every such target overflows the stack, a fatal error. A `null`
   there, and a chain of more than 64 without a cycle, decoded before and are
   refused too. The target is the caller's Go value, not input.
+- `vc` judges `credential.claim.charset` (the White_Space, Cc and Cf
+  characters a transformation claim may not contain) with tables generated
+  from the Unicode Character Database 15.0.0, the version the specification
+  pins, instead of the Go `unicode` tables: a toolchain whose tables are of
+  another Unicode version (Go 1.27 carries 17.0) judges a claim the same.
+  Today the three classes are the same in 15.0 and 17.0, so no claim is
+  judged differently; the tables guard against a later version.
+  `go generate ./vc` rebuilds them, refusing UCD files whose SHA-256 is not
+  the pinned one.
 
 ### Security
 
