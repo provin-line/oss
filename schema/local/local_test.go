@@ -217,8 +217,29 @@ func validatorFor(t *testing.T, doc string) (*local.Validator, vc.SchemaRef) {
 	return v, ref("schema:bound", []byte(doc))
 }
 
+// The work of validating a payload is bounded by a budget that grows with
+// the payload's size: one within it is validated, one that needs more is
+// refused, naming the budget.
+func TestValidate_BoundsTheWorkOnAPayload(t *testing.T) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprint(i)
+	}
+	v, r := validatorFor(t, `{"type": "array", "items": {"enum": [`+strings.Join(entries, ",")+`]}}`)
+	array := func(items int) []byte {
+		return []byte("[" + strings.TrimSuffix(strings.Repeat("99,", items), ",") + "]")
+	}
+	if err := v.Validate(context.Background(), array(1_000), r); err != nil {
+		t.Errorf("1 000 values: %v", err)
+	}
+	err := v.Validate(context.Background(), array(10_000), r)
+	if err == nil || !strings.Contains(err.Error(), "work budget") {
+		t.Errorf("10 000 values, each compared with 100 entries: err = %v, want the work budget named", err)
+	}
+}
+
 // A payload nested deeper than 512 levels is refused, naming the bound; one
-// of 512 is validated.
+// at the bound is validated.
 func TestValidate_BoundsThePayloadDepth(t *testing.T) {
 	v, r := validatorFor(t, `{"uniqueItems": true, "items": {"$ref": "#"}}`)
 	nested := func(depth int) []byte {
@@ -233,39 +254,13 @@ func TestValidate_BoundsThePayloadDepth(t *testing.T) {
 	}
 }
 
-// A payload whose values times the schema's enum entries and const values
-// exceed 2 000 000 is refused, naming the bound; one at the bound is
-// validated.
-func TestValidate_BoundsTheEnumComparisons(t *testing.T) {
-	entries := make([]string, 100)
-	for i := range entries {
-		entries[i] = fmt.Sprint(i)
-	}
-	v, r := validatorFor(t, `{"type": "array", "items": {"enum": [`+strings.Join(entries, ",")+`]}}`)
-	array := func(items int) []byte {
-		return []byte("[" + strings.TrimSuffix(strings.Repeat("7,", items), ",") + "]")
-	}
-	if err := v.Validate(context.Background(), array(19_999), r); err != nil { // 20 000 values × 100
-		t.Errorf("at the bound: %v", err)
-	}
-	err := v.Validate(context.Background(), array(20_000), r)
-	if err == nil || !strings.Contains(err.Error(), "beyond the bound of 2000000") {
-		t.Errorf("past the bound: err = %v, want the comparison bound named", err)
-	}
-}
-
-// const counts as one entry each.
-func TestValidate_CountsConstAsAnEntry(t *testing.T) {
-	v, r := validatorFor(t, `{"type": "array", "items": {"anyOf": [{"const": 1}, {"const": 2}]}}`)
-	array := func(items int) []byte {
-		return []byte("[" + strings.TrimSuffix(strings.Repeat("1,", items), ",") + "]")
-	}
-	if err := v.Validate(context.Background(), array(999_999), r); err != nil { // 1 000 000 values × 2
-		t.Errorf("at the bound: %v", err)
-	}
-	err := v.Validate(context.Background(), array(1_000_000), r)
-	if err == nil || !strings.Contains(err.Error(), "beyond the bound") {
-		t.Errorf("1 000 001 values × 2 const: err = %v, want the comparison bound", err)
+// A payload that fails at the bottom of a recursive schema, at the depth
+// bound, is answered: refused as non-conforming or for its budget.
+func TestValidate_AnswersADeepFailure(t *testing.T) {
+	v, r := validatorFor(t, `{"required": ["name"], "properties": {"c": {"$ref": "#"}}}`)
+	payload := strings.Repeat(`{"name":"n","c":`, 510) + `{}` + strings.Repeat("}", 510)
+	if err := v.Validate(context.Background(), []byte(payload), r); err == nil {
+		t.Error("a missing name at depth 511: want an error")
 	}
 }
 
@@ -282,5 +277,15 @@ func TestValidate_StatesOnlyTheFirstFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "/0") {
 		t.Errorf("error does not name the first failure: %.200s", err)
+	}
+}
+
+// A schema is checked against the metaschema whatever id it is added under,
+// one below json-schema.org included: {"multipleOf":0} is refused.
+func TestValidator_AddChecksEverySchemaAgainstTheMetaschema(t *testing.T) {
+	for _, id := range []string{"urn:x", "https://json-schema.org/x", "http://json-schema.org/draft-07/x"} {
+		if err := local.New().Add(id, []byte(`{"multipleOf":0}`)); err == nil {
+			t.Errorf("added under %s: a multipleOf of 0 accepted", id)
+		}
 	}
 }

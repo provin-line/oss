@@ -9,6 +9,8 @@
 - `check-number-hygiene.sh` — JSON の数を倍精度で読む所が、すべて `canon.Float64`（RFC 8259 の文法だけ、正しく丸め、綴りに依らない）を通ることを確認する。ほかの `Float64` の method（`json.Number` のもの。呼ぶ形、method value、method expression のどれでも）や `ParseFloat`（どの import 名の `strconv` でも、`math/big` のものでも）を使う場合は、その文字列が JSON の数でない理由を書いた `number-hygiene-exempt` コメントが必要。`rand.Float64()` と `canon.Float64` への言及は通る。行ごとの文字の照合で、import や型は解決しない。
 - `check-gofmt.sh` — 生成コード `gen/` を含むすべての Go ファイルが gofmt 済みであることを確認する。
 
+decoder、canonicalizer、number のチェックは、`gen/`（生成コード）を対象にしない。upstream の library の写しである `internal/jsonschema/` では、decoder のチェックが `loader.go` と `content.go`（schema の package が使わない decode）を対象にせず、`schema/internal/schemadoc` のほかの package がこの写しを import すると失敗する。number のチェックは `kind/kind.go`（誤りの文の整形）を対象にしない。その README を参照。
+
 適用除外コメントは、検出対象の行・その直前の行・`"encoding/json"` import 行（ファイル全体の除外）のいずれかに置き、その箇所で衛生ルールが問題にならない*理由*を明記する。
 
 チェック以外のスクリプト:

@@ -7,7 +7,9 @@
 // registered schema's SHA-256 must equal the SchemaRef.ContentHash, so a
 // retroactively-modified schema is detected (the data-integrity axis's
 // schema-reference check) — and then structural conformance of the payload
-// against the schema (santhosh-tekuri/jsonschema).
+// against the schema (internal/jsonschema, a copy of santhosh-tekuri/jsonschema
+// with a work budget added, and an error for a number it cannot read where
+// upstream panics).
 //
 // Both the schema document and the payload are decoded through
 // canon.StrictDecoder — the one JSON decode path permitted on protocol
@@ -16,8 +18,8 @@
 // ambiguous bytes the codec would refuse. A number longer than 256 bytes, or
 // whose exponent part lies beyond ±400, is refused in either, as the library
 // would read it slowly; so is a payload nested deeper than 512 levels, or
-// whose values times the schema's enum entries and const values exceed
-// 2 000 000 (see schema/README.md). Schema-document compilation (strict decode, number
+// whose validation needs more than its work budget, 2^20 steps plus 16 per
+// byte of the payload (see schema/README.md). Schema-document compilation (strict decode, number
 // bounds, Draft 2020-12 pin, external-$ref denial) is the shared
 // schema/internal/schemadoc policy, the same one schema.ValidateJSONSchema
 // applies at registry admission, so a stored schema is exactly one the registry
@@ -62,7 +64,7 @@ func New() *Validator {
 // malformed schema fails loudly here rather than at first validation. Re-adding
 // an id overwrites it.
 func (v *Validator) Add(id string, document []byte) error {
-	compiled, err := schemadoc.Compile(id, document)
+	compiled, err := schemadoc.Compile(document)
 	if err != nil {
 		return fmt.Errorf("schema/local: schema %q: %w", id, err)
 	}

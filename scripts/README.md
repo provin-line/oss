@@ -22,6 +22,13 @@ the target:
   does not resolve imports or types.
 - `check-gofmt.sh` — all Go files, including generated `gen/`, are gofmt-clean.
 
+The decoder, canonicalizer and number checks skip `gen/` (generated code).
+In `internal/jsonschema/`, a copy of an upstream library, the decoder check
+skips `loader.go` and `content.go` (decoding its schema package does not
+enable) and fails if a package other than `schema/internal/schemadoc` imports
+the copy; the number check skips `kind/kind.go` (error-message formatting).
+See that directory's README.
+
 Exemption comments go on the flagged line or the line directly above it (for
 the decoder and canonicalizer checks, also on the `"encoding/json"` import
 line, as a whole-file exemption), and must state *why* the hygiene rule cannot

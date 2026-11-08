@@ -1,0 +1,1857 @@
+diff --git a/budget.go b/budget.go
+new file mode 100644
+index 0000000..01387b2
+--- /dev/null
++++ b/budget.go
+@@ -0,0 +1,340 @@
++package jsonschema
++
++// Work budget: a patch to v6.0.3. This file and the lines marked "work
++// budget" in validator.go, util.go, vocab.go, roots.go, objcompiler.go and
++// schema.go are not upstream code (README.md, patches/work-budget.patch).
++
++import (
++	"fmt"
++	"math"
++	"math/big"
++	"math/bits"
++	"slices"
++	"strconv"
++	"strings"
++
++	"golang.org/x/text/message"
++)
++
++// MaxNesting is how deeply ValidateWithBudget applies schemas within one
++// another: each $ref, applicator and value below another adds a level, and
++// each level holds stack.
++const MaxNesting = 10_000
++
++// PatternInstructionsPerStep is how many instructions of a pattern's
++// program cost one more step per byte matched, when the RegexpEngine's
++// Regexp says its size (a Size() int method): matching a byte against a
++// program takes time in its size.
++const PatternInstructionsPerStep = 16
++
++// patternSize is the size of re's program as the RegexpEngine's Regexp gives
++// it (a Size() int method), or 0 when it gives none or a negative one.
++func patternSize(re Regexp) int {
++	if s, ok := re.(interface{ Size() int }); ok {
++		return max(s.Size(), 0)
++	}
++	return 0
++}
++
++// product is a × b steps, for a and b of at least 0, in int64 as the budget
++// counts, saturating at the largest int64 instead of overflowing, so it
++// exceeds any budget.
++func product(a, b int64) int64 {
++	if a == 0 || b == 0 {
++		return 0
++	}
++	if a > math.MaxInt64/b {
++		return math.MaxInt64
++	}
++	return a * b
++}
++
++// compileRegexFormat checks format "regex" as engine compiles v. Before the
++// engine runs, it spends PatternParseStepsPerByte steps per byte of v, and
++// does not run the engine when the budget cannot pay them. After, it spends
++// PatternCompileStepsPerInstruction steps per instruction of the program
++// compiled, whose size is known only then: once the budget is spent, at
++// most this one compile has run past it, within the engine's own bounds. A
++// value the engine refuses spends only the steps of its bytes.
++func (vd *validator) compileRegexFormat(engine RegexpEngine, v any) error {
++	str, ok := v.(string)
++	if !ok {
++		return nil
++	}
++	if !vd.budget.spendSteps(product(PatternParseStepsPerByte, int64(len(str)))) {
++		return nil
++	}
++	re, err := engine(str)
++	if err != nil {
++		return err
++	}
++	vd.budget.spendSteps(product(PatternCompileStepsPerInstruction, int64(patternSize(re))))
++	return nil
++}
++
++// sortSteps is the steps of sorting obj's names: n log n for n names
++// (n × (1 + bits.Len(n))), and one per byte of each.
++func sortSteps(obj map[string]any) int64 {
++	n := int64(len(obj))
++	steps := product(n, 1+int64(bits.Len64(uint64(n))))
++	for name := range obj {
++		steps += int64(len(name))
++	}
++	return steps
++}
++
++// sortedNames is obj's names in order, spending sortSteps(obj) steps of b
++// first. It reports false when b cannot pay them.
++func sortedNames(b *workBudget, obj map[string]any) ([]string, bool) {
++	if !b.spendSteps(sortSteps(obj)) {
++		return nil, false
++	}
++	names := make([]string, 0, len(obj))
++	for name := range obj {
++		names = append(names, name)
++	}
++	slices.Sort(names)
++	return names, true
++}
++
++// numberSteps is the steps of reading a number written as text as an exact
++// rational: one per byte, and one per unit of its exponent, as reading it
++// builds that power of ten. An exponent too long to read is more steps than
++// any budget.
++func numberSteps(text string) int64 {
++	n := int64(len(text))
++	i := strings.IndexAny(text, "eE")
++	if i < 0 {
++		return n
++	}
++	exp, err := strconv.ParseInt(text[i+1:], 10, 64)
++	if err != nil || exp == math.MinInt64 {
++		return math.MaxInt64
++	}
++	exp = max(exp, -exp)
++	if exp > math.MaxInt64-n {
++		return math.MaxInt64
++	}
++	return n + exp
++}
++
++// boundSteps is the steps of comparing a number written as text with bound,
++// or dividing one by the other: two, and one per 16 bits of the two. The
++// text is taken as 8 bits per step of reading it (numberSteps), more than
++// the 3.33 of a decimal digit or of a unit of an exponent, so it is charged
++// before it is read.
++func boundSteps(text string, bound *big.Rat) int64 {
++	read := product(8, numberSteps(text))
++	if read == math.MaxInt64 {
++		return math.MaxInt64
++	}
++	return 2 + (read+int64(bound.Num().BitLen()+bound.Denom().BitLen()))/16
++}
++
++// spendNumber spends the steps numValidate takes on v, before it reads v:
++// reading it (numberSteps), and comparing it with each bound the schema has
++// or dividing it by multipleOf (boundSteps). It reports false when the
++// budget cannot pay them.
++func (vd *validator) spendNumber(v any) bool {
++	s := vd.sch
++	var text string
++	var steps int64
++	for _, bound := range []*big.Rat{s.Minimum, s.Maximum, s.ExclusiveMinimum, s.ExclusiveMaximum, s.MultipleOf} {
++		if bound == nil {
++			continue
++		}
++		if text == "" {
++			text = fmt.Sprintf("%v", v)
++			steps = numberSteps(text)
++		}
++		steps = sumSteps(steps, boundSteps(text, bound))
++	}
++	return vd.budget.spendSteps(steps)
++}
++
++// sumSteps is a + b steps, for a and b of at least 0, saturating at the
++// largest int64 as product does.
++func sumSteps(a, b int64) int64 {
++	if a > math.MaxInt64-b {
++		return math.MaxInt64
++	}
++	return a + b
++}
++
++// namesLookedUp is the steps of looking up names in an object: one each,
++// and one per byte, which the lookup hashes.
++func namesLookedUp(names []string) int64 {
++	var n int64
++	for _, name := range names {
++		n += 1 + int64(len(name))
++	}
++	return n
++}
++
++// PatternParseStepsPerByte is how many steps each byte of a value checked as
++// format "regex" costs before it is compiled: parsing takes time in its
++// length, whatever the size of the program it compiles to.
++const PatternParseStepsPerByte = 4
++
++// PatternCompileStepsPerInstruction is how many steps each instruction of a
++// program costs when a value checked as format "regex" is compiled, when the
++// RegexpEngine's Regexp says its size: compiling takes time in the size.
++const PatternCompileStepsPerInstruction = 4
++
++// BudgetExceededError is returned by ValidateWithBudget when validating a
++// value would take more work than the budget it was given, or would nest
++// deeper than MaxNesting.
++type BudgetExceededError struct {
++	// Budget is the number of steps the validation was given.
++	Budget int64
++	// Nested reports that the validation would have nested deeper than
++	// MaxNesting, whatever its steps.
++	Nested bool
++}
++
++func (e *BudgetExceededError) Error() string {
++	if e.Nested {
++		return fmt.Sprintf("jsonschema: validation nests schemas deeper than %d", MaxNesting)
++	}
++	return fmt.Sprintf("jsonschema: validation needs more than its work budget of %d steps", e.Budget)
++}
++
++// ValidateWithBudget validates v as Validate does, within budget steps of
++// work. A step is:
++//
++//   - one schema applied to one value; one property (and one per byte of its
++//     name), item or string byte of that value;
++//   - one patternProperties pattern tried against a property name, and one
++//     per byte of the name;
++//   - PatternParseStepsPerByte per byte of each value compiled as format
++//     "regex", before it is compiled;
++//   - when the RegexpEngine's Regexp says the size n of its program (a
++//     Size() int method): n/PatternInstructionsPerStep more per position (each
++//     byte, and the end) of a string a pattern or a patternProperties
++//     pattern is matched against, and PatternCompileStepsPerInstruction × n
++//     for each value it compiles as format "regex";
++//   - reading a number, for a bound, for type integer, or to compare or
++//     hash it: one step per byte of its text and one per unit of its
++//     exponent; and comparing it with each bound or dividing it by
++//     multipleOf: two, and one per 16 bits of the two numbers (its own
++//     taken as 8 per step of reading it);
++//   - one name of required, dependentRequired or dependencies looked up, and
++//     one entry of dependencies, dependentSchemas or dependentRequired, each
++//     with one per byte of the name;
++//   - one scope walked to detect a cycle or to resolve $recursiveRef or
++//     $dynamicRef;
++//   - one token of a value's location copied into an error;
++//   - when enum, const or uniqueItems compares or hashes values: one value
++//     visited, one byte of each string, property name or number text it
++//     reads, one item uniqueItems looks at, and the sort of an object's
++//     names it compares or hashes (n log n steps for n names, and their
++//     bytes; names that share a long prefix take more per comparison, up to
++//     a factor of log n).
++//
++// When validation would take more steps than budget, or would apply schemas
++// within one another more than MaxNesting deep (counting on through the
++// validations propertyNames and contentSchema start), it stops (every step
++// after that stops at once, and so does every loop around it) and
++// ValidateWithBudget returns a *BudgetExceededError, never a result from the
++// work it did not finish. A budget of 0 or less admits no step. Applying a
++// schema to a value reads the value's names or items once to count them, and
++// sets up the tracking of what it evaluates, before it checks the budget:
++// so each application that starts reads that much of its value, counted or
++// not.
++//
++// The budget counts the work of this package's validator, and the
++// validations and comparisons a custom vocabulary asks of its
++// ValidatorContext. It does not count, beyond the length of what they read:
++//
++//   - a custom vocabulary's own work;
++//   - a RegexpEngine's parsing, matching and compiling, beyond what the
++//     length of what it reads and its Regexp's size charge, and a format
++//     check (format "regex" compiles the string; format is asserted where a
++//     schema's draft or the compiler asks for it).
++//
++// Bound the depth of v before validating it. The budget does not apply to
++// compiling schemas.
++func (sch *Schema) ValidateWithBudget(v any, budget int64) error {
++	b := &workBudget{left: budget}
++	err := sch.validate(v, nil, nil, nil, false, nil, b, 0)
++	if b.exceeded || budget <= 0 {
++		return &BudgetExceededError{Budget: budget, Nested: b.nested}
++	}
++	return err
++}
++
++// workBudget is the steps left in one ValidateWithBudget call, shared by
++// every validator it creates. A nil *workBudget is unlimited.
++type workBudget struct {
++	left     int64
++	exceeded bool
++	nested   bool // exceeded by nesting deeper than MaxNesting
++}
++
++// spend takes n steps, and reports false once the budget is exceeded. Once
++// exceeded, it stays so, so every later step stops at once. A negative n,
++// which no charge is, exceeds it.
++func (b *workBudget) spend(n int) bool { return b.spendSteps(int64(n)) }
++
++// spendSteps is spend for a charge counted in int64 (product).
++func (b *workBudget) spendSteps(n int64) bool {
++	if b == nil {
++		return true
++	}
++	if b.exceeded || n < 0 || n > b.left {
++		b.left, b.exceeded = 0, true
++		return false
++	}
++	b.left -= n
++	return true
++}
++
++// nest reports false, and exceeds the budget, once depth is beyond
++// MaxNesting. A nil budget is unlimited.
++func (b *workBudget) nest(depth int) bool {
++	if b == nil || depth <= MaxNesting {
++		return true
++	}
++	b.left, b.exceeded, b.nested = 0, true, true
++	return false
++}
++
++// over reports whether the budget is exceeded. A validator checks it before
++// any work that depends on its value, and then does none.
++func (b *workBudget) over() bool {
++	return b != nil && b.exceeded
++}
++
++// errBudget is the error a validator stops with once its budget is exceeded:
++// a new one each time, without a location, since callers may change it.
++func errBudget() *ValidationError {
++	return &ValidationError{ErrorKind: budgetExceeded{}}
++}
++
++// workOf is the steps for applying one schema to v, besides the one for the
++// schema itself: what the validator iterates or reads of v.
++func workOf(v any) int {
++	switch v := v.(type) {
++	case map[string]any:
++		n := len(v)
++		for k := range v {
++			n += len(k)
++		}
++		return n
++	case []any:
++		return len(v)
++	case string:
++		return len(v)
++	}
++	return 0
++}
++
++// budgetExceeded is the error kind a validator stops with once its budget is
++// exceeded. ValidateWithBudget reports a *BudgetExceededError instead.
++type budgetExceeded struct{}
++
++func (budgetExceeded) KeywordPath() []string { return nil }
++
++func (budgetExceeded) LocalizedString(p *message.Printer) string {
++	return p.Sprintf("validation work budget exceeded")
++}
+diff --git a/budget_internal_test.go b/budget_internal_test.go
+new file mode 100644
+index 0000000..3c41198
+--- /dev/null
++++ b/budget_internal_test.go
+@@ -0,0 +1,80 @@
++package jsonschema
++
++// Work budget: tests of the local patch to v6.0.3 (see budget.go).
++
++import (
++	"math"
++	"testing"
++)
++
++// The steps a charge multiplies are counted in int64, as the budget is, and
++// saturate instead of overflowing: a product past the largest int64 is the
++// largest int64, so it exceeds any budget. A product past the largest 32-bit
++// int is counted whole, so a 32-bit build charges what a 64-bit one does.
++func TestProduct_Saturates(t *testing.T) {
++	for _, c := range []struct{ a, b, want int64 }{
++		{0, math.MaxInt64, 0}, {3, 4, 12}, {1 << 31, 1 << 10, 1 << 41},
++		{math.MaxInt64, 2, math.MaxInt64}, {math.MaxInt64 / 2, 3, math.MaxInt64},
++	} {
++		if got := product(c.a, c.b); got != c.want {
++			t.Errorf("product(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
++		}
++	}
++}
++
++// A charge of more steps than a 32-bit int holds takes them all from the
++// budget: one past what is left exceeds it, and one within leaves the rest.
++func TestSpendSteps_ChargesPastTheLargest32BitInt(t *testing.T) {
++	b := &workBudget{left: 3 << 31}
++	if !b.spendSteps(product(1<<31, 2)) || b.left != 1<<31 {
++		t.Errorf("spendSteps(2^32) from 3·2^31: left %d, exceeded %v", b.left, b.exceeded)
++	}
++	if b.spendSteps(product(1<<31, 1)+1) || !b.exceeded {
++		t.Errorf("spendSteps(2^31+1) from 2^31: left %d, exceeded %v", b.left, b.exceeded)
++	}
++}
++
++// A negative charge exceeds the budget rather than adding to it.
++func TestSpend_RefusesANegativeCharge(t *testing.T) {
++	b := &workBudget{left: 10}
++	if b.spend(-5) || !b.exceeded || b.left != 0 {
++		t.Errorf("spend(-5): left %d, exceeded %v", b.left, b.exceeded)
++	}
++}
++
++// A size a RegexpEngine's Regexp gives below zero counts as none.
++func TestPatternSize_IgnoresANegativeSize(t *testing.T) {
++	if got := patternSize(negativeSize{}); got != 0 {
++		t.Errorf("patternSize = %d, want 0", got)
++	}
++}
++
++type negativeSize struct{ Regexp }
++
++func (negativeSize) Size() int { return -1 << 20 }
++
++// Reading a number costs one step per byte of its text and one per unit of
++// its exponent; an exponent too long to read costs more than any budget.
++func TestNumberSteps_CountsTheTextAndTheExponent(t *testing.T) {
++	for _, c := range []struct {
++		text string
++		want int64
++	}{
++		{"12.5", 4}, {"1e40", 4 + 40}, {"1E-40", 5 + 40}, {"-2.5e+3", 7 + 3},
++		{"1e99999999999999999999", math.MaxInt64},
++	} {
++		if got := numberSteps(c.text); got != c.want {
++			t.Errorf("numberSteps(%q) = %d, want %d", c.text, got, c.want)
++		}
++	}
++}
++
++// A sum of steps saturates as a product does.
++func TestSumSteps_Saturates(t *testing.T) {
++	if got := sumSteps(math.MaxInt64-1, 2); got != math.MaxInt64 {
++		t.Errorf("sumSteps(MaxInt64-1, 2) = %d", got)
++	}
++	if got := sumSteps(3, 4); got != 7 {
++		t.Errorf("sumSteps(3, 4) = %d", got)
++	}
++}
+diff --git a/budget_test.go b/budget_test.go
+new file mode 100644
+index 0000000..f878d1d
+--- /dev/null
++++ b/budget_test.go
+@@ -0,0 +1,642 @@
++package jsonschema_test
++
++// Work budget: tests of the local patch to v6.0.3 (see budget.go).
++
++import (
++	"errors"
++	"fmt"
++	"regexp"
++	"strings"
++	"testing"
++
++	"github.com/santhosh-tekuri/jsonschema/v6"
++	"golang.org/x/text/message"
++)
++
++func compileBudget(t *testing.T, schema string, content bool) *jsonschema.Schema {
++	t.Helper()
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	if content {
++		c.AssertContent()
++	}
++	if err := c.AddResource("schema.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	sch, err := c.Compile("schema.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	return sch
++}
++
++func instance(t *testing.T, s string) any {
++	t.Helper()
++	v, err := jsonschema.UnmarshalJSON(strings.NewReader(s))
++	if err != nil {
++		t.Fatal(err)
++	}
++	return v
++}
++
++func exceeded(err error) bool {
++	var be *jsonschema.BudgetExceededError
++	return errors.As(err, &be)
++}
++
++// least returns the smallest budget within which ValidateWithBudget finishes:
++// the steps a validation takes do not depend on its budget.
++func least(t *testing.T, sch *jsonschema.Schema, v any) int64 {
++	t.Helper()
++	lo, hi := int64(0), int64(1)<<40
++	if exceeded(sch.ValidateWithBudget(v, hi)) {
++		t.Fatal("no budget below 2^40 suffices")
++	}
++	for lo < hi {
++		mid := lo + (hi-lo)/2
++		if exceeded(sch.ValidateWithBudget(v, mid)) {
++			lo = mid + 1
++		} else {
++			hi = mid
++		}
++	}
++	return lo
++}
++
++// Within its budget, ValidateWithBudget gives Validate's answer; one step
++// less is a *BudgetExceededError, never an answer.
++func TestValidateWithBudget_AnswersAsValidateOrNotAtAll(t *testing.T) {
++	for _, tc := range []struct{ schema, value string }{
++		{`true`, `1`},
++		{`false`, `1`},
++		{`{"type":"array","items":{"type":"integer"}}`, `[1,2,3]`},
++		{`{"type":"array","items":{"type":"integer"}}`, `[1,"2",3]`},
++		{`{"properties":{"a":{"enum":[{"x":[1,2]},{"x":[1,3]}]}}}`, `{"a":{"x":[1,3]}}`},
++		{`{"const":{"x":[1,2]}}`, `{"x":[1,2,3]}`},
++		{`{"uniqueItems":true}`, `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,1]`},
++		{`{"uniqueItems":true}`, `[[1],[2],[3]]`},
++		{`{"not":{"type":"array","items":{"type":"string"}}}`, `[1,2,3]`},
++		{`{"anyOf":[{"items":{"type":"string"}},{"items":{"type":"integer"}}]}`, `[1,2,3]`},
++		{`{"propertyNames":{"maxLength":3}}`, `{"abc":1,"abcd":2}`},
++		{`{"patternProperties":{"^a":{"type":"integer"}},"additionalProperties":false}`, `{"aa":1,"ab":2}`},
++		{`{"type":"string","pattern":"^a+$"}`, `"aaaa"`},
++	} {
++		sch := compileBudget(t, tc.schema, false)
++		v := instance(t, tc.value)
++		want := sch.Validate(v)
++		n := least(t, sch, v)
++		got := sch.ValidateWithBudget(v, n)
++		if (got == nil) != (want == nil) {
++			t.Errorf("%s on %s: within %d steps %v, Validate %v", tc.schema, tc.value, n, got, want)
++		}
++		if n > 0 {
++			if err := sch.ValidateWithBudget(v, n-1); !exceeded(err) {
++				t.Errorf("%s on %s: within %d steps %v, want a *BudgetExceededError", tc.schema, tc.value, n-1, err)
++			}
++		}
++	}
++}
++
++// A budget that runs out inside not, anyOf or oneOf is reported as such,
++// not read as a failed branch.
++func TestValidateWithBudget_ExhaustionIsNotABranchResult(t *testing.T) {
++	long := `[` + strings.Repeat(`1,`, 50) + `1]`
++	for _, schema := range []string{
++		`{"not":{"items":{"type":"integer"}}}`,
++		`{"not":{"items":{"type":"string"}}}`,
++		`{"anyOf":[{"items":{"type":"string"}},true]}`,
++		`{"oneOf":[{"items":{"type":"string"}},true]}`,
++		`{"if":{"items":{"type":"integer"}},"then":true,"else":false}`,
++	} {
++		sch := compileBudget(t, schema, false)
++		if err := sch.ValidateWithBudget(instance(t, long), 10); !exceeded(err) {
++			t.Errorf("%s: %v, want a *BudgetExceededError", schema, err)
++		}
++	}
++}
++
++// The budget is shared with a schema applied to decoded content.
++func TestValidateWithBudget_CountsContentSchema(t *testing.T) {
++	sch := compileBudget(t, `{"contentMediaType":"application/json","contentSchema":{"items":{"type":"integer"}}}`, true)
++	v := instance(t, `"[`+strings.Repeat(`1,`, 50)+`1]"`)
++	if err := sch.Validate(v); err != nil {
++		t.Fatalf("Validate: %v", err)
++	}
++	if err := sch.ValidateWithBudget(v, 110); !exceeded(err) {
++		t.Errorf("within 110 steps: %v, want a *BudgetExceededError", err)
++	}
++	if err := sch.ValidateWithBudget(v, 1000); err != nil {
++		t.Errorf("within 1000 steps: %v", err)
++	}
++}
++
++// A budget of 0 or less admits no work, and the error names the budget.
++func TestValidateWithBudget_NoBudget(t *testing.T) {
++	sch := compileBudget(t, `true`, false)
++	for _, n := range []int64{0, -1} {
++		err := sch.ValidateWithBudget(instance(t, `1`), n)
++		var be *jsonschema.BudgetExceededError
++		if !errors.As(err, &be) || be.Budget != n {
++			t.Errorf("budget %d: %v, want a *BudgetExceededError of %d", n, err, n)
++		}
++	}
++}
++
++// The steps of a validation, as ValidateWithBudget documents them.
++func TestValidateWithBudget_Steps(t *testing.T) {
++	items := make([]string, 21)
++	for i := range items {
++		items[i] = strings.Repeat("9", i+1)
++	}
++	ints := "[" + strings.Join(items, ",") + "]"
++	strs := make([]string, 21)
++	objs := make([]string, 21)
++	for i := range strs {
++		strs[i] = `"` + strings.Repeat("a", i+1) + `"`
++		objs[i] = fmt.Sprintf(`{"k":%d}`, i)
++	}
++	strArr := "[" + strings.Join(strs, ",") + "]"
++	objArr := "[" + strings.Join(objs, ",") + "]"
++	for _, tc := range []struct {
++		schema, value string
++		steps         int64
++	}{
++		{`true`, `1`, 1},
++		// each enum value compared: a value, and the 2 bytes of number text
++		{`{"enum":[1,2,3]}`, `3`, 1 + 3*(1+2)},
++		// a number compared: a value, its text and its exponent, twice
++		{`{"enum":[1e2]}`, `1e2`, 1 + 1 + 2*(3+2)},
++		// a number read to see whether it is an integer: its text
++		{`{"type":"integer"}`, `1.0`, 1 + 3},
++		// a number read for a bound (1), then compared with the bound: two,
++		// and one per 16 bits of the two (its 1 step taken as 8 bits, and
++		// 0/1's 1 bit)
++		{`{"minimum":0}`, `5`, 1 + 1 + 2},
++		// a number with an exponent: its text and exponent (44); compared:
++		// two, and its 44 steps taken as 8 bits each, with 0/1's 1 bit
++		{`{"minimum":0}`, `1e40`, 1 + (4 + 40) + (2 + (8*44+1)/16)},
++		// each schema applied in place, and the scope its cycle check walks;
++		// the number read for type integer (1), and for minimum (1) and
++		// compared with it (2)
++		{`{"allOf":[{"type":"integer"},{"minimum":0}]}`, `1`, 1 + 2*(1+1) + 1 + 1 + 2},
++		// two levels in place: the inner one's cycle check walks two scopes;
++		// the number read for type integer
++		{`{"allOf":[{"allOf":[{"type":"integer"}]}]}`, `1`, 1 + (1 + 1) + (1 + 2) + 1},
++		// the array, and its items with the scope each one's cycle check
++		// walks and the number read for type integer
++		{`{"type":"array","items":{"type":"integer"}}`, `[1,2,3]`, 4 + 3*(1+1+1)},
++		// a failing item also copies its location (one token) into its error
++		{`{"items":{"type":"string"}}`, `[1]`, 2 + (1 + 1) + 1},
++		// the array (2); its item (1) and the scope its cycle check walks (1);
++		// the two scopes $dynamicRef walks; the schema it resolves to,
++		// applied in place (1), and the two scopes its cycle check walks
++		{`{"$dynamicAnchor":"node","items":{"$dynamicRef":"#node"}}`, `[1]`, 2 + (1 + 1) + 2 + (1 + 2)},
++		// each required name looked up, and its bytes
++		{`{"required":["a","bb","ccc"]}`, `{}`, 1 + (1 + 1) + (1 + 2) + (1 + 3)},
++		// the object, the dependentRequired entry and its name's byte, and
++		// its names looked up with their bytes
++		{`{"dependentRequired":{"a":["b","cc"]}}`, `{"a":1}`, 3 + (1 + 1) + (1 + 1) + (1 + 2)},
++		// the object, and the dependentSchemas entry with its name's bytes
++		{`{"dependentSchemas":{"ab":{}}}`, `{}`, 1 + (1 + 2)},
++		// the object, and the dependencies entry with its name's bytes
++		{`{"$schema":"http://json-schema.org/draft-07/schema#","dependencies":{"abc":["d"]}}`, `{}`, 1 + (1 + 3)},
++		// the object and each name
++		{`{"propertyNames":{"maxLength":3}}`, `{"abc":1,"abcd":2}`, 10 + 4 + 5},
++		// the object (3), its values compared: the object (1), the sort of
++		// its one name (3) and the name looked up (1), the array (1), and
++		// each number with its text (3 each)
++		{`{"const":{"x":[1,2]}}`, `{"x":[1,2]}`, 3 + 1 + 3 + 1 + 1 + 3 + 3},
++		// the string, and the string compared with its bytes
++		{`{"const":"abc"}`, `"abc"`, 4 + 4},
++		// the object, each pattern tried and each byte of the name it is
++		// matched against, each value
++		{`{"patternProperties":{"^a":{}}}`, `{"aa":1,"ab":2}`, 7 + 3 + 3 + 2},
++		// 3 pairs, each an array and a number with its text
++		{`{"uniqueItems":true}`, `[[1],[2],[3]]`, 4 + 3*(1+3)},
++		// past 20 items: each item, its hash, and its number text
++		{`{"uniqueItems":true}`, ints, 22 + 21*2 + (21*22)/2},
++		// past 20 items: each item, its hash, and its string's bytes
++		{`{"uniqueItems":true}`, strArr, 22 + 21*2 + (21*22)/2},
++		// past 20 items: each item; its hash: the object, its name and the
++		// sort of its one name (3), the name with its byte (2), the number
++		// with its text (1 + 1 or 2)
++		{`{"uniqueItems":true}`, objArr, 22 + 21*(1+1+3+2+1) + 10*1 + 11*2},
++	} {
++		sch := compileBudget(t, tc.schema, false)
++		if got := least(t, sch, instance(t, tc.value)); got != tc.steps {
++			t.Errorf("%s on %.20s: %d steps, want %d", tc.schema, tc.value, got, tc.steps)
++		}
++	}
++}
++
++// probe is a custom keyword that asks its ValidatorContext to validate a
++// nested value and to compare values.
++type probe struct{ sub *jsonschema.Schema }
++
++func (p *probe) Validate(ctx *jsonschema.ValidatorContext, v any) {
++	obj, ok := v.(map[string]any)
++	if !ok {
++		return
++	}
++	if a, ok := obj["a"].(map[string]any); ok {
++		ctx.AddErr(ctx.Validate(p.sub, a["b"], []string{"a", "b"}))
++	}
++	if _, err := ctx.Equals(v, v); err != nil {
++		ctx.AddErr(err)
++	}
++	if _, _, err := ctx.Duplicates([]any{v, v}); err != nil {
++		ctx.AddErr(err)
++	}
++}
++
++type probeKind struct{}
++
++func (probeKind) KeywordPath() []string                   { return []string{"probe"} }
++func (probeKind) LocalizedString(*message.Printer) string { return "probe" }
++
++// The budget counts what a custom vocabulary asks of its ValidatorContext.
++func TestValidateWithBudget_CountsVocabularyRequests(t *testing.T) {
++	sub := compileBudget(t, `true`, false)
++	meta := compileBudget(t, `{"properties":{"probe":{"type":"boolean"}}}`, false)
++	c := jsonschema.NewCompiler()
++	c.AssertVocabs()
++	c.RegisterVocabulary(&jsonschema.Vocabulary{
++		URL:    "http://example.com/meta/probe",
++		Schema: meta,
++		Compile: func(_ *jsonschema.CompilerContext, obj map[string]any) (jsonschema.SchemaExt, error) {
++			if _, ok := obj["probe"]; !ok {
++				return nil, nil
++			}
++			return &probe{sub: sub}, nil
++		},
++	})
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"probe":true}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := c.AddResource("probe.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	sch, err := c.Compile("probe.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	// The object (3), the nested value (1), and what Equals and Duplicates
++	// each compare: two objects, each visited (1) with its one name sorted
++	// (3) and looked up (1), and a number with its text (3).
++	if got := least(t, sch, instance(t, `{"a":{"b":1}}`)); got != 3+1+13+13 {
++		t.Errorf("%d steps, want %d", got, 3+1+13+13)
++	}
++}
++
++// Schemas applied within one another deeper than MaxNesting stop the
++// validation, whatever its budget: each level holds stack.
++func TestValidateWithBudget_BoundsTheNesting(t *testing.T) {
++	sch := compileBudget(t, `{"items":{"$ref":"#"}}`, false)
++	nested := func(depth int) any {
++		return instance(t, strings.Repeat("[", depth)+strings.Repeat("]", depth))
++	}
++	// Each array within another applies two schemas: items, then the $ref,
++	// so d arrays nest 2(d-1) deep.
++	if err := sch.ValidateWithBudget(nested(jsonschema.MaxNesting/2+1), 1<<40); err != nil {
++		t.Errorf("at MaxNesting: %v", err)
++	}
++	err := sch.ValidateWithBudget(nested(jsonschema.MaxNesting/2+2), 1<<40)
++	var be *jsonschema.BudgetExceededError
++	if !errors.As(err, &be) || !be.Nested {
++		t.Errorf("beyond MaxNesting: %v, want a *BudgetExceededError that is Nested", err)
++	}
++	if err := sch.Validate(nested(jsonschema.MaxNesting/2 + 2)); err != nil {
++		t.Errorf("Validate is not bounded: %v", err)
++	}
++}
++
++// BenchmarkValidateWithBudget measures, for two ordinary schemas over 20 000
++// records, the steps a validation takes per byte of the instance and the time
++// a step takes: the figures a caller sets a budget from.
++func BenchmarkValidateWithBudget(b *testing.B) {
++	for _, bc := range []struct {
++		name, schema string
++		item         func(i int) string
++	}{
++		{"record", `{"type":"array","items":{"type":"object","required":["name","age"],"properties":{"name":{"type":"string","maxLength":64},"age":{"type":"integer","minimum":0},"tags":{"type":"array","items":{"type":"string"},"uniqueItems":true},"kind":{"enum":["a","b","c"]}},"additionalProperties":false}}`,
++			func(i int) string {
++				return fmt.Sprintf(`{"name":"person-%d","age":%d,"tags":["x%d","y","z"],"kind":"b"}`, i, i%90, i)
++			}},
++		{"credential", `{"type":"array","items":{"$ref":"#/$defs/vc"},"$defs":{"vc":{"type":"object","required":["type","issuer","credentialSubject"],"properties":{"type":{"type":"array","contains":{"const":"VerifiableCredential"}},"issuer":{"type":"string","pattern":"^did:"},"credentialSubject":{"allOf":[{"type":"object"},{"properties":{"id":{"type":"string"},"score":{"type":"number","minimum":0,"maximum":100}}}]}}}}}`,
++			func(i int) string {
++				return fmt.Sprintf(`{"type":["VerifiableCredential","X"],"issuer":"did:example:%d","credentialSubject":{"id":"did:example:s%d","score":%d.5}}`, i, i, i%100)
++			}},
++	} {
++		b.Run(bc.name, func(b *testing.B) {
++			doc, err := jsonschema.UnmarshalJSON(strings.NewReader(bc.schema))
++			if err != nil {
++				b.Fatal(err)
++			}
++			c := jsonschema.NewCompiler()
++			if err := c.AddResource("s.json", doc); err != nil {
++				b.Fatal(err)
++			}
++			sch, err := c.Compile("s.json")
++			if err != nil {
++				b.Fatal(err)
++			}
++			items := make([]string, 20_000)
++			for i := range items {
++				items[i] = bc.item(i)
++			}
++			raw := "[" + strings.Join(items, ",") + "]"
++			v, err := jsonschema.UnmarshalJSON(strings.NewReader(raw))
++			if err != nil {
++				b.Fatal(err)
++			}
++			lo, hi := int64(0), int64(1)<<40
++			for lo < hi {
++				mid := lo + (hi-lo)/2
++				if exceeded(sch.ValidateWithBudget(v, mid)) {
++					lo = mid + 1
++				} else {
++					hi = mid
++				}
++			}
++			b.ResetTimer()
++			for i := 0; i < b.N; i++ {
++				if err := sch.ValidateWithBudget(v, lo); err != nil {
++					b.Fatal(err)
++				}
++			}
++			b.ReportMetric(float64(lo)/float64(len(raw)), "steps/byte")
++			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(lo), "ns/step")
++		})
++	}
++}
++
++// Each pattern tried against a property name costs a step, whatever the
++// name's length: a property named "" is matched against every pattern too.
++func TestValidateWithBudget_ChargesEachPatternTried(t *testing.T) {
++	patterns := func(n int) string {
++		ps := make([]string, n)
++		for i := range ps {
++			ps[i] = fmt.Sprintf(`"^p%d$":{}`, i)
++		}
++		return `{"patternProperties":{` + strings.Join(ps, ",") + `}}`
++	}
++	v := instance(t, `{"":0}`)
++	one := least(t, compileBudget(t, patterns(1), false), v)
++	many := least(t, compileBudget(t, patterns(100), false), v)
++	if many-one != 99 {
++		t.Errorf("1 pattern: %d steps; 100 patterns: %d steps; want 99 more", one, many)
++	}
++}
++
++// The nesting a propertyNames validation starts counts on from the schema
++// that starts it: schemas applied around it and within it together pass
++// MaxNesting, though each alone is within it.
++func TestValidateWithBudget_NestingCountsOnIntoPropertyNames(t *testing.T) {
++	const inner = jsonschema.MaxNesting / 2
++	defs := make([]string, 0, inner+1)
++	for i := 0; i < inner; i++ {
++		defs = append(defs, fmt.Sprintf(`"e%d":{"$ref":"#/$defs/e%d"}`, i, i+1))
++	}
++	defs = append(defs, fmt.Sprintf(`"e%d":{"type":"string"}`, inner))
++	sch := compileBudget(t, `{"items":{"$ref":"#"},"propertyNames":{"$ref":"#/$defs/e0"},"$defs":{`+strings.Join(defs, ",")+`}}`, false)
++	nested := func(levels int) any {
++		return instance(t, strings.Repeat("[", levels)+`{"a":0}`+strings.Repeat("]", levels))
++	}
++	// Two scopes per array level (items, then $ref): 1,200 levels (2,400
++	// scopes) around and 5,000 within stay under MaxNesting; 2,600 levels
++	// (5,200 scopes) around and 5,000 within pass it.
++	if err := sch.ValidateWithBudget(nested(1200), 1<<40); err != nil {
++		t.Errorf("within MaxNesting: %v", err)
++	}
++	var be *jsonschema.BudgetExceededError
++	if err := sch.ValidateWithBudget(nested(2600), 1<<40); !errors.As(err, &be) || !be.Nested {
++		t.Errorf("past MaxNesting: %v, want a *BudgetExceededError for nesting", err)
++	}
++}
++
++// counter is a custom vocabulary's keyword that counts the values it is asked
++// to validate.
++type counter struct{ calls *int }
++
++func (c counter) Validate(*jsonschema.ValidatorContext, any) { *c.calls++ }
++
++// Once the budget is spent, no custom vocabulary is asked to validate: its
++// own work is not counted, so it would run on unbounded.
++func TestValidateWithBudget_AsksNoVocabularyOnceSpent(t *testing.T) {
++	calls := 0
++	meta := compileBudget(t, `{"properties":{"counter":{"type":"boolean"}}}`, false)
++	c := jsonschema.NewCompiler()
++	c.AssertVocabs()
++	c.RegisterVocabulary(&jsonschema.Vocabulary{
++		URL:    "http://example.com/meta/counter",
++		Schema: meta,
++		Compile: func(_ *jsonschema.CompilerContext, obj map[string]any) (jsonschema.SchemaExt, error) {
++			if _, ok := obj["counter"]; !ok {
++				return nil, nil
++			}
++			return counter{&calls}, nil
++		},
++	})
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"counter":true,"items":{}}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := c.AddResource("counter.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	sch, err := c.Compile("counter.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	// The array costs 1 + 10 steps and each item 1: a budget of 15 runs out
++	// among the items, before the vocabulary's turn.
++	v := instance(t, `[0,1,2,3,4,5,6,7,8,9]`)
++	if err := sch.ValidateWithBudget(v, 15); !exceeded(err) {
++		t.Fatalf("budget 15: %v, want it exceeded", err)
++	}
++	if calls != 0 {
++		t.Errorf("the vocabulary was asked %d times after the budget was spent", calls)
++	}
++	if err := sch.ValidateWithBudget(v, 1<<20); err != nil || calls != 1 {
++		t.Errorf("within budget: %v, %d calls; want nil, 1", err, calls)
++	}
++}
++
++// The locations a $ref cycle's error names are charged by their length: a
++// location holds text the schema has (a pattern of patternProperties, here),
++// so a cycle met many times would otherwise build text in the schema's size
++// each time.
++func TestValidateWithBudget_ChargesTheTextOfACyclesLocations(t *testing.T) {
++	schema := func(pattern int) string {
++		return `{"patternProperties":{"^(?:` + strings.Repeat("x", pattern) + `|b)$":{"items":{"$ref":"#/$defs/c"}}},"$defs":{"c":{"$ref":"#/$defs/c"}}}`
++	}
++	v := instance(t, `{"b":[0]}`)
++	short := least(t, compileBudget(t, schema(10), false), v)
++	long := least(t, compileBudget(t, schema(1010), false), v)
++	if long-short < 2*1000 {
++		t.Errorf("pattern of 10: %d steps; of 1010: %d steps; want at least %d more", short, long, 2*1000)
++	}
++}
++
++// The nesting a contentSchema validation starts counts on from the schema
++// that starts it, as propertyNames' does.
++func TestValidateWithBudget_NestingCountsOnIntoContentSchema(t *testing.T) {
++	const inner = jsonschema.MaxNesting / 2
++	defs := make([]string, 0, inner+1)
++	for i := 0; i < inner; i++ {
++		defs = append(defs, fmt.Sprintf(`"e%d":{"$ref":"#/$defs/e%d"}`, i, i+1))
++	}
++	defs = append(defs, fmt.Sprintf(`"e%d":{"type":"string"}`, inner))
++	sch := compileBudget(t, `{"items":{"$ref":"#"},"contentMediaType":"application/json","contentSchema":{"$ref":"#/$defs/e0"},"$defs":{`+strings.Join(defs, ",")+`}}`, true)
++	nested := func(levels int) any {
++		return instance(t, strings.Repeat("[", levels)+`"\"x\""`+strings.Repeat("]", levels))
++	}
++	if err := sch.ValidateWithBudget(nested(1200), 1<<40); err != nil {
++		t.Errorf("within MaxNesting: %v", err)
++	}
++	var be *jsonschema.BudgetExceededError
++	if err := sch.ValidateWithBudget(nested(2600), 1<<40); !errors.As(err, &be) || !be.Nested {
++		t.Errorf("past MaxNesting: %v, want a *BudgetExceededError for nesting", err)
++	}
++}
++
++// sized is a Regexp whose program the engine says has size instructions.
++type sized struct {
++	*regexp.Regexp
++	size int
++}
++
++func (r sized) Size() int { return r.size }
++
++// compileSized compiles schema with an engine whose every Regexp has the
++// given size, asserting formats or not.
++func compileSized(t *testing.T, schema string, size int, assertFormat bool) *jsonschema.Schema {
++	t.Helper()
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	c.UseRegexpEngine(func(s string) (jsonschema.Regexp, error) {
++		re, err := regexp.Compile(s)
++		if err != nil {
++			return nil, err
++		}
++		return sized{re, size}, nil
++	})
++	if assertFormat {
++		c.AssertFormat()
++	}
++	if err := c.AddResource("sized.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	sch, err := c.Compile("sized.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	return sch
++}
++
++// Matching a string against a pattern costs, besides the string's bytes, a
++// step per position (each byte, and the end) for each
++// PatternInstructionsPerStep instructions of the pattern's program, an empty
++// string included; a pattern whose engine gives no size costs no more.
++func TestValidateWithBudget_ChargesAPatternBySize(t *testing.T) {
++	per := jsonschema.PatternInstructionsPerStep
++	for value, positions := range map[string]int64{`"aaaa"`: 5, `""`: 1} {
++		v := instance(t, value)
++		none := least(t, compileSized(t, `{"pattern":"^a*$"}`, 0, false), v)
++		big := least(t, compileSized(t, `{"pattern":"^a*$"}`, 10*per, false), v)
++		if big-none != positions*10 {
++			t.Errorf("%s: size 0: %d steps; size %d: %d steps; want %d more", value, none, 10*per, big, positions*10)
++		}
++	}
++}
++
++// A patternProperties pattern tried against a name costs, per position of
++// the name (each byte, and the end), 1 plus a step for each
++// PatternInstructionsPerStep instructions of its program, an empty name
++// included.
++func TestValidateWithBudget_ChargesAPatternPropertyBySize(t *testing.T) {
++	per := jsonschema.PatternInstructionsPerStep
++	for value, positions := range map[string]int64{`{"aa":1}`: 3, `{"":1}`: 1} {
++		v := instance(t, value)
++		none := least(t, compileSized(t, `{"patternProperties":{"^a":{}}}`, 0, false), v)
++		big := least(t, compileSized(t, `{"patternProperties":{"^a":{}}}`, 10*per, false), v)
++		if big-none != positions*10 {
++			t.Errorf("%s: size 0: %d steps; size %d: %d steps; want %d more", value, none, 10*per, big, positions*10)
++		}
++	}
++}
++
++// Checking format "regex" compiles the value: it costs
++// PatternCompileStepsPerInstruction steps per instruction of the program
++// compiled.
++func TestValidateWithBudget_ChargesARegexFormatBySize(t *testing.T) {
++	v := instance(t, `"a+"`)
++	want := int64(500 * jsonschema.PatternCompileStepsPerInstruction)
++	none := least(t, compileSized(t, `{"format":"regex"}`, 0, true), v)
++	big := least(t, compileSized(t, `{"format":"regex"}`, 500, true), v)
++	if big-none != want {
++		t.Errorf("size 0: %d steps; size 500: %d steps; want %d more", none, big, want)
++	}
++}
++
++// Checking format "regex" costs, before the value is compiled,
++// PatternParseStepsPerByte steps per byte of it, whatever the size of the
++// program it compiles to: parsing takes time in its length. A budget that
++// cannot pay them is exceeded before the engine runs.
++func TestValidateWithBudget_ChargesARegexFormatByLengthBeforeCompiling(t *testing.T) {
++	short, long := instance(t, `"a"`), instance(t, `"aaaaaaaaaaa"`)
++	more := func(schema string) int64 {
++		sch := compileSized(t, schema, 0, true)
++		return least(t, sch, long) - least(t, sch, short)
++	}
++	if got, want := more(`{"format":"regex"}`)-more(`{"type":"string"}`), int64(10*jsonschema.PatternParseStepsPerByte); got != want {
++		t.Errorf("10 bytes more cost %d more steps checked as format \"regex\", want %d", got, want)
++	}
++
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"format":"regex"}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	calls := 0
++	c.UseRegexpEngine(func(s string) (jsonschema.Regexp, error) {
++		calls++
++		return regexp.Compile(s)
++	})
++	c.AssertFormat()
++	if err := c.AddResource("counted.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	sch, err := c.Compile("counted.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	calls = 0
++	budget := least(t, compileSized(t, `{"type":"string"}`, 0, true), long)
++	var be *jsonschema.BudgetExceededError
++	if err := sch.ValidateWithBudget(long, budget); !errors.As(err, &be) || calls != 0 {
++		t.Errorf("a budget that pays only the value's bytes: %v, the engine ran %d times; want a *BudgetExceededError, and no run", err, calls)
++	}
++}
++
++// Comparing two objects takes the same steps every time, whatever order Go
++// ranges over their names in: so a budget near them answers the same each
++// time.
++func TestValidateWithBudget_ComparesObjectsInOneOrder(t *testing.T) {
++	long := strings.Repeat("a", 1000)
++	sch := compileBudget(t, `{"const":{"a":"`+long+`","b":"x"}}`, false)
++	v := instance(t, `{"a":"`+long+`","b":"y"}`)
++	want := least(t, sch, v)
++	for i := 0; i < 30; i++ {
++		if got := least(t, sch, v); got != want {
++			t.Fatalf("comparing two objects took %d steps, then %d", want, got)
++		}
++	}
++}
+diff --git a/objcompiler.go b/objcompiler.go
+index d47efa8..4b56d97 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -190,6 +190,7 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 					Name:     "regex",
+ 					Validate: c.c.roots.regexpEngine.validate,
+ 				}
++				s.regexEngine = c.c.roots.regexpEngine // work budget
+ 			} else {
+ 				s.Format = c.c.formats[*f]
+ 				if s.Format == nil {
+diff --git a/roots.go b/roots.go
+index a8d0ef0..48f7714 100644
+--- a/roots.go
++++ b/roots.go
+@@ -237,7 +237,7 @@ func (rr *roots) addSubschema(r *root, ptr jsonPointer) error {
+ func (rr *roots) validate(r *root, v any, ptr jsonPointer) error {
+ 	dialect := r.resource(ptr).dialect
+ 	meta := dialect.getSchema(rr.assertVocabs, rr.vocabularies)
+-	if err := meta.validate(v, rr.regexpEngine, meta, r.resources, rr.assertVocabs, rr.vocabularies); err != nil {
++	if err := meta.validate(v, rr.regexpEngine, meta, r.resources, rr.assertVocabs, rr.vocabularies, nil, 0); err != nil { // work budget: nil is unlimited
+ 		up := urlPtr{r.url, ptr}
+ 		return &SchemaValidationError{URL: up.String(), Err: err}
+ 	}
+diff --git a/schema.go b/schema.go
+index ab2474f..1de1cf9 100644
+--- a/schema.go
++++ b/schema.go
+@@ -56,6 +56,7 @@ type Schema struct {
+ 	Then            *Schema
+ 	Else            *Schema
+ 	Format          *Format
++	regexEngine     RegexpEngine // work budget: compiles a format "regex" value, to charge its program
+ 
+ 	// object --
+ 	MaxProperties         *int
+diff --git a/util.go b/util.go
+index 8cd32aa..430551a 100644
+--- a/util.go
++++ b/util.go
+@@ -269,8 +269,14 @@ func strVal(obj map[string]any, prop string) (string, bool) {
+ 	return s, ok
+ }
+ 
+-func isInteger(num any) bool {
+-	rat, ok := new(big.Rat).SetString(fmt.Sprint(num))
++// isIntegerWithin is upstream's isInteger, spending steps of b to read num
++// (numberSteps).
++func isIntegerWithin(b *workBudget, num any) bool { // work budget
++	s := fmt.Sprint(num)               // work budget
++	if !b.spendSteps(numberSteps(s)) { // work budget
++		return false
++	}
++	rat, ok := new(big.Rat).SetString(s) // work budget: s
+ 	return ok && rat.IsInt()
+ }
+ 
+@@ -284,18 +290,34 @@ func quote(s string) string {
+ }
+ 
+ func equals(v1, v2 any) (bool, ErrorKind) {
++	return equalsWithin(nil, v1, v2) // work budget
++}
++
++// equalsWithin is equals, spending a step of b per value it visits.
++func equalsWithin(b *workBudget, v1, v2 any) (bool, ErrorKind) { // work budget
++	if !b.spend(1) { // work budget
++		return false, nil
++	}
+ 	switch v1 := v1.(type) {
+ 	case map[string]any:
+ 		v2, ok := v2.(map[string]any)
+ 		if !ok || len(v1) != len(v2) {
+ 			return false, nil
+ 		}
+-		for k, val1 := range v1 {
++		names, ok := sortedNames(b, v1) // work budget: names in one order, so the steps are the same each time
++		if !ok {                        // work budget
++			return false, nil
++		}
++		for _, k := range names { // work budget
++			val1 := v1[k]         // work budget
++			if !b.spend(len(k)) { // work budget
++				return false, nil
++			}
+ 			val2, ok := v2[k]
+ 			if !ok {
+ 				return false, nil
+ 			}
+-			if ok, k := equals(val1, val2); !ok || k != nil {
++			if ok, k := equalsWithin(b, val1, val2); !ok || k != nil { // work budget
+ 				return ok, k
+ 			}
+ 		}
+@@ -306,7 +328,7 @@ func equals(v1, v2 any) (bool, ErrorKind) {
+ 			return false, nil
+ 		}
+ 		for i := range v1 {
+-			if ok, k := equals(v1[i], v2[i]); !ok || k != nil {
++			if ok, k := equalsWithin(b, v1[i], v2[i]); !ok || k != nil { // work budget
+ 				return ok, k
+ 			}
+ 		}
+@@ -318,13 +340,20 @@ func equals(v1, v2 any) (bool, ErrorKind) {
+ 		return ok && v1 == v2, nil
+ 	case string:
+ 		v2, ok := v2.(string)
++		if ok && !b.spend(len(v1)) { // work budget
++			return false, nil
++		}
+ 		return ok && v1 == v2, nil
+ 	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+ 		if typeOf(v2) != numberType {
+ 			return false, nil
+ 		}
+-		num1, ok1 := new(big.Rat).SetString(fmt.Sprint(v1))
+-		num2, ok2 := new(big.Rat).SetString(fmt.Sprint(v2))
++		s1, s2 := fmt.Sprint(v1), fmt.Sprint(v2)                              // work budget
++		if !b.spendSteps(numberSteps(s1)) || !b.spendSteps(numberSteps(s2)) { // work budget
++			return false, nil
++		}
++		num1, ok1 := new(big.Rat).SetString(s1) // work budget: s1
++		num2, ok2 := new(big.Rat).SetString(s2) // work budget: s2
+ 		return ok1 && ok2 && num1.Cmp(num2) == 0, nil
+ 	default:
+ 		return false, &kind.InvalidJsonValue{Value: v1}
+@@ -332,12 +361,21 @@ func equals(v1, v2 any) (bool, ErrorKind) {
+ }
+ 
+ func duplicates(arr []any) (int, int, ErrorKind) {
++	return duplicatesWithin(nil, arr) // work budget
++}
++
++// duplicatesWithin is duplicates, spending steps of b per item and per value
++// it compares or hashes.
++func duplicatesWithin(b *workBudget, arr []any) (int, int, ErrorKind) { // work budget
+ 	if len(arr) <= 20 {
+ 		for i := 1; i < len(arr); i++ {
+ 			for j := 0; j < i; j++ {
+-				if ok, k := equals(arr[i], arr[j]); ok || k != nil {
++				if ok, k := equalsWithin(b, arr[i], arr[j]); ok || k != nil { // work budget
+ 					return j, i, k
+ 				}
++				if b.over() { // work budget
++					return -1, -1, nil
++				}
+ 			}
+ 		}
+ 		return -1, -1, nil
+@@ -346,15 +384,21 @@ func duplicates(arr []any) (int, int, ErrorKind) {
+ 	m := make(map[uint64][]int)
+ 	h := new(maphash.Hash)
+ 	for i, item := range arr {
++		if !b.spend(1) { // work budget
++			return -1, -1, nil
++		}
+ 		h.Reset()
+-		writeHash(item, h)
++		writeHashWithin(b, item, h) // work budget
+ 		hash := h.Sum64()
+ 		indexes, ok := m[hash]
+ 		if ok {
+ 			for _, j := range indexes {
+-				if ok, k := equals(item, arr[j]); ok || k != nil {
++				if ok, k := equalsWithin(b, item, arr[j]); ok || k != nil { // work budget
+ 					return j, i, k
+ 				}
++				if b.over() { // work budget
++					return -1, -1, nil
++				}
+ 			}
+ 		}
+ 		indexes = append(indexes, i)
+@@ -364,8 +408,19 @@ func duplicates(arr []any) (int, int, ErrorKind) {
+ }
+ 
+ func writeHash(v any, h *maphash.Hash) ErrorKind {
++	return writeHashWithin(nil, v, h) // work budget
++}
++
++// writeHashWithin is writeHash, spending a step of b per value it visits.
++func writeHashWithin(b *workBudget, v any, h *maphash.Hash) ErrorKind { // work budget
++	if !b.spend(1) { // work budget
++		return nil
++	}
+ 	switch v := v.(type) {
+ 	case map[string]any:
++		if !b.spendSteps(sortSteps(v)) { // work budget: and the sort of its names
++			return nil
++		}
+ 		_ = h.WriteByte(0)
+ 		props := make([]string, 0, len(v))
+ 		for prop := range v {
+@@ -373,13 +428,19 @@ func writeHash(v any, h *maphash.Hash) ErrorKind {
+ 		}
+ 		slices.Sort(props)
+ 		for _, prop := range props {
+-			writeHash(prop, h)
+-			writeHash(v[prop], h)
++			writeHashWithin(b, prop, h)    // work budget
++			writeHashWithin(b, v[prop], h) // work budget
++			if b.over() {                  // work budget
++				return nil
++			}
+ 		}
+ 	case []any:
+ 		_ = h.WriteByte(1)
+ 		for _, item := range v {
+-			writeHash(item, h)
++			writeHashWithin(b, item, h) // work budget
++			if b.over() {               // work budget
++				return nil
++			}
+ 		}
+ 	case nil:
+ 		_ = h.WriteByte(2)
+@@ -391,11 +452,18 @@ func writeHash(v any, h *maphash.Hash) ErrorKind {
+ 			_ = h.WriteByte(0)
+ 		}
+ 	case string:
++		if !b.spend(len(v)) { // work budget
++			return nil
++		}
+ 		_ = h.WriteByte(4)
+ 		_, _ = h.WriteString(v)
+ 	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
++		s := fmt.Sprint(v)                 // work budget
++		if !b.spendSteps(numberSteps(s)) { // work budget
++			return nil
++		}
+ 		_ = h.WriteByte(5)
+-		num, _ := new(big.Rat).SetString(fmt.Sprint(v))
++		num, _ := new(big.Rat).SetString(s) // work budget: s
+ 		_, _ = h.Write(num.Num().Bytes())
+ 		_, _ = h.Write(num.Denom().Bytes())
+ 	default:
+diff --git a/validator.go b/validator.go
+index 53a4c73..6eeb199 100644
+--- a/validator.go
++++ b/validator.go
+@@ -6,6 +6,7 @@ import (
+ 	"math/big"
+ 	"slices"
+ 	"strconv"
++	"strings" // work budget
+ 	"unicode/utf8"
+ 
+ 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
+@@ -13,15 +14,18 @@ import (
+ )
+ 
+ func (sch *Schema) Validate(v any) error {
+-	return sch.validate(v, nil, nil, nil, false, nil)
++	return sch.validate(v, nil, nil, nil, false, nil, nil, 0) // work budget: nil is unlimited
+ }
+ 
+-func (sch *Schema) validate(v any, regexpEngine RegexpEngine, meta *Schema, resources map[jsonPointer]*resource, assertVocabs bool, vocabularies map[string]*Vocabulary) error {
++func (sch *Schema) validate(v any, regexpEngine RegexpEngine, meta *Schema, resources map[jsonPointer]*resource, assertVocabs bool, vocabularies map[string]*Vocabulary, budget *workBudget, outer int) error { // work budget: budget, outer
++	if budget.over() { // work budget
++		return errBudget()
++	}
+ 	vd := validator{
+ 		v:            v,
+ 		vloc:         make([]string, 0, 8),
+ 		sch:          sch,
+-		scp:          &scope{sch, "", 0, nil},
++		scp:          &scope{sch, "", 0, nil, 0, outer}, // work budget: depth, outer
+ 		uneval:       unevalFrom(v, sch, false),
+ 		errors:       nil,
+ 		boolResult:   false,
+@@ -30,6 +34,7 @@ func (sch *Schema) validate(v any, regexpEngine RegexpEngine, meta *Schema, reso
+ 		resources:    resources,
+ 		assertVocabs: assertVocabs,
+ 		vocabularies: vocabularies,
++		budget:       budget, // work budget
+ 	}
+ 	if _, err := vd.validate(); err != nil {
+ 		verr := err.(*ValidationError)
+@@ -65,12 +70,18 @@ type validator struct {
+ 	resources    map[jsonPointer]*resource // resources which should be validated with their dialect
+ 	assertVocabs bool
+ 	vocabularies map[string]*Vocabulary
++
++	budget *workBudget // work budget: shared by every validator of one call
+ }
+ 
+ func (vd *validator) validate() (*uneval, error) {
+ 	s := vd.sch
+ 	v := vd.v
+ 
++	if vd.budget.over() || !vd.budget.nest(vd.scp.outer+vd.scp.depth) || !vd.budget.spend(1+workOf(v)) { // work budget
++		return nil, errBudget()
++	}
++
+ 	// boolean --
+ 	if s.Bool != nil {
+ 		if *s.Bool {
+@@ -81,11 +92,22 @@ func (vd *validator) validate() (*uneval, error) {
+ 	}
+ 
+ 	// check cycle --
+-	if scp := vd.scp.checkCycle(); scp != nil {
++	if scp := vd.scp.checkCycle(vd.budget); scp != nil { // work budget: budget
++		if vd.boolResult { // work budget: no location to build
++			return nil, &ValidationError{}
++		}
++		if !vd.budget.spend(vd.scp.depth + scp.depth) { // work budget: kwLoc walks both
++			return nil, errBudget()
++		}
++		loc1, ok1 := vd.scp.kwLocWithin(vd.budget) // work budget
++		loc2, ok2 := scp.kwLocWithin(vd.budget)    // work budget
++		if !ok1 || !ok2 {                          // work budget
++			return nil, errBudget()
++		}
+ 		return nil, vd.error(&kind.RefCycle{
+ 			URL:              s.Location,
+-			KeywordLocation1: vd.scp.kwLoc(),
+-			KeywordLocation2: scp.kwLoc(),
++			KeywordLocation1: loc1, // work budget
++			KeywordLocation2: loc2, // work budget
+ 		})
+ 	}
+ 
+@@ -96,7 +118,7 @@ func (vd *validator) validate() (*uneval, error) {
+ 
+ 	// type --
+ 	if s.Types != nil && !s.Types.IsEmpty() {
+-		matched := s.Types.contains(t) || (s.Types.contains(integerType) && t == numberType && isInteger(v))
++		matched := s.Types.contains(t) || (s.Types.contains(integerType) && t == numberType && isIntegerWithin(vd.budget, v)) // work budget
+ 		if !matched {
+ 			return nil, vd.error(&kind.Type{Got: t.String(), Want: s.Types.ToStrings()})
+ 		}
+@@ -104,7 +126,7 @@ func (vd *validator) validate() (*uneval, error) {
+ 
+ 	// const --
+ 	if s.Const != nil {
+-		ok, k := equals(v, *s.Const)
++		ok, k := equalsWithin(vd.budget, v, *s.Const) // work budget
+ 		if k != nil {
+ 			return nil, vd.error(k)
+ 		} else if !ok {
+@@ -118,7 +140,10 @@ func (vd *validator) validate() (*uneval, error) {
+ 		if matched {
+ 			matched = false
+ 			for _, item := range s.Enum.Values {
+-				ok, k := equals(v, item)
++				if vd.budget.over() { // work budget
++					return nil, errBudget()
++				}
++				ok, k := equalsWithin(vd.budget, v, item) // work budget
+ 				if k != nil {
+ 					return nil, vd.error(k)
+ 				} else if ok {
+@@ -137,9 +162,14 @@ func (vd *validator) validate() (*uneval, error) {
+ 		var err error
+ 		if s.Format.Name == "regex" && vd.regexpEngine != nil {
+ 			err = vd.regexpEngine.validate(v)
++		} else if s.Format.Name == "regex" && s.regexEngine != nil { // work budget
++			err = vd.compileRegexFormat(s.regexEngine, v) // work budget
+ 		} else {
+ 			err = s.Format.Validate(v)
+ 		}
++		if vd.budget.over() { // work budget
++			return nil, errBudget()
++		}
+ 		if err != nil {
+ 			return nil, vd.error(&kind.Format{Got: v, Want: s.Format.Name, Err: err})
+ 		}
+@@ -156,6 +186,10 @@ func (vd *validator) validate() (*uneval, error) {
+ 		}
+ 	}
+ 
++	if vd.budget.over() { // work budget
++		return nil, errBudget()
++	}
++
+ 	// type specific validations --
+ 	switch v := v.(type) {
+ 	case map[string]any:
+@@ -175,6 +209,9 @@ func (vd *validator) validate() (*uneval, error) {
+ 		vd.condValidate()
+ 
+ 		for _, ext := range s.Extensions {
++			if vd.budget.over() { // work budget
++				return nil, errBudget()
++			}
+ 			ext.Validate(&ValidatorContext{vd}, v)
+ 		}
+ 
+@@ -225,6 +262,9 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 	// dependencies --
+ 	for pname, dep := range s.Dependencies {
++		if !vd.budget.spend(1 + len(pname)) { // work budget: the lookup hashes the name
++			return
++		}
+ 		if _, ok := obj[pname]; ok {
+ 			switch dep := dep.(type) {
+ 			case []string:
+@@ -239,7 +279,7 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 	var additionalPros []string
+ 	for pname, pvalue := range obj {
+-		if vd.boolResult && len(vd.errors) > 0 {
++		if vd.boolResult && len(vd.errors) > 0 || vd.budget.over() { // work budget: over
+ 			return
+ 		}
+ 		evaluated := false
+@@ -252,6 +292,9 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 		// patternProperties --
+ 		for regex, sch := range s.PatternProperties {
++			if !vd.budget.spendSteps(product(int64(len(pname))+1, int64(patternSize(regex)/PatternInstructionsPerStep)+1)) { // work budget
++				break
++			}
+ 			if regex.MatchString(pname) {
+ 				evaluated = true
+ 				vd.addErr(vd.validateVal(sch, pvalue, pname))
+@@ -285,13 +328,16 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 	// propertyNames --
+ 	if s.PropertyNames != nil {
+ 		for pname := range obj {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			sch, meta, resources := s.PropertyNames, vd.meta, vd.resources
+ 			res := vd.metaResource(sch)
+ 			if res != nil {
+ 				meta = res.dialect.getSchema(vd.assertVocabs, vd.vocabularies)
+ 				sch = meta
+ 			}
+-			if err := sch.validate(pname, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies); err != nil {
++			if err := sch.validate(pname, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies, vd.budget, vd.scp.outer+vd.scp.depth+1); err != nil { // work budget
+ 				verr := err.(*ValidationError)
+ 				verr.InstanceLocation = vd.vloc
+ 				verr.SchemaURL = s.PropertyNames.Location
+@@ -307,6 +353,9 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 	// dependentSchemas --
+ 	for pname, sch := range s.DependentSchemas {
++		if !vd.budget.spend(1 + len(pname)) { // work budget: the lookup hashes the name
++			return
++		}
+ 		if _, ok := obj[pname]; ok {
+ 			vd.addErr(vd.validateSelf(sch, "", false))
+ 		}
+@@ -314,6 +363,9 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 	// dependentRequired --
+ 	for pname, reqd := range s.DependentRequired {
++		if !vd.budget.spend(1 + len(pname)) { // work budget: the lookup hashes the name
++			return
++		}
+ 		if _, ok := obj[pname]; ok {
+ 			if missing := vd.findMissing(obj, reqd); missing != nil {
+ 				vd.addError(&kind.DependentRequired{Prop: pname, Missing: missing})
+@@ -341,7 +393,7 @@ func (vd *validator) arrValidate(arr []any) {
+ 
+ 	// uniqueItems --
+ 	if s.UniqueItems && len(arr) > 1 {
+-		i, j, k := duplicates(arr)
++		i, j, k := duplicatesWithin(vd.budget, arr) // work budget
+ 		if k != nil {
+ 			vd.addError(k)
+ 		} else if i != -1 {
+@@ -356,12 +408,18 @@ func (vd *validator) arrValidate(arr []any) {
+ 		switch items := s.Items.(type) {
+ 		case *Schema:
+ 			for i, item := range arr {
++				if vd.budget.over() { // work budget
++					return
++				}
+ 				vd.addErr(vd.validateVal(items, item, strconv.Itoa(i)))
+ 			}
+ 			evaluated = len(arr)
+ 		case []*Schema:
+ 			min := minInt(len(arr), len(items))
+ 			for i, item := range arr[:min] {
++				if vd.budget.over() { // work budget
++					return
++				}
+ 				vd.addErr(vd.validateVal(items[i], item, strconv.Itoa(i)))
+ 			}
+ 			evaluated = min
+@@ -376,6 +434,9 @@ func (vd *validator) arrValidate(arr []any) {
+ 				}
+ 			case *Schema:
+ 				for i, item := range arr[evaluated:] {
++					if vd.budget.over() { // work budget
++						return
++					}
+ 					vd.addErr(vd.validateVal(additional, item, strconv.Itoa(evaluated+i)))
+ 				}
+ 			}
+@@ -385,12 +446,18 @@ func (vd *validator) arrValidate(arr []any) {
+ 
+ 		// prefixItems --
+ 		for i, item := range arr[:evaluated] {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			vd.addErr(vd.validateVal(s.PrefixItems[i], item, strconv.Itoa(i)))
+ 		}
+ 
+ 		// items2020 --
+ 		if s.Items2020 != nil {
+ 			for i, item := range arr[evaluated:] {
++				if vd.budget.over() { // work budget
++					return
++				}
+ 				vd.addErr(vd.validateVal(s.Items2020, item, strconv.Itoa(evaluated+i)))
+ 			}
+ 		}
+@@ -402,6 +469,9 @@ func (vd *validator) arrValidate(arr []any) {
+ 		var matched []int
+ 
+ 		for i, item := range arr {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			if err := vd.validateVal(s.Contains, item, strconv.Itoa(i)); err != nil {
+ 				errors = append(errors, err.(*ValidationError))
+ 			} else {
+@@ -454,6 +524,9 @@ func (vd *validator) strValidate(str string) {
+ 
+ 	// pattern --
+ 	if s.Pattern != nil {
++		if !vd.budget.spendSteps(product(int64(len(str))+1, int64(patternSize(s.Pattern)/PatternInstructionsPerStep))) { // work budget
++			return
++		}
+ 		if !s.Pattern.MatchString(str) {
+ 			vd.addError(&kind.Pattern{Got: str, Want: s.Pattern.String()})
+ 		}
+@@ -502,7 +575,7 @@ func (vd *validator) strValidate(str string) {
+ 			meta = res.dialect.getSchema(vd.assertVocabs, vd.vocabularies)
+ 			sch = meta
+ 		}
+-		if err = sch.validate(*deserialized, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies); err != nil {
++		if err = sch.validate(*deserialized, vd.regexpEngine, meta, resources, vd.assertVocabs, vd.vocabularies, vd.budget, vd.scp.outer+vd.scp.depth+1); err != nil { // work budget
+ 			verr := err.(*ValidationError)
+ 			verr.InstanceLocation = vd.vloc
+ 			verr.SchemaURL = s.Location
+@@ -514,6 +587,9 @@ func (vd *validator) strValidate(str string) {
+ 
+ func (vd *validator) numValidate(v any) {
+ 	s := vd.sch
++	if !vd.spendNumber(v) { // work budget
++		return
++	}
+ 
+ 	var numVal *big.Rat
+ 	num := func() *big.Rat {
+@@ -565,6 +641,9 @@ func (vd *validator) condValidate() {
+ 	if len(s.AllOf) > 0 {
+ 		var errors []*ValidationError
+ 		for _, sch := range s.AllOf {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			if err := vd.validateSelf(sch, "", false); err != nil {
+ 				errors = append(errors, err.(*ValidationError))
+ 				if vd.boolResult {
+@@ -582,6 +661,9 @@ func (vd *validator) condValidate() {
+ 		var matched bool
+ 		var errors []*ValidationError
+ 		for _, sch := range s.AnyOf {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			if err := vd.validateSelf(sch, "", false); err != nil {
+ 				errors = append(errors, err.(*ValidationError))
+ 			} else {
+@@ -602,6 +684,9 @@ func (vd *validator) condValidate() {
+ 		var matched = -1
+ 		var errors []*ValidationError
+ 		for i, sch := range s.OneOf {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			if err := vd.validateSelf(sch, "", matched != -1); err != nil {
+ 				if matched == -1 {
+ 					errors = append(errors, err.(*ValidationError))
+@@ -638,6 +723,9 @@ func (vd *validator) unevalValidate() {
+ 	// unevaluatedProperties
+ 	if obj, ok := vd.v.(map[string]any); ok && s.UnevaluatedProperties != nil {
+ 		for pname := range vd.uneval.props {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			if pvalue, ok := obj[pname]; ok {
+ 				vd.addErr(vd.validateVal(s.UnevaluatedProperties, pvalue, pname))
+ 			}
+@@ -648,6 +736,9 @@ func (vd *validator) unevalValidate() {
+ 	// unevaluatedItems
+ 	if arr, ok := vd.v.([]any); ok && s.UnevaluatedItems != nil {
+ 		for i := range vd.uneval.items {
++			if vd.budget.over() { // work budget
++				return
++			}
+ 			vd.addErr(vd.validateVal(s.UnevaluatedItems, arr[i], strconv.Itoa(i)))
+ 		}
+ 		vd.uneval.items = nil
+@@ -657,6 +748,9 @@ func (vd *validator) unevalValidate() {
+ // validation helpers --
+ 
+ func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) error {
++	if vd.budget.over() { // work budget
++		return errBudget()
++	}
+ 	scp := vd.scp.child(sch, refKw, vd.scp.vid)
+ 	uneval := unevalFrom(vd.v, sch, !vd.uneval.isEmpty())
+ 	subvd := validator{
+@@ -672,6 +766,7 @@ func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) er
+ 		resources:    vd.resources,
+ 		assertVocabs: vd.assertVocabs,
+ 		vocabularies: vd.vocabularies,
++		budget:       vd.budget, // work budget
+ 	}
+ 	subvd.handleMeta()
+ 	uneval, err := subvd.validate()
+@@ -682,6 +777,9 @@ func (vd *validator) validateSelf(sch *Schema, refKw string, boolResult bool) er
+ }
+ 
+ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
++	if vd.budget.over() { // work budget
++		return errBudget()
++	}
+ 	vloc := append(vd.vloc, vtok)
+ 	scp := vd.scp.child(sch, "", vd.scp.vid+1)
+ 	uneval := unevalFrom(v, sch, false)
+@@ -698,6 +796,7 @@ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
+ 		resources:    vd.resources,
+ 		assertVocabs: vd.assertVocabs,
+ 		vocabularies: vd.vocabularies,
++		budget:       vd.budget, // work budget
+ 	}
+ 	subvd.handleMeta()
+ 	_, err := subvd.validate()
+@@ -705,6 +804,9 @@ func (vd *validator) validateVal(sch *Schema, v any, vtok string) error {
+ }
+ 
+ func (vd *validator) validateValue(sch *Schema, v any, vpath []string) error {
++	if vd.budget.over() { // work budget
++		return errBudget()
++	}
+ 	vloc := append(vd.vloc, vpath...)
+ 	scp := vd.scp.child(sch, "", vd.scp.vid+1)
+ 	uneval := unevalFrom(v, sch, false)
+@@ -721,6 +823,7 @@ func (vd *validator) validateValue(sch *Schema, v any, vpath []string) error {
+ 		resources:    vd.resources,
+ 		assertVocabs: vd.assertVocabs,
+ 		vocabularies: vd.vocabularies,
++		budget:       vd.budget, // work budget
+ 	}
+ 	subvd.handleMeta()
+ 	_, err := subvd.validate()
+@@ -770,6 +873,9 @@ func (vd *validator) resolveRecursiveAnchor(fallback *Schema) *Schema {
+ 	sch := fallback
+ 	scp := vd.scp
+ 	for scp != nil {
++		if !vd.budget.spend(1) { // work budget
++			break
++		}
+ 		if scp.sch.resource.RecursiveAnchor {
+ 			sch = scp.sch
+ 		}
+@@ -782,6 +888,9 @@ func (vd *validator) resolveDynamicAnchor(name string, fallback *Schema) *Schema
+ 	sch := fallback
+ 	scp := vd.scp
+ 	for scp != nil {
++		if !vd.budget.spend(1) { // work budget
++			break
++		}
+ 		if dsch, ok := scp.sch.resource.dynamicAnchors[name]; ok {
+ 			sch = dsch
+ 		}
+@@ -823,6 +932,9 @@ func (vd *validator) error(kind ErrorKind) *ValidationError {
+ 	if vd.boolResult {
+ 		return &ValidationError{}
+ 	}
++	if !vd.budget.spend(len(vd.vloc)) { // work budget
++		return errBudget()
++	}
+ 	return &ValidationError{
+ 		SchemaURL:        vd.sch.Location,
+ 		InstanceLocation: vd.instanceLocation(),
+@@ -848,6 +960,9 @@ func (vd *validator) addErrors(errors []*ValidationError, kind ErrorKind) {
+ }
+ 
+ func (vd *validator) findMissing(obj map[string]any, reqd []string) []string {
++	if !vd.budget.spendSteps(namesLookedUp(reqd)) { // work budget
++		return nil
++	}
+ 	var missing []string
+ 	for _, pname := range reqd {
+ 		if _, ok := obj[pname]; !ok {
+@@ -875,15 +990,21 @@ type scope struct {
+ 	vid int
+ 
+ 	parent *scope
++
++	depth int // work budget: scopes above this one
++	outer int // work budget: scopes above the validation this one is in, which propertyNames or contentSchema started
+ }
+ 
+ func (sc *scope) child(sch *Schema, refKeyword string, vid int) *scope {
+-	return &scope{sch, refKeyword, vid, sc}
++	return &scope{sch, refKeyword, vid, sc, sc.depth + 1, sc.outer} // work budget: depth, outer
+ }
+ 
+-func (sc *scope) checkCycle() *scope {
++func (sc *scope) checkCycle(b *workBudget) *scope { // work budget: b
+ 	scp := sc.parent
+ 	for scp != nil {
++		if !b.spend(1) { // work budget
++			return nil
++		}
+ 		if scp.vid != sc.vid {
+ 			break
+ 		}
+@@ -895,19 +1016,28 @@ func (sc *scope) checkCycle() *scope {
+ 	return nil
+ }
+ 
+-func (sc *scope) kwLoc() string {
+-	var loc string
++// kwLocWithin is kwLoc, spending a step of b per byte of the location before
++// it builds it: a location holds text the schema has. It reports false, and
++// builds nothing, once b is exceeded.
++func (sc *scope) kwLocWithin(b *workBudget) (string, bool) { // work budget
++	var parts []string // work budget: joined once, not prepended per scope
++	n := 0             // work budget
+ 	for sc.parent != nil {
+ 		if sc.refKeyword != "" {
+-			loc = fmt.Sprintf("/%s%s", escape(sc.refKeyword), loc)
++			parts = append(parts, "/"+escape(sc.refKeyword)) // work budget
+ 		} else {
+ 			cur := sc.sch.Location
+ 			parent := sc.parent.sch.Location
+-			loc = fmt.Sprintf("%s%s", cur[len(parent):], loc)
++			parts = append(parts, cur[len(parent):]) // work budget
+ 		}
++		n += len(parts[len(parts)-1]) // work budget
+ 		sc = sc.parent
+ 	}
+-	return loc
++	if !b.spend(n) { // work budget
++		return "", false
++	}
++	slices.Reverse(parts)                // work budget
++	return strings.Join(parts, ""), true // work budget
+ }
+ 
+ // --
+diff --git a/vocab.go b/vocab.go
+index eaed8c9..f37f02c 100644
+--- a/vocab.go
++++ b/vocab.go
+@@ -99,7 +99,7 @@ func (ctx *ValidatorContext) AddErr(err error) {
+ }
+ 
+ func (ctx *ValidatorContext) Equals(v1, v2 any) (bool, error) {
+-	b, k := equals(v1, v2)
++	b, k := equalsWithin(ctx.vd.budget, v1, v2) // work budget
+ 	if k != nil {
+ 		return false, ctx.vd.error(k)
+ 	}
+@@ -107,7 +107,7 @@ func (ctx *ValidatorContext) Equals(v1, v2 any) (bool, error) {
+ }
+ 
+ func (ctx *ValidatorContext) Duplicates(arr []any) (int, int, error) {
+-	i, j, k := duplicates(arr)
++	i, j, k := duplicatesWithin(ctx.vd.budget, arr) // work budget
+ 	if k != nil {
+ 		return -1, -1, ctx.vd.error(k)
+ 	}

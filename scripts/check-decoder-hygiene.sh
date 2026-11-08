@@ -18,6 +18,14 @@
 # prose comment mentioning the function name does not trip it, but a comment
 # containing literal call syntax would — reword the comment or carry the token.
 # gen/ is excluded: generated code cannot carry hand-written exemptions.
+# Two files of internal/jsonschema (a copy of an upstream library, kept as
+# upstream wrote it apart from its documented patch; its README.md) are
+# excluded: loader.go decodes the library's embedded metaschemas (trusted) and
+# the files and URLs its loaders read, and content.go decodes a string under
+# content assertion. The schema package, the copy's only user, denies every
+# loader and leaves content assertion off, and decodes schemas and payloads
+# with canon.StrictDecoder itself; this script fails if another package
+# imports internal/jsonschema.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -50,7 +58,13 @@ while IFS= read -r f; do
     violations="${violations}${out}
 "
   fi
-done < <(find . -name '*.go' ! -name '*_test.go' ! -path './gen/*' ! -path './.git/*' | sort)
+done < <(find . -name '*.go' ! -name '*_test.go' ! -path './gen/*' ! -path './internal/jsonschema/loader.go' ! -path './internal/jsonschema/content.go' ! -path './.git/*' | sort)
+
+users=$(grep -rl --include='*.go' '"github.com/provin-line/oss/internal/jsonschema' . | grep -v -e '^./internal/jsonschema/' -e '^./schema/internal/schemadoc/' -e '^./gen/' || true)
+if [ -n "$users" ]; then
+  violations="${violations}${users}: imports internal/jsonschema; its exclusion above holds only for schema/internal/schemadoc
+"
+fi
 
 if [ -n "$violations" ]; then
   printf '%s' "$violations" >&2

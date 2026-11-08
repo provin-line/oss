@@ -294,9 +294,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - Dependency refresh to the latest releases: `connectrpc.com/connect` 1.21.1,
   `nats-server` 2.15.1 and `nats.go` 1.55.0, `o3co/go.hocon` 1.14.2,
   `piprate/json-gold` 0.9.1, `prometheus/client_golang` 1.25.0,
-  `santhosh-tekuri/jsonschema/v6` 6.0.3, OpenTelemetry 1.47.0
-  (`exporters/prometheus` 0.69.0), `golang.org/x/net` 0.61.0,
-  `golang.org/x/sys` 0.49.0, and what `go mod tidy` carries with them
+  OpenTelemetry 1.47.0 (`exporters/prometheus` 0.69.0), `golang.org/x/net`
+  0.61.0, `golang.org/x/sys` 0.49.0, and what `go mod tidy` carries with them
   (`golang.org/x/crypto` 0.58.0, `x/text` 0.43.0, `x/time` 0.16.0). The
   quickstart's broker image moves to `nats:2.15.1`, the server line the
   broker-contract tests now run against.
@@ -366,6 +365,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   binary64 value as `encoding/json` and RFC 8785 write it. The schema
   registry's `RegisterSchema` refuses such a schema too; a schema stored
   before the upgrade is not checked again.
+- **BREAKING (Go API)** `schema.ValidateJSONSchema`, `(*local.Validator).Add`
+  and `(*local.Validator).Validate` refuse a regular expression not written
+  in the forms ECMA-262 and Go's regexp read alike (Security, below): in a
+  schema's `pattern` or `patternProperties`, and in a payload value checked
+  as format `regex`. Forms Go compiled before are among them: inline flags
+  such as `(?i)`, `\pL` and other one-letter class names, `\z`, `\Q…\E`,
+  POSIX classes such as `[[:alpha:]]`, and a `-` that Go reads as a literal
+  between a class escape and another member, as in `[\w-.]`. A schema
+  holding one no longer registers, and a payload value holding one now fails
+  format `regex`.
+- **BREAKING (wire)** The schema registry's `RegisterSchema` refuses such a
+  schema with `InvalidArgument`, as it refuses one that does not compile. A
+  schema stored before the upgrade is not checked again.
 - The YAML stores (the chain manager's subscriptions and allow lists, the
   schema registry's versions, the DID registry's status and lifecycle events)
   refuse to write a record whose YAML would not read back as written, and
@@ -388,9 +400,22 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (`ErrRemotePeer`): the remote registration is undone and nothing is
   imported or stored.
 - **BREAKING (Go API)** `(*local.Validator).Validate` refuses a payload nested
-  deeper than 512 levels, or whose JSON values times the schema's `enum`
-  entries and `const` values exceed 2 000 000; the error names the bound.
-  `schema/README.md` lists the bounds.
+  deeper than 512 levels, whose validation needs more than its work budget,
+  2^20 steps plus 16 per byte of the payload, or that would apply schemas
+  within one another more than 10,000 deep; the error names the bound.
+  `schema/README.md` states them.
+- The JSON Schema library is a copy inside this module, `internal/jsonschema`:
+  `santhosh-tekuri/jsonschema/v6` v6.0.3 (Apache-2.0, its LICENSE copied
+  unchanged) with a work budget added, `ValidateWithBudget`, and with a
+  number `big.Rat` cannot read (such as `1e1000001`) reported as an error,
+  where v6.0.3 panics or takes it as unequal to every number: in the number
+  keywords, `enum`, `const` and `uniqueItems`, at any depth of a value, so
+  also when a schema is compiled against the metaschema. Under its own import path, every module that imports this one
+  builds with it. go.mod no longer requires `santhosh-tekuri/jsonschema/v6`,
+  and `golang.org/x/text` becomes a direct requirement. When upstream bounds
+  its own work and releases the error for such numbers, the schema package
+  goes back to the upstream module and the copy goes
+  (`internal/jsonschema/README.md`).
 - **BREAKING (Go API)** `canon.StrictDecoder` refuses, as a
   `*canon.DuplicateKeyError` naming both, two keys of one object that differ
   only in case as encoding/json folds names (also the Kelvin and long-s
@@ -821,13 +846,37 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   frame, and keeps only the stall bound for the payload frames after it. The
   deployment guide gives the limits and says to set a rate or time limit for
   `RetainPayload` at the proxy in front where one is wanted.
-- The JSON Schema payload check refuses two shapes of payload that cost
-  `santhosh-tekuri/jsonschema` far more than their size (many values against
-  a large `enum`, deep nesting under a recursive schema), and a conformance
-  error states only the first failure, in at most 1 KiB (the library's text
-  lists every failure and could run to hundreds of megabytes). These are
-  partial: they do not bound the library's work for every schema and payload,
-  which needs a work budget inside the library.
+- The JSON Schema payload check bounds the library's work on a payload by a
+  budget that grows with the payload's size. Reading a number is charged by
+  its length and its exponent, and comparing it with a bound by the size of
+  both; two objects are compared by their names in order, so a validation
+  takes the same steps each time. What the budget does not count, the work
+  per step that grows with nesting, the depth bound keeps small. A regular
+  expression, in a schema
+  (`pattern`, `patternProperties`) or in a payload checked as format
+  `regex`, is refused before it is parsed unless it is written in the forms
+  ECMA-262 (which JSON Schema's regular expressions follow) and Go's regexp
+  read alike: no inline flags such as `(?i)`, no lookarounds or
+  backreferences, Unicode classes by general category only, of at most
+  8,192 ranges together, repeat counts without a leading zero, and groups
+  nested at most 32 deep. Two forms keep Go's meaning, as before: `.` also
+  matches `\r`, U+2028 and U+2029, and `\s` holds only the ASCII spaces
+  (`\t \n \f \r` and space). It is refused before it is compiled when its
+  size (an upper bound of its instructions) passes 8,192. A schema is
+  refused at registration when its regular expressions, together, pass 2^14
+  plus one per 4 bytes of the schema. Matching and compiling one is charged
+  to the budget by its size, and a payload value checked as format `regex`
+  by its length before it is compiled, so the budget bounds the time of that
+  work as it does every other step's. A conformance error states only the
+  first failure, in at most 1 KiB, written within that bound: where it is in
+  the payload and the keyword it fails, with the library's description only
+  where that grows with the payload alone, not where it quotes what the
+  schema holds (a `required` list, `enum` or `const` values, a pattern). The
+  library's text lists every failure and could run to hundreds of megabytes.
+- `(*local.Validator).Add` checks a schema against the metaschema whatever id
+  it is added under: every schema is compiled at one fixed location, as
+  admission compiles it. One added under an id below `json-schema.org`
+  skipped the check.
 - `canon.StrictDecoder` no longer lets two keys that differ only in case into
   one object, nor a key that matches a struct field only by case. encoding/json
   reads both into the same struct field, the later one winning, and reads

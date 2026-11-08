@@ -11,7 +11,10 @@
 # canon.Float64.
 #
 # canon/float.go is the helper itself. gen/ is excluded: generated code
-# cannot carry hand-written exemptions. Like the other check-*.sh scripts,
+# cannot carry hand-written exemptions.
+# internal/jsonschema/kind/kind.go is excluded: in a copy of an upstream
+# library (its README.md), it formats error messages with big.Rat's Float64;
+# the library reads numbers as exact rationals, not as doubles. Like the other check-*.sh scripts,
 # this is a line-based textual check: it matches the identifiers on each
 # line, comments included, and resolves neither imports nor types.
 set -euo pipefail
@@ -33,7 +36,7 @@ while IFS= read -r f; do
     violations="${violations}${out}
 "
   fi
-done < <(find . -name '*.go' ! -name '*_test.go' ! -path './gen/*' ! -path './.git/*' ! -path './canon/float.go' | sort)
+done < <(find . -name '*.go' ! -name '*_test.go' ! -path './gen/*' ! -path './internal/jsonschema/kind/kind.go' ! -path './.git/*' ! -path './canon/float.go' | sort)
 
 if [ -n "$violations" ]; then
   printf '%s' "$violations" >&2
