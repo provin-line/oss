@@ -214,3 +214,26 @@ func TestRDFC_ContextHasNoAlias(t *testing.T) {
 		}
 	}
 }
+
+// On the suite's path, as in canon/urdna2015, two documents of the corpus
+// that differ in a value and hold only the served contexts have different
+// canonical forms, or are refused.
+func TestRDFC_SignsEveryValueOfTheServedCorpusOrRefuses(t *testing.T) {
+	canonicalize := registeredRDFC(t)
+	served := 0
+	for name, pair := range rdfccorpus.DifferentValues() {
+		docA, docB := pair("a"), pair("b")
+		if !onlyServedContexts(docA) || !onlyServedContexts(docB) {
+			continue
+		}
+		served++
+		a, errA := canonicalize(docA)
+		b, errB := canonicalize(docB)
+		if errA == nil && errB == nil && string(a) == string(b) {
+			t.Errorf("%s: two documents differing in a value have one canonical form", name)
+		}
+	}
+	if served == 0 {
+		t.Error("no pair of the corpus holds only the served contexts")
+	}
+}

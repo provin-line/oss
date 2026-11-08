@@ -626,6 +626,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   - may not use `@index`, `@direction`, JSON literals (`@json`, or the
     `rdf:JSON` datatype) or blank node labels (`_:`; RDFC-1.0 gives every
     blank node a label of its own, so a label would not be signed);
+  - may not write `@set`, or a framing keyword (`@default`, `@explicit`,
+    `@embed`, `@requireAll`, `@omitDefault`): json-gold drops without an
+    error what it cannot expand under them. A set's values are written
+    without `@set`;
   - may use `@language` only in a value object, and must write a value
     object's keys as `@value`, `@type` and `@language` (not as aliases);
   - must write a language tag, in a value object or a context, in ASCII
@@ -633,7 +637,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
     mapping, so `İt` would be signed as `it`;
   - may not write the RDF collection vocabulary out (`rdf:first` or
     `rdf:rest` as a property, `rdf:nil` as an IRI): it would be signed as the
-    list `@list` makes. A list is written with `@list`;
+    list `@list` makes. A list is written with `@list`, and a list object
+    holds nothing beside it: with a `@type`, JSON-LD keeps the list alone.
+    Nor may an item of a list fail to expand: json-gold drops it without an
+    error;
   - may give a value object at most one datatype, and a boolean none but
     `xsd:boolean`;
   - may not give one node's property the same RDF term twice, as when a node
@@ -652,7 +659,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   string with `xsd:string` written or not, a boolean or the string of its name
   typed `xsd:boolean`) are signed as that term, and the values of a property
   outside a list are signed as a set, in no order. A context's own text is not
-  signed: a term the document does not use adds nothing. A document accepted
+  signed, nor which context a document names: a term the document does not
+  use adds nothing. A document accepted
   before that meets these keeps its canonical bytes; one that writes a value
   twice is now refused, such as a self-issued credential whose issuer and
   subject, one id, both carry the same `name`, or a `type` that lists

@@ -46,6 +46,39 @@ func CredentialV2(subject map[string]any) map[string]any {
 	}
 }
 
+// servedSubject is a credential of the W3C VC v2 context alone, which vc
+// serves, whose subject urn:o holds urn:p with the value given.
+func servedSubject(value any) map[string]any {
+	return servedSubjectWith(map[string]any{"urn:p": value})
+}
+
+// servedSubjectWith is a credential of the W3C VC v2 context alone whose
+// subject urn:o holds the members given.
+func servedSubjectWith(members map[string]any) map[string]any {
+	subject := map[string]any{"@id": "urn:o"}
+	for k, v := range members {
+		subject[k] = v
+	}
+	return map[string]any{
+		"@context":          "https://www.w3.org/ns/credentials/v2",
+		"@id":               "urn:s",
+		"type":              "VerifiableCredential",
+		"issuer":            "urn:issuer",
+		"credentialSubject": subject,
+	}
+}
+
+// undefinedTerm is a term the W3C VC v2 context does not define, for m.
+func undefinedTerm(m string) string {
+	return map[string]string{"a": "approved", "b": "rejected"}[m]
+}
+
+// setThroughATerm is a context in which s2 stands for @set through s, a
+// term of a term the context rules do not read as an alias.
+func setThroughATerm() map[string]any {
+	return map[string]any{"s": "@set", "s2": "s"}
+}
+
 // aNode is a node with a property, beside the value a pair changes.
 func aNode() map[string]any { return map[string]any{"@id": "https://e.x/n", "q": "v"} }
 
@@ -227,6 +260,27 @@ func DifferentValues() map[string]func(m string) any {
 		"a default language Unicode lowercases to ASCII": func(m string) any {
 			return map[string]any{"@context": map[string]any{"@language": map[string]string{"a": "\u212Ar", "b": "kr"}[m], "q": "urn:q"}, "@id": "urn:s", "q": "v"}
 		},
+		"a list object's type": func(m string) any {
+			return servedSubject(map[string]any{"@list": []any{"v"}, "@type": "urn:" + m})
+		},
+		"a property beside a list, with a type": func(m string) any {
+			return servedSubject(map[string]any{"@list": []any{"v"}, "@type": "urn:L", "urn:q": m})
+		},
+		"an @id beside a list, with a type": func(m string) any {
+			return servedSubject(map[string]any{"@list": []any{"v"}, "@type": "urn:L", "@id": "urn:" + m})
+		},
+		"a set object's type": func(m string) any {
+			return servedSubject(map[string]any{"@set": []any{"v"}, "@type": "urn:" + m})
+		},
+		"a set object's type, through a term of a term of @set": func(m string) any {
+			return map[string]any{"@context": setThroughATerm(), "@id": "urn:o", "urn:p": map[string]any{"s2": []any{"v"}, "@type": "urn:" + m}}
+		},
+		"an undefined term under @set": func(m string) any {
+			return servedSubject(map[string]any{"@set": []any{map[string]any{undefinedTerm(m): []any{}}}})
+		},
+		"an undefined term under @default": func(m string) any {
+			return servedSubjectWith(map[string]any{"urn:p": "v", "@default": map[string]any{undefinedTerm(m): []any{}}})
+		},
 		"a term's language Unicode lowercases to ASCII": func(m string) any {
 			return map[string]any{"@context": map[string]any{"q": map[string]any{"@id": "urn:q", "@language": map[string]string{"a": "\u0130t", "b": "it"}[m]}}, "@id": "urn:s", "q": "v"}
 		},
@@ -264,33 +318,40 @@ func AcceptedPairs() map[string]func(m string) any {
 func Refusals() map[string]any {
 	dv := DifferentValues()
 	return map[string]any{
-		"@index in the document":         dv["the @index of a set object"]("a"),
-		"@direction in the document":     OwnContext(nil, map[string]any{"q": map[string]any{"@value": "x", "@direction": "rtl"}}),
-		"@language outside a value":      dv["an object of only @language"]("a"),
-		"a map container":                dv["a key of an id map whose item has its own @id"]("a"),
-		"a value expansion drops":        dv["a value object in a top-level @graph"]("a"),
-		"a value in no node's property":  dv["a string in a graph container"]("a"),
-		"a node in no quad":              dv["a proof as an IRI in a subject typed VerifiableCredential"]("a"),
-		"a value twice":                  dv["a value repeated"]("b"),
-		"a node written out twice":       map[string]any{"@id": "https://e.x/s", "https://e.x/p": map[string]any{"@id": "https://e.x/n", "https://e.x/q": "v"}, "https://e.x/r": map[string]any{"@id": "https://e.x/n", "https://e.x/q": "v"}},
-		"an alias of @value":             OwnContext(map[string]any{"val": "@value"}, map[string]any{"q": map[string]any{"val": "x"}}),
-		"a term aliasing two keywords":   OwnContext(map[string]any{"A": map[string]any{"@id": "https://e.x/A", "@context": map[string]any{"k": "@id"}}, "B": map[string]any{"@id": "https://e.x/B", "@context": map[string]any{"k": "@type"}}}, map[string]any{"q": "x"}),
-		"two datatypes":                  dv["a second datatype of a value object"]("a"),
-		"a datatype of rdf:JSON":         dv["a value of type rdf:JSON"]("a"),
-		"a boolean with a datatype":      dv["a boolean or a string of one datatype"]("a"),
-		"a blank node label":             dv["a blank node's label"]("a"),
-		"a wrapped context's container":  map[string]any{"@context": map[string]any{"@context": map[string]any{"m": map[string]any{"@id": "urn:m", "@container": "@index"}}}, "@id": "urn:s", "urn:q": "x"},
-		"a JSON literal written":         OwnContext(nil, map[string]any{"q": map[string]any{"@value": map[string]any{"k": "v"}, "@type": "@json"}}),
-		"a language tag not ASCII":       map[string]any{"@id": "urn:s", "urn:p": map[string]any{"@value": "v", "@language": "\u0130t"}},
-		"a default language not ASCII":   map[string]any{"@context": map[string]any{"@language": "\u212Ar", "q": "urn:q"}, "@id": "urn:s", "q": "v"},
-		"a term's language not ASCII":    map[string]any{"@context": map[string]any{"q": map[string]any{"@id": "urn:q", "@language": "\u0130t"}}, "@id": "urn:s", "q": "v"},
-		"a @base":                        map[string]any{"@context": map[string]any{"@base": "https://e.x/"}, "@id": "https://e.x/s", "https://e.x/p": "v"},
-		"one RDF value in two spellings": OwnContext(nil, map[string]any{"q": []any{"x", map[string]any{"@value": "x", "@type": "http://www.w3.org/2001/XMLSchema#string"}}}),
-		"a boolean in two spellings":     OwnContext(nil, map[string]any{"q": []any{true, map[string]any{"@value": "true", "@type": "http://www.w3.org/2001/XMLSchema#boolean"}}}),
-		"an alias in a value object":     OwnContext(map[string]any{"t": "@type"}, map[string]any{"q": map[string]any{"@value": "x", "t": "https://e.x/T"}}),
-		"a term of @none in a value":     dv["a value object's key, a term of a term of @none"]("a"),
-		"a @vocab of @value":             map[string]any{"@context": map[string]any{"@vocab": "@value", "v": map[string]any{"@id": ""}}, "@id": "urn:s", "urn:p": map[string]any{"v": "kept"}},
-		"a @vocab of @":                  map[string]any{"@context": map[string]any{"@vocab": "@"}, "@id": "urn:s", "urn:p": map[string]any{"value": "kept"}},
-		"a JSON literal by a term":       CredentialV2(map[string]any{"id": "did:example:s", "name": "x", "credentialSchema": map[string]any{"id": "https://e.x/schema", "type": "JsonSchema", "jsonSchema": map[string]any{"k": "v"}}}),
+		"a list object with a type":                          dv["a list object's type"]("a"),
+		"a set object with a type":                           dv["a set object's type"]("a"),
+		"an empty set object with a type":                    servedSubject(map[string]any{"@set": []any{}, "@type": "urn:a"}),
+		"a set object with a type, through a term of a term": dv["a set object's type, through a term of a term of @set"]("a"),
+		"an undefined term under @set":                       dv["an undefined term under @set"]("a"),
+		"an undefined term under @default":                   dv["an undefined term under @default"]("a"),
+		"an undefined term in a list item":                   servedSubject(map[string]any{"@list": []any{map[string]any{"approved": []any{}}}}),
+		"@index in the document":                             dv["the @index of a set object"]("a"),
+		"@direction in the document":                         OwnContext(nil, map[string]any{"q": map[string]any{"@value": "x", "@direction": "rtl"}}),
+		"@language outside a value":                          dv["an object of only @language"]("a"),
+		"a map container":                                    dv["a key of an id map whose item has its own @id"]("a"),
+		"a value expansion drops":                            dv["a value object in a top-level @graph"]("a"),
+		"a value in no node's property":                      dv["a string in a graph container"]("a"),
+		"a node in no quad":                                  dv["a proof as an IRI in a subject typed VerifiableCredential"]("a"),
+		"a value twice":                                      dv["a value repeated"]("b"),
+		"a node written out twice":                           map[string]any{"@id": "https://e.x/s", "https://e.x/p": map[string]any{"@id": "https://e.x/n", "https://e.x/q": "v"}, "https://e.x/r": map[string]any{"@id": "https://e.x/n", "https://e.x/q": "v"}},
+		"an alias of @value":                                 OwnContext(map[string]any{"val": "@value"}, map[string]any{"q": map[string]any{"val": "x"}}),
+		"a term aliasing two keywords":                       OwnContext(map[string]any{"A": map[string]any{"@id": "https://e.x/A", "@context": map[string]any{"k": "@id"}}, "B": map[string]any{"@id": "https://e.x/B", "@context": map[string]any{"k": "@type"}}}, map[string]any{"q": "x"}),
+		"two datatypes":                                      dv["a second datatype of a value object"]("a"),
+		"a datatype of rdf:JSON":                             dv["a value of type rdf:JSON"]("a"),
+		"a boolean with a datatype":                          dv["a boolean or a string of one datatype"]("a"),
+		"a blank node label":                                 dv["a blank node's label"]("a"),
+		"a wrapped context's container":                      map[string]any{"@context": map[string]any{"@context": map[string]any{"m": map[string]any{"@id": "urn:m", "@container": "@index"}}}, "@id": "urn:s", "urn:q": "x"},
+		"a JSON literal written":                             OwnContext(nil, map[string]any{"q": map[string]any{"@value": map[string]any{"k": "v"}, "@type": "@json"}}),
+		"a language tag not ASCII":                           map[string]any{"@id": "urn:s", "urn:p": map[string]any{"@value": "v", "@language": "\u0130t"}},
+		"a default language not ASCII":                       map[string]any{"@context": map[string]any{"@language": "\u212Ar", "q": "urn:q"}, "@id": "urn:s", "q": "v"},
+		"a term's language not ASCII":                        map[string]any{"@context": map[string]any{"q": map[string]any{"@id": "urn:q", "@language": "\u0130t"}}, "@id": "urn:s", "q": "v"},
+		"a @base":                                            map[string]any{"@context": map[string]any{"@base": "https://e.x/"}, "@id": "https://e.x/s", "https://e.x/p": "v"},
+		"one RDF value in two spellings":                     OwnContext(nil, map[string]any{"q": []any{"x", map[string]any{"@value": "x", "@type": "http://www.w3.org/2001/XMLSchema#string"}}}),
+		"a boolean in two spellings":                         OwnContext(nil, map[string]any{"q": []any{true, map[string]any{"@value": "true", "@type": "http://www.w3.org/2001/XMLSchema#boolean"}}}),
+		"an alias in a value object":                         OwnContext(map[string]any{"t": "@type"}, map[string]any{"q": map[string]any{"@value": "x", "t": "https://e.x/T"}}),
+		"a term of @none in a value":                         dv["a value object's key, a term of a term of @none"]("a"),
+		"a @vocab of @value":                                 map[string]any{"@context": map[string]any{"@vocab": "@value", "v": map[string]any{"@id": ""}}, "@id": "urn:s", "urn:p": map[string]any{"v": "kept"}},
+		"a @vocab of @":                                      map[string]any{"@context": map[string]any{"@vocab": "@"}, "@id": "urn:s", "urn:p": map[string]any{"value": "kept"}},
+		"a JSON literal by a term":                           CredentialV2(map[string]any{"id": "did:example:s", "name": "x", "credentialSchema": map[string]any{"id": "https://e.x/schema", "type": "JsonSchema", "jsonSchema": map[string]any{"k": "v"}}}),
 	}
 }

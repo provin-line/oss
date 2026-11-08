@@ -143,26 +143,29 @@ func (c *Canonicalizer) Name() string { return Name }
 //     (conserve.go), so a value JSON-LD processing would leave out is refused
 //     whatever the form that loses it. The document must use only forms where
 //     a value stays one value: no @index, @direction, JSON literal or blank
-//     node label; @language only in a value object, and a language tag, there
-//     or in a context, of ASCII letters, digits and hyphens; a value object's
-//     keys written as @value, @type and @language; at most one datatype, and
-//     on a boolean none but xsd:boolean; no RDF collection vocabulary written
-//     out (rdf:first or rdf:rest as a property, rdf:nil as an IRI), so a list
-//     comes only from @list; no context term with a map container, no alias of
-//     @value, no term aliasing two keywords, no @vocab beginning with @, and
-//     no @base. Its values must all reach the expanded form; there, each value
-//     must belong to a node's property, each node object must add a quad, and
-//     no node's property may hold one RDF term twice; and the dataset must
-//     hold exactly the quads those values make. What is signed is the dataset,
-//     so spellings JSON-LD gives one RDF term are signed as that term: an IRI
-//     written as a term, a compact IRI or in full; a language tag in any ASCII
-//     case; a string with xsd:string written or not; a boolean written as true
-//     or false, or as the string of its name typed xsd:boolean. The values of
-//     a property outside a list are signed as a set, in no order, so one
-//     written twice is refused (a node written out in full in two places, or a
-//     type repeated): write a node once and refer to it elsewhere by its @id.
-//     A context's own text is not signed: a term the document does not use
-//     adds nothing to the dataset.
+//     node label; no @set or framing keyword written in the document;
+//     @language only in a value object, and a language tag, there or in a
+//     context, of ASCII letters, digits and hyphens; a value object's keys
+//     written as @value, @type and @language; at most one datatype, and on a
+//     boolean none but xsd:boolean; no RDF collection vocabulary written out
+//     (rdf:first or rdf:rest as a property, rdf:nil as an IRI), so a list
+//     comes only from @list, and nothing beside @list in a list object, nor an
+//     item of a list that JSON-LD could not expand; no context term with a map
+//     container, no alias of @value, no term aliasing two keywords, no @vocab
+//     beginning with @, and no @base. Its values must all reach the expanded
+//     form; there, each value must belong to a node's property, each node
+//     object must add a quad, and no node's property may hold one RDF term
+//     twice; and the dataset must hold exactly the quads those values make.
+//     What is signed is the dataset, so spellings JSON-LD gives one RDF term
+//     are signed as that term: an IRI written as a term, a compact IRI or in
+//     full; a language tag in any ASCII case; a string with xsd:string written
+//     or not; a boolean written as true or false, or as the string of its name
+//     typed xsd:boolean. The values of a property outside a list are signed as
+//     a set, in no order, so one written twice is refused (a node written out
+//     in full in two places, or a type repeated): write a node once and refer
+//     to it elsewhere by its @id. A context's own text is not signed, nor
+//     which context a document names: a term the document does not use adds
+//     nothing to the dataset.
 //
 // One drop shape is deliberately ALLOWED: a member whose value is an empty
 // array ("derived_from": []) contributes zero quads, so its presence is not
@@ -545,6 +548,35 @@ const (
 	rdfNil     = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"
 )
 
+// besideListOrSet is what json-gold makes of an expanded list or set object
+// holding another key, which its expansion lets through where the object has
+// a @type: of a list object, its node map makes the list alone; a set
+// object, it reads as a node and drops the set's values.
+var besideListOrSet = []struct{ keyword, makes string }{
+	{"@list", "JSON-LD keeps the list alone, so it would ride the document unsigned"},
+	{"@set", "JSON-LD reads the object as a node and drops the set's values, so they would ride the document unsigned"},
+}
+
+// rejectListBeside refuses an expanded list object holding a key beside
+// @list, and an expanded object holding @set beside another key
+// (besideListOrSet). Expanded, a set object is otherwise replaced by its
+// values; @set written in a document is refused before expansion
+// (dataValues), so this is reached through an alias the context rules do
+// not read.
+func rejectListBeside(obj map[string]any) error {
+	for _, b := range besideListOrSet {
+		if _, ok := obj[b.keyword]; !ok || len(obj) == 1 {
+			continue
+		}
+		for _, k := range sortedKeys(obj) {
+			if k != b.keyword {
+				return fmt.Errorf("urdna2015: %s beside %s: %s", bounded(k), b.keyword, b.makes)
+			}
+		}
+	}
+	return nil
+}
+
 // collectionWrittenOut is the refusal of the RDF collection vocabulary
 // written out (see rejectDroppableNodes).
 const collectionWrittenOut = "urdna2015: rdf:first or rdf:rest as a property, or rdf:nil as an IRI: it would be signed as the list @list makes, which a JSON reader does not see; write a list with @list"
@@ -558,6 +590,10 @@ const collectionWrittenOut = "urdna2015: rdf:first or rdf:rest as a property, or
 // walk needs no context awareness.
 func rejectDroppableNodes(v any) error {
 	switch t := v.(type) {
+	case nil:
+		// The expanded form holds null only where json-gold dropped the
+		// error of an item it could not expand (under @list).
+		return errors.New("urdna2015: an item JSON-LD could not expand: json-gold drops it without an error, so it would ride the document unsigned")
 	case []any:
 		for _, e := range t {
 			if err := rejectDroppableNodes(e); err != nil {
@@ -569,6 +605,9 @@ func rejectDroppableNodes(v any) error {
 			if err := rejectLossyValue(value, t["@type"]); err != nil {
 				return err
 			}
+		}
+		if err := rejectListBeside(t); err != nil {
+			return err
 		}
 		for _, k := range sortedKeys(t) {
 			e := t[k]
