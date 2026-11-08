@@ -18,6 +18,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 const CanonicalizerRFC8785 = "jcs-rfc8785"
@@ -67,7 +68,9 @@ const (
 // SpineEntry fixes one selected signed wire variant in origin-to-head order.
 // Extensions are its other members, preserved and included in the manifest's
 // identity as Manifest.Extensions are: the dPLaaX schema admits members of a
-// spine entry beyond its two fields.
+// spine entry beyond its two fields. An extension may nest at most 9,997
+// objects and arrays deep, as the manifest holds it three levels down and
+// nests at most 10,000, as encoding/json decodes.
 type SpineEntry struct {
 	BodyAddress   string         `json:"bodyAddress"`
 	WireVariantID string         `json:"wireVariantId"`
@@ -105,7 +108,7 @@ func (e SpineEntry) MarshalJSON() ([]byte, error) {
 }
 
 func (e SpineEntry) projection(where string) (map[string]any, error) {
-	if err := validExtensions(where+" extension", e.Extensions, spineEntryFields); err != nil {
+	if err := validExtensions(where+" extension", e.Extensions, spineEntryFields, spineExtensionDepth); err != nil {
 		return nil, err
 	}
 	out := map[string]any{
@@ -121,6 +124,9 @@ func (e SpineEntry) projection(where string) (map[string]any, error) {
 // Manifest fixes all inputs on which an evaluation depends. Extensions are
 // preserved and included in its identity because the dPLaaX schema is
 // extensible; dropping an unknown member before hashing would rename a view.
+// An extension may nest at most 9,999 objects and arrays deep, as the
+// manifest holds it one level down and nests at most 10,000, as
+// encoding/json decodes.
 type Manifest struct {
 	Head                 string            `json:"head"`
 	Spine                []SpineEntry      `json:"spine"`
@@ -323,7 +329,7 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("%w: repeated spine body %s", ErrInvalidManifest, entry.BodyAddress)
 		}
 		seen[entry.BodyAddress] = true
-		if err := validExtensions(fmt.Sprintf("spine[%d] extension", i), entry.Extensions, spineEntryFields); err != nil {
+		if err := validExtensions(fmt.Sprintf("spine[%d] extension", i), entry.Extensions, spineEntryFields, spineExtensionDepth); err != nil {
 			return err
 		}
 		if err := canon.AdmitSafeNumbers(entry.Extensions); err != nil {
@@ -353,7 +359,7 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("%w: invalid input snapshot %q", ErrInvalidManifest, name)
 		}
 	}
-	if err := validExtensions("extension", m.Extensions, manifestFields); err != nil {
+	if err := validExtensions("extension", m.Extensions, manifestFields, manifestExtensionDepth); err != nil {
 		return err
 	}
 	if err := canon.AdmitSafeNumbers(m.Extensions); err != nil {
@@ -366,7 +372,7 @@ func (m Manifest) Validate() error {
 // another case (a reader would take it for that field), and one whose value
 // is not a JSON value (jsonValue). Keys are checked in sorted order, so the
 // refusal reported does not depend on map order.
-func validExtensions(what string, extensions map[string]any, fields map[string]bool) error {
+func validExtensions(what string, extensions map[string]any, fields map[string]bool, depth int) error {
 	for _, key := range slices.Sorted(maps.Keys(extensions)) {
 		if fields[key] {
 			return fmt.Errorf("%w: %s collides with %q", ErrInvalidManifest, what, key)
@@ -374,7 +380,7 @@ func validExtensions(what string, extensions map[string]any, fields map[string]b
 		if name, ok := foldsTo(key, fields); ok {
 			return fmt.Errorf("%w: %s %q is %q in another case", ErrInvalidManifest, what, key, name)
 		}
-		if err := jsonValue(extensions[key]); err != nil {
+		if err := jsonValue(extensions[key], depth); err != nil {
 			return fmt.Errorf("%w: %s %q %v", ErrInvalidManifest, what, key, err)
 		}
 	}
@@ -386,21 +392,34 @@ func validExtensions(what string, extensions map[string]any, fields map[string]b
 // The JSON form of any other value reads back as another value (a float32 is
 // widened when canonicalized but written short), so the identity would not be
 // that of the document the manifest encodes to.
-func jsonValue(v any) error {
+//
+// v sits depth objects and arrays deep in the manifest's document
+// (manifestExtensionDepth, spineExtensionDepth). An object or array deeper
+// than jsondepth.Max is refused before the check enters it: it recurses once
+// per level, and a goroutine stack exhausted is a fatal error. So the
+// manifest's document nests at most jsondepth.Max deep, and what passes is
+// canonicalized and encoded without a refusal.
+func jsonValue(v any, depth int) error {
 	switch t := v.(type) {
 	case nil, bool, string, json.Number, float64,
 		int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return nil
 	case []any:
+		if depth > jsondepth.Max {
+			return errNestedTooDeep
+		}
 		for _, e := range t {
-			if err := jsonValue(e); err != nil {
+			if err := jsonValue(e, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	case map[string]any:
+		if depth > jsondepth.Max {
+			return errNestedTooDeep
+		}
 		for _, k := range slices.Sorted(maps.Keys(t)) {
-			if err := jsonValue(t[k]); err != nil {
+			if err := jsonValue(t[k], depth+1); err != nil {
 				return err
 			}
 		}
@@ -409,6 +428,19 @@ func jsonValue(v any) error {
 		return fmt.Errorf("holds a %T, not a JSON value", v)
 	}
 }
+
+// errNestedTooDeep refuses an extension that would nest the manifest past
+// jsondepth.Max (jsonValue).
+var errNestedTooDeep = fmt.Errorf("is nested deeper than %d objects and arrays, the manifest counted", jsondepth.Max)
+
+// The depth at which an extension's value sits in the manifest's document: a
+// manifest's is a member of the manifest; a spine entry's, a member of an
+// entry of the manifest's spine. A spine entry encoded alone is held to the
+// same, as it is a part of a manifest.
+const (
+	manifestExtensionDepth = 2
+	spineExtensionDepth    = 4
+)
 
 func (m Manifest) projection() (map[string]any, error) {
 	out := map[string]any{
@@ -432,7 +464,7 @@ func (m Manifest) projection() (map[string]any, error) {
 		snapshots[key] = value
 	}
 	out["inputSnapshotDigests"] = snapshots
-	if err := validExtensions("extension", m.Extensions, manifestFields); err != nil {
+	if err := validExtensions("extension", m.Extensions, manifestFields, manifestExtensionDepth); err != nil {
 		return nil, err
 	}
 	for key, value := range m.Extensions {

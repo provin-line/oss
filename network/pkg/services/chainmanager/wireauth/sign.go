@@ -29,8 +29,10 @@ type Proof struct {
 // the signed value never diverge.
 //
 // signerDID, op, and nonce must be non-empty, and fields must satisfy the value
-// grammar (ErrInvalidView); a real caller obtains nonce from NewNonce and
-// issuedAt from time.Now().
+// grammar (ErrInvalidView), which also refuses fields nested more than 9,999
+// objects and arrays deep, the fields object counted, so that the view, which
+// holds them one level down, nests at most 10,000, as encoding/json decodes;
+// a real caller obtains nonce from NewNonce and issuedAt from time.Now().
 func Sign(signer crypto.Signer, signerDID, op string, fields map[string]any, nonce string, issuedAt time.Time) (Proof, error) {
 	if signerDID == "" || op == "" || nonce == "" {
 		return Proof{}, fmt.Errorf("%w: signerDID, op, and nonce must be non-empty", ErrMalformedProof)

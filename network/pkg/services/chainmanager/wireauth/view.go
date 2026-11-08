@@ -2,9 +2,13 @@ package wireauth
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 // ViewVersion is the frozen version of the signed-view composition, folded
@@ -47,37 +51,67 @@ func viewBytes(signerDID, op, nonce string, issuedAt time.Time, fields map[strin
 // the "same" field would canonicalize to different bytes, and JCS number
 // serialization is an interop hazard for a frozen cross-org wire; number-like
 // values must be carried as decimal strings by the per-op builder.
+//
+// The view holds the fields one level down, so the fields may nest at most
+// jsondepth.Max-1 objects and arrays, the fields object counted, and the view
+// at most jsondepth.Max: the check recurses once per level and refuses deeper
+// fields before entering the level past the bound, as a goroutine stack
+// exhausted is a fatal error, so what passes is copied and canonicalized
+// without a refusal. The refusal names the path to the value, spelled once
+// and within fieldPathLimit bytes.
 func validateFields(fields map[string]any) error {
 	if fields == nil {
 		return fmt.Errorf("%w: fields must be a non-nil object", ErrInvalidView)
 	}
+	var path []string
 	for k, v := range fields {
-		if err := validateFieldValue(v); err != nil {
-			return fmt.Errorf("%w: at %q: %v", ErrInvalidView, k, err)
+		path = append(path[:0], strconv.Quote(k))
+		if err := validateFieldValue(v, 3, &path); err != nil {
+			at, _ := excerpt.Of("at "+strings.Join(path, ": at "), fieldPathLimit)
+			return fmt.Errorf("%w: %s: %v", ErrInvalidView, at, err)
 		}
 	}
 	return nil
 }
 
-func validateFieldValue(v any) error {
+// fieldPathLimit bounds the path a refusal of the fields names.
+const fieldPathLimit = 256
+
+// validateFieldValue checks v, held depth objects and arrays deep in the view.
+// path is where v is: a step is pushed before a member or item is checked and
+// popped after, and left as it is on a refusal, for validateFields to spell.
+func validateFieldValue(v any, depth int, path *[]string) error {
 	switch t := v.(type) {
 	case nil, string, bool:
 		return nil
 	case map[string]any:
+		if depth > jsondepth.Max {
+			return errFieldsTooDeep
+		}
 		for k, e := range t {
-			if err := validateFieldValue(e); err != nil {
-				return fmt.Errorf("at %q: %v", k, err)
+			*path = append(*path, strconv.Quote(k))
+			if err := validateFieldValue(e, depth+1, path); err != nil {
+				return err
 			}
+			*path = (*path)[:len(*path)-1]
 		}
 		return nil
 	case []any:
+		if depth > jsondepth.Max {
+			return errFieldsTooDeep
+		}
 		for i, e := range t {
-			if err := validateFieldValue(e); err != nil {
-				return fmt.Errorf("at [%d]: %v", i, err)
+			*path = append(*path, "["+strconv.Itoa(i)+"]")
+			if err := validateFieldValue(e, depth+1, path); err != nil {
+				return err
 			}
+			*path = (*path)[:len(*path)-1]
 		}
 		return nil
 	default:
 		return fmt.Errorf("disallowed value type %T (numbers must be decimal strings)", v)
 	}
 }
+
+// errFieldsTooDeep refuses fields nested past the bound (validateFields).
+var errFieldsTooDeep = fmt.Errorf("nested deeper than %d objects and arrays, the view counted", jsondepth.Max)

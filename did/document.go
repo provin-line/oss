@@ -90,7 +90,9 @@ type DocumentFields struct {
 
 // New assembles a DID Document body from typed fields. The inputs are copied
 // into the body, so later mutation of the argument slices does not affect the
-// document.
+// document. A verification method's PublicKeyJWK must be a JSON value, so
+// acyclic; it is copied at any depth, and Hash refuses one nested more than
+// 10,000 objects and arrays deep.
 func New(fields DocumentFields) *DIDDocument {
 	body := map[string]any{keyID: fields.ID}
 	if len(fields.Context) > 0 {
@@ -664,6 +666,8 @@ func toAnySlice(s []string) []any {
 	return out
 }
 
+// deepCopyMap copies m, a value as encoding/json decodes into any, with
+// deepCopyValue.
 func deepCopyMap(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
@@ -672,20 +676,55 @@ func deepCopyMap(m map[string]any) map[string]any {
 	return out
 }
 
+// deepCopyValue copies v, a value as encoding/json decodes into any. It keeps
+// its own stack rather than recursing, so it copies a value of any depth: a
+// publicKeyJwk is a caller's map, and a recursive copy of one built deep
+// enough would exhaust the goroutine stack, a fatal error. v must be acyclic,
+// as a JSON value is; a part v holds in two places is copied for each.
+// Scalars (string, json.Number, bool, nil) are immutable and shared.
 func deepCopyValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		return deepCopyMap(t)
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = deepCopyValue(e)
-		}
-		return out
-	default:
-		// Scalars (string, json.Number, bool, nil) are immutable.
-		return v
+	// copyTask copies src to where place puts it: a member of toMap, an item
+	// of toSlice, or else the copy returned.
+	type copyTask struct {
+		src     any
+		toMap   map[string]any
+		key     string
+		toSlice []any
+		index   int
 	}
+	var out any
+	place := func(t copyTask, x any) {
+		switch {
+		case t.toMap != nil:
+			t.toMap[t.key] = x
+		case t.toSlice != nil:
+			t.toSlice[t.index] = x
+		default:
+			out = x
+		}
+	}
+	stack := []copyTask{{src: v}}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch s := t.src.(type) {
+		case map[string]any:
+			m := make(map[string]any, len(s))
+			place(t, m)
+			for k, e := range s {
+				stack = append(stack, copyTask{src: e, toMap: m, key: k})
+			}
+		case []any:
+			a := make([]any, len(s))
+			place(t, a)
+			for i, e := range s {
+				stack = append(stack, copyTask{src: e, toSlice: a, index: i})
+			}
+		default:
+			place(t, s)
+		}
+	}
+	return out
 }
 
 // EncodeEd25519Multikey renders an Ed25519 public key as a Multikey

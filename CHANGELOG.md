@@ -602,6 +602,26 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- More walks of a caller's value refuse one that would nest past 10,000
+  objects and arrays, before recursing past it, or no longer recurse:
+  - `wireauth.Sign` and `(*wireauth.Verifier).Verify` refuse `fields` nested
+    more than 9,999 deep, the fields object counted (the signed view holds
+    them one level down), with `ErrInvalidView`, at the value grammar they
+    check first: `Verify` before it resolves the signer. What passes is
+    copied and canonicalized without a refusal. The refusal names the path
+    within 256 bytes, built once;
+  - `appraisal`'s `Manifest` and `SpineEntry` refuse an extension that would
+    nest the manifest past 10,000 (a manifest's extension more than 9,999
+    deep, a spine entry's more than 9,997) with `ErrInvalidManifest` naming
+    it, in `Validate`, `ID`, `CanonicalBytes` and `MarshalJSON`; up to that,
+    the manifest's JSON decodes again;
+  - `did.New` and `(*did.DIDDocument).Body` copy a verification method's
+    `publicKeyJwk` of any depth without recursing (it must be acyclic, as a
+    JSON value is); `Hash` refuses one nested past 10,000.
+
+  Built in Go deep enough, each value exhausted the goroutine stack, a fatal
+  error. A value decoded by encoding/json or `canon.StrictDecoder` is never
+  deeper than 10,000.
 - `canon.AdmitSafeNumbers`, and `canon/jcs`'s `Canonicalize`,
   `CanonicalizeRFC8785`, `Hash` and `HashRFC8785`, refuse a value nested more
   than 10,000 objects and arrays deep, before their walk enters the level
