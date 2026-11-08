@@ -1073,6 +1073,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   double nearest its value, whatever its spelling, and only RFC 8259 numbers
   are read; the jsonata filter and converter evaluate no number they cannot
   read as one.
+- The HTTP server of the node binaries (`internal/httpserve`) returns the
+  error of a failed read of a request body, and of closing one (which on
+  HTTP/1 reads what is left of it), within 512 bytes of UTF-8, whatever the
+  body. net/http quotes what it read in some of these errors, such as a
+  malformed trailer line of a chunked body, and a handler (a connect
+  service, the push ingest) writes the text into its answer or a log. Any
+  other error is cut, its head and its length, `… (N bytes)`, and wraps the
+  one it replaces, so `errors.Is` and `errors.As` still find it; an error
+  whose text is UTF-8 within the limit (`io.EOF`, the read limit's
+  `*http.MaxBytesError`) is returned as it is. This holds over TLS and over
+  cleartext h2c.
 - The text of `canon`'s errors does not grow with the document it was given.
   `canon.UnsafeNumberError` and `canon.DuplicateKeyError` write each literal,
   key and path they name within 128 bytes: whole when it fits, or else its

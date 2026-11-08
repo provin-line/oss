@@ -15,3 +15,6 @@ func SetBodyReadTimeout(d time.Duration) (restore func()) {
 	bodyReadTimeout = d
 	return func() { bodyReadTimeout = old }
 }
+
+// ReadErrorLimit is the most bytes the text of a body's read error takes.
+const ReadErrorLimit = readErrorLimit

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 )
 
@@ -39,6 +40,14 @@ const (
 	maxHeaderBytes = 64 << 10
 	stallReadBytes = 16 << 10
 )
+
+// readErrorLimit is the most bytes the text of a failed read or close of a
+// body takes (package excerpt cuts it): net/http quotes what it read in some
+// of these errors, such as a malformed trailer line of a chunked body, and a
+// handler writes the text into its answer or a log. 512 bytes hold any of
+// net/http's own texts whole and leave a handler room for its words within
+// 1 KiB.
+const readErrorLimit = 512
 
 var (
 	bodyStallTimeout = 30 * time.Second
@@ -202,9 +211,13 @@ func (b *stallBoundedBody) deadline(now time.Time) time.Time {
 	return d
 }
 
+// Read returns the error of a failed read with its text within readErrorLimit
+// bytes: an error whose text is UTF-8 within the limit as it is, any other cut
+// and wrapped, so errors.Is and errors.As still find it.
 func (b *stallBoundedBody) Read(p []byte) (int, error) {
 	if b.ended {
-		return b.ReadCloser.Read(p)
+		n, err := b.ReadCloser.Read(p)
+		return n, excerpt.OfError(err, readErrorLimit)
 	}
 	if len(p) > stallReadBytes {
 		p = p[:stallReadBytes]
@@ -215,7 +228,13 @@ func (b *stallBoundedBody) Read(p []byte) (int, error) {
 	if err != nil {
 		b.ended = true
 	}
-	return n, err
+	return n, excerpt.OfError(err, readErrorLimit)
+}
+
+// Close closes the body, which on HTTP/1 reads what is left of it, and returns
+// its error with the text bounded as Read's is.
+func (b *stallBoundedBody) Close() error {
+	return excerpt.OfError(b.ReadCloser.Close(), readErrorLimit)
 }
 
 // HTTP2Server builds the HTTP/2 server used by both transport paths — h2c
