@@ -602,6 +602,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon.AdmitSafeNumbers`, and `canon/jcs`'s `Canonicalize`,
+  `CanonicalizeRFC8785`, `Hash` and `HashRFC8785`, refuse a value nested more
+  than 10,000 objects and arrays deep, before their walk enters the level
+  past the bound: a value built in Go far deeper could exhaust the goroutine
+  stack, a fatal error. A value decoded by encoding/json or
+  `canon.StrictDecoder` is never deeper. With them, `vc`'s `CreateProof` and
+  verify functions refuse such a document before a suite canonicalizes it:
+  `CreateProof` at its check of the document's numbers (under
+  `eddsa-rdfc-2022` too, so with canon's error, not one wrapping
+  `urdna2015.ErrTooComplex`), and the verify functions at the comparison of a
+  proof's `@context` with the document's, or else in the canonicalization.
 - `canon/urdna2015` and `vc`'s `eddsa-rdfc-2022` refuse a document nested
   more than 10,000 objects and arrays deep, as deep as encoding/json and
   `canon.StrictDecoder` decode, with an error wrapping

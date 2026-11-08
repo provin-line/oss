@@ -11,14 +11,8 @@ import (
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/urdna2015"
 	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
-
-// rdfcMaxNesting is the deepest nesting of objects and arrays the suite
-// accepts, as deep as encoding/json, canon.StrictDecoder and canon/urdna2015
-// read. The walk recurses once per level, and a goroutine stack exhausted is
-// a fatal error no recover catches; a document decoded by encoding/json or
-// canon.StrictDecoder is never deeper, but one built otherwise can be.
-const rdfcMaxNesting = 10000
 
 // rdfcContextQuoteLimit bounds each document text the refusal of a context
 // quotes: the path to the context, and an IRI not served.
@@ -67,13 +61,13 @@ func (s servedContexts) Canonicalize(v any) ([]byte, error) {
 // the key written out finds every context. An object's keys are read in
 // order, so a document is refused for the same context each time. path is
 // where v is, spelled only into an error; its length is v's depth, and an
-// object or array deeper than rdfcMaxNesting is refused before the walk
+// object or array deeper than jsondepth.Max is refused before the walk
 // enters it.
 func (s servedContexts) walk(v any, path *[]string) error {
 	switch v.(type) {
 	case []any, map[string]any:
-		if len(*path) >= rdfcMaxNesting {
-			return fmt.Errorf("vc: eddsa-rdfc-2022: %w: nesting: more than %d objects and arrays deep", urdna2015.ErrTooComplex, rdfcMaxNesting)
+		if len(*path) >= jsondepth.Max {
+			return fmt.Errorf("vc: eddsa-rdfc-2022: %w: nesting: more than %d objects and arrays deep", urdna2015.ErrTooComplex, jsondepth.Max)
 		}
 	}
 	switch t := v.(type) {

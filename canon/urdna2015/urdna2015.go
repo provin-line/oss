@@ -34,6 +34,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/piprate/json-gold/ld"
+
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 // Name is the wire identifier of this canonicalization.
@@ -179,8 +181,8 @@ func (c *Canonicalizer) Name() string { return Name }
 // additionally couples the commitment fields together. JCS — the default
 // suite — signs the bytes verbatim either way.
 //
-// A document nested more than 10,000 objects and arrays deep (maxNesting),
-// deeper than encoding/json decodes, is refused with an error wrapping
+// A document nested more than 10,000 objects and arrays deep, deeper than
+// encoding/json decodes, is refused with an error wrapping
 // ErrTooComplex before any walk of Canonicalize recurses into it: each walk,
 // and json-gold's, recurses at least once per level, and a goroutine stack
 // exhausted is a fatal error.
@@ -214,8 +216,8 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("urdna2015: input must be a JSON object or array, got %T", v)
 	}
-	if !nestedWithin(v, maxNesting) {
-		return nil, fmt.Errorf("%w: nesting: more than %d objects and arrays deep", ErrTooComplex, maxNesting)
+	if !jsondepth.Within(v) {
+		return nil, fmt.Errorf("%w: nesting: more than %d objects and arrays deep", ErrTooComplex, jsondepth.Max)
 	}
 	if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
 		return nil, err
@@ -343,45 +345,6 @@ func (l *offlineLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
 		return nil, fmt.Errorf("urdna2015: embedded context %q is not valid JSON: %w", u, err)
 	}
 	return &ld.RemoteDocument{DocumentURL: u, Document: parsed}, nil
-}
-
-// maxNesting is the deepest nesting of objects and arrays Canonicalize
-// accepts, as deep as encoding/json and canon.StrictDecoder decode. Each walk
-// of the document, and json-gold's, recurses at least once per level, and a
-// goroutine stack exhausted is a fatal error no recover catches; a document
-// decoded by encoding/json or canon.StrictDecoder is never deeper, but one
-// built otherwise can be.
-const maxNesting = 10000
-
-// nestedWithin reports whether v nests at most limit objects and arrays deep.
-// It keeps its own stack rather than recursing, so it is safe at any depth.
-func nestedWithin(v any, limit int) bool {
-	type item struct {
-		v     any
-		depth int
-	}
-	stack := []item{{v, 1}}
-	for len(stack) > 0 {
-		it := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		switch t := it.v.(type) {
-		case map[string]any:
-			if it.depth > limit {
-				return false
-			}
-			for _, x := range t {
-				stack = append(stack, item{x, it.depth + 1})
-			}
-		case []any:
-			if it.depth > limit {
-				return false
-			}
-			for _, x := range t {
-				stack = append(stack, item{x, it.depth + 1})
-			}
-		}
-	}
-	return true
 }
 
 // requireNodeObjects fails unless every element of a node-array position

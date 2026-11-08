@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 // MaxSafeInteger and MinSafeInteger bound the integers an artifact may carry as
@@ -71,7 +72,12 @@ func (e *UnsafeNumberError) Error() string {
 // v is a value tree as decoding JSON into any gives it (map[string]any,
 // []any, json.Number and the other scalars), and Go's numeric types are read
 // too. A value of any other type, a typed slice or a struct among them, is
-// not inspected and is admitted.
+// not inspected and is admitted. A value nested deeper than encoding/json
+// decodes, more than 10,000 objects and arrays, is refused with an error that
+// is not an *UnsafeNumberError, before the walk enters the
+// level past the bound: the walk recurses once per level, and a goroutine
+// stack exhausted is a fatal error. A value decoded by encoding/json or
+// StrictDecoder is never deeper.
 //
 // Its work is linear in v and in the length of each literal, without
 // arbitrary-precision arithmetic, so it can run on input not yet
@@ -132,12 +138,18 @@ func admitSafeNumbers(v any, path *[]pathStep) error {
 	case uint64:
 		bad = admitUint64(t)
 	case []any:
+		if len(*path) >= jsondepth.Max {
+			return errNestedTooDeep
+		}
 		for i, e := range t {
 			if err := admitStep(e, path, pathStep{index: i}); err != nil {
 				return err
 			}
 		}
 	case map[string]any:
+		if len(*path) >= jsondepth.Max {
+			return errNestedTooDeep
+		}
 		for k, e := range t {
 			if err := admitStep(e, path, pathStep{key: k, index: -1}); err != nil {
 				return err
@@ -150,6 +162,11 @@ func admitSafeNumbers(v any, path *[]pathStep) error {
 	bad.Path = spellPath(*path)
 	return bad
 }
+
+// errNestedTooDeep refuses a value nested deeper than jsondepth.Max objects
+// and arrays: the walk recurses once per level, and a goroutine stack
+// exhausted is a fatal error.
+var errNestedTooDeep = fmt.Errorf("canon: value nested deeper than %d objects and arrays", jsondepth.Max)
 
 func admitStep(v any, path *[]pathStep, step pathStep) error {
 	*path = append(*path, step)

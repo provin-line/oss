@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 // DuplicateKeyError reports a duplicate object key encountered during strict
@@ -187,13 +188,6 @@ func readUnicodeEscape(data []byte, i int) (int, int, error) {
 	return int(cp), 6, nil
 }
 
-// maxNesting is the deepest nesting of arrays and objects the walk enters, as
-// deep as encoding/json decodes in the pass after it. The walk needs its own
-// bound: json.Decoder.Token does not limit depth in every Go release, and the
-// walk recurses once per level, so a megabyte of "[" would exhaust the
-// goroutine stack, a fatal error no recover catches.
-const maxNesting = 10000
-
 // walkValue walks the next value. path is the one path of the whole walk: a
 // member or index is pushed before its value is walked and popped after, and
 // only an error copies it, so the walk is linear in the document.
@@ -227,8 +221,13 @@ func walkFrom(dec *json.Decoder, tok json.Token, path *[]string, d dest) error {
 	if !ok {
 		return nil // scalar
 	}
-	if len(*path) >= maxNesting {
-		return fmt.Errorf("canon: JSON document nested deeper than %d", maxNesting)
+	// The walk enters at most jsondepth.Max levels of arrays and objects, as
+	// deep as encoding/json decodes in the pass after it. It needs its own
+	// bound: json.Decoder.Token does not limit depth in every Go release, and
+	// the walk recurses once per level, so a megabyte of "[" would exhaust the
+	// goroutine stack, a fatal error no recover catches.
+	if len(*path) >= jsondepth.Max {
+		return fmt.Errorf("canon: JSON document nested deeper than %d", jsondepth.Max)
 	}
 	switch delim {
 	case '{':

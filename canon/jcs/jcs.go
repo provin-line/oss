@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/jsondepth"
 )
 
 // Name is the wire identifier of the legacy int64-verbatim canonicalization.
@@ -63,6 +64,12 @@ const (
 // than round-tripped through binary64. It exists to verify artifacts signed
 // under the historical deviation (canon.jcs.int64-verbatim). New signature
 // scopes and content hashes use CanonicalizeRFC8785.
+//
+// A value nested deeper than encoding/json decodes, more than 10,000 objects
+// and arrays, is refused before the serializer enters the level past the
+// bound: it recurses once per level, and a goroutine stack
+// exhausted is a fatal error. A value decoded by encoding/json or
+// canon.StrictDecoder is never deeper.
 func Canonicalize(v any) ([]byte, error) { return canonicalize(v, modeLegacyInt64) }
 
 // CanonicalizeRFC8785 returns the byte-for-byte RFC 8785 canonical bytes for v
@@ -75,22 +82,30 @@ func Canonicalize(v any) ([]byte, error) { return canonicalize(v, modeLegacyInt6
 // canonicalization (canon.AdmitSafeNumbers / canon.number.raw-token-guard) —
 // a serializer that rejected them could not stay RFC 8785 conformant, because
 // the RFC's own examples contain 1E30.
+//
+// A value nested deeper than encoding/json decodes, more than 10,000 objects
+// and arrays, is refused before the serializer enters the level past the
+// bound: it recurses once per level, and a goroutine stack
+// exhausted is a fatal error. A value decoded by encoding/json or
+// canon.StrictDecoder is never deeper.
 func CanonicalizeRFC8785(v any) ([]byte, error) { return canonicalize(v, modeRFC8785) }
 
 func canonicalize(v any, mode numberMode) ([]byte, error) {
 	var sb strings.Builder
-	if err := serialize(&sb, v, mode); err != nil {
+	if err := serialize(&sb, v, mode, 0); err != nil {
 		return nil, err
 	}
 	return []byte(sb.String()), nil
 }
 
 // Hash returns "sha256:<hex>" over the legacy canonical bytes of v.
-// New content addresses use HashRFC8785.
+// New content addresses use HashRFC8785. It refuses what Canonicalize
+// refuses, a value nested more than 10,000 deep among it.
 func Hash(v any) (string, error) { return hashWith(v, modeLegacyInt64) }
 
 // HashRFC8785 returns "sha256:<hex>" over the RFC 8785 canonical bytes of v —
-// the content address for VC bodies and chain links.
+// the content address for VC bodies and chain links. It refuses what
+// CanonicalizeRFC8785 refuses, a value nested more than 10,000 deep among it.
 func HashRFC8785(v any) (string, error) { return hashWith(v, modeRFC8785) }
 
 func hashWith(v any, mode numberMode) (string, error) {
@@ -126,7 +141,10 @@ func (RFC8785) Name() string { return NameRFC8785 }
 // Canonicalize implements canon.Canonicalizer.
 func (RFC8785) Canonicalize(v any) ([]byte, error) { return CanonicalizeRFC8785(v) }
 
-func serialize(sb *strings.Builder, v any, mode numberMode) error {
+// serialize writes v, held in depth objects and arrays. It refuses an object
+// or array deeper than jsondepth.Max before entering it: it recurses once per
+// level, and a goroutine stack exhausted is a fatal error.
+func serialize(sb *strings.Builder, v any, mode numberMode, depth int) error {
 	switch t := v.(type) {
 	case nil:
 		sb.WriteString("null")
@@ -182,17 +200,23 @@ func serialize(sb *strings.Builder, v any, mode numberMode) error {
 	case uint64:
 		return writeUint(sb, t, mode)
 	case []any:
+		if depth >= jsondepth.Max {
+			return errNestedTooDeep
+		}
 		sb.WriteByte('[')
 		for i, e := range t {
 			if i > 0 {
 				sb.WriteByte(',')
 			}
-			if err := serialize(sb, e, mode); err != nil {
+			if err := serialize(sb, e, mode, depth+1); err != nil {
 				return err
 			}
 		}
 		sb.WriteByte(']')
 	case map[string]any:
+		if depth >= jsondepth.Max {
+			return errNestedTooDeep
+		}
 		keys := make([]string, 0, len(t))
 		for k := range t {
 			if !utf8.ValidString(k) {
@@ -208,7 +232,7 @@ func serialize(sb *strings.Builder, v any, mode numberMode) error {
 			}
 			writeString(sb, k)
 			sb.WriteByte(':')
-			if err := serialize(sb, t[k], mode); err != nil {
+			if err := serialize(sb, t[k], mode, depth+1); err != nil {
 				return err
 			}
 		}
@@ -218,6 +242,10 @@ func serialize(sb *strings.Builder, v any, mode numberMode) error {
 	}
 	return nil
 }
+
+// errNestedTooDeep refuses a value nested deeper than jsondepth.Max objects
+// and arrays (serialize).
+var errNestedTooDeep = fmt.Errorf("jcs: value nested deeper than %d objects and arrays", jsondepth.Max)
 
 // writeString emits s per ES6 JSON.stringify (RFC 8785 §3.2.2.2): the short
 // escapes for ", \, and the named controls; \u00xx (lowercase hex) for the

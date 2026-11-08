@@ -130,13 +130,16 @@ var registerRDFC sync.Once
 //     canon/urdna2015 and json-gold) runs on the untrusted document before
 //     its signature is checked.
 //   - That work is bounded: the comparisons the dataset's node map makes, the
-//     length of the canonical form, the work of labelling blank nodes, and
-//     the nesting of objects and arrays (10,000 deep, as encoding/json
-//     decodes; the suite's canonicalization refuses a document nested deeper
-//     before it recurses into it). A document past a bound is refused with an
-//     error wrapping
+//     length of the canonical form, and the work of labelling blank nodes. A
+//     document past one of these bounds is refused with an error wrapping
 //     urdna2015.ErrTooComplex, both when a proof is created and when one is
 //     verified.
+//   - A document nested deeper than encoding/json decodes, more than 10,000
+//     objects and arrays, is refused before anything recurses into it: by
+//     CreateProof's check of its numbers, with canon's error; when verifying,
+//     by the comparison of the proof's @context with the document's, with
+//     canon/jcs's error, or else by the suite's canonicalization, with an
+//     error wrapping urdna2015.ErrTooComplex.
 //   - Within the bounds the work is linear in the document's size, but heavy:
 //     of the shapes measured, a 1 MiB document that names a served context
 //     again at every node costs the most, about 1 s and 0.9 GB allocated
