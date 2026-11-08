@@ -20,7 +20,7 @@ import (
 // with its ranges. Go's regexp compiles a program in time and memory linear
 // in that size (at most about 150 ns and 150 bytes per instruction,
 // measured, without the one-pass analysis: onePassGuard), and matches a
-// position against it in time at most linear in it. The 1,029 schemas of
+// position against it in time at most linear in it. The 1,027 schemas of
 // SchemaStore hold no pattern above 5,415.
 const maxPatternSize = 8192
 
@@ -33,10 +33,10 @@ const maxPatternSize = 8192
 const maxGroupDepth = 32
 
 // compileRegexpWithin compiles expr with Go's regexp, refusing, before it
-// parses it, what would make parsing it take more than time and memory
-// linear in its length and maxPatternSize (prescan), and before it compiles
-// it, a program larger than maxPatternSize or, when left is not nil, than
-// what is left of a total, which it then takes. It says the size of the
+// parses it, what would make parsing it take more than about 240 ns per byte,
+// or memory more than linear in its length and maxPatternSize (prescan), and
+// before it compiles it, a program larger than maxPatternSize or, when left
+// is not nil, than what is left of a total, which it then takes. It says the size of the
 // program it compiles (sizedRegexp), by which the library charges matching
 // and compiling it.
 func compileRegexpWithin(expr string, left *int64) (jsonschema.Regexp, error) {
@@ -90,7 +90,7 @@ const (
 // so compiling them allocates at most about (2^14 + b/4) × 150 bytes: about
 // 40 MB for a schema of 1 MiB.
 //
-// The values are measured. Of the 1,029 schemas of SchemaStore, the 882 that
+// The values are measured. Of the 1,027 schemas of SchemaStore, the 882 that
 // compile here use at most 1.78 instructions per byte (a schema of 1 KB),
 // 0.33 at the 99th percentile, and 24,774 in all at most (a schema of 7.6
 // MB); none needs more than this bound.

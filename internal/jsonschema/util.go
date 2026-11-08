@@ -1,7 +1,9 @@
 // Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: the import path of
-// package kind, a work budget (the lines marked "work budget"), and numbers
+// package kind, a work budget (the lines marked "work budget"), numbers
 // big.Rat cannot read reported as kind.LargeNumber (the lines marked "large
-// number"). See README.md in this directory.
+// number"), a number's sign in its hash (the line marked "hash sign"), and an
+// array index read only as RFC 6901 writes one (the lines marked "pointer
+// index"). See README.md in this directory.
 
 package jsonschema
 
@@ -236,7 +238,7 @@ func (up *urlPtr) lookup(v any) (any, error) {
 				continue
 			}
 		case []any:
-			if index, err := strconv.Atoi(tok); err == nil {
+			if index, ok := arrayIndex(tok); ok { // pointer index
 				if index >= 0 && index < len(val) {
 					v = val[index]
 					continue
@@ -247,6 +249,23 @@ func (up *urlPtr) lookup(v any) (any, error) {
 	}
 	return v, nil
 }
+
+// arrayIndex reads an array index as RFC 6901 §4 writes one: "0", or
+// digits not beginning with 0. Read as a number, "00", "+0" and "-0" would
+// each reach the first item, so one item would have many pointers and a
+// reference by each would compile its subtree again.
+func arrayIndex(tok string) (int, bool) { // pointer index
+	if tok == "" || (tok[0] == '0' && len(tok) > 1) { // pointer index
+		return 0, false // pointer index
+	} // pointer index
+	for i := 0; i < len(tok); i++ { // pointer index
+		if tok[i] < '0' || tok[i] > '9' { // pointer index
+			return 0, false // pointer index
+		} // pointer index
+	} // pointer index
+	index, err := strconv.Atoi(tok) // pointer index
+	return index, err == nil        // pointer index
+} // pointer index
 
 func (up *urlPtr) format(tok string) string {
 	return fmt.Sprintf("%s#%s/%s", up.url, encode(string(up.ptr)), encode(escape(tok)))
@@ -484,6 +503,7 @@ func writeHashWithin(b *workBudget, v any, h *maphash.Hash) ErrorKind { // work 
 		if !ok {                             // large number
 			return &kind.LargeNumber{Value: v} // large number
 		} // large number
+		_ = h.WriteByte(byte(num.Sign() + 1)) // hash sign: Bytes() drops it, so n and -n would hash alike
 		_, _ = h.Write(num.Num().Bytes())
 		_, _ = h.Write(num.Denom().Bytes())
 	default:

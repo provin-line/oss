@@ -1,0 +1,58 @@
+diff --git a/compiler.go b/compiler.go
+index 338e56b..5e281e2 100644
+--- a/compiler.go
++++ b/compiler.go
+@@ -100,6 +100,7 @@ func (c *Compiler) RegisterContentMediaType(mt *MediaType) {
+ //     see [Compiler.AssertVocabs]
+ func (c *Compiler) RegisterVocabulary(vocab *Vocabulary) {
+ 	c.roots.vocabularies[vocab.URL] = vocab
++	c.roots.loader.vocabs = nil // vocabulary cache: read the metaschemas' vocabularies again with it
+ }
+ 
+ // AssertVocabs always enables user-defined vocabularies assertions.
+diff --git a/loader.go b/loader.go
+index ce0170e..b2e112b 100644
+--- a/loader.go
++++ b/loader.go
+@@ -129,8 +129,16 @@ func loadMeta(url string) (any, error) {
+ type defaultLoader struct {
+ 	docs   map[url]any // docs loaded so far
+ 	loader URLLoader
++	vocabs map[metaVocabs][]string // vocabulary cache: getMetaVocabs's results, until a vocabulary is registered
+ }
+ 
++// metaVocabs is what getMetaVocabs reads a metaschema's vocabularies by, as
++// the vocabularies registered stay the same.
++type metaVocabs struct { // vocabulary cache
++	url   url    // vocabulary cache
++	draft *Draft // vocabulary cache
++} // vocabulary cache
++
+ func (l *defaultLoader) add(url url, doc any) bool {
+ 	if _, ok := l.docs[url]; ok {
+ 		return false
+@@ -210,11 +218,23 @@ func (l *defaultLoader) getMetaVocabs(doc any, draft *Draft, vocabularies map[st
+ 		return nil, &ParseURLError{sch, err}
+ 	}
+ 	schUrl := url(sch)
++	key := metaVocabs{schUrl, draft}     // vocabulary cache: each resource naming the metaschema would read it again
++	if vocabs, ok := l.vocabs[key]; ok { // vocabulary cache
++		return vocabs, nil // vocabulary cache
++	} // vocabulary cache
+ 	doc, err := l.load(schUrl)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return draft.getVocabs(schUrl, doc, vocabularies)
++	vocabs, err := draft.getVocabs(schUrl, doc, vocabularies) // vocabulary cache
++	if err != nil {                                           // vocabulary cache
++		return nil, err // vocabulary cache
++	} // vocabulary cache
++	if l.vocabs == nil { // vocabulary cache
++		l.vocabs = map[metaVocabs][]string{} // vocabulary cache
++	} // vocabulary cache
++	l.vocabs[key] = vocabs // vocabulary cache
++	return vocabs, nil     // vocabulary cache
+ }
+ 
+ // --

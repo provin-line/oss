@@ -8,8 +8,8 @@
 // retroactively-modified schema is detected (the data-integrity axis's
 // schema-reference check) — and then structural conformance of the payload
 // against the schema (internal/jsonschema, a copy of santhosh-tekuri/jsonschema
-// with a work budget added, and an error for a number it cannot read where
-// upstream panics).
+// with patches: a work budget, an error for a number it cannot read where
+// upstream panics, and compiling a schema in time linear in its size).
 //
 // Both the schema document and the payload are decoded through
 // canon.StrictDecoder — the one JSON decode path permitted on protocol

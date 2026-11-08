@@ -1,3 +1,7 @@
+// Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: the vocabularies of
+// a metaschema are read once (the lines marked "vocabulary cache"). See
+// README.md in this directory.
+
 package jsonschema
 
 import (
@@ -129,7 +133,15 @@ func loadMeta(url string) (any, error) {
 type defaultLoader struct {
 	docs   map[url]any // docs loaded so far
 	loader URLLoader
+	vocabs map[metaVocabs][]string // vocabulary cache: getMetaVocabs's results, until a vocabulary is registered
 }
+
+// metaVocabs is what getMetaVocabs reads a metaschema's vocabularies by, as
+// the vocabularies registered stay the same.
+type metaVocabs struct { // vocabulary cache
+	url   url    // vocabulary cache
+	draft *Draft // vocabulary cache
+} // vocabulary cache
 
 func (l *defaultLoader) add(url url, doc any) bool {
 	if _, ok := l.docs[url]; ok {
@@ -210,11 +222,23 @@ func (l *defaultLoader) getMetaVocabs(doc any, draft *Draft, vocabularies map[st
 		return nil, &ParseURLError{sch, err}
 	}
 	schUrl := url(sch)
+	key := metaVocabs{schUrl, draft}     // vocabulary cache: each resource naming the metaschema would read it again
+	if vocabs, ok := l.vocabs[key]; ok { // vocabulary cache
+		return vocabs, nil // vocabulary cache
+	} // vocabulary cache
 	doc, err := l.load(schUrl)
 	if err != nil {
 		return nil, err
 	}
-	return draft.getVocabs(schUrl, doc, vocabularies)
+	vocabs, err := draft.getVocabs(schUrl, doc, vocabularies) // vocabulary cache
+	if err != nil {                                           // vocabulary cache
+		return nil, err // vocabulary cache
+	} // vocabulary cache
+	if l.vocabs == nil { // vocabulary cache
+		l.vocabs = map[metaVocabs][]string{} // vocabulary cache
+	} // vocabulary cache
+	l.vocabs[key] = vocabs // vocabulary cache
+	return vocabs, nil     // vocabulary cache
 }
 
 // --

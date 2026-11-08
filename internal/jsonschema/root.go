@@ -1,8 +1,13 @@
+// Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: the resources are
+// also indexed by id (the lines marked "resource index"), and a subschema
+// read for a reference is added in place, recorded so a failure takes it
+// back (the lines marked "subschema journal"). See README.md in this
+// directory.
+
 package jsonschema
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -10,8 +15,42 @@ type root struct {
 	url                 url
 	doc                 any
 	resources           map[jsonPointer]*resource
+	ids                 map[url]*resource // resource index: resources by id
 	subschemasProcessed map[jsonPointer]struct{}
+	journal             *[]func() // subschema journal: how to take back what is added, while it is set
 }
+
+// record notes how to take back an addition to the root, while a journal is
+// kept (roots.ensureSubschema).
+func (r *root) record(undo func()) { // subschema journal
+	if r.journal != nil { // subschema journal
+		*r.journal = append(*r.journal, undo) // subschema journal
+	} // subschema journal
+} // subschema journal
+
+// addResource adds res at ptr, indexed by its id too, so finding a resource
+// by id takes constant time rather than a search of every resource.
+func (r *root) addResource(ptr jsonPointer, res *resource) { // resource index
+	prevRes, hadRes := r.resources[ptr] // subschema journal
+	prevID, hadID := r.ids[res.id]      // subschema journal
+	r.record(func() {                   // subschema journal
+		if hadRes { // subschema journal
+			r.resources[ptr] = prevRes // subschema journal
+		} else { // subschema journal
+			delete(r.resources, ptr) // subschema journal
+		} // subschema journal
+		if hadID { // subschema journal
+			r.ids[res.id] = prevID // subschema journal
+		} else { // subschema journal
+			delete(r.ids, res.id) // subschema journal
+		} // subschema journal
+	}) // subschema journal
+	r.resources[ptr] = res // resource index
+	if r.ids == nil {      // resource index
+		r.ids = map[url]*resource{} // resource index
+	} // resource index
+	r.ids[res.id] = res // resource index
+} // resource index
 
 func (r *root) rootResource() *resource {
 	return r.resources[""]
@@ -61,12 +100,7 @@ func (r *root) resolve(uf urlFrag) (*urlPtr, error) {
 		res = r.rootResource()
 	} else {
 		// look for resource with id==uf.url
-		for _, v := range r.resources {
-			if v.id == uf.url {
-				res = v
-				break
-			}
-		}
+		res = r.ids[uf.url] // resource index
 		if res == nil {
 			return nil, nil // external url
 		}
@@ -92,6 +126,7 @@ func (r *root) collectAnchors(sch any, schPtr jsonPointer, res *resource) error 
 				string(anchor), r.url.String(), string(ptr1), string(schPtr),
 			}
 		}
+		r.record(func() { delete(res.anchors, anchor) }) // subschema journal
 		res.anchors[anchor] = schPtr
 		return nil
 	}
@@ -127,28 +162,13 @@ func (r *root) collectAnchors(sch any, schPtr jsonPointer, res *resource) error 
 			if err := addAnchor(anchor(s)); err != nil {
 				return err
 			}
+			n := len(res.dynamicAnchors)                                     // subschema journal
+			r.record(func() { res.dynamicAnchors = res.dynamicAnchors[:n] }) // subschema journal
 			res.dynamicAnchors = append(res.dynamicAnchors, anchor(s))
 		}
 	}
 
 	return nil
-}
-
-func (r *root) clone() *root {
-	processed := map[jsonPointer]struct{}{}
-	for k := range r.subschemasProcessed {
-		processed[k] = struct{}{}
-	}
-	resources := map[jsonPointer]*resource{}
-	for k, v := range r.resources {
-		resources[k] = v.clone()
-	}
-	return &root{
-		url:                 r.url,
-		doc:                 r.doc,
-		resources:           resources,
-		subschemasProcessed: processed,
-	}
 }
 
 // --
@@ -163,20 +183,6 @@ type resource struct {
 
 func newResource(ptr jsonPointer, id url) *resource {
 	return &resource{ptr: ptr, id: id, anchors: make(map[anchor]jsonPointer)}
-}
-
-func (res *resource) clone() *resource {
-	anchors := map[anchor]jsonPointer{}
-	for k, v := range res.anchors {
-		anchors[k] = v
-	}
-	return &resource{
-		ptr:            res.ptr,
-		id:             res.id,
-		dialect:        res.dialect,
-		anchors:        anchors,
-		dynamicAnchors: slices.Clone(res.dynamicAnchors),
-	}
 }
 
 //--

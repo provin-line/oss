@@ -1,5 +1,7 @@
 // Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: a work budget (the
-// lines marked "work budget"). See README.md in this directory.
+// lines marked "work budget"), and a reference's target found once for each
+// URL it resolves to (the lines marked "reference index"). See README.md in
+// this directory.
 
 package jsonschema
 
@@ -370,13 +372,19 @@ func (c *objCompiler) enqueueRefVal(ref string) (*Schema, error) {
 		return nil, err
 	}
 
+	key := refKey{c.r.url, *uf}       // reference index
+	if sch, ok := c.q.refs[key]; ok { // reference index
+		return sch, nil // reference index
+	} // reference index
 	up, err := c.r.resolve(*uf)
 	if err != nil {
 		return nil, err
 	}
 	if up != nil {
 		// local ref
-		return c.enqueuePtr(up.ptr), nil
+		sch := c.enqueuePtr(up.ptr) // reference index
+		c.q.addRef(key, sch)        // reference index
+		return sch, nil             // reference index
 	}
 
 	// remote ref

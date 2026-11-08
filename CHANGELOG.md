@@ -403,6 +403,28 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - **BREAKING (wire)** The schema registry's `RegisterSchema` refuses such a
   schema with `InvalidArgument`, as it refuses one that does not compile. A
   schema stored before the upgrade is not checked again.
+- **BREAKING (Go API)** `schema.ValidateJSONSchema` and
+  `(*local.Validator).Add` refuse a schema nested deeper than 64 levels (each
+  object, array and scalar is a level), holding more than 4,096 objects and
+  booleans and one per 8 bytes of the schema (counted wherever they are, in
+  a `default` or an example too, since a `$ref` can make any of them a
+  subschema), or whose JSON pointers and URLs, summed, pass 2^16 bytes and
+  16 per byte of the schema (each value's pointer counted escaped for a URL,
+  as the library keeps it, and each URL its ids and references resolve to:
+  `$id`, draft-04's `id`, `$ref`, `$dynamicRef`, `$recursiveRef`, escaped);
+  and one whose check against its metaschema needs more than a work budget
+  of 2^20 steps and 16 per byte of the schema. The error names the bound.
+  SchemaStore's schemas nest at most 23 deep, hold at most one object or
+  boolean per 40 bytes, their pointers and URLs come to at most 4.03 bytes
+  per byte, and their checks need at most 11.5% of the budget.
+  `schema/README.md` states the bounds. They also refuse a reference by a
+  JSON pointer whose array index is not written as RFC 6901 writes one
+  (`#/allOf/00`, `+0`, `-0`, `01`): the pointer is not found. No SchemaStore
+  schema writes one.
+- **BREAKING (wire)** The schema registry's `RegisterSchema` refuses such a
+  schema with `InvalidArgument`. A schema stored before the upgrade is not
+  checked again, but `(*local.Validator).Add` refuses it when a validator
+  loads it.
 - The YAML stores (the chain manager's subscriptions and allow lists, the
   schema registry's versions, the DID registry's status and lifecycle events)
   refuse to write a record whose YAML would not read back as written, and
@@ -953,6 +975,31 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   it is added under: every schema is compiled at one fixed location, as
   admission compiles it. One added under an id below `json-schema.org`
   skipped the check.
+- Registering a schema (`schema.ValidateJSONSchema`, `(*local.Validator).Add`,
+  the schema registry's `RegisterSchema`) takes memory linear in the
+  schema's size, and time about linear: within the bounds above (Changed), a
+  schema of 1 MiB keeps at most about 170 MB once compiled (the worst shapes
+  measured keep 127 MB and compile in at most about 0.5 s; one the
+  metaschema's budget refuses is refused in at most about 0.8 s). Sorting the
+  names of an object that `uniqueItems` hashes, in the metaschema's check,
+  takes up to a factor of log n more where the names share a long prefix, as
+  the library's work budget states; a 1 MiB schema of such names compiles in
+  about 9 ms. The copy of the JSON Schema library compiles in about linear
+  time: it finds a queued subschema, a resource by id and
+  a dynamic anchor without a search, adds a subschema read for a reference
+  without copying what is compiled, hashes a number with its sign, reads a
+  metaschema's vocabularies once, and resolves each URL a reference resolves
+  to once in a compile; it reads a JSON pointer's array index only as RFC
+  6901 writes one, so an item is compiled under one location, not again for
+  each spelling of its index (`00`, `+0`, `-0`); and it checks the schema
+  against its metaschema within a work budget, so a shape whose check takes
+  more than linear work is refused at that bound. Each is a patch of its own
+  (`internal/jsonschema/patches/`). A schema the metaschema refuses is
+  refused with its first failure, and every compile error and conformance
+  error the schema package states is at most 1 KiB in all, a failure's
+  location at most half of it (a caller's prefix, such as
+  `(*local.Validator).Add`'s, comes on top); the library's text listing
+  every failure, indented per level, is not built.
 - `canon.StrictDecoder` no longer lets two keys that differ only in case into
   one object, nor a key that matches a struct field only by case. encoding/json
   reads both into the same struct field, the later one winning, and reads

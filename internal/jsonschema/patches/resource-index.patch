@@ -1,0 +1,106 @@
+diff --git a/root.go b/root.go
+index a8b819b..7bbe543 100644
+--- a/root.go
++++ b/root.go
+@@ -10,9 +10,20 @@ type root struct {
+ 	url                 url
+ 	doc                 any
+ 	resources           map[jsonPointer]*resource
++	ids                 map[url]*resource // resource index: resources by id
+ 	subschemasProcessed map[jsonPointer]struct{}
+ }
+ 
++// addResource adds res at ptr, indexed by its id too, so finding a resource
++// by id takes constant time rather than a search of every resource.
++func (r *root) addResource(ptr jsonPointer, res *resource) { // resource index
++	r.resources[ptr] = res // resource index
++	if r.ids == nil {      // resource index
++		r.ids = map[url]*resource{} // resource index
++	} // resource index
++	r.ids[res.id] = res // resource index
++} // resource index
++
+ func (r *root) rootResource() *resource {
+ 	return r.resources[""]
+ }
+@@ -61,12 +72,7 @@ func (r *root) resolve(uf urlFrag) (*urlPtr, error) {
+ 		res = r.rootResource()
+ 	} else {
+ 		// look for resource with id==uf.url
+-		for _, v := range r.resources {
+-			if v.id == uf.url {
+-				res = v
+-				break
+-			}
+-		}
++		res = r.ids[uf.url] // resource index
+ 		if res == nil {
+ 			return nil, nil // external url
+ 		}
+@@ -140,13 +146,16 @@ func (r *root) clone() *root {
+ 		processed[k] = struct{}{}
+ 	}
+ 	resources := map[jsonPointer]*resource{}
++	ids := map[url]*resource{} // resource index
+ 	for k, v := range r.resources {
+ 		resources[k] = v.clone()
++		ids[v.id] = resources[k] // resource index
+ 	}
+ 	return &root{
+ 		url:                 r.url,
+ 		doc:                 r.doc,
+ 		resources:           resources,
++		ids:                 ids, // resource index
+ 		subschemasProcessed: processed,
+ 	}
+ }
+diff --git a/roots.go b/roots.go
+index 48f7714..5917654 100644
+--- a/roots.go
++++ b/roots.go
+@@ -85,7 +85,7 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
+ 			// root resource
+ 			res := newResource(schPtr, base)
+ 			res.dialect = fallback
+-			r.resources[schPtr] = res
++			r.addResource(schPtr, res) // resource index
+ 		}
+ 		return nil
+ 	}
+@@ -125,12 +125,10 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
+ 
+ 	if res != nil {
+ 		found := false
+-		for _, res := range r.resources {
+-			if res.id == base {
+-				found = true
+-				if res.ptr != schPtr {
+-					return &DuplicateIDError{base.String(), r.url.String(), string(schPtr), string(res.ptr)}
+-				}
++		if res, ok := r.ids[base]; ok { // resource index
++			found = true
++			if res.ptr != schPtr {
++				return &DuplicateIDError{base.String(), r.url.String(), string(schPtr), string(res.ptr)}
+ 			}
+ 		}
+ 		if !found {
+@@ -143,17 +141,11 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
+ 			} else {
+ 				res.dialect = fallback
+ 			}
+-			r.resources[schPtr] = res
++			r.addResource(schPtr, res) // resource index
+ 		}
+ 	}
+ 
+-	var baseRes *resource
+-	for _, res := range r.resources {
+-		if res.id == base {
+-			baseRes = res
+-			break
+-		}
+-	}
++	baseRes := r.ids[base] // resource index
+ 	if baseRes == nil {
+ 		panic("baseres is nil")
+ 	}

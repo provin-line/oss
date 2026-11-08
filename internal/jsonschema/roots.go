@@ -1,5 +1,9 @@
 // Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: a work budget (the
-// lines marked "work budget"). See README.md in this directory.
+// lines marked "work budget"), the resources found by an index by id (the
+// lines marked "resource index"), a subschema read for a reference added in
+// place, recorded so a failure takes it back (the lines marked "subschema
+// journal"), and the metaschema checks within a budget (the lines marked
+// "metaschema budget"). See README.md in this directory.
 
 package jsonschema
 
@@ -15,6 +19,7 @@ type roots struct {
 	regexpEngine RegexpEngine
 	vocabularies map[string]*Vocabulary
 	assertVocabs bool
+	budget       *workBudget // metaschema budget: the checks' budget during a CompileWithBudget call, nil otherwise
 }
 
 func newRoots() *roots {
@@ -77,6 +82,7 @@ func (rr *roots) collectResources(r *root, sch any, base url, schPtr jsonPointer
 	if err := rr._collectResources(r, sch, base, schPtr, fallback); err != nil {
 		return err
 	}
+	r.record(func() { delete(r.subschemasProcessed, schPtr) }) // subschema journal
 	r.subschemasProcessed[schPtr] = struct{}{}
 	return nil
 }
@@ -88,7 +94,7 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
 			// root resource
 			res := newResource(schPtr, base)
 			res.dialect = fallback
-			r.resources[schPtr] = res
+			r.addResource(schPtr, res) // resource index
 		}
 		return nil
 	}
@@ -128,12 +134,10 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
 
 	if res != nil {
 		found := false
-		for _, res := range r.resources {
-			if res.id == base {
-				found = true
-				if res.ptr != schPtr {
-					return &DuplicateIDError{base.String(), r.url.String(), string(schPtr), string(res.ptr)}
-				}
+		if res, ok := r.ids[base]; ok { // resource index
+			found = true
+			if res.ptr != schPtr {
+				return &DuplicateIDError{base.String(), r.url.String(), string(schPtr), string(res.ptr)}
 			}
 		}
 		if !found {
@@ -146,17 +150,11 @@ func (rr *roots) _collectResources(r *root, sch any, base url, schPtr jsonPointe
 			} else {
 				res.dialect = fallback
 			}
-			r.resources[schPtr] = res
+			r.addResource(schPtr, res) // resource index
 		}
 	}
 
-	var baseRes *resource
-	for _, res := range r.resources {
-		if res.id == base {
-			baseRes = res
-			break
-		}
-	}
+	baseRes := r.ids[base] // resource index
 	if baseRes == nil {
 		panic("baseres is nil")
 	}
@@ -205,14 +203,23 @@ func (rr *roots) ensureSubschema(up urlPtr) error {
 	if err != nil {
 		return err
 	}
-	rClone := r.clone()
-	if err := rr.addSubschema(rClone, up.ptr); err != nil {
-		return err
-	}
-	if err := rr.validate(rClone, v, up.ptr); err != nil {
-		return err
-	}
-	rr.roots[r.url] = rClone
+	// The subschema is added to the root in place, each addition recorded,
+	// and a failure to add or check it takes them back, last first: as
+	// upstream's copy of the root did, a subschema is admitted whole or not
+	// at all, without a copy of the root for each subschema.
+	var journal []func()             // subschema journal
+	r.journal = &journal             // subschema journal
+	err = rr.addSubschema(r, up.ptr) // subschema journal
+	if err == nil {                  // subschema journal
+		err = rr.validate(r, v, up.ptr) // subschema journal
+	} // subschema journal
+	r.journal = nil // subschema journal
+	if err != nil { // subschema journal
+		for i := len(journal) - 1; i >= 0; i-- { // subschema journal
+			journal[i]() // subschema journal
+		} // subschema journal
+		return err // subschema journal
+	} // subschema journal
 	return nil
 }
 
@@ -240,7 +247,7 @@ func (rr *roots) addSubschema(r *root, ptr jsonPointer) error {
 func (rr *roots) validate(r *root, v any, ptr jsonPointer) error {
 	dialect := r.resource(ptr).dialect
 	meta := dialect.getSchema(rr.assertVocabs, rr.vocabularies)
-	if err := meta.validate(v, rr.regexpEngine, meta, r.resources, rr.assertVocabs, rr.vocabularies, nil, 0); err != nil { // work budget: nil is unlimited
+	if err := meta.validate(v, rr.regexpEngine, meta, r.resources, rr.assertVocabs, rr.vocabularies, rr.budget, 0); err != nil { // work budget: nil is unlimited; metaschema budget
 		up := urlPtr{r.url, ptr}
 		return &SchemaValidationError{URL: up.String(), Err: err}
 	}

@@ -1,9 +1,18 @@
+// Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: the compile
+// queue looks a subschema up by an index (the lines marked "compile index"),
+// a resource's dynamic anchors are found in its anchors rather than searched
+// for (the lines marked "dynamic anchor set"), CompileWithBudget (the lines
+// marked "metaschema budget"), the cache of a metaschema's vocabularies
+// emptied when a vocabulary is registered (the line marked "vocabulary
+// cache"), and the target of each local reference kept by the URL it
+// resolves to (the lines marked "reference index"). See README.md in this
+// directory.
+
 package jsonschema
 
 import (
 	"fmt"
 	"regexp"
-	"slices"
 )
 
 // Compiler compiles json schema into *Schema.
@@ -101,6 +110,7 @@ func (c *Compiler) RegisterContentMediaType(mt *MediaType) {
 //     see [Compiler.AssertVocabs]
 func (c *Compiler) RegisterVocabulary(vocab *Vocabulary) {
 	c.roots.vocabularies[vocab.URL] = vocab
+	c.roots.loader.vocabs = nil // vocabulary cache: read the metaschemas' vocabularies again with it
 }
 
 // AssertVocabs always enables user-defined vocabularies assertions.
@@ -163,6 +173,23 @@ func (c *Compiler) enqueue(q *queue, up urlPtr) *Schema {
 	return sch
 }
 
+// CompileWithBudget compiles the schema at loc as Compile does, checking it,
+// and each subschema it reads for a reference, against its metaschema within
+// budget steps of work in all (ValidateWithBudget states what a step is). When
+// the checks would take more, it returns a *BudgetExceededError, never a
+// schema; a budget of 0 or less admits no step. The compiler's own reading
+// of the schema is not counted.
+func (c *Compiler) CompileWithBudget(loc string, budget int64) (*Schema, error) { // metaschema budget
+	b := &workBudget{left: budget}          // metaschema budget
+	c.roots.budget = b                      // metaschema budget
+	defer func() { c.roots.budget = nil }() // metaschema budget
+	sch, err := c.Compile(loc)              // metaschema budget
+	if b.exceeded || budget <= 0 {          // metaschema budget
+		return nil, &BudgetExceededError{Budget: budget, Nested: b.nested} // metaschema budget
+	} // metaschema budget
+	return sch, err // metaschema budget
+} // metaschema budget
+
 // MustCompile is like [Compile] but panics if compilation fails.
 // It simplifies safe initialization of global variables holding
 // compiled schema.
@@ -207,7 +234,7 @@ func (c *Compiler) doCompile(up urlPtr) (*Schema, error) {
 		}
 		compiled++
 	}
-	for _, sch := range *q {
+	for _, sch := range q.list { // compile index
 		c.schemas[sch.up] = sch
 	}
 	return c.schemas[up], nil
@@ -223,8 +250,8 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
 	// if resource, enqueue dynamic anchors for compilation
 	if sch.DraftVersion >= 2020 && sch.up == sch.resource.up {
 		res := r.resource(sch.up.ptr)
-		for anchor, anchorPtr := range res.anchors {
-			if slices.Contains(res.dynamicAnchors, anchor) {
+		for _, anchor := range res.dynamicAnchors { // dynamic anchor set: each dynamic anchor, found in the anchors, rather than each anchor searched for in the dynamic ones
+			if anchorPtr, ok := res.anchors[anchor]; ok { // dynamic anchor set
 				up := urlPtr{sch.up.url, anchorPtr}
 				danchorSch := c.enqueue(q, up)
 				if sch.dynamicAnchors == nil {
@@ -280,26 +307,53 @@ func (c *Compiler) compileObject(obj map[string]any, sch *Schema, r *root, q *qu
 
 // queue --
 
-type queue []*Schema
+// queue is the subschemas one Compile compiles, in the order they were
+// found, with an index by location, so a lookup takes constant time rather
+// than a search of the list.
+type queue struct { // compile index
+	list  []*Schema          // compile index
+	index map[urlPtr]*Schema // compile index
+	refs  map[refKey]*Schema // reference index: the target of each local reference, by the URL it resolves to
+} // compile index
+
+// refKey is a reference resolved in a root: the root's URL, and the URL and
+// decoded fragment the reference resolves to.
+type refKey struct { // reference index
+	root url     // reference index
+	uf   urlFrag // reference index
+} // reference index
+
+// addRef records the target of a local reference, so a reference that
+// resolves to the same URL in the same root takes it from here rather than
+// building the target's location again: a resource's id stays with the one
+// resource for the compile, so its target does not change.
+func (q *queue) addRef(key refKey, sch *Schema) { // reference index
+	if q.refs == nil { // reference index
+		q.refs = map[refKey]*Schema{} // reference index
+	} // reference index
+	q.refs[key] = sch // reference index
+} // reference index
 
 func (q *queue) append(sch *Schema) {
-	*q = append(*q, sch)
+	q.list = append(q.list, sch) // compile index
+	if q.index == nil {          // compile index
+		q.index = map[urlPtr]*Schema{} // compile index
+	} // compile index
+	if _, ok := q.index[sch.up]; !ok { // compile index: the first one, as the search found
+		q.index[sch.up] = sch // compile index
+	} // compile index
 }
 
 func (q *queue) at(i int) *Schema {
-	return (*q)[i]
+	return q.list[i] // compile index
 }
 
 func (q *queue) len() int {
-	return len(*q)
+	return len(q.list) // compile index
 }
 
 func (q *queue) get(up urlPtr) *Schema {
-	i := slices.IndexFunc(*q, func(sch *Schema) bool { return sch.up == up })
-	if i != -1 {
-		return (*q)[i]
-	}
-	return nil
+	return q.index[up] // compile index
 }
 
 // regexp --

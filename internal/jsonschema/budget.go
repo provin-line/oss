@@ -186,7 +186,8 @@ const PatternCompileStepsPerInstruction = 4
 
 // BudgetExceededError is returned by ValidateWithBudget when validating a
 // value would take more work than the budget it was given, or would nest
-// deeper than MaxNesting.
+// deeper than MaxNesting, and by CompileWithBudget when checking a schema
+// against its metaschema would.
 type BudgetExceededError struct {
 	// Budget is the number of steps the validation was given.
 	Budget int64
@@ -255,8 +256,9 @@ func (e *BudgetExceededError) Error() string {
 //     check (format "regex" compiles the string; format is asserted where a
 //     schema's draft or the compiler asks for it).
 //
-// Bound the depth of v before validating it. The budget does not apply to
-// compiling schemas.
+// Bound the depth of v before validating it. Compiling schemas is counted by
+// (*Compiler).CompileWithBudget, which checks them against their
+// metaschemas within a budget of these steps.
 func (sch *Schema) ValidateWithBudget(v any, budget int64) error {
 	b := &workBudget{left: budget}
 	err := sch.validate(v, nil, nil, nil, false, nil, b, 0)

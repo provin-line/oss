@@ -11,8 +11,9 @@
 // through Schema.Validate, which decodes it first.
 //
 // The library is internal/jsonschema, a copy of santhosh-tekuri/jsonschema
-// with a work budget added, and an error for a number it cannot read where
-// upstream panics (its README.md).
+// with patches: a work budget, an error for a number it cannot read where
+// upstream panics, and compiling a schema in time linear in its size, its
+// metaschema check within a budget (its README.md).
 //
 // Internal: this is an implementation detail, not part of the public API. The
 // public entry points are schema.ValidateJSONSchema (admission) and the
@@ -23,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -45,7 +47,7 @@ import (
 type denyLoader struct{}
 
 func (denyLoader) Load(url string) (any, error) {
-	return nil, fmt.Errorf("schemadoc: external $ref is not allowed: %s", url)
+	return nil, fmt.Errorf("schemadoc: external $ref is not allowed: %q", url)
 }
 
 // resourceID is where Compile compiles every document. External $ref is
@@ -61,9 +63,24 @@ const resourceID = "urn:dplaax:schema-doc:document"
 // well-formedness verdict (Validate) share it, so the admission policy cannot
 // drift between them.
 func Compile(document []byte) (*Schema, error) {
-	doc, _, err := decode(document)
+	return compileWithin(document, schemaBudgetBase+schemaBudgetPerByte*int64(len(document)))
+}
+
+// compileWithin is Compile, checking the schema against its metaschema
+// within budget steps.
+func compileWithin(document []byte, budget int64) (*Schema, error) {
+	doc, sh, err := decode(document)
 	if err != nil {
 		return nil, err
+	}
+	if sh.depth > maxSchemaDepth {
+		return nil, fmt.Errorf("schemadoc: schema nested %d deep, beyond the bound of %d levels", sh.depth, maxSchemaDepth)
+	}
+	if bound := schemaObjectBase + int64(len(document))/schemaBytesPerObject; sh.objects > bound {
+		return nil, fmt.Errorf("schemadoc: the schema holds %d objects and booleans, beyond the bound of %d (%d, and one per %d bytes of the schema)", sh.objects, bound, schemaObjectBase, schemaBytesPerObject)
+	}
+	if bound := schemaPointerBase + schemaPointerBytesPerByte*int64(len(document)); sh.pointers > bound {
+		return nil, fmt.Errorf("schemadoc: the schema's JSON pointers and URLs (its values' pointers, and what its $id and $ref resolve to) come to %d bytes, beyond the bound of %d (%d, and %d per byte of the schema)", sh.pointers, bound, schemaPointerBase, schemaPointerBytesPerByte)
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
@@ -76,12 +93,83 @@ func Compile(document []byte) (*Schema, error) {
 	if err := c.AddResource(resourceID, doc); err != nil {
 		return nil, fmt.Errorf("schemadoc: add resource: %w", err)
 	}
-	compiled, err := c.Compile(resourceID)
+	compiled, err := c.CompileWithBudget(resourceID, budget)
 	patterns.compiled = true
-	if err != nil {
-		return nil, fmt.Errorf("schemadoc: compile: %w", err)
+	var exceeded *jsonschema.BudgetExceededError
+	switch {
+	case errors.As(err, &exceeded) && exceeded.Nested:
+		return nil, fmt.Errorf("schemadoc: checking the schema against its metaschema nests schemas deeper than %d", jsonschema.MaxNesting)
+	case errors.As(err, &exceeded):
+		return nil, fmt.Errorf("schemadoc: checking the schema against its metaschema needs more than its work budget of %d steps (%d, and %d per byte of the schema)", exceeded.Budget, schemaBudgetBase, schemaBudgetPerByte)
+	case err != nil:
+		return nil, compileError(err)
 	}
 	return &Schema{compiled: compiled}, nil
+}
+
+// Compile checks a schema against its metaschema within a work budget of
+// schemaBudgetBase steps and schemaBudgetPerByte per byte of the schema
+// (jsonschema.CompileWithBudget), so a form of schema whose check takes more
+// than linear work, found or not, is refused at that bound rather than run.
+// SchemaStore's 882 schemas that compile here need at most 4.8 steps per
+// byte, and at most 11.5% of their budget (measured).
+const (
+	schemaBudgetBase    = 1 << 20
+	schemaBudgetPerByte = 16
+)
+
+// What the library does and keeps in compiling a schema grows with the
+// schema's shape, not only its size, and a schema a validator registers is
+// kept compiled. So Compile refuses a schema:
+//
+//   - nested deeper than maxSchemaDepth: the work per subschema grows with
+//     its depth (the library rebuilds and hashes its location at each level);
+//   - holding more than schemaObjectBase objects and booleans and one per
+//     schemaBytesPerObject bytes of the schema: the library keeps a
+//     subschema of about 1 KB for each it compiles (970 bytes for an empty
+//     one), and a subschema is an object or a boolean (numbers, strings and
+//     arrays, such as an enum's entries, are not counted). They are counted
+//     wherever they are, in a default or an example too: a $ref can make
+//     any of them a subschema;
+//   - whose JSON pointers and URLs, summed, pass schemaPointerBase bytes and
+//     schemaPointerBytesPerByte per byte of the schema: the library keeps
+//     each subschema's pointer, and its location with the pointer escaped
+//     for a URL, so the pointers are counted escaped so (tokenBytes); it
+//     keeps the URL each id resolves to ($id, or draft-04's id), and builds
+//     the one each reference resolves to ($ref, $dynamicRef,
+//     $recursiveRef), each counted escaped, at its base's length and its
+//     own (resolvedBytes); and it finds each object's resource by its base
+//     URL, which is counted once for each object.
+//
+// SchemaStore's 1,027 schemas nest at most 23 deep, hold at most one object
+// or boolean per 40 bytes, and their pointers and URLs come to at most 4.03
+// bytes per byte; the 882 that compile here keep at most 31 bytes per byte of
+// the schema (measured). Within the bounds a schema of 1 MiB keeps at most
+// about 170 MB once compiled (about 1 KB per object or boolean, and its
+// pointers and locations, each within the bound on pointers). The worst
+// shapes measured keep 127 MB and compile in at most about 0.5 s; one the
+// metaschema's budget refuses is refused in at most about 0.8 s. The library
+// reads an array index only as RFC 6901 writes one, so an item has one
+// location, and resolves each URL a reference resolves to once, so a
+// reference to a long location is not built again for each reference.
+const (
+	maxSchemaDepth            = 64
+	schemaObjectBase          = 4096
+	schemaBytesPerObject      = 8
+	schemaPointerBase         = 1 << 16
+	schemaPointerBytesPerByte = 16
+)
+
+// compileError states why a schema did not compile within maxFailureBytes.
+// For a schema the metaschema refuses it states the first failure
+// (firstFailure): the library's own text lists every failure, indented per
+// level, and is not built.
+func compileError(err error) error {
+	var invalid *jsonschema.SchemaValidationError
+	if errors.As(err, &invalid) {
+		return errors.New(cutFailure("schemadoc: compile: the schema does not conform to its metaschema: " + firstFailure(invalid.Err)))
+	}
+	return errors.New(cutFailure("schemadoc: compile: " + err.Error()))
 }
 
 // Schema is a compiled schema.
@@ -110,11 +198,14 @@ type Schema struct {
 // A regular expression is parsed here only when it is written in the forms
 // ECMA-262 and Go's regexp read alike (but for . and \s, which Go reads its
 // own way), its groups nested at most 32 deep (prescan, which reads it
-// once), so Go parses it in time linear in its length; compiled only within
-// a size n of maxPatternSize (8,192, an upper bound of its instructions;
-// compileRegexpWithin); and charged by its length and n. Matching one
-// position of a string (each byte, and the end) against it costs n/16 steps
-// besides the byte's own (16 being jsonschema.PatternInstructionsPerStep).
+// once), so Go parses it in at most about 240 ns per byte (measured, below;
+// alternations sharing prefixes grow a little faster than linearly, up to
+// about 72 ns per byte, Go's parser refusing one past about 256 KB);
+// compiled only within a size n of maxPatternSize (8,192, an upper bound of
+// its instructions; compileRegexpWithin); and charged by its length and n.
+// Matching one position of a string (each byte, and the end) against it
+// costs n/16 steps besides the byte's own (16 being
+// jsonschema.PatternInstructionsPerStep).
 // Compiling a payload value as format "regex" costs 4 steps per byte before
 // (jsonschema.PatternParseStepsPerByte) and 4n after
 // (jsonschema.PatternCompileStepsPerInstruction). Go's regexp matches a
@@ -141,12 +232,12 @@ const (
 // another deeper than jsonschema.MaxNesting, is refused, the error naming
 // the bound.
 func (s *Schema) Validate(payload []byte) error {
-	inst, depth, err := decode(payload)
+	inst, sh, err := decode(payload)
 	if err != nil {
 		return err
 	}
-	if depth > maxPayloadDepth {
-		return fmt.Errorf("schemadoc: payload nested %d deep, beyond the bound of %d levels", depth, maxPayloadDepth)
+	if sh.depth > maxPayloadDepth {
+		return fmt.Errorf("schemadoc: payload nested %d deep, beyond the bound of %d levels", sh.depth, maxPayloadDepth)
 	}
 	budget := budgetBase + budgetPerByte*int64(len(payload))
 	err = s.compiled.ValidateWithBudget(inst, budget)
@@ -157,13 +248,18 @@ func (s *Schema) Validate(payload []byte) error {
 	case errors.As(err, &exceeded):
 		return fmt.Errorf("schemadoc: validating the payload needs more than its work budget of %d steps (%d, and %d per byte of payload)", exceeded.Budget, budgetBase, budgetPerByte)
 	case err != nil:
-		return fmt.Errorf("schemadoc: does not conform: %s", firstFailure(err))
+		return errors.New(cutFailure("schemadoc: does not conform: " + firstFailure(err)))
 	}
 	return nil
 }
 
-// maxFailureBytes bounds the text of a conformance error.
-const maxFailureBytes = 1 << 10
+// maxFailureBytes bounds the text of a conformance or compile error this
+// package states, the whole of it; maxLocationBytes, the location of a
+// failure firstFailure states, so the keyword it fails fits after a long one.
+const (
+	maxFailureBytes  = 1 << 10
+	maxLocationBytes = maxFailureBytes / 2
+)
 
 // printer writes the library's descriptions of a failure.
 var printer = message.NewPrinter(language.English)
@@ -187,12 +283,14 @@ func firstFailure(err error) string {
 	for len(ve.Causes) > 0 {
 		ve = ve.Causes[0]
 	}
+	var loc strings.Builder
+	for _, tok := range ve.InstanceLocation {
+		writeWithin(&loc, "/")
+		writeEscaped(&loc, pointerEscaper.Replace(tok), true)
+	}
 	var b strings.Builder
 	b.WriteString("at '")
-	for _, tok := range ve.InstanceLocation {
-		writeWithin(&b, "/")
-		writeEscaped(&b, pointerEscaper.Replace(tok), true)
-	}
+	b.WriteString(cut(loc.String(), maxLocationBytes))
 	writeWithin(&b, "': ")
 	switch {
 	case ve.ErrorKind == nil:
@@ -274,13 +372,16 @@ func writeEscaped(b *strings.Builder, s string, name bool) {
 	}
 }
 
-// cutFailure cuts text to maxFailureBytes, where a character starts, and
-// marks the cut with "…".
-func cutFailure(text string) string {
-	if len(text) <= maxFailureBytes {
+// cutFailure cuts text to maxFailureBytes (cut).
+func cutFailure(text string) string { return cut(text, maxFailureBytes) }
+
+// cut cuts text to at most bound bytes, where a character starts, and marks
+// the cut with "…", within the bound.
+func cut(text string, bound int) string {
+	if len(text) <= bound {
 		return text
 	}
-	n := maxFailureBytes
+	n := bound - len("…")
 	for n > 0 && !utf8.RuneStart(text[n]) {
 		n--
 	}
@@ -302,35 +403,124 @@ const (
 	maxExponent    = 400
 )
 
-// decode strict-decodes document, refuses a number beyond the bounds the
-// library reads in bounded time (maxNumberBytes, maxExponent), and measures
-// the depth of its deepest value (a scalar at the top is depth 1). Compile
-// and Schema.Validate decode every JSON value the library reads here.
-func decode(document []byte) (any, int, error) {
-	var v any
-	if err := canon.NewStrictDecoder(document).Decode(&v); err != nil {
-		return nil, 0, fmt.Errorf("schemadoc: not strict-decodable JSON: %w", err)
+// pathBytes is, for each byte, how many bytes url.PathEscape writes for it:
+// the library keeps each subschema's location escaped so, its pointer's
+// tokens escaped first as RFC 6901 says (~ and / as two bytes).
+var pathBytes = func() (n [256]int64) {
+	for c := range n {
+		n[c] = int64(len(url.PathEscape(string([]byte{byte(c)}))))
 	}
-	depth := 0
-	if err := walk(v, 1, &depth); err != nil {
-		return nil, 0, err
+	n['~'], n['/'] = 2, 2
+	return n
+}()
+
+// tokenBytes is how many bytes the pointer token of the name k takes, as the
+// library keeps it in a subschema's location.
+func tokenBytes(k string) int64 {
+	var n int64
+	for i := 0; i < len(k); i++ {
+		n += pathBytes[k[i]]
 	}
-	return v, depth, nil
+	return n
 }
 
-// walk checks every number in v and records the deepest depth.
-func walk(v any, at int, depth *int) error {
-	*depth = max(*depth, at)
+// resolvedBytes is at most how long the URL ref resolves to against a base
+// of base bytes is, as the library writes it, each byte escaped
+// (pathBytes): ref itself when it names a scheme, else the base and ref.
+func resolvedBytes(base int64, ref string) int64 {
+	var n int64
+	for i := 0; i < len(ref); i++ {
+		n += pathBytes[ref[i]]
+	}
+	for i := 0; i < len(ref); i++ {
+		c := ref[i]
+		switch {
+		case c == ':' && i > 0:
+			return n
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', i > 0 && ('0' <= c && c <= '9' || c == '+' || c == '-' || c == '.'):
+			continue
+		}
+		break
+	}
+	return base + n
+}
+
+// digits is how many decimal digits i, at least 0, has.
+func digits(i int) int64 {
+	n := int64(1)
+	for ; i >= 10; i /= 10 {
+		n++
+	}
+	return n
+}
+
+// shape is what decode measures of a document: the depth of its deepest
+// value (each object, array and scalar is a level; a scalar at the top is
+// depth 1), its objects and booleans, and the length of the JSON pointer
+// (RFC 6901) of each of its values, its tokens escaped for a URL's path as
+// the library keeps them (tokenBytes), and of each URL its ids and
+// references resolve to (resolvedBytes), summed.
+type shape struct {
+	depth    int
+	objects  int64
+	pointers int64
+}
+
+// decode strict-decodes document, refuses a number beyond the bounds the
+// library reads in bounded time (maxNumberBytes, maxExponent), and measures
+// its shape. Compile and Schema.Validate decode every JSON value the library
+// reads here.
+func decode(document []byte) (any, shape, error) {
+	var v any
+	if err := canon.NewStrictDecoder(document).Decode(&v); err != nil {
+		return nil, shape{}, fmt.Errorf("schemadoc: not strict-decodable JSON: %w", err)
+	}
+	var sh shape
+	if err := walk(v, 1, 0, int64(len(resourceID)), &sh); err != nil {
+		return nil, shape{}, err
+	}
+	return v, sh, nil
+}
+
+// walk checks every number in v, whose depth is at, whose JSON pointer is
+// pointer bytes long and whose base URL is base bytes long, and adds v and
+// its members to sh.
+func walk(v any, at int, pointer, base int64, sh *shape) error {
+	sh.depth = max(sh.depth, at)
+	sh.pointers += pointer
 	switch t := v.(type) {
+	case bool:
+		sh.objects++
 	case map[string]any:
-		for _, e := range t {
-			if err := walk(e, at+1, depth); err != nil {
+		sh.objects++
+		// The URL an id resolves to is a new base; draft-04 writes it id. A
+		// draft before 2019-09 ignores an $id beside a $ref, which then
+		// resolves against the base outside it, so each reference, and what
+		// is below, is counted at the longer of the two.
+		outer := base
+		for _, kw := range []string{"$id", "id"} {
+			if id, ok := t[kw].(string); ok {
+				resolved := resolvedBytes(outer, id)
+				sh.pointers += resolved
+				base = max(base, resolved)
+			}
+		}
+		for _, kw := range []string{"$ref", "$dynamicRef", "$recursiveRef"} {
+			if ref, ok := t[kw].(string); ok {
+				sh.pointers += resolvedBytes(base, ref)
+			}
+		}
+		// The library finds the object's resource by its base URL, hashing
+		// it whole.
+		sh.pointers += base
+		for k, e := range t {
+			if err := walk(e, at+1, pointer+1+tokenBytes(k), base, sh); err != nil {
 				return err
 			}
 		}
 	case []any:
-		for _, e := range t {
-			if err := walk(e, at+1, depth); err != nil {
+		for i, e := range t {
+			if err := walk(e, at+1, pointer+1+digits(i), base, sh); err != nil {
 				return err
 			}
 		}
