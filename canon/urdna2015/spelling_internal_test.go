@@ -6,10 +6,10 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
-// Step 6 refuses every character an IRIREF cannot hold unescaped, control
-// characters included, on the dataset alone: Canonicalize's earlier steps
-// refuse control characters before it, so only a dataset built here reaches
-// this check with one.
+// rejectUnspellable refuses every character an IRIREF cannot hold unescaped,
+// control characters included, on the dataset alone: Canonicalize's earlier
+// stages refuse control characters before it, so only a dataset built here
+// reaches this check with one.
 func TestRejectUnspellable_RefusesEveryCharacterIRIREFExcludes(t *testing.T) {
 	iri := func(s string) ld.Node { return ld.NewIRI(s) }
 	lit := ld.NewLiteral("v", ld.XSDString, "")
