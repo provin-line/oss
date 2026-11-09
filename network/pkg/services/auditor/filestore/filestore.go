@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/vc"
 )
@@ -314,13 +315,13 @@ func (s *StatusStore) List(fromExclusive string, limit int) ([]auditor.HeadStatu
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			// Listed a moment ago but unreadable now: damage, not absence.
-			s.logger.Warn("auditor/filestore: verdict entry unreadable — listed as damaged", "head", h, "err", err)
+			s.logger.Warn("auditor/filestore: verdict entry unreadable — listed as damaged", "head", h, "err", netexcerpt.ErrorText(err))
 			out = append(out, auditor.HeadStatus{Head: h, Damaged: true})
 			continue
 		}
 		rec, err := decodeVerdict(raw, h)
 		if err != nil {
-			s.logger.Warn("auditor/filestore: damaged verdict entry — listed as damaged", "head", h, "err", err)
+			s.logger.Warn("auditor/filestore: damaged verdict entry — listed as damaged", "head", h, "err", netexcerpt.ErrorText(err))
 			out = append(out, auditor.HeadStatus{Head: h, Damaged: true})
 			continue
 		}
@@ -533,7 +534,7 @@ func (q *Queue) Add(headHash string) error {
 	if _, err := q.readEnvelope(path); err == nil {
 		return nil // already queued — preserve attempts and position
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		q.logger.Warn("auditor/filestore: replacing damaged queue entry", "hash", headHash, "err", err)
+		q.logger.Warn("auditor/filestore: replacing damaged queue entry", "hash", headHash, "err", netexcerpt.ErrorText(err))
 	}
 	if err := q.write(headHash, queueEnvelope{V: 1, Seq: q.nextSeq}); err != nil {
 		return err
@@ -571,7 +572,7 @@ func (q *Queue) ListNewest(n int) ([]auditor.AuditCandidate, error) {
 		}
 		env, err := q.readEnvelope(filepath.Join(q.dir, de.Name()))
 		if err != nil {
-			q.logger.Warn("auditor/filestore: skipping damaged queue entry", "file", de.Name(), "err", err)
+			q.logger.Warn("auditor/filestore: skipping damaged queue entry", "file", de.Name(), "err", netexcerpt.ErrorText(err))
 			continue
 		}
 		all = append(all, cand{hash: hash, env: env})

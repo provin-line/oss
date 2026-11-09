@@ -1170,8 +1170,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `auditor.ConsumeVerifier.Verify` bounds its verdict's `Notation` the same
   way, and names a consumed hash that is not a content address within 128
   bytes. The batch resolver's log lines name a DID or an endpoint within 128
-  bytes, and its and the auditor's an error within 1024, quoted, so neither
-  their length nor a line break in them reaches the log as it is.
+  bytes, and its, the auditor's, the resolver's pool's and the audit
+  stores' an error within 1024, quoted, so neither their length nor a line
+  break in them reaches the log as it is.
   `chainmanager` names a connection-info key it does not use within 128
   bytes, with its length when it is cut.
 - The pipeline's error results, records, answers and log lines do not grow

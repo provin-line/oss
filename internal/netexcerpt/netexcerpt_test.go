@@ -61,26 +61,48 @@ type nilPointerError struct{ text string }
 
 func (e *nilPointerError) Error() string { return e.text }
 
-// ErrorText writes an error as %v does when its Error method panics or its
-// value is a nil pointer, instead of panicking itself.
-func TestErrorTextOfAnErrorThatPanics(t *testing.T) {
+// selfPanickingError panics with itself, a value fmt cannot write either.
+type selfPanickingError struct{}
+
+func (e selfPanickingError) Error() string { panic(e) }
+
+// formattingError writes under %v another text than its Error text.
+type formattingError struct{}
+
+func (formattingError) Error() string                 { return "plain" }
+func (formattingError) Format(s fmt.State, verb rune) { _, _ = s.Write([]byte("formatted")) }
+
+// ErrorText quotes the text excerpt.ErrorText takes for an error: its Error
+// text first, whatever fmt writes for it; what fmt writes when Error panics,
+// such as "<nil>" for a nil pointer; a fixed text when fmt panics too. It does
+// not panic itself.
+func TestErrorTextOfAnyError(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		err  error
+		want string
 	}{
-		{"panicking Error method", panickingError{}},
-		{"nil pointer", (*nilPointerError)(nil)},
+		{"formats itself", formattingError{}, `"plain"`},
+		{"panicking Error method", panickingError{}, strconv.Quote(fmt.Sprint(panickingError{}))},
+		{"nil pointer", (*nilPointerError)(nil), `"<nil>"`},
+		{"panics with a value fmt cannot write", selfPanickingError{}, `"%!v(PANIC=Error method of netexcerpt_test.selfPanickingError)"`},
 	} {
-		got := func() (s string) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("%s: ErrorText panicked: %v", c.name, r)
-				}
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			done := false
+			func() {
+				defer func() {
+					r := recover()
+					if !done {
+						t.Fatalf("ErrorText panicked: %T", r)
+					}
+				}()
+				got = netexcerpt.ErrorText(c.err)
+				done = true
 			}()
-			return netexcerpt.ErrorText(c.err)
-		}()
-		if want := strconv.Quote(fmt.Sprint(c.err)); got != want {
-			t.Errorf("%s: ErrorText = %s, want %s", c.name, got, want)
-		}
+			if got != c.want {
+				t.Errorf("ErrorText = %s, want %s", got, c.want)
+			}
+		})
 	}
 }
