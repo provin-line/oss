@@ -156,8 +156,8 @@ func (c *Canonicalizer) Name() string { return Name }
 //     (rdf:first or rdf:rest as a property, rdf:nil as an IRI), so a list
 //     comes only from @list, and nothing beside @list in a list object, nor an
 //     item of a list that JSON-LD could not expand; no context term with a map
-//     container, no alias of @value, no term aliasing two keywords, no @vocab
-//     beginning with @, and no @base. Its values must all reach the expanded
+//     container, no alias of @value, no term aliasing two keywords, no term
+//     naming an alias of a keyword, no @vocab beginning with @, and no @base. Its values must all reach the expanded
 //     form; there, each value must belong to a node's property, each node
 //     object must add a quad, and no node's property may hold one RDF term
 //     twice; and the dataset must hold exactly the quads those values make.
@@ -171,8 +171,16 @@ func (c *Canonicalizer) Name() string { return Name }
 //     to it elsewhere by its @id. A context's own text is not signed, nor
 //     which context a document names: a term the document does not use adds
 //     nothing to the dataset.
+//  8. The document's JSON must hold no shape the dataset does not
+//     (shapes.go): an empty object only as a property's value or an item of
+//     it or of a list, which is a blank node; an empty array only as a
+//     property's whole value, or as the items of a list a property holds; no
+//     array as an item of another array, which json-gold flattens, in a list
+//     too; a list only where JSON-LD keeps one; and as members, besides
+//     properties, only the keywords JSON-LD reads in a document. Such a shape
+//     holds no value, but a JSON reader sees it and the signature would not.
 //
-// One drop shape is deliberately ALLOWED: a member whose value is an empty
+// One drop shape is deliberately ALLOWED: a property whose value is an empty
 // array ("derived_from": []) contributes zero quads, so its presence is not
 // itself signed at the proof layer. That is safe for provin's only
 // empty-array member because the binding lives one layer up: the signed
@@ -278,8 +286,9 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 }
 
 // dataValues reads the contexts the document can use, the served ones and its
-// own, refusing one with a map container, and counts the document's values
-// (conserve.go).
+// own, refusing one with a map container, counts the document's values
+// (conserve.go), and refuses a shape of the document the dataset would not
+// hold (shapes.go).
 func (c *Canonicalizer) dataValues(v any) (int64, error) {
 	served := c.served
 	if served == nil {
@@ -292,14 +301,21 @@ func (c *Canonicalizer) dataValues(v any) (int64, error) {
 	if served.err != nil {
 		return 0, served.err
 	}
-	rules := newContextRules()
-	for k, kw := range served.rules.aliases {
-		rules.aliases[k] = kw
-	}
+	rules := served.rules.copyOf()
 	if err := rules.readDocument(v); err != nil {
 		return 0, err
 	}
-	return rules.dataValues(v, new(jsonPath))
+	if err := rules.rejectAliasChains(); err != nil {
+		return 0, err
+	}
+	n, err := rules.dataValues(v, new(jsonPath))
+	if err != nil {
+		return 0, err
+	}
+	if err := rules.rejectUnsignedShapes(v, atNode, new(jsonPath)); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // datasetOf builds the RDF dataset of an expanded document as json-gold's

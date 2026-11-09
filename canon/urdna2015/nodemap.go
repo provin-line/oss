@@ -198,8 +198,8 @@ func (w *nodeMapWork) comparisons() int64 {
 }
 
 // add adds a value to a node's property; it is a new one unless an equal one
-// (v) is there. A value no other equals (a list, as json-gold compares) is
-// always new. The quad names the node object at subjectOcc (as its subject,
+// (v) is there. A value no other equals (a list that is not empty, as
+// json-gold compares) is always new. The quad names the node object at subjectOcc (as its subject,
 // or as a reverse value's object) and the one at graphOcc (as its graph),
 // where they are not -1.
 func (w *nodeMapWork) add(graph, node, property int, v valueID, unequal bool, subjectOcc, graphOcc int) {
@@ -249,7 +249,8 @@ func (w *nodeMapWork) element(el any, graph, graphOcc, subject, subjectOcc int, 
 			return
 		}
 		if list, ok := t["@list"]; ok {
-			if items, ok := list.([]any); ok {
+			items, isArray := list.([]any)
+			if isArray {
 				w.listQuads += 2 * int64(len(items))
 			}
 			w.element(list, graph, graphOcc, subject, subjectOcc, reverse, property, true)
@@ -257,6 +258,11 @@ func (w *nodeMapWork) element(el any, graph, graphOcc, subject, subjectOcc int, 
 			case inList:
 			case subject < 0 || property < 0:
 				w.floating++
+			case isArray && len(items) == 0:
+				// An empty list is the one term rdf:nil, which json-gold
+				// writes once for each list, so the dataset would hold it
+				// twice where the property holds two.
+				w.add(graph, subject, property, valueID{ref: true, node: w.id(rdfNil)}, false, subjectOcc, graphOcc)
 			default:
 				w.add(graph, subject, property, valueID{}, true, subjectOcc, graphOcc)
 			}

@@ -612,6 +612,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, refuse the shapes
+  of a document's JSON that the signed dataset does not hold: they hold no
+  value, but a JSON reader sees them and the signature would not. Refused
+  are an empty object or array where JSON-LD keeps nothing of it, an array
+  as an item of another array (json-gold flattens it into the outer one, in a
+  list too), a list where JSON-LD keeps none, and a member that is a keyword
+  JSON-LD does not read in a document. Accepted are an empty object as a
+  property's value or an item of it or of a list (a blank node), and an empty
+  array as a property's whole value (signed as no quad, as before) or as the
+  items of a list a property holds (the empty list). A `@nest` group's
+  members are held to the position of the object holding it. An empty list
+  written twice on one property is refused as one value twice: json-gold
+  wrote `rdf:nil` twice, a duplicate line in the canonical form. On the
+  direct path, where a document may write its own context, a term naming an
+  alias of a keyword is refused (the RDFC path reads an alias one step), and
+  two forms json-gold signs are refused too: a list of lists through a term
+  whose container is `@list`, and a shape under a term that only a scoped
+  context not in use makes a keyword.
 - `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, return an error
   where json-gold panics on a document: a panic of its expansion or of its
   building of the dataset is returned as an error, its text within 128 bytes,

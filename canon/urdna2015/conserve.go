@@ -53,7 +53,8 @@ import (
 // alias or a vocabulary, is counted as a value unless it is written as one, and
 // can only make the counts disagree. The aliases contexts write are read only
 // to refuse by name, with no alias of @value, no term aliasing two keywords
-// (contextRules.alias), and no @vocab beginning with @, which would make keys
+// (contextRules.alias), no term naming an alias of a keyword
+// (rejectAliasChains), and no @vocab beginning with @, which would make keys
 // keywords. A JSON literal (@json) is refused too: written in the document,
 // before it is expanded; by a term's @type, once expanded
 // (rejectDroppableNodes), before ToRDF, whose canonical JSON takes time in the
@@ -72,13 +73,42 @@ import (
 // counts no value of a context.
 
 // contextRules is what Canonicalize reads from a context: the keyword each
-// alias stands for. Reading a context refuses one defining a map container.
+// alias stands for, and the names each term's definitions give, terms or
+// IRIs. Reading a context refuses one defining a map container.
 type contextRules struct {
 	aliases map[string]string
+	names   map[string][]string
 }
 
 func newContextRules() *contextRules {
-	return &contextRules{aliases: map[string]string{}}
+	return &contextRules{aliases: map[string]string{}, names: map[string][]string{}}
+}
+
+// copyOf is a copy of r, for a document's contexts to be read after r's.
+func (r *contextRules) copyOf() *contextRules {
+	c := newContextRules()
+	for k, kw := range r.aliases {
+		c.aliases[k] = kw
+	}
+	for k, names := range r.names {
+		c.names[k] = append([]string(nil), names...)
+	}
+	return c
+}
+
+// rejectAliasChains refuses a term whose definition names a term that is an
+// alias of a keyword: JSON-LD reads it as the keyword too, and the rules read
+// an alias of a keyword one step only. It runs once every context the
+// document can use is read, as a term may name one defined in another.
+func (r *contextRules) rejectAliasChains() error {
+	for _, term := range sortedKeys(r.names) {
+		for _, name := range r.names[term] {
+			if kw, ok := r.aliases[name]; ok && name != term {
+				return fmt.Errorf("urdna2015: context term %s names %s, an alias of %s: the RDFC path reads an alias of a keyword one step only", bounded(term), bounded(name), kw)
+			}
+		}
+	}
+	return nil
 }
 
 // read reads the term definitions of a context value: an object, an array of
@@ -134,6 +164,8 @@ func (r *contextRules) read(ctx any) error {
 					if err := r.alias(term, d); err != nil {
 						return err
 					}
+				} else {
+					r.names[term] = append(r.names[term], d)
 				}
 			case map[string]any:
 				if language, ok := d["@language"]; ok {
@@ -145,6 +177,8 @@ func (r *contextRules) read(ctx any) error {
 					if err := r.alias(term, id); err != nil {
 						return err
 					}
+				} else if ok {
+					r.names[term] = append(r.names[term], id)
 				}
 				containers, ok := d["@container"].([]any)
 				if !ok {
@@ -184,13 +218,14 @@ func asciiLanguage(language any) error {
 // alias records that term stands for keyword. An alias of @value written in
 // a context is refused; and a term two definitions alias to different
 // keywords is refused, so each term reads as one keyword in whatever order
-// the definitions are read. The aliases read here are not all json-gold's:
-// one may be in a scope not in use, and a term of a term of a keyword is not
-// read. They are used only to refuse (@index, @direction, or @language
-// outside a value object) by name: no value is left uncounted by an alias,
-// since dataValues knows a value object by @value written out and reads its
-// keys only as the keywords written out, so an alias read wrong, or not
-// read, can only refuse.
+// the definitions are read. An alias is read one step: a term naming an
+// alias of a keyword is refused (rejectAliasChains). The aliases read here may
+// be more than json-gold's, as one may be in a scope not in use. They are
+// used to refuse (@index, @direction, or @language outside a value object) by
+// name, and to read a member's position (shapes.go): no value is left
+// uncounted by an alias, since dataValues knows a value object by @value
+// written out and reads its keys only as the keywords written out, so an
+// alias read wrong can only refuse.
 func (r *contextRules) alias(term, keyword string) error {
 	if keyword == "@value" {
 		return fmt.Errorf("urdna2015: context term %s is an alias of @value: the RDFC path knows a value object by @value alone", bounded(term))

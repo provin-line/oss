@@ -310,7 +310,34 @@ func AcceptedPairs() map[string]func(m string) any {
 		"a boolean under a term typed xsd:boolean": func(m string) any {
 			return OwnContext(map[string]any{"f": map[string]any{"@id": "https://e.x/f", "@type": "http://www.w3.org/2001/XMLSchema#boolean"}}, map[string]any{"f": m == "a"})
 		},
+		"an empty array as a property's value": func(m string) any {
+			return servedSubjectWith(map[string]any{"urn:q": []any{}, "urn:p": m})
+		},
+		"an empty object as a property's value": func(m string) any {
+			return servedSubjectWith(map[string]any{"urn:q": map[string]any{}, "urn:p": m})
+		},
+		"an empty list as a property's value": func(m string) any {
+			return servedSubjectWith(map[string]any{"urn:q": map[string]any{"@list": []any{}}, "urn:p": m})
+		},
+		"an empty object in a list": func(m string) any {
+			return servedSubject(map[string]any{"@list": []any{map[string]any{}, m}})
+		},
+		"an empty array as a reverse property's value": func(m string) any {
+			return servedSubjectWith(map[string]any{"@reverse": map[string]any{"urn:r": []any{}}, "urn:p": m})
+		},
 	}
+}
+
+// emptyAt is a credential of the W3C VC v2 context alone whose subject holds
+// a value and, at member, an empty object or array, or what is given.
+func emptyAt(member string, shape any) map[string]any {
+	return servedSubjectWith(map[string]any{"urn:p": "v", member: shape})
+}
+
+// beside is the document as an array: a credential of the W3C VC v2 context
+// alone, and what is given beside it.
+func beside(item any) []any {
+	return []any{servedSubject("v"), item}
 }
 
 // Refusals are documents refused for the form they use, one for each reason
@@ -353,5 +380,28 @@ func Refusals() map[string]any {
 		"a @vocab of @value":                                 map[string]any{"@context": map[string]any{"@vocab": "@value", "v": map[string]any{"@id": ""}}, "@id": "urn:s", "urn:p": map[string]any{"v": "kept"}},
 		"a @vocab of @":                                      map[string]any{"@context": map[string]any{"@vocab": "@"}, "@id": "urn:s", "urn:p": map[string]any{"value": "kept"}},
 		"a JSON literal by a term":                           CredentialV2(map[string]any{"id": "did:example:s", "name": "x", "credentialSchema": map[string]any{"id": "https://e.x/schema", "type": "JsonSchema", "jsonSchema": map[string]any{"k": "v"}}}),
+		"an empty object under @nest":                        emptyAt("@nest", map[string]any{}),
+		"an empty object under @reverse":                     emptyAt("@reverse", map[string]any{}),
+		"an empty object in a graph":                         emptyAt("urn:g", map[string]any{"@id": "urn:g", "@graph": []any{map[string]any{"@id": "urn:m", "urn:r": "x"}, map[string]any{}}}),
+		"an empty object beside the document":                beside(map[string]any{}),
+		"an object of only a context beside the document":    beside(map[string]any{"@context": "https://www.w3.org/ns/credentials/v2"}),
+		"an empty document":                                  map[string]any{},
+		"an empty array as a type":                           emptyAt("type", []any{}),
+		"an empty array as a graph":                          emptyAt("urn:g", map[string]any{"@id": "urn:g", "urn:q": "w", "@graph": []any{}}),
+		"an empty array as @included":                        emptyAt("@included", []any{}),
+		"an empty array of documents":                        []any{},
+		"an empty array in an array":                         servedSubject([]any{"v", []any{}}),
+		"an array in an array":                               servedSubject([]any{"a", []any{"b"}}),
+		"an array in a list":                                 servedSubject(map[string]any{"@list": []any{[]any{"a"}}}),
+		"a list beside the document":                         beside(map[string]any{"@list": []any{}}),
+		"a list as a member of the document":                 map[string]any{"@context": "https://www.w3.org/ns/credentials/v2", "@id": "urn:s", "urn:p": "v", "@list": []any{}},
+		"a list in a graph":                                  emptyAt("urn:g", map[string]any{"@id": "urn:g", "@graph": []any{map[string]any{"@id": "urn:m", "urn:r": "x"}, map[string]any{"@list": []any{}}}}),
+		"a keyword JSON-LD does not read in a document":      emptyAt("@none", map[string]any{"urn:q": []any{}}),
+		"an empty list twice":                                emptyAt("urn:q", []any{map[string]any{"@list": []any{}}, map[string]any{"@list": []any{}}}),
+		"a list of lists through a list container":           OwnContext(map[string]any{"t": map[string]any{"@id": "urn:t", "@container": "@list"}}, map[string]any{"t": []any{[]any{"a"}}}),
+		"an alias of an alias of @nest":                      OwnContext(map[string]any{"n": "@nest", "m": "n"}, map[string]any{"q": "v", "m": map[string]any{}}),
+		"an alias of an alias of @reverse":                   OwnContext(map[string]any{"r": "@reverse", "rr": map[string]any{"@id": "r"}}, map[string]any{"q": "v", "rr": map[string]any{}}),
+		"an alias of an alias of @none":                      OwnContext(map[string]any{"n": "@none", "k": "n"}, map[string]any{"q": "v", "k": map[string]any{}}),
+		"an alias of a served alias":                         map[string]any{"@context": []any{"https://www.w3.org/ns/credentials/v2", map[string]any{"t": "type"}}, "@id": "urn:s", "t": []any{}, "issuer": "urn:issuer"},
 	}
 }
