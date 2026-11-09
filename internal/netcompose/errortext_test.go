@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -218,6 +219,298 @@ func TestBoundError_KeepsWhatTheErrorHolds(t *testing.T) {
 	}
 	if !errors.Is(got, long) {
 		t.Error("the connect error is lost")
+	}
+}
+
+type panickingError struct{}
+
+func (panickingError) Error() string { panic("boom") }
+
+type nilPointerError struct{ text string }
+
+func (e *nilPointerError) Error() string { return e.text }
+
+// selfPanickingError panics with itself, a value fmt cannot write either.
+type selfPanickingError struct{}
+
+func (e selfPanickingError) Error() string { panic(e) }
+
+// A connect error that holds an error whose Error method panics, whatever it
+// panics with, or which is a nil pointer, is returned as a connect error of
+// the same code whose message is UTF-8 within netexcerpt.TextLimit bytes:
+// neither boundError nor that message panics, and errors.Is still finds the
+// connect error.
+func TestBoundError_AConnectErrorWhoseInnerTextPanics(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		inner error
+		want  string // "" when only the bound is checked
+	}{
+		{"panics", panickingError{}, fmt.Sprint(panickingError{})},
+		{"nil pointer", (*nilPointerError)(nil), "<nil>"},
+		{"panics with a value fmt cannot write", selfPanickingError{}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ce := connect.NewError(connect.CodeFailedPrecondition, c.inner)
+			var got error
+			var message, text string
+			done := false
+			func() {
+				defer func() {
+					r := recover()
+					if !done {
+						t.Fatalf("panicked: %T", r)
+					}
+				}()
+				got = boundError(ce)
+				var out *connect.Error
+				if errors.As(got, &out) {
+					message = out.Message()
+				}
+				text = got.Error()
+				done = true
+			}()
+			var out *connect.Error
+			if !errors.As(got, &out) {
+				t.Fatalf("boundError = %T, want a connect error", got)
+			}
+			if connect.CodeOf(got) != connect.CodeFailedPrecondition {
+				t.Errorf("code %v, want %v", connect.CodeOf(got), connect.CodeFailedPrecondition)
+			}
+			if len(message) > netexcerpt.TextLimit || !utf8.ValidString(message) || message == "" {
+				t.Errorf("message: %d bytes (UTF-8: %v): %.80q", len(message), utf8.ValidString(message), message)
+			}
+			if c.want != "" && message != c.want {
+				t.Errorf("message = %q, want %q", message, c.want)
+			}
+			if !strings.Contains(text, message) {
+				t.Errorf("text %q does not hold the message %q", text, message)
+			}
+			if !errors.Is(got, ce) {
+				t.Error("errors.Is does not find the connect error")
+			}
+		})
+	}
+}
+
+// panickingWrapper holds a connect error and panics when asked its own text.
+type panickingWrapper struct{ err error }
+
+func (w panickingWrapper) Error() string { panic("boom") }
+func (w panickingWrapper) Unwrap() error { return w.err }
+
+// connect writes an error by asking first the text of the whole error it is
+// given, then the message of the connect error in it. A connect error that
+// fits, held by an error whose own text panics (joined with a nil pointer, or
+// in a wrapper that panics), is returned as a new connect error of the same
+// code and message, whose text does not panic; errors.Is still finds what it
+// held.
+func TestBoundError_AConnectErrorHeldByAnErrorWhoseTextPanics(t *testing.T) {
+	joined := connect.NewError(connect.CodeNotFound, errors.New("no such head"))
+	wrapped := connect.NewError(connect.CodeAborted, errors.New("conflict"))
+	for _, c := range []struct {
+		name string
+		ce   *connect.Error
+		err  error
+	}{
+		{"joined with a nil pointer", joined, errors.Join(joined, (*nilPointerError)(nil))},
+		{"in a wrapper that panics", wrapped, panickingWrapper{wrapped}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var got error
+			var text string
+			done := false
+			func() {
+				defer func() {
+					r := recover()
+					if !done {
+						t.Fatalf("panicked: %T", r)
+					}
+				}()
+				got = boundError(c.err)
+				text = got.Error()
+				done = true
+			}()
+			var out *connect.Error
+			if !errors.As(got, &out) || out.Code() != c.ce.Code() || out.Message() != c.ce.Message() {
+				t.Fatalf("boundError = %q, want a connect error of code %v and message %q", text, c.ce.Code(), c.ce.Message())
+			}
+			if !errors.Is(got, c.ce) {
+				t.Error("errors.Is does not find the connect error")
+			}
+		})
+	}
+}
+
+// canceledPanics holds a context's cancellation and panics when asked its
+// own text.
+type canceledPanics struct{}
+
+func (canceledPanics) Error() string { panic("boom") }
+func (canceledPanics) Unwrap() error { return context.Canceled }
+
+// A handler's error whose Error method panics, in a connect error, holding
+// one or beside one, is answered in each protocol and from a unary and a
+// streaming RPC, with the code and the message below, instead of failing the
+// answer.
+func TestErrorText_AnswersAnErrorWhoseTextPanics(t *testing.T) {
+	fits := func(code connect.Code) *connect.Error { return connect.NewError(code, errors.New("no such head")) }
+	for _, c := range []struct {
+		name    string
+		err     func() error
+		code    connect.Code
+		message string // "" when only the bound is checked
+	}{
+		{"connect error holding a panicking error", func() error { return connect.NewError(connect.CodeFailedPrecondition, panickingError{}) },
+			connect.CodeFailedPrecondition, fmt.Sprint(panickingError{})},
+		{"connect error holding a nil pointer", func() error { return connect.NewError(connect.CodeFailedPrecondition, (*nilPointerError)(nil)) },
+			connect.CodeFailedPrecondition, "<nil>"},
+		{"connect error holding an error fmt cannot write", func() error { return connect.NewError(connect.CodeAborted, selfPanickingError{}) },
+			connect.CodeAborted, "%!v(PANIC=Error method of netcompose.selfPanickingError)"},
+		{"connect error joined with a nil pointer", func() error { return errors.Join(fits(connect.CodeNotFound), (*nilPointerError)(nil)) },
+			connect.CodeNotFound, "no such head"},
+		{"connect error in a wrapper that panics", func() error { return panickingWrapper{fits(connect.CodeAborted)} },
+			connect.CodeAborted, "no such head"},
+		{"panicking error", func() error { return panickingError{} }, connect.CodeUnknown, fmt.Sprint(panickingError{})},
+		{"cancellation in a wrapper that panics", func() error { return canceledPanics{} }, connect.CodeCanceled, fmt.Sprint(canceledPanics{})},
+	} {
+		failure := c.err
+		bounded := echoServer(t, &failure, errorText())
+		for _, pr := range protocols {
+			gotU, gotS := received(t, bounded, pr.opts)
+			for _, r := range []struct {
+				rpc string
+				got error
+			}{{"unary", gotU}, {"stream", gotS}} {
+				what := c.name + " " + pr.name + " " + r.rpc
+				var got *connect.Error
+				if !errors.As(r.got, &got) {
+					t.Fatalf("%s: got %v, want a connect error", what, r.got)
+				}
+				if got.Code() != c.code {
+					t.Errorf("%s: code %v, want %v", what, got.Code(), c.code)
+				}
+				if msg := got.Message(); len(msg) > netexcerpt.TextLimit || !utf8.ValidString(msg) || c.message != "" && msg != c.message {
+					t.Errorf("%s: message %.80q, want %q", what, msg, c.message)
+				}
+			}
+		}
+	}
+}
+
+// A connect error whose message fits, held by another error or not, is
+// answered as it is without errorText: the same code, message, details and
+// metadata, in each protocol and from a unary and a streaming RPC.
+func TestErrorText_AnswersAConnectErrorThatFitsAsWithoutIt(t *testing.T) {
+	withDetail := func(ce *connect.Error) *connect.Error {
+		detail, err := connect.NewErrorDetail(structpb.NewStringValue("kept"))
+		if err != nil {
+			panic(err)
+		}
+		ce.AddDetail(detail)
+		ce.Meta().Set("X-Kept", "yes")
+		return ce
+	}
+	for _, c := range []struct {
+		name string
+		err  func() error
+	}{
+		{"connect error", func() error { return withDetail(connect.NewError(connect.CodeNotFound, errors.New("no such head"))) }},
+		{"wrapped connect error", func() error {
+			return fmt.Errorf("lookup: %w", withDetail(connect.NewError(connect.CodeNotFound, errors.New("no such head"))))
+		}},
+		{"wrapped wire error", func() error {
+			return fmt.Errorf("peer: %w", withDetail(connect.NewWireError(connect.CodeUnavailable, errors.New("busy"))))
+		}},
+		{"wrapped connect error holding no error", func() error {
+			return fmt.Errorf("lookup: %w", withDetail(connect.NewError(connect.CodePermissionDenied, nil)))
+		}},
+		{"connect error holding a connect error", func() error {
+			return connect.NewError(connect.CodeInternal, withDetail(connect.NewError(connect.CodeNotFound, errors.New("no such head"))))
+		}},
+	} {
+		failure := c.err
+		bounded := echoServer(t, &failure, errorText())
+		plain := echoServer(t, &failure, connect.WithHandlerOptions())
+		for _, pr := range protocols {
+			wantU, wantS := received(t, plain, pr.opts)
+			gotU, gotS := received(t, bounded, pr.opts)
+			for _, r := range []struct {
+				rpc       string
+				want, got error
+			}{{"unary", wantU, gotU}, {"stream", wantS, gotS}} {
+				what := c.name + " " + pr.name + " " + r.rpc
+				var want, got *connect.Error
+				if !errors.As(r.want, &want) || !errors.As(r.got, &got) {
+					t.Fatalf("%s: want %v, got %v", what, r.want, r.got)
+				}
+				if got.Code() != want.Code() || got.Message() != want.Message() {
+					t.Errorf("%s: %v %q, want %v %q", what, got.Code(), got.Message(), want.Code(), want.Message())
+				}
+				if !sameDetails(want, got) {
+					t.Errorf("%s: details %v, want %v", what, got.Details(), want.Details())
+				}
+				if g, w := got.Meta().Get("X-Kept"), want.Meta().Get("X-Kept"); g != w {
+					t.Errorf("%s: metadata X-Kept %q, want %q", what, g, w)
+				}
+			}
+		}
+	}
+}
+
+// boundError reads a connect error whose message fits without writing into
+// it: a handler may return one such error, held by another, from many
+// requests at once.
+func TestBoundError_ReadsAConnectErrorThatFitsWithoutWritingIntoIt(t *testing.T) {
+	shared := connect.NewError(connect.CodeNotFound, errors.New("no such head"))
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				_ = boundError(fmt.Errorf("lookup: %w", shared))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// sliceError is an error of a type == cannot compare.
+type sliceError struct{ parts []string }
+
+func (e sliceError) Error() string { return strings.Join(e.parts, ", ") }
+
+// anyError is of a type == compares, holding a value it cannot.
+type anyError struct{ value any }
+
+func (e anyError) Error() string { return fmt.Sprint(e.value) }
+
+// A connect error whose message fits is returned as it is, whatever the type
+// of the error it holds, also one == cannot compare.
+func TestBoundError_AConnectErrorThatFitsHoldingAnErrorThatDoesNotCompare(t *testing.T) {
+	for name, inner := range map[string]error{
+		"a type that does not compare":  sliceError{[]string{"a", "b"}},
+		"a value that does not compare": anyError{[]int{1, 2}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ce := connect.NewError(connect.CodeNotFound, inner)
+			var got error
+			done := false
+			func() {
+				defer func() {
+					r := recover()
+					if !done {
+						t.Fatalf("panicked: %v", r)
+					}
+				}()
+				got = boundError(ce)
+				done = true
+			}()
+			if got != error(ce) {
+				t.Errorf("boundError = %v, want the connect error itself", got)
+			}
+		})
 	}
 }
 

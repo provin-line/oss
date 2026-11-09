@@ -60,14 +60,27 @@ func (errorTextInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFu
 	}
 }
 
-// boundError is err as its caller is to receive it. connect writes the
-// message of the first *connect.Error in err's chain, or else err's whole
-// text with CodeUnknown (or the code of a context error); boundError returns
-// err itself when that text is UTF-8 within netexcerpt.TextLimit bytes, and
-// otherwise an error whose text is the head of it and its length (package
-// excerpt) and which holds err, so errors.Is and errors.As still find all err
-// held. A connect error keeps its code and details, and its metadata unless
-// it is a wire error, whose metadata connect does not send.
+// boundError is err as its caller is to receive it. connect asks err's whole
+// text, then writes the message of the first *connect.Error in err's chain,
+// or else that whole text with CodeUnknown (or the code of a context error).
+//   - An error whose chain holds no connect error is returned as
+//     excerpt.OfError returns it, within netexcerpt.TextLimit bytes.
+//   - When the connect error's message is UTF-8 within netexcerpt.TextLimit
+//     bytes, err is returned itself if it is that connect error, and else as
+//     excerpt.OfError returns it: connect reads the connect error in it as it
+//     is.
+//   - Otherwise boundError returns a new connect error whose message is the
+//     text excerpt.OfError takes and bounds for the error the connect error
+//     holds, and which holds err, so errors.Is and errors.As still find all
+//     err held. It keeps the code and details, and the metadata unless it is
+//     a wire error, whose metadata connect does not send.
+//
+// It writes into no error it reads, but for the metadata of a connect error
+// it replaces, whose map connect's Meta makes when it has none. A panic of
+// the Error method of an error it reads (a nil pointer's, too) leaves neither
+// boundError nor the text of the error it returns; the methods that walk
+// err's chain (Unwrap, As, Is) are taken to return, and an Error method to
+// return the same text each time it is called.
 func boundError(err error) error {
 	if err == nil {
 		return nil
@@ -76,12 +89,14 @@ func boundError(err error) error {
 	if !errors.As(err, &ce) || ce == nil {
 		return excerpt.OfError(err, netexcerpt.TextLimit)
 	}
-	message := ce.Message()
-	text, _ := excerpt.Of(message, netexcerpt.TextLimit)
-	if text == message {
-		return err
+	inner, changed := excerpt.OfErrorChanged(ce.Unwrap(), netexcerpt.TextLimit)
+	if !changed {
+		if err == error(ce) {
+			return err
+		}
+		return excerpt.OfError(err, netexcerpt.TextLimit)
 	}
-	held := &boundText{text: text, err: err}
+	held := &boundText{text: inner.Error(), err: err}
 	var out *connect.Error
 	if connect.IsWireError(ce) {
 		out = connect.NewWireError(ce.Code(), held)

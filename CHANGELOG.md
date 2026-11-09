@@ -1153,13 +1153,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   starts. Its code and details are kept, and the metadata of an error that is
   not a wire error. A text that is not UTF-8 is sent as UTF-8, so over gRPC
   such a text beside details keeps its code instead of being answered
-  `internal`. connect answers a protocol header, query parameter or method it
-  cannot read (a timeout, a compression name, the protocol version) before
-  the node sees the request, quoting the value with `%q`, which writes a byte
-  as `\xNN`: that text, at most four times the value sent, within four times
-  the 64 KiB of headers the server reads and connect's own words, goes to the
-  one who sent it alone and to no log. `/readyz` logs the error of a failed
-  check quoted, on one line, within 1024 bytes.
+  `internal`. An error whose `Error` method panics, as a nil pointer's may, no
+  longer fails the answer: held by a connect error, it is answered with that
+  connect error's code and the text `fmt` writes for it, or a fixed text
+  naming its type; holding a connect error or beside one (joined with it,
+  say), with that connect error's code and message; with neither, with
+  `unknown` (or a context error's code) and the text `fmt` writes for it.
+  connect answers a protocol header, query parameter or method it cannot read
+  (a timeout, a compression name, the protocol version) before the node sees
+  the request, quoting the value with `%q`, which writes a byte as `\xNN`:
+  that text, at most four times the value sent, within four times the 64 KiB
+  of headers the server reads and connect's own words, goes to the one who
+  sent it alone and to no log. `/readyz` logs the error of a failed check
+  quoted, on one line, within 1024 bytes.
 - The network node's audit notations and its services' log lines do not
   grow with what others sent. Each notation the auditor records, and each it
   serves through `GetAuditStatus` and `ListAuditStatuses`, is within 1024
