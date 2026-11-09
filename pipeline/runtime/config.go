@@ -62,6 +62,20 @@ type Config struct {
 	// sink loops. It is read only when such a loop exists, and then its zero
 	// value fails the build (the zero level is refused).
 	DecisionRecord DecisionRecordConfig
+	// MaxCredentialSize and MaxInlinePayloadSize bound an envelope a loop
+	// receives over the transport: its credential, its inline payload, and
+	// with them the whole message (envelopecodec.Limits). They are read when
+	// a loop is configured, and then a value envelopecodec.New refuses fails
+	// the build.
+	MaxCredentialSize    int
+	MaxInlinePayloadSize int
+	// MaxIngestPayloadSize bounds a raw payload a source loop takes in: its
+	// input over the transport (ingest.Config.MaxPayloadSize) and, for a
+	// push-enabled loop, the body its push route accepts
+	// (PushBinding.MaxBodySize), so the two refuse the same payloads. It is
+	// read when a source loop is configured, and then a value that is not
+	// positive fails the build before it dials.
+	MaxIngestPayloadSize int
 }
 
 // IssuerConfig is the issuing process identity for a producing loop or a

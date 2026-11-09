@@ -28,7 +28,7 @@ func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {
 			PipelineID: "p", ProcessID: "s", TransformationClaim: vc.ClaimAggregate,
 		},
 	}
-	_, err := buildSourceLoop(nil, nil, nil, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, lc)
+	_, err := buildSourceLoop(nil, nil, nil, 1<<20, nil, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, lc)
 	if err == nil {
 		t.Fatal("aggregate claim on ingest source loop: want boot error, got nil")
 	}
@@ -45,7 +45,7 @@ const (
 // dpAggregateCfg is one aggregate loop consuming the shared pipeline DID as its single
 // ingress (a valid N=1 aggregate) and emitting on its own output subject.
 func dpAggregateCfg() *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name: "agg",
 		Role: RoleAggregate,
 		Aggregate: AggregateConfig{

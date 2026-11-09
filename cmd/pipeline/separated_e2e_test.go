@@ -114,6 +114,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Identities. registry component "reg" + accountType "org" matches every
 // other e2e test in this repo (cmd/standalone's crossnode_e2e_test.go etc).
@@ -459,7 +469,7 @@ func sepSignFeed(t *testing.T, builder *vc.Builder, issuerDID, procID string, pa
 	if err != nil {
 		t.Fatalf("sepSignFeed SignFirstDrop %q: %v", issuerDID, err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: payload, SequenceNo: 1})
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: payload, SequenceNo: 1})
 	if err != nil {
 		t.Fatalf("sepSignFeed MarshalEnvelope %q: %v", issuerDID, err)
 	}
@@ -472,7 +482,7 @@ func sepSignFeed(t *testing.T, builder *vc.Builder, issuerDID, procID string, pa
 // aggregate first (cmd/standalone/aggregate_e2e_test.go's own rationale).
 func sepAwaitTwoSourceAggregate(t *testing.T, ch <-chan []byte, publishBoth func(), deadline time.Duration) *vc.PipelinePassCredential {
 	t.Helper()
-	codec := envelopecodec.New()
+	codec := testCodec()
 	publishBoth()
 	dl := time.After(deadline)
 	tick := time.NewTicker(50 * time.Millisecond)
@@ -648,8 +658,8 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	pipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint:   reg.url,
 		VCStoreBearer:     sepBearer,
-		MaxCredentialSize: 1 << 20,
-		TlogMirror:        pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 256, MaxBatchBytes: 4 << 20, FlushInterval: time.Hour},
+		MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
+		TlogMirror: pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 256, MaxBatchBytes: 4 << 20, FlushInterval: time.Hour},
 		Loops: []pipelineconfig.LoopConfig{
 			{
 				Name: "src1", Role: pipelineconfig.RoleSource, IngressSubject: sepSrc1Ingress,
@@ -976,8 +986,8 @@ func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 	pipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint:   reg.url,
 		VCStoreBearer:     sepBearer,
-		MaxCredentialSize: 1 << 20,
-		TlogMirror:        pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 256, MaxBatchBytes: 4 << 20, FlushInterval: time.Hour},
+		MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
+		TlogMirror: pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 256, MaxBatchBytes: 4 << 20, FlushInterval: time.Hour},
 		Loops: []pipelineconfig.LoopConfig{{
 			Name: "shutsrc", Role: pipelineconfig.RoleSource, IngressSubject: sepShutSrcIngress,
 			Source: pipelineconfig.SourceConfig{

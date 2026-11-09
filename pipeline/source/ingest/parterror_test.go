@@ -34,7 +34,7 @@ func TestProcess_ASignersErrorWhoseTextPanics(t *testing.T) {
 		{"panics with itself", selfPanickingError{}},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
-			p, err := ingest.New(ingest.Config{Signer: &fakeSourceSigner{returnErr: bad.err}})
+			p, err := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: &fakeSourceSigner{returnErr: bad.err}})
 			if err != nil {
 				t.Fatal(err)
 			}

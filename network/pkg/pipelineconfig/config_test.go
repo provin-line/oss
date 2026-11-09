@@ -278,6 +278,37 @@ func TestLoad_MaxPushBodySize_NonPositiveFails(t *testing.T) {
 	}
 }
 
+func TestLoad_MaxInlinePayloadSizeDefault(t *testing.T) {
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, loopsConf(validSourceLoop)))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if pc.MaxInlinePayloadSize != 1<<20 {
+		t.Errorf("max-inline-payload-size default = %d, want %d", pc.MaxInlinePayloadSize, 1<<20)
+	}
+}
+
+func TestLoad_MaxInlinePayloadSize_Override(t *testing.T) {
+	conf := loopsConf(validSourceLoop) + "provin.network.pipeline.max-inline-payload-size = 4096\n"
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, conf))
+	if err != nil {
+		t.Fatalf("LoadPipelineConfig: %v", err)
+	}
+	if pc.MaxInlinePayloadSize != 4096 {
+		t.Errorf("max-inline-payload-size = %d, want 4096", pc.MaxInlinePayloadSize)
+	}
+}
+
+func TestLoad_MaxInlinePayloadSize_NonPositiveFails(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		conf := loopsConf(validSourceLoop) + "provin.network.pipeline.max-inline-payload-size = " + v + "\n"
+		_, err := pipelineconfig.LoadPipelineConfig(loadWith(t, conf))
+		if err == nil || !strings.Contains(err.Error(), "max-inline-payload-size") {
+			t.Errorf("max-inline-payload-size = %s: want an error naming the key, got %v", v, err)
+		}
+	}
+}
+
 // HasConsumingLoop classifies the population that drives the async chain audit: any
 // sink/chained/aggregate loop, regardless of siblings; never source-only or zero loops.
 func TestHasConsumingLoop(t *testing.T) {

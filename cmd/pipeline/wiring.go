@@ -58,6 +58,9 @@ func pipelineRuntimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineco
 			AccountSeed: chainCfg.NATS.AccountSeed,
 			ConnectWait: chainCfg.NATS.ConnectWait,
 		},
+		MaxCredentialSize:    pipeCfg.MaxCredentialSize,
+		MaxInlinePayloadSize: pipeCfg.MaxInlinePayloadSize,
+		MaxIngestPayloadSize: pipeCfg.MaxPushBodySize,
 	}
 	cfg.DecisionRecord = pipelineruntime.DecisionRecordConfig{
 		Level:         pipeCfg.DecisionRecord.Level,

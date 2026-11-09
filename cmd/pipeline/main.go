@@ -220,7 +220,7 @@ func main() {
 	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 
 	mountIngest := func(mux *http.ServeMux) error {
-		return mountPushRoutes(mux, dp.PushBindings(), verifier, pipeCfg.MaxPushBodySize)
+		return mountPushRoutes(mux, dp.PushBindings(), verifier)
 	}
 	var natsHealthy func() bool
 	if dp.Conn() != nil {
@@ -242,7 +242,7 @@ func main() {
 		log.Printf("pipeline: metrics exposition mounted at /metrics")
 	}
 
-	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxPushBodySize)
+	maxHTTPRequestBytes := outerRequestCapBytes(rtCfg.MaxIngestPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("pipeline: build server: %v", err)

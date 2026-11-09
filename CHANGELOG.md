@@ -172,6 +172,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   and `(*pipelineconfig.Config).PresentsCredentialTo` reports whether any fetch
   of the pipeline may present the bearer to an endpoint, reading any spelling
   of a listed origin. A value that is not an http(s) origin fails startup.
+- `provin.network.pipeline.max-inline-payload-size` (default 1 MiB): the
+  most bytes of an inline payload in an envelope a pipeline loop receives
+  over the transport; with `max-credential-size` it also bounds the whole
+  message. In Go, `pipelineconfig.Config.MaxInlinePayloadSize`. A value that
+  is not positive fails startup.
 - `provin bundle export --credential-origin <origin>` (repeatable): an origin
   (`scheme://host[:port]`) the `--token` may be shown to, besides
   `--registry`'s, read in the same spelling as `credential-origins`.
@@ -188,6 +193,30 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- **BREAKING (Go API)** `envelopecodec.New` takes `envelopecodec.Limits`
+  (`MaxCredentialSize`, `MaxInlinePayloadSize`) and returns an error: a codec
+  without bounds can no longer be made. It refuses limits that are not
+  positive, or whose sum with the envelope's framing passes the largest int,
+  with the new `envelopecodec.ErrInvalidLimits`. `UnmarshalEnvelope` refuses
+  what passes them with the new `ErrMessageTooLarge`, `ErrCredentialTooLarge`
+  and `ErrInlinePayloadTooLarge`. The zero `Codec` refuses every message it is
+  given to unmarshal.
+- **BREAKING (Go API)** `ingest.New` requires the new
+  `ingest.Config.MaxPayloadSize`, and refuses one that is not positive with
+  the new `ingest.ErrInvalidMaxPayloadSize`: a source processor without a
+  bound can no longer be made. `Process` refuses a longer input as an
+  errored result, before reading it.
+- **BREAKING (Go API)** `pipeline/runtime.Config` gains `MaxCredentialSize`
+  and `MaxInlinePayloadSize`, which `runtime.Build` requires when a loop is
+  configured: without them it fails with `envelopecodec.ErrInvalidLimits`
+  before it dials. It also gains `MaxIngestPayloadSize`, which `runtime.Build`
+  requires, before it dials, when a source loop is configured: it bounds a
+  source loop's raw input and, through the new `PushBinding.MaxBodySize`, the
+  body its push route accepts, so the two refuse the same payloads.
+  `cmd/pipeline` sets them from `pipeline.max-credential-size`, which now
+  bounds an envelope's credential too, the new
+  `pipeline.max-inline-payload-size`, and `pipeline.max-push-body-size`,
+  which now bounds a source loop's raw input too.
 - **BREAKING (Go API)** `canon/urdna2015`'s `Canonicalize` refuses by
   default a document holding, at any depth, a `@context` other than the IRI
   of a context the `Canonicalizer` serves or a list of them: a context
@@ -632,6 +661,22 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- A pipeline loop refuses an envelope it receives over the transport whose
+  credential is longer than `pipeline.max-credential-size`, or whose inline
+  payload is longer than the new `pipeline.max-inline-payload-size` (1 MiB by
+  default), and, before decoding it, a message longer than the two and the
+  envelope's framing. A source loop refuses a raw input on its ingest
+  subject longer than `pipeline.max-push-body-size`, the bound the push
+  route already puts on what it publishes there. Before, a node decoded and
+  processed whatever the messaging backend delivered. With the three keys
+  and NATS's `max_payload` at their defaults (1 MiB each) nothing changes;
+  the bounds take effect where a hub raises `max_payload`. A node that
+  lowered `max-credential-size` or `max-push-body-size` below 1 MiB, for the
+  HTTP and fetch paths they bounded before, now also refuses transport
+  messages past them. A refused envelope is dropped and logged as one that
+  does not decode, and an archival sink records it as a decode failure; a
+  refused raw input is dropped and logged as an errored ingest. The errors
+  name the two sizes only.
 - `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, refuse a value
   object where JSON-LD keeps none (an item of the document's array, of
   `@graph` or of `@included`), and a JSON literal however its `@type` is

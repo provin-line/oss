@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/pipeline/contract"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -42,7 +41,7 @@ func byRefEnvelope(t *testing.T, issuer string, payload []byte) []byte {
 	if err != nil {
 		t.Fatalf("vc.New: %v", err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: nil, SequenceNo: 1})
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: nil, SequenceNo: 1})
 	if err != nil {
 		t.Fatalf("MarshalEnvelope: %v", err)
 	}
@@ -63,7 +62,7 @@ func TestNew_ByReferenceIngressRequiresResolver(t *testing.T) {
 		Verifier:  stubVerifier{state: vc.ConfidenceVerified},
 		Store:     h.store,
 		Publisher: h.pub,
-		Codec:     envelopecodec.New(),
+		Codec:     testCodec(),
 		Emission:  h.emis,
 		Fold:      ManifestFold{},
 	}

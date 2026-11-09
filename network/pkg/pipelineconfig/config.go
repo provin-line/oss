@@ -72,6 +72,7 @@ const (
 	credentialOriginsKey       = pipelineKey + ".credential-origins"
 	maxCredentialSizeKey       = pipelineKey + ".max-credential-size"
 	maxPushBodySizeKey         = pipelineKey + ".max-push-body-size"
+	maxInlinePayloadSizeKey    = pipelineKey + ".max-inline-payload-size"
 	maxRetainChunkSizeKey      = pipelineKey + ".max-retain-chunk-size"
 	maxRetainPayloadSizeKey    = pipelineKey + ".max-retain-payload-size"
 	tlogMirrorKey              = pipelineKey + ".tlog-mirror"
@@ -134,16 +135,26 @@ type Config struct {
 	// without the scheme's default port; PresentsCredentialTo reads any spelling of an
 	// origin. Empty by default.
 	CredentialOrigins []string
-	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
-	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
-	// bloated body. Node-level: it governs every fetch/store, not just the async resolver.
-	// Sourced from reference.conf (no Go default); a non-positive value fails startup.
+	// MaxCredentialSize bounds the bytes of a single VC the node takes in: on the
+	// fetch/store path (the VCResolverService client and handler), and in an envelope a
+	// pipeline loop receives over the transport (envelopecodec.Limits) — a hostile peer
+	// must not OOM the node with a bloated body. Node-level: it governs every fetch/store
+	// and every loop. Sourced from reference.conf (no Go default); a non-positive value
+	// fails startup.
 	MaxCredentialSize int
-	// MaxPushBodySize bounds an HTTP push request body (the apipush adapter). Distinct
-	// from MaxCredentialSize: that key bounds credentials on the fetch/store path, this
-	// one bounds a raw ingest payload. Sourced from reference.conf (no Go default); a
-	// non-positive value fails startup.
+	// MaxPushBodySize bounds a raw ingest payload: an HTTP push request body (the
+	// apipush adapter), and a raw input a source loop receives on its ingest subject
+	// (ingest.Config.MaxPayloadSize), so the two refuse the same payloads. Distinct from
+	// MaxCredentialSize: that key bounds credentials, this one bounds a raw ingest
+	// payload. Sourced from reference.conf (no Go default); a non-positive value fails
+	// startup.
 	MaxPushBodySize int
+	// MaxInlinePayloadSize bounds the bytes of an inline payload in an envelope a
+	// pipeline loop receives over the transport (envelopecodec.Limits); with
+	// MaxCredentialSize it also bounds the whole message, which the codec refuses before
+	// decoding it. Node-level: it governs every loop. Sourced from reference.conf (no Go
+	// default); a non-positive value fails startup.
+	MaxInlinePayloadSize int
 	// MaxRetainChunkSize bounds one RetainPayload chunk frame (PayloadStoreService —
 	// mounted as the per-RPC connect read cap in netcompose). Sourced from
 	// reference.conf (no Go default); a non-positive value fails startup.
@@ -498,6 +509,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		return nil, err
 	}
 	if out.MaxPushBodySize, err = loadPositiveInt(cfg, maxPushBodySizeKey); err != nil {
+		return nil, err
+	}
+	if out.MaxInlinePayloadSize, err = loadPositiveInt(cfg, maxInlinePayloadSizeKey); err != nil {
 		return nil, err
 	}
 	if out.MaxRetainChunkSize, err = loadPositiveInt(cfg, maxRetainChunkSizeKey); err != nil {

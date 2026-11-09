@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/tlog/memlog"
 )
 
@@ -15,7 +14,7 @@ func TestProcess_StrippedPublishHealthAccessors(t *testing.T) {
 	cfg := Config{
 		Ingress: []Ingress{{Subscriber: &captureSubscriber{}}}, Window: time.Hour,
 		Signer: &recordSigner{}, Verifier: stubVerifier{}, Store: &recordStore{},
-		Publisher: &recordPublisher{}, Codec: envelopecodec.New(), Emission: memlog.New(),
+		Publisher: &recordPublisher{}, Codec: testCodec(), Emission: memlog.New(),
 		Fold: ManifestFold{},
 	}
 	p, err := New(cfg)

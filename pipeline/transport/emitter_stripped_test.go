@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // A stripped-publisher-equipped Emitter dual-publishes: the primary form
@@ -15,7 +14,7 @@ import (
 func TestEmitter_Stripped_DualPublishSameSeq(t *testing.T) {
 	pub := &fakePublisher{}
 	stripped := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -39,7 +38,7 @@ func TestEmitter_Stripped_DualPublishSameSeq(t *testing.T) {
 	}
 
 	// The stripped envelope round-trips to a nil Payload via the real codec.
-	env, err := envelopecodec.New().UnmarshalEnvelope(stripped.calls[0])
+	env, err := testCodec().UnmarshalEnvelope(stripped.calls[0])
 	if err != nil {
 		t.Fatalf("UnmarshalEnvelope(stripped): %v", err)
 	}
@@ -51,7 +50,7 @@ func TestEmitter_Stripped_DualPublishSameSeq(t *testing.T) {
 	}
 
 	// The primary form is unaffected: it still carries the payload.
-	primaryEnv, err := envelopecodec.New().UnmarshalEnvelope(pub.calls[0])
+	primaryEnv, err := testCodec().UnmarshalEnvelope(pub.calls[0])
 	if err != nil {
 		t.Fatalf("UnmarshalEnvelope(primary): %v", err)
 	}
@@ -77,7 +76,7 @@ func TestEmitter_Stripped_FailureDoesNotFailEmit(t *testing.T) {
 	pub := &fakePublisher{}
 	stripped := &failingPublisher{}
 	tl := &fakeTlog{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), tl, nil, transport.WithStrippedPublisher(stripped))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), tl, nil, transport.WithStrippedPublisher(stripped))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestEmitter_Stripped_FailureDoesNotFailEmit(t *testing.T) {
 // behavior: one publish, and the accessors report zero/none.
 func TestEmitter_NoStrippedPublisher_Unchanged(t *testing.T) {
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -152,7 +151,7 @@ func TestEmitter_NoStrippedPublisher_Unchanged(t *testing.T) {
 func TestEmitter_Stripped_PrimaryFailureSkipsStripped(t *testing.T) {
 	pub := &fakePublisher{failFirst: 1}
 	stripped := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -199,7 +198,7 @@ func (p *toggleFailPublisher) Close() error  { return nil }
 // it — so a broken-then-quiet publisher never falsely recovers on elapsed time.
 func TestEmitter_StrippedPublishHealth_TracksLastOutcome(t *testing.T) {
 	stripped := &toggleFailPublisher{failFirst: 1}
-	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
+	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, testCodec(), &fakeTlog{}, nil, transport.WithStrippedPublisher(stripped))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}

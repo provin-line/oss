@@ -148,6 +148,18 @@ func TestPipelineRuntimeConfigFrom_MapsDecisionRecord(t *testing.T) {
 	}
 }
 
+func TestPipelineRuntimeConfigFrom_MapsEnvelopeLimits(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNATS, NATS: chainconfig.NATSConfig{URL: "nats://x:4222"}}
+	pipeCfg := &pipelineconfig.Config{MaxCredentialSize: 3 << 20, MaxInlinePayloadSize: 5 << 20, MaxPushBodySize: 7 << 20}
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxCredentialSize != 3<<20 || cfg.MaxInlinePayloadSize != 5<<20 || cfg.MaxIngestPayloadSize != 7<<20 {
+		t.Errorf("limits = %d, %d, %d; want %d, %d, %d", cfg.MaxCredentialSize, cfg.MaxInlinePayloadSize, cfg.MaxIngestPayloadSize, 3<<20, 5<<20, 7<<20)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // auditClientFactory — cache-per-DID (pure, no network).
 // ─────────────────────────────────────────────────────────────────────────

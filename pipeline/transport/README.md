@@ -6,7 +6,7 @@ event processor.
 
 ## Conventions
 
-- This is the **Hub swap point** for the pub-sub backend: `nats/` (JetStream) is the
+- This is the **Hub swap point** for the pub-sub backend: `nats/` (core NATS) is the
   OSS default; SQS/SNS and others replace it without touching process logic.
 - `envelopecodec/` is the wire codec for pipeline envelopes (the reference
   implementation of `contract.EnvelopeCodec`, over `dplaax.pipeline.v1`). It is
@@ -14,6 +14,12 @@ event processor.
   (by-reference); whether absence is legitimate is decided by the layer that knows
   the subscription's agreed delivery mode, never by the codec. Fail-closed on empty
   inline payloads (marshal side) and on zero sequence numbers (both directions).
+  What a subscriber delivers has no bound that holds regardless of the backend, so
+  `envelopecodec.New` takes `Limits` (node-level, the same for every
+  subscription) and there is no unbounded codec: it refuses a message longer than
+  the two limits and the framing of the envelope's fields before reading it, then
+  a credential or an inline payload past its limit, with an error naming the two
+  sizes only.
   Reversal condition for the codec-external mode check: if the runtime-loop work
   reveals no single layer knows the delivery mode, add a mode-aware wrapper as a
   pure addition — never push the check into this codec.

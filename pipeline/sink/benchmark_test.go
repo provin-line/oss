@@ -8,7 +8,6 @@ import (
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -59,7 +58,7 @@ func BenchmarkSinkDelivery(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			cfg := sink.Config{
 				Strategy: contract.VerificationAdjacent, Kind: contract.SinkProduction,
-				Codec: envelopecodec.New(), Verifier: tc.verifier, Appraiser: tc.appraiser,
+				Codec: testCodec(), Verifier: tc.verifier, Appraiser: tc.appraiser,
 				AgentBoundaryID: tc.boundary, DecisionRecorder: tc.recorder, Store: benchmarkStore{}, Writer: benchmarkWriter{},
 				UpstreamEndpoint: "https://upstream.example", AllowIssuers: []string{issuer},
 			}

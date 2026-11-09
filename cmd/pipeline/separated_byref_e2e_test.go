@@ -393,7 +393,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	// a PayloadStore (D-6), so this loop dual-emits automatically — no
 	// separate opt-in needed to prove property 1. ---
 	producerPipeCfg := &pipelineconfig.Config{
-		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20,
+		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
 		Loops: []pipelineconfig.LoopConfig{{
 			Name: "byrefsrc", Role: pipelineconfig.RoleSource, IngressSubject: byrefProducerIngress,
 			Source: pipelineconfig.SourceConfig{
@@ -431,7 +431,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	localResolver.Add(sepOwnerDocLocal(sepOwnerDID))
 	localResolver.Add(sepLocalProcessDoc(t, byrefProducerIssuerDID, sepOwnerDID, producerIssuerKP.PublicKey))
 	consumerPipeCfg := &pipelineconfig.Config{
-		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20,
+		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
 		DecisionRecord: pipelineconfig.DecisionRecordConfig{
 			Level: decisionrecord.LevelAll, Output: pipelineconfig.DecisionRecordOutputLog, SummaryWindow: time.Minute,
 		},

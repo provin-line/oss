@@ -33,6 +33,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // fakeVCStore is a minimal IngressStorer test double: it derives a
 // deterministic body address (sha256 of the credential bytes) and does no
 // persistence. It is enough for the assembly-level tests in this file, which
@@ -135,7 +145,7 @@ func dpKeyStore(t *testing.T) keystore.KeyStore {
 }
 
 func dpPipelineCfg() *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "src",
 		Role:           RoleSource,
 		IngressSubject: dpIngress,
@@ -202,7 +212,7 @@ loop:
 		}
 	}
 
-	env, err := envelopecodec.New().UnmarshalEnvelope(wire)
+	env, err := testCodec().UnmarshalEnvelope(wire)
 	if err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
@@ -264,11 +274,11 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	badLC.Name = "bad"
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
 
-	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, goodLC)
+	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, testCodec(), 1<<20, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, goodLC)
 	if err != nil {
 		t.Fatalf("build good loop: %v", err)
 	}
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
+	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, testCodec(), 1<<20, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}
@@ -328,7 +338,7 @@ func (stubResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
 }
 
 func dpSinkCfg() *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "archive",
 		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,
@@ -535,7 +545,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	}
 
 	// Aggregate: the early-continue path appends exactly once, producer+consumer.
-	aggCfg := &Config{Loops: []LoopConfig{{
+	aggCfg := &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name: "agg",
 		Role: RoleAggregate,
 		Aggregate: AggregateConfig{
@@ -664,7 +674,7 @@ const (
 )
 
 func dpChainedCfg(converter string) *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "relay",
 		Role:           RoleChained,
 		IngressSubject: dpPipelineDID,
@@ -779,7 +789,7 @@ func dpArchivalSinkCfg() *Config {
 // ONLY in that identity — the axis the reject-log rekeying fix (Task 7) must
 // key storage on.
 func dpArchivalSinkCfgWithIssuer(issuerDID string) *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "archive",
 		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,

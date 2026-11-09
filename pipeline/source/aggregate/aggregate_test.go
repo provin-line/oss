@@ -22,6 +22,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // --- stubs ------------------------------------------------------------------
 
 type captureSubscriber struct {
@@ -147,7 +157,7 @@ func ingressEnvelopeWith(t *testing.T, issuer string, hashSrc, data []byte) []by
 	if err != nil {
 		t.Fatalf("vc.New: %v", err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: data, SequenceNo: 1})
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: data, SequenceNo: 1})
 	if err != nil {
 		t.Fatalf("MarshalEnvelope: %v", err)
 	}
@@ -179,7 +189,7 @@ func newHarness(t *testing.T, opts func(*Config)) *harness {
 		Verifier:  stubVerifier{state: vc.ConfidenceVerified},
 		Store:     store,
 		Publisher: pub,
-		Codec:     envelopecodec.New(),
+		Codec:     testCodec(),
 		Emission:  emis,
 		Fold:      ManifestFold{},
 		Observers: []contract.ProcessObserver{obs},
@@ -230,7 +240,7 @@ func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 	if len(h.pub.calls) != 1 {
 		t.Fatalf("published = %d, want 1", len(h.pub.calls))
 	}
-	env, err := envelopecodec.New().UnmarshalEnvelope(h.pub.calls[0])
+	env, err := testCodec().UnmarshalEnvelope(h.pub.calls[0])
 	if err != nil {
 		t.Fatalf("decode emitted: %v", err)
 	}
@@ -286,7 +296,7 @@ func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
 	}
 	call := reg.calls[0]
 	// The registered head hash is the emitted credential's content address.
-	env, _ := envelopecodec.New().UnmarshalEnvelope(h.pub.calls[0])
+	env, _ := testCodec().UnmarshalEnvelope(h.pub.calls[0])
 	wantHead, _ := env.Credential.Hash()
 	if call.headHash != wantHead {
 		t.Errorf("registered head = %q, want emitted head %q", call.headHash, wantHead)
@@ -456,7 +466,7 @@ func TestNew_RequiresDeps(t *testing.T) {
 		return Config{
 			Ingress: []Ingress{{Subscriber: &captureSubscriber{}}}, Window: time.Hour,
 			Signer: &recordSigner{}, Verifier: stubVerifier{}, Store: &recordStore{},
-			Publisher: &recordPublisher{}, Codec: envelopecodec.New(), Emission: memlog.New(),
+			Publisher: &recordPublisher{}, Codec: testCodec(), Emission: memlog.New(),
 			Fold: ManifestFold{},
 		}
 	}

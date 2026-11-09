@@ -267,6 +267,10 @@ type Envelope struct {
 // wire encoding is pinned at the proto layer; processes and external
 // adapters depend only on this interface.
 //
+// What a process hands UnmarshalEnvelope is a message as the transport
+// delivered it, with no bound that holds regardless of the messaging backend: an
+// implementation bounds what it decodes (envelopecodec does, by its Limits).
+//
 // Its errors keep the rule for a part's errors in the package doc.
 type EnvelopeCodec interface {
 	MarshalEnvelope(e *Envelope) ([]byte, error)

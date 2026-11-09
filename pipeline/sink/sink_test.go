@@ -21,6 +21,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 24, MaxInlinePayloadSize: 1 << 24})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // compile-time: *Processor implements contract.EventProcessor.
 var _ contract.EventProcessor = (*sink.Processor)(nil)
 
@@ -120,7 +130,7 @@ func boundCredIssuer(t testing.TB, payload []byte, issuer string) *vc.PipelinePa
 
 func encode(t testing.TB, cred *vc.PipelinePassCredential, payload []byte) []byte {
 	t.Helper()
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: cred,
 		Payload:    payload,
 		SequenceNo: 1,
@@ -164,7 +174,7 @@ func baseConfig(v *fakeVerifier, s *fakeStore, w *fakeWriter) sink.Config {
 	return sink.Config{
 		Strategy:         contract.VerificationAdjacent,
 		Kind:             contract.SinkObservationOnly,
-		Codec:            envelopecodec.New(),
+		Codec:            testCodec(),
 		Verifier:         v,
 		Store:            s,
 		Writer:           w,
@@ -177,7 +187,7 @@ func baseConfig(v *fakeVerifier, s *fakeStore, w *fakeWriter) sink.Config {
 // ---------------------------------------------------------------------------
 
 func TestNew_Validation(t *testing.T) {
-	codec := envelopecodec.New()
+	codec := testCodec()
 	v := &fakeVerifier{result: verified()}
 	s := &fakeStore{}
 	w := &fakeWriter{}
@@ -588,7 +598,7 @@ func TestProcess_DecodeFails_Errored(t *testing.T) {
 func TestProcess_NilPayload_Errored(t *testing.T) {
 	cred := boundCred(t, []byte(`{"x":1}`))
 	// Envelope with nil payload (by-reference) — craft via codec by passing nil.
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: nil, SequenceNo: 1})
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: cred, Payload: nil, SequenceNo: 1})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -989,7 +999,7 @@ func TestProcess_RejectLog_EveryRejectPathRecords(t *testing.T) {
 			verifier: &fakeVerifier{result: verified()},
 			store:    &fakeStore{},
 			wire: func(t *testing.T) []byte {
-				wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: boundCred(t, good), Payload: nil, SequenceNo: 1})
+				wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: boundCred(t, good), Payload: nil, SequenceNo: 1})
 				if err != nil {
 					t.Fatalf("encode nil payload: %v", err)
 				}

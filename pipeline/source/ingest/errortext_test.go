@@ -15,7 +15,7 @@ import (
 // An ingest step's errored Result names its error within
 // pipeexcerpt.TextLimit bytes of UTF-8, however long: a signer's error.
 func TestProcess_ErroredResultWithinTheLimit(t *testing.T) {
-	p, err := ingest.New(ingest.Config{Signer: &fakeSourceSigner{returnErr: errors.New(strings.Repeat("ab\n\xff", 64<<10))}})
+	p, err := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: &fakeSourceSigner{returnErr: errors.New(strings.Repeat("ab\n\xff", 64<<10))}})
 	if err != nil {
 		t.Fatal(err)
 	}

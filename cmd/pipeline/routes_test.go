@@ -131,8 +131,8 @@ func newTestPipelineHandler(t *testing.T) http.Handler {
 	verifier := endpoint.NewStaticEndpoint(nil) // no rules => every Verify fails; only the 401 (no bearer) path is asserted here
 	ready := make(chan struct{})                // never closed: the push route stays readiness-gated (503), not the point of this test
 	mountIngest := func(mux *http.ServeMux) error {
-		binding := pipelineruntime.PushBinding{Name: testLoopName, Publisher: fakePublisher{}, Ready: ready}
-		return mountPushRoutes(mux, []pipelineruntime.PushBinding{binding}, verifier, pipeCfg.MaxPushBodySize)
+		binding := pipelineruntime.PushBinding{Name: testLoopName, Publisher: fakePublisher{}, Ready: ready, MaxBodySize: pipeCfg.MaxPushBodySize}
+		return mountPushRoutes(mux, []pipelineruntime.PushBinding{binding}, verifier)
 	}
 	h, err := buildHandler(guard, pipeCfg, &auth.AuthConfig{}, mountIngest, nil, true)
 	if err != nil {

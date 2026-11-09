@@ -12,10 +12,20 @@ import (
 	"github.com/provin-line/oss/tlog/memlog"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // seqOf decodes a published wire envelope and returns its SequenceNo.
 func seqOf(t *testing.T, wire []byte) uint64 {
 	t.Helper()
-	env, err := envelopecodec.New().UnmarshalEnvelope(wire)
+	env, err := testCodec().UnmarshalEnvelope(wire)
 	if err != nil {
 		t.Fatalf("UnmarshalEnvelope: %v", err)
 	}
@@ -26,7 +36,7 @@ func seqOf(t *testing.T, wire []byte) uint64 {
 func TestEmitter_Emit_PublishesAppendsAdvances(t *testing.T) {
 	pub := &fakePublisher{}
 	tl := &fakeTlog{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -55,7 +65,7 @@ func TestEmitter_Emit_PublishesAppendsAdvances(t *testing.T) {
 // Nil credential / nil payload are caller contract violations: error, no publish.
 func TestEmitter_Emit_NilGuards(t *testing.T) {
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -77,7 +87,7 @@ func TestEmitter_Emit_NilGuards(t *testing.T) {
 func TestEmitter_Emit_PublishFailure_ReusesSequence(t *testing.T) {
 	pub := &fakePublisher{failFirst: 1}
 	tl := &fakeTlog{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -103,7 +113,7 @@ func TestEmitter_Emit_PublishFailure_ReusesSequence(t *testing.T) {
 func TestEmitter_Emit_AppendFailureAfterPublish_ReturnsNil(t *testing.T) {
 	pub := &fakePublisher{}
 	tl := &fakeTlog{failErr: context.DeadlineExceeded}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -131,7 +141,7 @@ func TestEmitter_Emit_AppendFailureAfterPublish_ReturnsNil(t *testing.T) {
 // StrippedPublishFailures.
 func TestEmitter_EmitCounters_OutcomePerReturn(t *testing.T) {
 	pub := &fakePublisher{failFirst: 1}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -160,7 +170,7 @@ func TestEmitter_EmitCounters_OutcomePerReturn(t *testing.T) {
 // counter — the event was delivered (same boundary as Emit's nil return).
 func TestEmitter_EmitCounters_AppendFailureCountsSuccess(t *testing.T) {
 	tl := &fakeTlog{failErr: context.DeadlineExceeded}
-	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(context.Background(), &fakePublisher{}, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -191,7 +201,7 @@ func TestNewEmitter_ResumesSequenceFromLogTail(t *testing.T) {
 		}
 	}
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter over a seeded log: %v", err)
 	}
@@ -211,7 +221,7 @@ func TestNewEmitter_DamagedTailFailsConstruction(t *testing.T) {
 	if _, err := tl.Append(context.Background(), []byte(`not an emission record`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), tl, nil); err == nil {
+	if _, err := transport.NewEmitter(context.Background(), &fakePublisher{}, testCodec(), tl, nil); err == nil {
 		t.Fatal("NewEmitter over a damaged tail: want error")
 	}
 }
@@ -223,7 +233,7 @@ func TestNewEmitter_SequenceExhaustionFailsClosed(t *testing.T) {
 	if _, err := tl.Append(context.Background(), []byte(`{"credentialHash":"sha256:aa","sequenceNo":"18446744073709551615"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transport.NewEmitter(context.Background(), &fakePublisher{}, envelopecodec.New(), tl, nil); err == nil {
+	if _, err := transport.NewEmitter(context.Background(), &fakePublisher{}, testCodec(), tl, nil); err == nil {
 		t.Fatal("MaxUint64 tail: want fail-closed error, got wrap-around")
 	}
 }
@@ -239,7 +249,7 @@ func TestNewEmitter_ResumesOverReopenedFilelog(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub1 := &fakePublisher{}
-	e1, err := transport.NewEmitter(ctx, pub1, envelopecodec.New(), l1, nil)
+	e1, err := transport.NewEmitter(ctx, pub1, testCodec(), l1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +269,7 @@ func TestNewEmitter_ResumesOverReopenedFilelog(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	pub2 := &fakePublisher{}
-	e2, err := transport.NewEmitter(ctx, pub2, envelopecodec.New(), l2, nil)
+	e2, err := transport.NewEmitter(ctx, pub2, testCodec(), l2, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter after restart: %v", err)
 	}
@@ -282,7 +292,7 @@ func TestNewEmitter_NoReuseAcrossLossWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e1, err := transport.NewEmitter(ctx, &fakePublisher{}, envelopecodec.New(), l1, nil)
+	e1, err := transport.NewEmitter(ctx, &fakePublisher{}, testCodec(), l1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +317,7 @@ func TestNewEmitter_NoReuseAcrossLossWindow(t *testing.T) {
 	}
 	defer l2.Close()
 	pub2 := &fakePublisher{}
-	e2, err := transport.NewEmitter(ctx, pub2, envelopecodec.New(), l2, nil)
+	e2, err := transport.NewEmitter(ctx, pub2, testCodec(), l2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +350,7 @@ func TestNewEmitter_EmptyLogHighWaterRecovers(t *testing.T) {
 	}
 	defer l2.Close()
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(ctx, pub, envelopecodec.New(), l2, nil)
+	e, err := transport.NewEmitter(ctx, pub, testCodec(), l2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +373,7 @@ func TestNewEmitter_HighWaterExhaustionFailsClosed(t *testing.T) {
 	if err := l.RecordIntent(ctx, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transport.NewEmitter(ctx, &fakePublisher{}, envelopecodec.New(), l, nil); err == nil {
+	if _, err := transport.NewEmitter(ctx, &fakePublisher{}, testCodec(), l, nil); err == nil {
 		t.Fatal("MaxUint64 high-water: want fail-closed error, got wrap-around")
 	}
 }
@@ -384,7 +394,7 @@ func TestEmitter_RecordIntentFailsClosedBeforePublish(t *testing.T) {
 	ctx := context.Background()
 	tl := &failingIntentTlog{fakeTlog: &fakeTlog{}, recordErr: errors.New("intent boom")}
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(ctx, pub, envelopecodec.New(), tl, nil)
+	e, err := transport.NewEmitter(ctx, pub, testCodec(), tl, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

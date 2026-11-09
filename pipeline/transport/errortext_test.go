@@ -11,7 +11,6 @@ import (
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // lockedBuffer is a bytes.Buffer safe for the loop's goroutine and the test's.
@@ -54,7 +53,7 @@ func TestLoop_LogsAProcessorsErrorWithinTheLimit(t *testing.T) {
 				Processor:  &fakeProcessor{results: []*contract.Result{c.result}, errs: []error{c.err}},
 				Subscriber: sub,
 				Publisher:  &fakePublisher{},
-				Codec:      envelopecodec.New(),
+				Codec:      testCodec(),
 				Emission:   &fakeTlog{},
 				Logger:     slog.New(slog.NewTextHandler(&logs, nil)),
 			})

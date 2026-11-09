@@ -45,6 +45,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // readingSchema constrains the pipeline payload: an object with a numeric
 // "reading". The chained process validates its input and output against it.
 var readingSchema = []byte(`{
@@ -374,7 +384,7 @@ type e2eOutcome struct {
 // exercise a verification failure end to end.
 func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resolver, srcPub, chPub []byte)) e2eOutcome {
 	t.Helper()
-	codec := envelopecodec.New()
+	codec := testCodec()
 	res := newMemResolver()
 	schemaValidator, schemaRef := readingValidator(t)
 
@@ -422,7 +432,7 @@ func runPipeline(t *testing.T, payload []byte, wireDocs func(didRes *local.Resol
 	bChainedSink := newBroker()
 
 	// --- Source (ingest, FirstDrop) ---
-	srcProc, err := ingest.New(ingest.Config{Signer: &registeringSigner{Signer: sourceSig, res: res, t: t}})
+	srcProc, err := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: &registeringSigner{Signer: sourceSig, res: res, t: t}})
 	if err != nil {
 		t.Fatalf("ingest.New: %v", err)
 	}

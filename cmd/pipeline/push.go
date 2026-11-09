@@ -20,14 +20,14 @@ import (
 	"github.com/provin-line/oss/pipeline/source/ingest/apipush"
 )
 
-// mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/.
-// Zero bindings mount nothing. The bindings themselves (pipelineruntime.
-// PushBinding) come from the data plane's loop builders
-// (pipeline/runtime.Build); this file owns only the HTTP mounting that
-// consumes them.
-func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding, verifier auth.Verifier, maxBodyBytes int) error {
+// mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/,
+// each bounding a body by its binding's MaxBodySize. Zero bindings mount
+// nothing. The bindings themselves (pipelineruntime.PushBinding) come from the
+// data plane's loop builders (pipeline/runtime.Build); this file owns only the
+// HTTP mounting that consumes them.
+func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding, verifier auth.Verifier) error {
 	for _, b := range bindings {
-		inner, err := apipush.New(apipush.Config{Publisher: b.Publisher, MaxBodyBytes: maxBodyBytes})
+		inner, err := apipush.New(apipush.Config{Publisher: b.Publisher, MaxBodyBytes: b.MaxBodySize})
 		if err != nil {
 			return fmt.Errorf("pipeline: loop %q: push adapter: %w", b.Name, err)
 		}
