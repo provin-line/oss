@@ -24,6 +24,12 @@ number it cannot read where upstream panics, and compiling a schema in time
 about linear in its size, its check against its metaschema within a work budget
 (its README). Each refusal names the bound it hit.
 
+This package does not bound a schema's size: its caller does, as the
+network's schema registration does at 1 MiB (the bound of a document request).
+The bounds below grow with the schema's size, and so does what a schema costs:
+one of 1 MiB keeps at most about 170 MB once compiled, and the worst shapes
+measured are compiled or refused in at most about 0.8 s (below).
+
 - A number in a schema or a payload: at most 256 bytes, with its exponent part
   (after `e` or `E`) within ±400. The library reads numbers as exact rationals,
   at a cost that grows with the exponent: the budget charges it on a payload,

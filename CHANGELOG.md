@@ -612,6 +612,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`'s doc states that, called directly, with a context
+  written in the document, `Canonicalize`'s work can grow as the square of
+  the document's size (of the shapes measured, the costliest takes about
+  30 s for 300 KB on darwin/arm64), and that a document not trusted goes
+  through `vc`'s `eddsa-rdfc-2022`, which reads only the contexts it serves
+  and whose work is linear. `schema`'s doc states that it does not bound a
+  schema's size, its caller does (the network's registration, at 1 MiB),
+  and what a schema of 1 MiB costs at worst.
 - `canon/urdna2015`'s refusals quote a key or value they name as `excerpt`
   quotes it, within 64 bytes: whole when its quoted form fits, or else its
   head and its length, escapes counted, as valid UTF-8. Before, they quoted

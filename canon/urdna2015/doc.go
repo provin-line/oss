@@ -11,6 +11,11 @@
 // the forms below. vc's eddsa-rdfc-2022 refuses such a document before it
 // is canonicalized, accepting as @context only the IRIs of the contexts it
 // serves; a program that calls this package itself gets no such refusal.
+// With a context of its own, a document can make the work of canonicalizing
+// it grow as the square of its size: of the shapes measured, the costliest
+// takes about 30 s for 300 KB (darwin/arm64). With only the contexts vc
+// serves, the work is linear in the document's size. A document not trusted
+// goes through vc's eddsa-rdfc-2022.
 //
 // # What is signed
 //
