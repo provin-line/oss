@@ -36,13 +36,21 @@ import (
 //     scanning memory (refusing a document of 1 MiB whose quads name an IRI
 //     of 512 KB takes about 0.5 s, measured).
 //   - Expanding the document lengthens its keys and strings by what its own
-//     contexts define. json-gold writes a new string at each use of a prefix
-//     (a compact IRI), of @vocab and of @base, so a long one used many times
-//     costs memory in the uses times its length (a document of 252 KB made
-//     it allocate 1.5 GB, measured); a long term IRI, a datatype a term's
-//     @type gives its values, and a language a context gives them are shared
-//     but read again at each use, in time in the uses times their length
-//     (about 5 s for 1 MiB, measured).
+//     contexts define (WithLocalContexts). json-gold writes a new string at
+//     each use of a prefix (a compact IRI) and of @vocab, so a long one used
+//     many times costs memory in the uses times its length: with an @vocab of
+//     half its size, a document of 250 KB made it allocate about 2.7 GB, and
+//     with one of about a third, a document of 1 MiB about 37 GB (urn: IRIs;
+//     darwin/arm64, measured). json-gold's bound on an IRI's length, 2,083
+//     characters, holds only for http and https IRIs, and is applied to the
+//     expanded form (rejectDroppableNodes mirrors it), after the expansion has
+//     allocated it; an IRI of another scheme, such as urn:, has no bound. A
+//     context setting @base is refused as it is read (contextRules.read).
+//   - A long term IRI, a datatype a term's @type gives its values, and a
+//     language a context gives them are shared but read again at each use,
+//     in time in the uses times their length: with a default language of
+//     half its size, a document of 250 KB took about 18 s, and one of 1 MiB
+//     more than 150 s (darwin/arm64, measured).
 
 // canonicalBase and canonicalPerDocumentByte bound the length of the
 // canonical form: 1 MiB, and 32 bytes per byte of the document as JSON

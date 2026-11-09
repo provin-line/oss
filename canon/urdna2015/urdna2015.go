@@ -63,10 +63,12 @@ type Option struct {
 // of a scoped context of a type the document does not use, is not checked.
 //
 // With a context of its own, a document can make the work of canonicalizing
-// it grow as the square of its size: of the shapes measured, the costliest
-// takes about 30 s for 300 KB, and another allocates about 700 MB for 250 KB
-// (darwin/arm64), observations, not bounds. Open it only for documents the
-// program trusts, and bound their size.
+// it, and the memory it allocates, grow as the square of its size. Of the
+// shapes measured (darwin/arm64), observations, not bounds: a long default
+// language takes about 18 s for 250 KB and more than 150 s for 1 MiB; a long
+// @vocab of urn: IRIs allocates about 2.7 GB for 250 KB and about 37 GB for
+// 1 MiB (size.go). Open it only for documents the program trusts, and bound
+// their size.
 func WithLocalContexts() Option {
 	return Option{apply: func(c *Canonicalizer) { c.localContexts = true }}
 }

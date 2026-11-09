@@ -10,22 +10,24 @@
 // json-gold would treat as a remote document URL) is rejected before it
 // reaches the processor.
 //
-// By default, Canonicalize accepts as @context, at any depth, only the IRI
-// of a context it serves or a list of them, and refuses a document holding
-// a context written in it (a JSON-LD local context), or the IRI of a context
-// not served, before JSON-LD processing reads it: every context definition
-// a document uses then comes from the documents its caller serves. A program
+// By default, Canonicalize accepts as @context, at any depth, only the IRI of
+// a context it serves or a list of them, and refuses a document holding a
+// context written in it (a JSON-LD local context), or the IRI of a context not
+// served, before JSON-LD processing reads it: every context definition a
+// document uses then comes from the documents its caller serves. A program
 // that passes WithLocalContexts to NewCanonicalizer has Canonicalize read a
-// document's own contexts too, holding them to the forms below. With a
-// context of its own, a document can make the work of canonicalizing it grow
-// as the square of its size: of the shapes measured, the costliest takes
-// about 30 s for 300 KB, and another allocates about 700 MB for 250 KB
-// (darwin/arm64). So a program opens it only for documents it trusts, and
-// bounds their size. With only the contexts vc serves, the work measured
-// grows linearly with the document's size, but is heavy (vc's
-// RegisterEdDSARDFC2022 gives the costliest shape): a caller bounds the size
-// either way. vc's eddsa-rdfc-2022 does not open WithLocalContexts, and
-// refuses such a document itself too, before it is canonicalized.
+// document's own contexts too, holding them to the forms below. With a context
+// of its own, a document can make the work of canonicalizing it, and the
+// memory it allocates, grow as the square of its size: of the shapes measured
+// (darwin/arm64), a long default language takes about 18 s for 250 KB and more
+// than 150 s for 1 MiB, and a long @vocab of urn: IRIs allocates about 2.7 GB
+// for 250 KB and about 37 GB for 1 MiB (size.go). So a program opens it only
+// for documents it trusts, and bounds their size. With only the contexts vc
+// serves, the work measured grows linearly with the document's size, but is
+// heavy (vc's RegisterEdDSARDFC2022 gives the costliest shape): a caller
+// bounds the size either way. vc's eddsa-rdfc-2022 does not open
+// WithLocalContexts, and refuses such a document itself too, before it is
+// canonicalized.
 //
 // # What is signed
 //
