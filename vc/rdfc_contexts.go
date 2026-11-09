@@ -20,12 +20,13 @@ const rdfcContextQuoteLimit = 256
 
 // servedContextsOnly is the eddsa-rdfc-2022 canonicalizer over contexts:
 // URDNA2015 over the context documents served offline, refusing first a
-// document that holds any @context other than their IRIs. Every term such a
-// document uses is then defined in the served contexts, which this module
-// holds, so a document cannot define a term of its own: what
+// document that holds any @context other than their IRIs. Every context
+// definition such a document uses then comes from the served contexts, which
+// this module holds, so a document cannot define a term of its own: what
 // canon/urdna2015 checks a document against is fixed by the contexts vc
-// serves. canon/urdna2015's Canonicalize itself reads a document's own
-// contexts; this holds only on vc's path.
+// serves. The canonicalizer it wraps refuses such a document too, as vc does
+// not pass urdna2015.WithLocalContexts; the check here holds the rule on vc's
+// path whatever that default.
 func servedContextsOnly(contexts map[string][]byte) canon.Canonicalizer {
 	served := make(map[string]bool, len(contexts))
 	for iri := range contexts {

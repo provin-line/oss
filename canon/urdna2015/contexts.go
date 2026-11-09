@@ -212,6 +212,77 @@ func (r *contextRules) readDocument(v any) error {
 	return nil
 }
 
+// rejectLocalContexts refuses the first @context in v, at any depth, that is
+// not the IRI of a context served or a list of them: a context written in
+// the document (a local context), or an IRI not served. JSON-LD gives
+// @context no alias, so the key written out finds every context. path is
+// where v is, for the error.
+func rejectLocalContexts(v any, served map[string][]byte, path *jsonPath) error {
+	switch t := v.(type) {
+	case []any:
+		for i, x := range t {
+			*path = append(*path, pathSegment{index: i})
+			if err := rejectLocalContexts(x, served, path); err != nil {
+				return err
+			}
+			*path = (*path)[:len(*path)-1]
+		}
+	case map[string]any:
+		for _, k := range sortedKeys(t) {
+			*path = append(*path, pathSegment{key: k, index: -1})
+			var err error
+			if k == "@context" {
+				err = rejectLocalContext(t[k], served, path)
+			} else {
+				err = rejectLocalContexts(t[k], served, path)
+			}
+			if err != nil {
+				return err
+			}
+			*path = (*path)[:len(*path)-1]
+		}
+	}
+	return nil
+}
+
+// rejectLocalContext refuses a @context value at path that is not the IRI of
+// a context served or a list of them.
+func rejectLocalContext(ctx any, served map[string][]byte, path *jsonPath) error {
+	list, ok := ctx.([]any)
+	if !ok {
+		return rejectUnservedContext(ctx, served, path)
+	}
+	for i, x := range list {
+		*path = append(*path, pathSegment{index: i})
+		if err := rejectUnservedContext(x, served, path); err != nil {
+			return err
+		}
+		*path = (*path)[:len(*path)-1]
+	}
+	return nil
+}
+
+// rejectUnservedContext refuses a context at path that is not the IRI of a
+// context served, naming what it is.
+func rejectUnservedContext(ctx any, served map[string][]byte, path *jsonPath) error {
+	switch t := ctx.(type) {
+	case string:
+		if _, ok := served[t]; ok {
+			return nil
+		}
+		return fmt.Errorf("urdna2015: @context at %s names %s, a context this Canonicalizer does not serve", path.quoted(), bounded(t))
+	case map[string]any:
+		return fmt.Errorf("urdna2015: @context at %s is a context written in the document: this Canonicalizer reads only the contexts it serves, by their IRIs, unless WithLocalContexts opens it", path.quoted())
+	case []any:
+		return fmt.Errorf("urdna2015: @context at %s holds a list, not the IRI of a context this Canonicalizer serves", path.quoted())
+	case bool:
+		return fmt.Errorf("urdna2015: @context at %s holds a boolean, not the IRI of a context this Canonicalizer serves", path.quoted())
+	case nil:
+		return fmt.Errorf("urdna2015: @context at %s holds null, not the IRI of a context this Canonicalizer serves", path.quoted())
+	}
+	return fmt.Errorf("urdna2015: @context at %s holds a value of type %T, not the IRI of a context this Canonicalizer serves", path.quoted(), ctx)
+}
+
 // readServed reads the contexts a Canonicalizer serves, parsed as its
 // loader parses them (offlineLoader), so the rules read what json-gold reads.
 // A document that is not JSON is left to the loader to report.

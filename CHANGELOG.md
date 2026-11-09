@@ -188,6 +188,26 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- **BREAKING (Go API)** `canon/urdna2015`'s `Canonicalize` refuses by
+  default a document holding, at any depth, a `@context` other than the IRI
+  of a context the `Canonicalizer` serves or a list of them: a context
+  written in the document (JSON-LD's local context), or an IRI not served.
+  It refuses it before JSON-LD processing reads it, so every context
+  definition a document uses comes from the documents the caller serves.
+  With a context of its own, a document could make the work of
+  canonicalizing it grow as the square of its size (of the shapes measured,
+  the costliest took about 30 s for 300 KB, and another allocated about
+  700 MB for 250 KB, on darwin/arm64). A program that
+  canonicalizes documents with their own contexts passes the new
+  `urdna2015.WithLocalContexts()` to `NewCanonicalizer`, which then reads
+  them as before; it opens it only for documents it trusts, and bounds their
+  size. `NewCanonicalizer` takes options (`opts ...urdna2015.Option`; only
+  `canon/urdna2015` makes an `Option`, and the zero `Option` changes
+  nothing): every call compiles as before, but `NewCanonicalizer` assigned
+  to a variable or parameter of type `func(map[string][]byte)
+  *urdna2015.Canonicalizer` no longer does. `vc`'s `eddsa-rdfc-2022` is
+  unchanged: it refused such a document already, and does not open the
+  option.
 - **BREAKING (Go API)** `eddsa-rdfc-2022` is registered only when a process
   calls the new `vc.RegisterEdDSARDFC2022`; `vc`'s init registers
   `eddsa-jcs-2022` alone. Until then nothing in `vc` issues or verifies an
@@ -217,7 +237,7 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   or another IRI, before it is canonicalized (Security, below). Credentials,
   presentations and provin's documents of the embedded contexts alone are
   unchanged. `canon/urdna2015`'s `Canonicalize`, called by a program itself,
-  still reads a document's own contexts.
+  refuses such a document too by default (above).
 - **BREAKING (wire)** provin's own binaries do not call
   `vc.RegisterEdDSARDFC2022`, so they refuse an `eddsa-rdfc-2022` credential
   they verified before; this release has no setting that turns the suite on

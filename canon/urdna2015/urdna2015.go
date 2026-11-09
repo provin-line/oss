@@ -41,7 +41,34 @@ const ErrTooComplex Error = "urdna2015: dataset too complex to canonicalize"
 type Canonicalizer struct {
 	contexts map[string][]byte
 
+	// localContexts is whether Canonicalize reads a context written in the
+	// document (WithLocalContexts).
+	localContexts bool
+
 	served *servedRules
+}
+
+// Option configures a Canonicalizer. Only this package makes one, so only the
+// options it documents change what Canonicalize accepts; the zero Option
+// changes nothing.
+type Option struct {
+	apply func(*Canonicalizer)
+}
+
+// WithLocalContexts makes Canonicalize read a context written in the
+// document, a JSON-LD local context (a map given as @context), besides the
+// IRIs of the contexts it serves, holding it to the forms the package doc
+// lists. Without it, Canonicalize refuses such a document. A context the
+// processing loads must still be one served; one it never loads, as the IRI
+// of a scoped context of a type the document does not use, is not checked.
+//
+// With a context of its own, a document can make the work of canonicalizing
+// it grow as the square of its size: of the shapes measured, the costliest
+// takes about 30 s for 300 KB, and another allocates about 700 MB for 250 KB
+// (darwin/arm64), observations, not bounds. Open it only for documents the
+// program trusts, and bound their size.
+func WithLocalContexts() Option {
+	return Option{apply: func(c *Canonicalizer) { c.localContexts = true }}
 }
 
 // servedRules is what the served contexts define (contexts.go), read once,
@@ -58,14 +85,26 @@ type servedRules struct {
 // change canonical output. A context document that is not valid JSON is
 // reported by Canonicalize (registration-time probing is the caller's
 // responsibility — see vc.RegisterCryptosuite).
-func NewCanonicalizer(contexts map[string][]byte) *Canonicalizer {
+//
+// By default, Canonicalize refuses a document holding, at any depth, a
+// @context other than the IRI of a context served or a list of them, before
+// JSON-LD processing reads it: every context definition a document uses then
+// comes from the documents the caller serves. opts change that
+// (WithLocalContexts).
+func NewCanonicalizer(contexts map[string][]byte, opts ...Option) *Canonicalizer {
 	copied := make(map[string][]byte, len(contexts))
 	for iri, doc := range contexts {
 		b := make([]byte, len(doc))
 		copy(b, doc)
 		copied[iri] = b
 	}
-	return &Canonicalizer{contexts: copied, served: &servedRules{}}
+	c := &Canonicalizer{contexts: copied, served: &servedRules{}}
+	for _, o := range opts {
+		if o.apply != nil {
+			o.apply(c)
+		}
+	}
+	return c
 }
 
 // Name implements canon.Canonicalizer.
@@ -76,8 +115,11 @@ func (c *Canonicalizer) Name() string { return Name }
 // is the RDF dataset v expands to, so before JSON-LD processing could lose
 // it, Canonicalize refuses every form whose value or shape the dataset would
 // not hold; the package doc lists them, each with the check that refuses it.
-// The stages run in this order: the input's grammar (input.go); the context
-// rules (contexts.go); the document's forms (forms.go); the count of its
+// The stages run in this order: by default, the refusal of a context the
+// Canonicalizer does not serve (contexts.go), so a context written in the
+// document is refused as one, whatever else it holds; the input's grammar
+// (input.go); the context rules (contexts.go); the document's forms
+// (forms.go); the count of its
 // values (conserve.go); expansion (jsongold.go); the expanded form
 // (expanded.go) and its count of values; the node map (nodemap.go); the
 // dataset, its quads, its size and its spelling (jsongold.go, nodemap.go,
@@ -99,6 +141,11 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	}
 	if !jsondepth.Within(v) {
 		return nil, fmt.Errorf("%w: nesting: more than %d objects and arrays deep", ErrTooComplex, jsondepth.Max)
+	}
+	if !c.localContexts {
+		if err := rejectLocalContexts(v, c.contexts, new(jsonPath)); err != nil {
+			return nil, err
+		}
 	}
 	if err := rejectSilentDrops(v, new(jsonPath), false); err != nil {
 		return nil, err
@@ -153,9 +200,11 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	return []byte(s), nil
 }
 
-// dataValues reads the contexts the document can use, the served ones and its
-// own (contexts.go), refuses a form of the document the dataset would not
-// hold (forms.go), and counts the document's values (conserve.go).
+// dataValues reads the contexts the document can use (contexts.go): the
+// served ones, and its own with WithLocalContexts (without it, Canonicalize
+// has refused a document holding one). It then refuses a form of the
+// document the dataset would not hold (forms.go), and counts the document's
+// values (conserve.go).
 func (c *Canonicalizer) dataValues(v any) (int64, error) {
 	served := c.served
 	if served == nil {
@@ -169,8 +218,10 @@ func (c *Canonicalizer) dataValues(v any) (int64, error) {
 		return 0, served.err
 	}
 	rules := served.rules.copyOf()
-	if err := rules.readDocument(v); err != nil {
-		return 0, err
+	if c.localContexts {
+		if err := rules.readDocument(v); err != nil {
+			return 0, err
+		}
 	}
 	if err := rules.rejectAliasChains(); err != nil {
 		return 0, err

@@ -197,22 +197,63 @@ func TestRDFC_AcceptsAPresentationOfTheServedContexts(t *testing.T) {
 
 // JSON-LD gives @context no alias (json-gold: "cannot alias @context"), so
 // reading the key @context written out finds every context: a document that
-// defines one is refused by json-gold, and on the suite's path, where its
-// context is not served, before json-gold reads it.
+// defines one is refused where a document's own contexts are read
+// (canon/urdna2015 with WithLocalContexts), and on the suite's path, where
+// its context is not served, before they are read.
 func TestRDFC_ContextHasNoAlias(t *testing.T) {
 	canonicalize := registeredRDFC(t)
-	plain := urdna2015.NewCanonicalizer(map[string][]byte{ContextCredentialsV2: contextCredentialsV2Document})
+	local := urdna2015.NewCanonicalizer(map[string][]byte{ContextCredentialsV2: contextCredentialsV2Document}, urdna2015.WithLocalContexts())
 	for name, alias := range map[string]any{"a term": "@context", "a term's @id": map[string]any{"@id": "@context"}} {
 		var doc map[string]any
 		if err := json.Unmarshal([]byte(`{"@context":[{"ctx":null}],"@id":"urn:s","ctx":{"x":"urn:x"},"urn:p":"v"}`), &doc); err != nil {
 			t.Fatal(err)
 		}
 		doc["@context"].([]any)[0].(map[string]any)["ctx"] = alias
-		if _, err := plain.Canonicalize(doc); err == nil || !strings.Contains(err.Error(), "alias") {
-			t.Errorf("%s, json-gold: %v, want the alias refused", name, err)
+		if _, err := local.Canonicalize(doc); err == nil || !strings.Contains(err.Error(), "alias") {
+			t.Errorf("%s, its own contexts read: %v, want the alias refused", name, err)
 		}
 		if _, err := canonicalize(doc); err == nil || !strings.Contains(err.Error(), servedOnlyRefusal) {
 			t.Errorf("%s, the suite: %v, want it refused as a context not served", name, err)
+		}
+	}
+}
+
+// The canonicalizer the suite wraps refuses a context written in the document
+// by itself, behind the suite's own refusal: vc does not open
+// urdna2015.WithLocalContexts, so either check alone keeps a document from
+// defining a term.
+func TestRDFC_TheWrappedCanonicalizerRefusesALocalContext(t *testing.T) {
+	inner := servedContextsOnly(map[string][]byte{ContextCredentialsV2: contextCredentialsV2Document}).(servedContexts).inner
+	doc := map[string]any{"@context": []any{ContextCredentialsV2, map[string]any{"q": "urn:q"}}, "id": "urn:s", "q": "v"}
+	if _, err := inner.Canonicalize(doc); err == nil || !strings.Contains(err.Error(), "a context written in the document") {
+		t.Errorf("%v, want it refused as a context written in the document", err)
+	}
+}
+
+// The suite's check and the canonicalizer it wraps hold one rule for
+// @context, the IRI of a served context or a list of them: for each shape,
+// in a node, both accept it or both refuse it.
+func TestRDFC_BothContextChecksAgree(t *testing.T) {
+	wrapped := servedContextsOnly(map[string][]byte{ContextCredentialsV2: contextCredentialsV2Document}).(servedContexts)
+	for name, ctx := range map[string]any{
+		"a served IRI":             ContextCredentialsV2,
+		"a list of served IRIs":    []any{ContextCredentialsV2, ContextCredentialsV2},
+		"an empty list":            []any{},
+		"a context written":        map[string]any{"q": "urn:q"},
+		"a list holding one":       []any{ContextCredentialsV2, map[string]any{"q": "urn:q"}},
+		"an IRI not served":        "https://e.x/unserved",
+		"a list in a list":         []any{[]any{ContextCredentialsV2}},
+		"a boolean":                true,
+		"null":                     nil,
+		"a list holding a boolean": []any{ContextCredentialsV2, false},
+	} {
+		doc := map[string]any{"@context": ContextCredentialsV2, "id": "urn:s", "credentialSubject": map[string]any{"@context": ctx, "id": "urn:o"}}
+		var path []string
+		walkErr := wrapped.walk(doc, &path)
+		_, innerErr := wrapped.inner.Canonicalize(doc)
+		innerRefuses := innerErr != nil && strings.Contains(innerErr.Error(), "@context at")
+		if (walkErr != nil) != innerRefuses {
+			t.Errorf("%s: the suite's check: %v; the wrapped canonicalizer: %v", name, walkErr, innerErr)
 		}
 	}
 }

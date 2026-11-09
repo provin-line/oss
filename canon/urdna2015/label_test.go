@@ -328,6 +328,10 @@ func documentDataset(t testing.TB, c *Canonicalizer, doc map[string]any) *ld.RDF
 	return ds
 }
 
+// testContexts serves the W3C contexts and reads a document's own, as the
+// corpus writes many: the forms are held the same either way, and the
+// default's refusal of a document's own context is tested on its own
+// (localcontexts_test.go).
 func testContexts(t testing.TB) *Canonicalizer {
 	t.Helper()
 	read := func(name string) []byte {
@@ -340,7 +344,7 @@ func testContexts(t testing.TB) *Canonicalizer {
 	return NewCanonicalizer(map[string][]byte{
 		"https://www.w3.org/ns/credentials/v2":          read("credentials-v2.jsonld"),
 		"https://www.w3.org/ns/credentials/examples/v2": read("examples-v2.jsonld"),
-	})
+	}, WithLocalContexts())
 }
 
 // Ordinary credentials, anonymous repeats included, take at most half of the

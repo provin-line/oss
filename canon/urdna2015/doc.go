@@ -4,18 +4,28 @@
 // within a work bound (see label.go).
 //
 // JSON-LD contexts are resolved exclusively from an in-process allowlist of
-// embedded documents — never the network. Any context IRI outside the
-// allowlist is an error, and a non-object input (which json-gold would treat
-// as a remote document URL) is rejected before it reaches the processor.
-// Canonicalize reads a context written in the document too, holding it to
-// the forms below. vc's eddsa-rdfc-2022 refuses such a document before it
-// is canonicalized, accepting as @context only the IRIs of the contexts it
-// serves; a program that calls this package itself gets no such refusal.
-// With a context of its own, a document can make the work of canonicalizing
-// it grow as the square of its size: of the shapes measured, the costliest
-// takes about 30 s for 300 KB (darwin/arm64). With only the contexts vc
-// serves, the work is linear in the document's size. A document not trusted
-// goes through vc's eddsa-rdfc-2022.
+// embedded documents — never the network. A context IRI outside the
+// allowlist is an error when the processing loads it (one in a scoped
+// context never used is not loaded), and a non-object input (which
+// json-gold would treat as a remote document URL) is rejected before it
+// reaches the processor.
+//
+// By default, Canonicalize accepts as @context, at any depth, only the IRI
+// of a context it serves or a list of them, and refuses a document holding
+// a context written in it (a JSON-LD local context), or the IRI of a context
+// not served, before JSON-LD processing reads it: every context definition
+// a document uses then comes from the documents its caller serves. A program
+// that passes WithLocalContexts to NewCanonicalizer has Canonicalize read a
+// document's own contexts too, holding them to the forms below. With a
+// context of its own, a document can make the work of canonicalizing it grow
+// as the square of its size: of the shapes measured, the costliest takes
+// about 30 s for 300 KB, and another allocates about 700 MB for 250 KB
+// (darwin/arm64). So a program opens it only for documents it trusts, and
+// bounds their size. With only the contexts vc serves, the work measured
+// grows linearly with the document's size, but is heavy (vc's
+// RegisterEdDSARDFC2022 gives the costliest shape): a caller bounds the size
+// either way. vc's eddsa-rdfc-2022 does not open WithLocalContexts, and
+// refuses such a document itself too, before it is canonicalized.
 //
 // # What is signed
 //
@@ -74,6 +84,10 @@
 //	  a term no context defines, dropped         its safe mode, set by
 //	                                             Canonicalizer.options
 //	The context rules (contexts.go):
+//	  a context written in the document, or the IRI of a context not
+//	    served, unless WithLocalContexts opens both (then an IRI not
+//	    served fails where the processing loads it)
+//	                                             rejectLocalContexts
 //	  a term with a map container, whose keys become values
 //	                                             contextRules.read
 //	  @base, resolving relative IRIs, so two spellings of one IRI

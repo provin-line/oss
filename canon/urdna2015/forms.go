@@ -42,10 +42,10 @@ import (
 //
 // A key is read as a keyword through the aliases the context rules read, one
 // step, a longer chain being refused (rejectAliasChains): exact for the
-// contexts vc serves. In a document's own contexts, a term a scope not in use
-// makes a keyword is read as one, so a shape it holds may be refused though
-// signed: under a term such a scope makes @graph or @included, an empty
-// object, a list or a value object is read as at a node.
+// contexts vc serves. In a document's own contexts (WithLocalContexts), a
+// term a scope not in use makes a keyword is read as one, so a shape it holds
+// may be refused though signed: under a term such a scope makes @graph or
+// @included, an empty object, a list or a value object is read as at a node.
 
 // position is where a value sits in a document, for the shapes JSON-LD signs
 // there.
