@@ -57,7 +57,7 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `did/` | DID ドメイン: W3C 文書モデル・method dispatch（`MethodOf`）。`did:dplaax` method（T1）は `did/dplaax` |
 | `canon/` | 署名スコープの正規化: JCS (RFC 8785)・URDNA2015・厳格な JSON デコード |
 | `vc/` | W3C VC Data Integrity: クレデンシャルモデル・ビルダー・検証器・暗号スイート・confidence 軸 |
-| `crypto/` | 鍵生成・署名・検証インターフェース + Ed25519 実装 |
+| `crypto/` | 鍵生成・署名・検証インターフェース。Ed25519（`crypto/ed25519`）・ES256（`crypto/es256`）・RS256（`crypto/rs256`）の実装 |
 | `delegation/` | Pipeline/Process DID 向けのオーナー署名付き委任クレデンシャル |
 | `resolver/` | DID Document 解決インターフェース + ローカル・grpc・マルチ実装 |
 | `keystore/` | 秘密鍵ストレージコントラクト（KMS モデル境界） |

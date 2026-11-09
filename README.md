@@ -84,7 +84,7 @@ other — they interact exclusively over the wire (ConnectRPC / NATS).
 | `did/` | DID domain: W3C document model, method dispatch (`MethodOf`); the `did:dplaax` method (T1) in `did/dplaax` |
 | `canon/` | Canonicalization of signing scopes: JCS (RFC 8785), URDNA2015, strict JSON decoding |
 | `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, confidence axes |
-| `crypto/` | Key generation / signing / verification interfaces + Ed25519 implementation |
+| `crypto/` | Key generation / signing / verification interfaces; Ed25519 (`crypto/ed25519`), ES256 (`crypto/es256`) and RS256 (`crypto/rs256`) implementations |
 | `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
 | `resolver/` | DID Document resolution interface + local / grpc / multi implementations |
 | `keystore/` | Private-key storage contract (KMS-model boundary) |

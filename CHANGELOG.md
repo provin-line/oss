@@ -12,7 +12,7 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
-## [0.4.0] - YYYY-MM-DD
+## [0.4.0] - 2026-11-09
 
 This release fixes twelve security advisories and bounds what a node takes in
 before it checks a signature. It has breaking changes: read **Breaking
@@ -506,8 +506,8 @@ changes** before upgrading.
   or a page token in another spelling, and a schema added below
   `json-schema.org` that its metaschema refuses.
 - **The module needs Go 1.26** (build). `go.mod` sets `go 1.26.0`, which
-  `protobuf.interceptors` v0.6.0 requires, and `toolchain go1.26.8`; the
-  images build on `golang:1.26.8-alpine`. Go 1.25 no longer receives
+  `protobuf.interceptors` v0.6.0 requires, and `toolchain go1.26.10`; the
+  images build on `golang:1.26.10-alpine`. Go 1.25 no longer receives
   security fixes.
 
 ### Added
@@ -652,7 +652,12 @@ changes** before upgrading.
   `https://quickstart.provin.invalid` (`OAUTH_JWT_AUDIENCE`). The shared HS256
   secret is now long enough to carry 32 bytes of key material, and the issuer
   is `http://localhost:3000`; an existing `.env` that sets `OAUTH_JWT_SECRET`
-  or `OAUTH_JWT_ISSUER` must meet the same rules.
+  or `OAUTH_JWT_ISSUER` must meet the same rules. The service token
+  `provision` mints for the nodes lives 24 hours (`-service-ttl`, was 30
+  days): the verifier refuses a token older than that from its `iat`
+  whatever its `exp` says, so a longer lifetime was not honoured; `docker
+  compose up --force-recreate` re-mints it and restarts the nodes, which
+  read it once at boot.
 - Dependencies, from 0.3.0: `connectrpc.com/connect` 1.20.0 → 1.21.1,
   `github.com/o3co/protobuf.interceptors` (and its `connectrpc` module)
   0.2.0 / 0.2.1 → 0.6.0 (it authorizes a stream before its handler runs and
@@ -667,7 +672,7 @@ changes** before upgrading.
   `github.com/go-jose/go-jose/v4` 4.1.6 (new, for the cedar JWT check). The
   quickstart's broker image moves from `nats:2.12.6` to `nats:2.15.1`.
   `govulncheck` reported 18 standard-library vulnerabilities on the old
-  toolchain and reports none now.
+  toolchain; on `go1.26.10` it reports none that this module's code reaches.
 
 ### Fixed
 

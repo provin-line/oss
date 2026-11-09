@@ -49,6 +49,18 @@ func testConfig(dir string) config {
 	}
 }
 
+// The policy-verifier the quickstart runs refuses a token whose iat is more
+// than oauth.jwt.maxTokenAgeSeconds old (auth.policy-verifier, default 86400;
+// the generated verifier exposes no setting for it), whatever exp says. A
+// service token minted to live longer would be refused partway through its
+// stated life, with nothing re-minting it.
+func TestDefaultServiceTTL_WithinVerifierTokenAgeCeiling(t *testing.T) {
+	const verifierMaxTokenAge = 86400 * time.Second
+	if defaultServiceTTL > verifierMaxTokenAge {
+		t.Fatalf("default service TTL %v exceeds the verifier's token-age ceiling %v", defaultServiceTTL, verifierMaxTokenAge)
+	}
+}
+
 // provision must lay down exactly the operator-mode NATS artifacts the
 // quickstart's broker and node consume, mirroring a production deployment's
 // out-of-band provisioning: an operator trust root, one account, the account's

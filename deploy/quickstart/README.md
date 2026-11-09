@@ -288,8 +288,13 @@ artifact to describe itself.
   nothing cryptographic is committed to the repo. The sys-user files and the
   pipeline keys are trust material — in anything beyond this dev stack, guard
   them like signing keys. Re-running `docker compose up` **reuses** existing
-  trust material and keys (only the service token is re-minted — it carries
-  an expiry); partial material from an interrupted run — or material from a
+  trust material and keys (only the service token is re-minted — it lives
+  24 hours, the longest the policy-verifier accepts a token for after its
+  `iat`, so a stack left up longer answers the nodes' own L1 calls with 401
+  until `docker compose up --force-recreate` re-mints it and restarts the
+  nodes with the new token, which they read once at boot;
+  `provision -service-ttl` sets the lifetime); partial material from an
+  interrupted run — or material from a
   pre-directory-resolver or pre-separated-topology quickstart — fails closed
   with a pointer to the reset below.
 - **`policy-verifier`** and **`auth-provider`** are *generated* by
