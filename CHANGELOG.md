@@ -707,7 +707,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   through `vc`'s `eddsa-rdfc-2022`, which reads only the contexts it serves
   and whose work is linear. `schema`'s doc states that it does not bound a
   schema's size, its caller does (the network's registration, at 1 MiB),
-  and what a schema of 1 MiB costs at worst.
+  and what a schema of 1 MiB costs at worst; and likewise for a payload:
+  `schema/local`'s `Validate` does not bound its size, the pipeline bounds a
+  payload where it takes one in (the shipped binaries set no validator), and
+  the work budget bounds a validation at about 2 s for 1 MiB and 2 minutes
+  for 64 MiB on darwin/arm64, besides decoding the payload (up to about 5 s
+  and 2.5 GB of memory for 64 MiB).
 - `canon/urdna2015`'s refusals quote a key or value they name as `excerpt`
   quotes it, within 64 bytes: whole when its quoted form fits, or else its
   head and its length, escapes counted, as valid UTF-8. Before, they quoted

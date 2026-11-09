@@ -66,3 +66,40 @@ measured are compiled or refused in at most about 0.8 s (below).
   library's `MaxNesting`). What the budget does not count (the work per step
   that grows with nesting, a format check beyond the string's length) is
   bounded by the depth bound above or by the string's length.
+
+Nor does this package bound a payload's size: its caller does. A payload's
+work budget grows with its size, and so does what a validation costs
+(darwin/arm64, go1.27.1). Of the shapes measured, an ordinary schema accepts
+a payload of 1 MiB in about 30 ms and one of 64 MiB in about 2 s; the
+costliest, a pattern of about 8,192 instructions matched against each string
+of an array, is refused at the budget in about 0.8 s for 1 MiB and 51 s for
+64 MiB. A step takes at most about 112 ns (a step of matching such a
+pattern; `schema/internal/schemadoc`), so the budget bounds the validation
+itself at about 2 s for 1 MiB and 2 minutes for 64 MiB. Decoding the
+payload, before the budget applies, takes time and memory that grow with its
+size too: the heaviest shapes measured, a dense array of empty objects or of
+zeros, take about 70 ms and hold about 40 MB at their peak for 1 MiB, and
+about 5 s and 2.5 GB for 64 MiB.
+
+None of the shipped binaries sets a `Validator` (`cmd/pipeline` builds its
+loops through `pipeline/runtime`, which sets none): only a caller composing
+`pipeline/chained` itself checks payloads against a schema, with a step's
+`InputValidator` and `OutputValidator`. In that step:
+
+- `InputValidator` checks a payload its `Codec` decoded inline, which
+  `envelopecodec`'s `Limits.MaxInlinePayloadSize` bounds, or its
+  `PayloadResolver` fetched by reference, which
+  `network/pkg/services/payloadresolver/client` bounds by `Config.MaxBytes`
+  (its `DefaultMaxBytes`, 64 MiB, when that is not set); another resolver
+  bounds what it chooses to.
+- `OutputValidator` checks the step's `Converter`'s output, which nothing in
+  the pipeline bounds but that `Converter` (with none, it is the input
+  payload).
+
+Where a payload comes in, the shipped runtime takes these bounds from:
+
+- `pipeline.max-push-body-size` (1 MiB by default): a body pushed over HTTP
+  to a source loop, and a source loop's raw input over the transport;
+- `pipeline.max-inline-payload-size` (1 MiB by default): an inline payload in
+  an envelope a loop receives over the transport;
+- by reference: the resolver's 64 MiB, which `cmd/pipeline` keeps.

@@ -81,7 +81,9 @@ func (v *Validator) Add(id string, document []byte) error {
 // Validate resolves the schema named by ref.ID, verifies the registered
 // schema's content hash matches ref.ContentHash, and validates payload against
 // it. A content-hash mismatch and a structural violation are both errors; the
-// error names the failure.
+// error names the failure. It does not bound the size of payload: its caller
+// does. Its work budget, and so what a call costs, grows with that size
+// (schema/README.md gives the worst measured).
 func (v *Validator) Validate(_ context.Context, payload []byte, ref vc.SchemaRef) error {
 	if ref.Type != schemaType {
 		return fmt.Errorf("schema/local: unsupported schema type %q (want %q)", ref.Type, schemaType)
