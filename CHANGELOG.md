@@ -612,6 +612,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`'s refusals quote the path of what they refuse within
+  256 bytes: whole when it fits, or else its head and its length (the
+  refusal of a scalar in `@graph` now quotes its path too). A json-gold
+  error it returns is quoted within 256 bytes too, wrapped whole: json-gold
+  writes into its error the value it refuses, which a document's own context
+  can make as long as it likes. A refusal's text no longer grows with the
+  document.
 - `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, refuse the shapes
   of a document's JSON that the signed dataset does not hold: they hold no
   value, but a JSON reader sees them and the signature would not. Refused

@@ -319,17 +319,17 @@ func (r *contextRules) dataValues(v any, path *jsonPath) (int64, error) {
 			case "@language":
 				language = true
 			case "@index":
-				return 0, fmt.Errorf("urdna2015: @index at %q: RDF does not carry it, so it would ride the document unsigned", path.String())
+				return 0, fmt.Errorf("urdna2015: @index at %s: RDF does not carry it, so it would ride the document unsigned", path.quoted())
 			case "@direction":
-				return 0, fmt.Errorf("urdna2015: @direction at %q: json-gold does not write base direction, so it would ride the document unsigned", path.String())
+				return 0, fmt.Errorf("urdna2015: @direction at %s: json-gold does not write base direction, so it would ride the document unsigned", path.quoted())
 			case "@set":
-				return 0, fmt.Errorf("urdna2015: @set at %q: json-gold drops what it cannot expand under @set without an error, so it would ride the document unsigned; write the set's values without @set", path.String())
+				return 0, fmt.Errorf("urdna2015: @set at %s: json-gold drops what it cannot expand under @set without an error, so it would ride the document unsigned; write the set's values without @set", path.quoted())
 			case "@default", "@explicit", "@embed", "@requireAll", "@omitDefault":
-				return 0, fmt.Errorf("urdna2015: %s at %q: a framing keyword, which a document does not use; json-gold drops what it cannot expand under it without an error, so it would ride the document unsigned", r.keyword(k), path.String())
+				return 0, fmt.Errorf("urdna2015: %s at %s: a framing keyword, which a document does not use; json-gold drops what it cannot expand under it without an error, so it would ride the document unsigned", r.keyword(k), path.quoted())
 			}
 		}
 		if language && !value {
-			return 0, fmt.Errorf("urdna2015: @language at %q outside a value object: JSON-LD drops it, so it would ride the document unsigned", path.String())
+			return 0, fmt.Errorf("urdna2015: @language at %s outside a value object: JSON-LD drops it, so it would ride the document unsigned", path.quoted())
 		}
 		if value {
 			for _, k := range keys {
@@ -342,10 +342,10 @@ func (r *contextRules) dataValues(v any, path *jsonPath) (int64, error) {
 					}
 				case "@type":
 					if x == "@json" {
-						return 0, fmt.Errorf("urdna2015: @json at %q: the RDFC path does not accept JSON literals", path.String())
+						return 0, fmt.Errorf("urdna2015: @json at %s: the RDFC path does not accept JSON literals", path.quoted())
 					}
 				default:
-					return 0, fmt.Errorf("urdna2015: a value object at %q holds %s: the RDFC path reads a value object's keys only as the keywords written out (@value, @type, @language)", path.String(), bounded(k))
+					return 0, fmt.Errorf("urdna2015: a value object at %s holds %s: the RDFC path reads a value object's keys only as the keywords written out (@value, @type, @language)", path.quoted(), bounded(k))
 				}
 			}
 		}

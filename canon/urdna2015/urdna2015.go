@@ -35,6 +35,7 @@ import (
 
 	"github.com/piprate/json-gold/ld"
 
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/internal/jsondepth"
 )
 
@@ -248,7 +249,7 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 		expanded, err = proc.Expand(v, opts)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("urdna2015: expand: %w", err)
+		return nil, fmt.Errorf("urdna2015: expand: %w", excerpt.OfError(err, goldErrorQuoteLimit))
 	}
 	if err := rejectDroppableNodes(expanded); err != nil {
 		return nil, err
@@ -330,7 +331,7 @@ func datasetOf(proc *ld.JsonLdProcessor, expanded any, opts *ld.JsonLdOptions) (
 		rdf, err = proc.ToRDF(expanded, toRDF)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("urdna2015: normalize: %w", err)
+		return nil, fmt.Errorf("urdna2015: normalize: %w", excerpt.OfError(err, goldErrorQuoteLimit))
 	}
 	dataset, ok := rdf.(*ld.RDFDataset)
 	if !ok {
@@ -397,6 +398,19 @@ type pathSegment struct {
 	index int
 }
 
+// pathQuoteLimit bounds the path a refusal quotes: a path is as long as the
+// keys and the depth of the document that holds it.
+const pathQuoteLimit = 256
+
+// goldErrorQuoteLimit bounds the text of a json-gold error a refusal quotes:
+// json-gold writes into its error the value it refuses, which a document's own
+// context makes as long as it likes. The error is wrapped whole.
+const goldErrorQuoteLimit = 256
+
+// quoted is the path quoted for a refusal, within pathQuoteLimit bytes: whole
+// when it fits, or else its head and its length.
+func (p *jsonPath) quoted() string { return excerpt.Quoted(p.String(), pathQuoteLimit) }
+
 func (p *jsonPath) String() string {
 	var b strings.Builder
 	for _, s := range *p {
@@ -420,14 +434,14 @@ func rejectSilentDrops(v any, path *jsonPath, inContext bool) error {
 	switch t := v.(type) {
 	case map[string]any:
 		if _, ok := t[""]; ok && !inContext {
-			return fmt.Errorf("urdna2015: a member named \"\" at %q: JSON-LD gives the empty name no meaning, so the RDFC path does not read it", path.String())
+			return fmt.Errorf("urdna2015: a member named \"\" at %s: JSON-LD gives the empty name no meaning, so the RDFC path does not read it", path.quoted())
 		}
 		for _, k := range sortedKeys(t) {
 			e := t[k]
 			*path = append(*path, pathSegment{key: k, index: -1})
 			if k == "@graph" {
 				if list, ok := e.([]any); ok {
-					if err := requireNodeObjects(list, path.String); err != nil {
+					if err := requireNodeObjects(list, path.quoted); err != nil {
 						return err
 					}
 				}
@@ -448,10 +462,10 @@ func rejectSilentDrops(v any, path *jsonPath, inContext bool) error {
 	case string, bool:
 		// The value types the RDFC path canonicalizes losslessly.
 	case nil:
-		return fmt.Errorf("urdna2015: refusing null at %q: JSON-LD expansion drops null members and null array entries silently (an unsigned rider) — omit the member instead", path.String())
+		return fmt.Errorf("urdna2015: refusing null at %s: JSON-LD expansion drops null members and null array entries silently (an unsigned rider) — omit the member instead", path.quoted())
 	default:
 		// json.Number, float64, and every other scalar type land here.
-		return fmt.Errorf("urdna2015: refusing value of type %T at %q: JSON numbers are rejected on the RDFC path (integers above 2^53 are silently truncated in JSON-LD processing) — encode numeric values as strings", v, path.String())
+		return fmt.Errorf("urdna2015: refusing value of type %T at %s: JSON numbers are rejected on the RDFC path (integers above 2^53 are silently truncated in JSON-LD processing) — encode numeric values as strings", v, path.quoted())
 	}
 	return nil
 }

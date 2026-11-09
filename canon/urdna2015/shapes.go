@@ -67,12 +67,12 @@ func (r *contextRules) rejectUnsignedShapes(v any, at position, path *jsonPath) 
 	switch t := v.(type) {
 	case []any:
 		if len(t) == 0 && at != atProperty {
-			return fmt.Errorf("urdna2015: an empty array at %q: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.String())
+			return fmt.Errorf("urdna2015: an empty array at %s: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.quoted())
 		}
 		for i, x := range t {
 			*path = append(*path, pathSegment{index: i})
 			if _, ok := x.([]any); ok {
-				return fmt.Errorf("urdna2015: an array in an array at %q: json-gold flattens it into the outer one, so how it is nested would ride the document unsigned", path.String())
+				return fmt.Errorf("urdna2015: an array in an array at %s: json-gold flattens it into the outer one, so how it is nested would ride the document unsigned", path.quoted())
 			}
 			if err := r.rejectUnsignedShapes(x, at, path); err != nil {
 				return err
@@ -93,7 +93,7 @@ func (r *contextRules) rejectUnsignedShapes(v any, at position, path *jsonPath) 
 			}
 		}
 		if members == 0 && at != atProperty && at != atList {
-			return fmt.Errorf("urdna2015: an empty object at %q: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.String())
+			return fmt.Errorf("urdna2015: an empty object at %s: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.quoted())
 		}
 		return r.rejectUnsignedMembers(t, keys, at, path)
 	}
@@ -125,7 +125,7 @@ func (r *contextRules) rejectUnsignedMembers(obj map[string]any, keys []string, 
 		case keywordsRead[kw]:
 			err = r.rejectUnsignedShapes(x, atKeyword, path)
 		default:
-			err = fmt.Errorf("urdna2015: %s at %q: JSON-LD reads no such member in a document, so what it holds would ride the document unsigned", bounded(k), path.String())
+			err = fmt.Errorf("urdna2015: %s at %s: JSON-LD reads no such member in a document, so what it holds would ride the document unsigned", bounded(k), path.quoted())
 		}
 		if err != nil {
 			return err
@@ -144,12 +144,12 @@ func (r *contextRules) rejectUnsignedNest(group any, at position, path *jsonPath
 	switch t := group.(type) {
 	case []any:
 		if len(t) == 0 {
-			return fmt.Errorf("urdna2015: an empty array at %q: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.String())
+			return fmt.Errorf("urdna2015: an empty array at %s: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.quoted())
 		}
 		for i, x := range t {
 			*path = append(*path, pathSegment{index: i})
 			if _, ok := x.([]any); ok {
-				return fmt.Errorf("urdna2015: an array in an array at %q: json-gold flattens it into the outer one, so how it is nested would ride the document unsigned", path.String())
+				return fmt.Errorf("urdna2015: an array in an array at %s: json-gold flattens it into the outer one, so how it is nested would ride the document unsigned", path.quoted())
 			}
 			if err := r.rejectUnsignedNest(x, at, path); err != nil {
 				return err
@@ -165,7 +165,7 @@ func (r *contextRules) rejectUnsignedNest(group any, at position, path *jsonPath
 			}
 		}
 		if members == 0 {
-			return fmt.Errorf("urdna2015: an empty object at %q: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.String())
+			return fmt.Errorf("urdna2015: an empty object at %s: JSON-LD keeps nothing of it there, so it would ride the document unsigned", path.quoted())
 		}
 		return r.rejectUnsignedMembers(t, keys, at, path)
 	}
@@ -177,7 +177,7 @@ func (r *contextRules) rejectUnsignedNest(group any, at position, path *jsonPath
 // An empty list is kept where a list is: its items are signed as rdf:nil.
 func (r *contextRules) rejectUnsignedList(items any, at position, path *jsonPath) error {
 	if at != atProperty && at != atList {
-		return fmt.Errorf("urdna2015: a list at %q, where JSON-LD keeps no list, so it would ride the document unsigned", path.String())
+		return fmt.Errorf("urdna2015: a list at %s, where JSON-LD keeps no list, so it would ride the document unsigned", path.quoted())
 	}
 	if list, ok := items.([]any); ok && len(list) == 0 {
 		return nil
