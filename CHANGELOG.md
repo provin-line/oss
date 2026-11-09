@@ -1170,6 +1170,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   their length nor a line break in them reaches the log as it is.
   `chainmanager` names a connection-info key it does not use within 128
   bytes, with its length when it is cut.
+- The pipeline's error results, records, answers and log lines do not grow
+  with what others sent. The errored `Result.Error` of a sink, a chained step
+  and an ingest step, a sink's reject record (`Detail` and `IssuerDID`), a
+  delivery decision's `Reason`, and the text of apipush's 400 answer are each
+  within 1024 bytes of UTF-8: whole when they fit, or else their head and
+  their length, `… (N bytes)`. A value such a text names (a declared output
+  hash, an issuer) is quoted within 128 bytes, so a long one does not push
+  the rest out. Every log line of the pipeline names an error within 1024
+  bytes, as `%v` writes it, also the `Result.Error` of a processor or an
+  observer this module does not hold. An `IssuerDID` longer than 1024 bytes
+  is its head and its length, not a DID; `CredentialHash` still names the
+  credential whole. A reject record never carries the refused payload; its
+  `Detail` may quote an excerpt of it, an error naming a token it could not
+  read, within those 1024 bytes. The type's doc said the record carried no
+  payload bytes.
 
 ## [0.3.0] - 2026-08-05
 

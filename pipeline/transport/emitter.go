@@ -12,6 +12,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -444,7 +445,7 @@ func (e *Emitter) Emit(ctx context.Context, cred *vc.PipelinePassCredential, pay
 	// Append the pre-computed emission record under a detached context so that
 	// ctx cancellation at shutdown cannot abort recording a delivered event.
 	if _, err := e.emission.Append(context.WithoutCancel(ctx), rec); err != nil {
-		e.logger.Error("transport: emission log append failed", "err", err, "sequenceNo", next)
+		e.logger.Error("transport: emission log append failed", "err", pipeexcerpt.ErrorText(err), "sequenceNo", next)
 		// Counter already advanced: the event was delivered. The gap is our
 		// audit-defense loss. Log loudly; do not re-attempt (PoC posture).
 	}
@@ -469,12 +470,12 @@ func (e *Emitter) publishStripped(cred *vc.PipelinePassCredential, seq uint64) {
 	})
 	if err != nil {
 		e.recordStrippedFailure()
-		e.logger.Error("transport: marshal stripped envelope failed", "err", err, "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
+		e.logger.Error("transport: marshal stripped envelope failed", "err", pipeexcerpt.ErrorText(err), "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
 		return
 	}
 	if err := e.stripped.Publish(wire); err != nil {
 		e.recordStrippedFailure()
-		e.logger.Error("transport: stripped publish failed", "err", err, "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
+		e.logger.Error("transport: stripped publish failed", "err", pipeexcerpt.ErrorText(err), "sequenceNo", seq, "strippedPublishFailures", e.strippedFailures.Load())
 		return
 	}
 	// A successful stripped publish clears the health flag — recovery is proven,

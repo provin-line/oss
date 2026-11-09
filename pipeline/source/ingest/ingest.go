@@ -75,6 +75,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -222,7 +223,7 @@ func hashBytes(data []byte) string {
 func (p *Processor) errored(ctx context.Context, msg, inputHash, outputHash string) *contract.Result {
 	r := &contract.Result{
 		Status: contract.StatusErrored,
-		Error:  msg,
+		Error:  pipeexcerpt.Text(msg),
 	}
 	p.notify(ctx, r, inputHash, outputHash, "")
 	return r
@@ -244,7 +245,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, inputHash, o
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

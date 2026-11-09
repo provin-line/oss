@@ -91,6 +91,7 @@ import (
 	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
 )
@@ -176,18 +177,26 @@ const (
 
 // RejectRecord is one durable reject-log entry. Identity fields are best-effort —
 // empty when unknown at the reject point (e.g. a decode failure yields no
-// credential hash or issuer). The record NEVER carries the payload: a sink must
-// not hoard the bytes it refused in its evidence store.
+// credential hash or issuer). A sink never records the refused payload itself:
+// it must not hoard the bytes it refused in its evidence store. The sink
+// writes Detail, the reject's error text, which may quote an excerpt of them
+// (an error names a token it could not read), and IssuerDID each within 1024
+// bytes of UTF-8, whatever was refused.
 type RejectRecord struct {
 	// Timestamp is when the reject occurred.
 	Timestamp time.Time `json:"timestamp"`
 	// Reason is the closed-set reject class.
 	Reason RejectReason `json:"reason"`
-	// Detail is the human-readable reject message (no payload bytes).
+	// Detail is the human-readable reject message, written within 1024 bytes
+	// of UTF-8: whole, or its head and its length, "… (N bytes)", when longer.
 	Detail string `json:"detail"`
-	// CredentialHash is the consumed credential's content address, if it decoded.
+	// CredentialHash is the consumed credential's content address, if it
+	// decoded: the credential's full identity, whatever was cut elsewhere.
 	CredentialHash string `json:"credentialHash,omitempty"`
-	// IssuerDID is the consumed credential's issuer, if readable.
+	// IssuerDID is the consumed credential's issuer, if readable, written
+	// within 1024 bytes of UTF-8. An issuer longer than that (a DID carrying a
+	// large key, say) is written as its head and its length, which is not a
+	// DID: match on CredentialHash, not on a cut IssuerDID.
 	IssuerDID string `json:"issuerDid,omitempty"`
 }
 
@@ -440,7 +449,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			// A verification transport error (resolver outage, chain hole) IS the
 			// indeterminate verdict — the verdict could not be computed. Synthesize
 			// it and fall through to the SinkKind policy.
-			p.logger.Warn("sink: verification error treated as indeterminate", "err", err)
+			p.logger.Warn("sink: verification error treated as indeterminate", "err", pipeexcerpt.ErrorText(err))
 			verifyResult = &vc.VerifyResult{Overall: vc.ConfidenceIndeterminate}
 		}
 	}
@@ -463,7 +472,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			issuer = cred.Issuer()
 		}
 		if !p.issuerAllowed(issuer) {
-			return p.reject(ctx, dec, RejectAllowList, fmt.Sprintf("issuer %q is not in the sink allow-list (fail-closed)", issuer), &verdict, consumedRef, "", issuer), nil
+			return p.reject(ctx, dec, RejectAllowList, fmt.Sprintf("issuer %s is not in the sink allow-list (fail-closed)", pipeexcerpt.Value(issuer)), &verdict, consumedRef, "", issuer), nil
 		}
 	}
 
@@ -515,7 +524,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// by-reference payload this is the sole integrity check on the fetched bytes —
 	// the serving boundary is untrusted.
 	if inputHash != subject.OutputHash {
-		return p.reject(ctx, dec, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
+		return p.reject(ctx, dec, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, pipeexcerpt.Value(subject.OutputHash)), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 
 	// Stage 7 — Construct the exact successful-delivery record, then perform the
@@ -600,7 +609,7 @@ func (p *Processor) acquirePayload(ctx context.Context, dec *decision, envelope 
 			if cErr := ctx.Err(); cErr != nil {
 				return nil, nil, cErr
 			}
-			return nil, p.reject(ctx, dec, RejectPayloadFetch, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+			return nil, p.reject(ctx, dec, RejectPayloadFetch, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", pipeexcerpt.Value(outputHash), p.cfg.UpstreamEndpoint, err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		return bytes, nil, nil
 	default: // DeliveryInline
@@ -653,12 +662,12 @@ func (p *Processor) reject(ctx context.Context, dec *decision, reason RejectReas
 		rec := RejectRecord{
 			Timestamp:      p.now(),
 			Reason:         reason,
-			Detail:         msg,
+			Detail:         pipeexcerpt.Text(msg),
 			CredentialHash: consumedVCRef,
-			IssuerDID:      issuerDID,
+			IssuerDID:      pipeexcerpt.Text(issuerDID),
 		}
 		if err := p.cfg.RejectLog.RecordReject(ctx, rec); err != nil {
-			p.logger.Error("sink: reject-log write failed", "reason", reason, "err", err)
+			p.logger.Error("sink: reject-log write failed", "reason", reason, "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 	return p.errored(ctx, msg, confidence, consumedVCRef, inputHash)
@@ -699,7 +708,7 @@ func (d *decision) record(at time.Time, point string, o decisionrecord.Outcome, 
 		At:         at.UTC(),
 		Outcome:    o,
 		Check:      check,
-		Reason:     reason,
+		Reason:     pipeexcerpt.Text(reason),
 		Evidence:   ev,
 		Attributes: map[string]string{"appraisalDecision": d.outcome, "decisionProfile": d.profile},
 	}
@@ -749,7 +758,7 @@ func (p *Processor) recordAfterAccept(ctx context.Context, dec *decision, o deci
 	if payload != "" {
 		a, err := contentaddress.Parse(payload)
 		if err != nil {
-			p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", fmt.Errorf("payload: %w", err))
+			p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", pipeexcerpt.ErrorText(fmt.Errorf("payload: %w", err)))
 			return
 		}
 		payloadAddress = a
@@ -758,7 +767,7 @@ func (p *Processor) recordAfterAccept(ctx context.Context, dec *decision, o deci
 	defer cancel()
 	rec := dec.record(p.now(), p.cfg.AgentBoundaryID, o, check, reason, payloadAddress)
 	if err := p.cfg.DecisionRecorder.Record(detached, rec); err != nil {
-		p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", err)
+		p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", pipeexcerpt.ErrorText(err))
 	}
 }
 
@@ -783,7 +792,7 @@ func (p *Processor) recordWriteUnknown(ctx context.Context, dec *decision, err e
 func (p *Processor) recordUndecided(ctx context.Context, check string, view *appraisal.View, appraised, reason string) {
 	id, err := newDecisionID()
 	if err != nil {
-		p.logger.Error("sink: delivery decision refusal not recorded", "err", err)
+		p.logger.Error("sink: delivery decision refusal not recorded", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 	rec := decisionrecord.Record{
@@ -792,12 +801,12 @@ func (p *Processor) recordUndecided(ctx context.Context, check string, view *app
 		At:         p.now().UTC(),
 		Outcome:    decisionrecord.Refused,
 		Check:      check,
-		Reason:     reason,
+		Reason:     pipeexcerpt.Text(reason),
 	}
 	if view != nil {
 		viewAddress, err := contentaddress.Parse(view.EvidenceViewID)
 		if err != nil {
-			p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", fmt.Errorf("evidence view: %w", err))
+			p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", pipeexcerpt.ErrorText(fmt.Errorf("evidence view: %w", err)))
 			return
 		}
 		rec.Evidence = []decisionrecord.Evidence{{Role: "evidenceView", Address: viewAddress}}
@@ -807,7 +816,7 @@ func (p *Processor) recordUndecided(ctx context.Context, check string, view *app
 		}
 	}
 	if err := p.cfg.DecisionRecorder.Record(ctx, rec); err != nil {
-		p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", err)
+		p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", pipeexcerpt.ErrorText(err))
 	}
 }
 
@@ -823,7 +832,7 @@ func issuerDIDOf(cred *vc.PipelinePassCredential) string {
 func (p *Processor) errored(ctx context.Context, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash string) *contract.Result {
 	r := &contract.Result{
 		Status:     contract.StatusErrored,
-		Error:      msg,
+		Error:      pipeexcerpt.Text(msg),
 		Confidence: confidence,
 	}
 	p.notify(ctx, r, consumedVCRef, inputHash)
@@ -848,7 +857,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, consumedVCRe
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

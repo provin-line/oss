@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -234,13 +235,13 @@ func (l *Loop) Run(ctx context.Context) error {
 	var firstErr error
 
 	if err := l.cfg.Subscriber.Drain(); err != nil {
-		l.logger.Error("transport: drain failed", "err", err)
+		l.logger.Error("transport: drain failed", "err", pipeexcerpt.ErrorText(err))
 		firstErr = err
 	}
 
 	if l.cfg.Publisher != nil {
 		if err := l.cfg.Publisher.Close(); err != nil {
-			l.logger.Error("transport: publisher close failed", "err", err)
+			l.logger.Error("transport: publisher close failed", "err", pipeexcerpt.ErrorText(err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -258,7 +259,7 @@ func (l *Loop) handle(ctx context.Context, data []byte, emitter *Emitter) {
 		// Go error = context cancellation or internal invariant violation.
 		// The Subscriber API gives the handler no way to stop the loop;
 		// ctx governs Run. Log loudly and drop.
-		l.logger.Error("transport: processor error", "err", err)
+		l.logger.Error("transport: processor error", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 
@@ -273,7 +274,7 @@ func (l *Loop) handle(ctx context.Context, data []byte, emitter *Emitter) {
 		l.logger.Info("transport: event filtered", "filteredAtStep", result.FilteredAtStep)
 		return
 	case contract.StatusErrored:
-		l.logger.Error("transport: processing error", "error", result.Error)
+		l.logger.Error("transport: processing error", "error", pipeexcerpt.Text(result.Error))
 		return
 	case contract.StatusPassed:
 		if !isProducing(l.cfg.Behavior) {
@@ -284,7 +285,7 @@ func (l *Loop) handle(ctx context.Context, data []byte, emitter *Emitter) {
 		// and dropped (the sequence is not advanced — reused next attempt); an
 		// append-after-publish failure is logged inside Emit and returns nil.
 		if err := emitter.Emit(ctx, result.VC, result.Payload); err != nil {
-			l.logger.Error("transport: emit failed — dropping", "err", err)
+			l.logger.Error("transport: emit failed — dropping", "err", pipeexcerpt.ErrorText(err))
 		}
 	default:
 		l.logger.Error("transport: processor returned invalid status — dropping", "status", result.Status)

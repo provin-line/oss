@@ -55,6 +55,7 @@ import (
 	"github.com/provin-line/oss/pipeline/chained/converter"
 	"github.com/provin-line/oss/pipeline/chained/filter"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/schema"
 	"github.com/provin-line/oss/vc"
@@ -327,7 +328,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// by-reference payload this is the sole integrity check on the fetched
 	// bytes — the serving boundary is untrusted.
 	if got := hashBytes(payload); got != subject.OutputHash {
-		return p.errored(ctx, fmt.Sprintf("payload does not match the predecessor's outputHash (payload %s, credential declares %s): tampered or substituted bytes", got, subject.OutputHash), &confidence, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("payload does not match the predecessor's outputHash (payload %s, credential declares %s): tampered or substituted bytes", got, pipeexcerpt.Value(subject.OutputHash)), &confidence, "", ""), nil
 	}
 
 	// Stage 5 — Optional input-schema check.
@@ -479,7 +480,7 @@ func (p *Processor) acquirePayload(ctx context.Context, envelope *contract.Envel
 			if cErr := ctx.Err(); cErr != nil {
 				return nil, nil, cErr
 			}
-			return nil, p.errored(ctx, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &confidence, "", ""), nil
+			return nil, p.errored(ctx, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", pipeexcerpt.Value(outputHash), p.cfg.UpstreamEndpoint, err), &confidence, "", ""), nil
 		}
 		return bytes, nil, nil
 	default: // DeliveryInline
@@ -505,7 +506,7 @@ func hashBytes(data []byte) string {
 func (p *Processor) errored(ctx context.Context, msg string, confidence *vc.ConfidenceState, inputHash, outputHash string) *contract.Result {
 	r := &contract.Result{
 		Status:     contract.StatusErrored,
-		Error:      msg,
+		Error:      pipeexcerpt.Text(msg),
 		Confidence: confidence,
 	}
 	p.notify(ctx, r, inputHash, outputHash, "")
@@ -528,7 +529,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, inputHash, o
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

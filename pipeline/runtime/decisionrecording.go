@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/decisionrecord"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 )
 
 // Where decision records are written. String-identical to
@@ -134,7 +135,7 @@ func (d *decisionRecording) stopAndFlush(ctx context.Context) {
 
 func (d *decisionRecording) flush(ctx context.Context) {
 	if err := d.filter.Flush(context.WithoutCancel(ctx), time.Now().UTC()); err != nil {
-		slog.Warn("runtime: decision record summary not flushed", "err", err)
+		slog.Warn("runtime: decision record summary not flushed", "err", pipeexcerpt.ErrorText(err))
 	}
 }
 

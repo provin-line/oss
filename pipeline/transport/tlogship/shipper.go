@@ -41,6 +41,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -191,7 +192,7 @@ func (s *Shipper) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return nil
 				}
-				s.logger.Error("tlogship: flush tick failed", "log_id", s.logID, "err", err)
+				s.logger.Error("tlogship: flush tick failed", "log_id", s.logID, "err", pipeexcerpt.ErrorText(err))
 			}
 		}
 	}

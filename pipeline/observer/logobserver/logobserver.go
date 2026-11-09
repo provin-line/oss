@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -78,7 +79,7 @@ func (o *Observer) OnProcessComplete(ctx context.Context, ev contract.ProcessEve
 			attrs = append(attrs, slog.Int("filteredAtStep", r.FilteredAtStep))
 		}
 		if r.Error != "" {
-			attrs = append(attrs, slog.String("error", r.Error))
+			attrs = append(attrs, slog.String("error", pipeexcerpt.Text(r.Error)))
 		}
 	}
 	o.logger.LogAttrs(ctx, slog.LevelInfo, "pipeline event observed", attrs...)

@@ -49,6 +49,7 @@ import (
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/pipeline/transport"
 	"github.com/provin-line/oss/tlog"
@@ -291,7 +292,7 @@ func (p *Process) Run(ctx context.Context) error {
 			// failure.
 			for _, s := range subscribed {
 				if derr := s.Subscriber.Drain(); derr != nil {
-					p.logger.Error("aggregate: drain after subscribe failure", "err", derr)
+					p.logger.Error("aggregate: drain after subscribe failure", "err", pipeexcerpt.ErrorText(derr))
 				}
 			}
 			return err
@@ -322,7 +323,7 @@ func (p *Process) Run(ctx context.Context) error {
 func (p *Process) handleIngress(ctx context.Context, data []byte, ing Ingress) {
 	env, err := p.cfg.Codec.UnmarshalEnvelope(data)
 	if err != nil {
-		p.logger.Error("aggregate: decode ingress envelope", "err", err)
+		p.logger.Error("aggregate: decode ingress envelope", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 	if env.Credential == nil {
@@ -334,7 +335,7 @@ func (p *Process) handleIngress(ctx context.Context, data []byte, ing Ingress) {
 	// Adjacent verification — fail-closed: only a Verified credential pools.
 	res, err := p.cfg.Verifier.Verify(ctx, cred)
 	if err != nil {
-		p.logger.Error("aggregate: verify ingress credential", "err", err)
+		p.logger.Error("aggregate: verify ingress credential", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 	if res == nil || res.Overall != vc.ConfidenceVerified {
@@ -346,7 +347,7 @@ func (p *Process) handleIngress(ctx context.Context, data []byte, ing Ingress) {
 	// declared outputHash, and the binding gate compares against it).
 	subj, err := cred.Subject()
 	if err != nil {
-		p.logger.Error("aggregate: ingress credential subject", "err", err)
+		p.logger.Error("aggregate: ingress credential subject", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 	if subj.OutputHash == "" {
@@ -372,7 +373,7 @@ func (p *Process) handleIngress(ctx context.Context, data []byte, ing Ingress) {
 	// Store synchronously before pooling (fail-closed). The store implementation
 	// owns audit-head registration.
 	if err := p.cfg.Store.StoreIngressVC(ctx, cred, ing.UpstreamEndpoint); err != nil {
-		p.logger.Error("aggregate: store ingress VC — dropping", "err", err)
+		p.logger.Error("aggregate: store ingress VC — dropping", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 
@@ -400,7 +401,7 @@ func (p *Process) acquirePayload(ctx context.Context, env *contract.Envelope, ou
 		}
 		bytes, err := ing.PayloadResolver.ResolvePayload(ctx, ing.UpstreamEndpoint, outputHash)
 		if err != nil {
-			p.logger.Warn("aggregate: fetch by-reference payload — dropping", "err", err)
+			p.logger.Warn("aggregate: fetch by-reference payload — dropping", "err", pipeexcerpt.ErrorText(err))
 			return nil, false
 		}
 		return bytes, true
@@ -418,7 +419,7 @@ func (p *Process) acquirePayload(ctx context.Context, env *contract.Envelope, ou
 func (p *Process) admit(in PooledInput) {
 	h, err := in.Credential.Hash()
 	if err != nil {
-		p.logger.Error("aggregate: hash ingress credential — dropping", "err", err)
+		p.logger.Error("aggregate: hash ingress credential — dropping", "err", pipeexcerpt.ErrorText(err))
 		return
 	}
 	p.mu.Lock()
@@ -451,14 +452,14 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 
 	output, err := p.cfg.Fold.Fold(ctx, inputs)
 	if err != nil {
-		p.logger.Error("aggregate: fold", "err", err, "inputs", len(inputs))
+		p.logger.Error("aggregate: fold", "err", pipeexcerpt.ErrorText(err), "inputs", len(inputs))
 		p.notifyErr(ctx)
 		return false
 	}
 	// Strict canonical-JSON gate: never sign a malformed fold output.
 	var strictOut interface{}
 	if err := canon.NewStrictDecoder(output).Decode(&strictOut); err != nil {
-		p.logger.Error("aggregate: fold output failed strict-JSON gate", "err", err)
+		p.logger.Error("aggregate: fold output failed strict-JSON gate", "err", pipeexcerpt.ErrorText(err))
 		p.notifyErr(ctx)
 		return false
 	}
@@ -471,7 +472,7 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 
 	cred, err := p.cfg.Signer.SignAggregateFirstDrop(ctx, output, outputHash, creds)
 	if err != nil {
-		p.logger.Error("aggregate: sign aggregate FirstDrop", "err", err)
+		p.logger.Error("aggregate: sign aggregate FirstDrop", "err", pipeexcerpt.ErrorText(err))
 		p.notifyErr(ctx)
 		return false
 	}
@@ -482,7 +483,7 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 	// credential).
 	ref, err := cred.Hash()
 	if err != nil {
-		p.logger.Error("aggregate: hash issued aggregate credential", "err", err)
+		p.logger.Error("aggregate: hash issued aggregate credential", "err", pipeexcerpt.ErrorText(err))
 		p.notifyErr(ctx)
 		return false
 	}
@@ -497,21 +498,21 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 		for _, in := range inputs {
 			ch, err := in.Credential.Hash()
 			if err != nil {
-				p.logger.Error("aggregate: hash consumed source for receipt", "err", err)
+				p.logger.Error("aggregate: hash consumed source for receipt", "err", pipeexcerpt.ErrorText(err))
 				p.notifyErr(ctx)
 				return false
 			}
 			consumed = append(consumed, ch)
 		}
 		if err := p.cfg.SelfAudit.RegisterEmission(ctx, cred, consumed); err != nil {
-			p.logger.Error("aggregate: register emission for self-audit — dropping", "err", err)
+			p.logger.Error("aggregate: register emission for self-audit — dropping", "err", pipeexcerpt.ErrorText(err))
 			p.notifyErr(ctx)
 			return false
 		}
 	}
 
 	if err := p.emitter.Emit(ctx, cred, output); err != nil {
-		p.logger.Error("aggregate: emit aggregate FirstDrop — dropping", "err", err)
+		p.logger.Error("aggregate: emit aggregate FirstDrop — dropping", "err", pipeexcerpt.ErrorText(err))
 		p.notifyErr(ctx)
 		return false
 	}
@@ -531,7 +532,7 @@ func (p *Process) shutdown() error {
 	var firstErr error
 	for _, ing := range p.cfg.Ingress {
 		if err := ing.Subscriber.Drain(); err != nil {
-			p.logger.Error("aggregate: drain subscriber", "err", err)
+			p.logger.Error("aggregate: drain subscriber", "err", pipeexcerpt.ErrorText(err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -540,7 +541,7 @@ func (p *Process) shutdown() error {
 	// Partial-window policy: discard (PoC default — matches auditor/batchresolver
 	// returning on ctx.Done without a final flush).
 	if err := p.cfg.Publisher.Close(); err != nil {
-		p.logger.Error("aggregate: publisher close", "err", err)
+		p.logger.Error("aggregate: publisher close", "err", pipeexcerpt.ErrorText(err))
 		if firstErr == nil {
 			firstErr = err
 		}
@@ -559,7 +560,7 @@ func (p *Process) notify(ctx context.Context, r *contract.Result, outputHash, is
 			Timestamp:   p.now(),
 		}
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("aggregate: observer error", "err", err)
+			p.logger.Error("aggregate: observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }
@@ -572,7 +573,7 @@ func (p *Process) notifyErr(ctx context.Context) {
 			Timestamp: p.now(),
 		}
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("aggregate: observer error", "err", err)
+			p.logger.Error("aggregate: observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }
