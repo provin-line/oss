@@ -4,6 +4,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/piprate/json-gold/ld"
 
 	"github.com/provin-line/oss/internal/excerpt"
 )
@@ -147,5 +150,59 @@ func TestCanonicalize_QuotesJSONGoldsErrorWithinTheBound(t *testing.T) {
 	}
 	if len(err.Error()) > 512 {
 		t.Errorf("the refusal is %d bytes", len(err.Error()))
+	}
+}
+
+// A key or value a refusal quotes is quoted as excerpt quotes it, within
+// valueQuoteLimit: whole when its quoted form fits, or else its head and its
+// length, escapes counted, and valid UTF-8.
+func TestBounded_QuotesAsExcerptWithinTheLimit(t *testing.T) {
+	for name, s := range map[string]string{
+		"short":      "urn:T",
+		"fits whole": strings.Repeat("x", 50),
+		"long":       strings.Repeat("x", 10000),
+		"escaped":    strings.Repeat("\x00", 32),
+		"not UTF-8":  strings.Repeat("\xff", 40),
+	} {
+		got := bounded(s)
+		if got != excerpt.Quoted(s, valueQuoteLimit) || len(got) > valueQuoteLimit || !utf8.ValidString(got) {
+			t.Errorf("%s: %q (%d bytes)", name, got, len(got))
+		}
+	}
+	if got := bounded(strings.Repeat("x", 50)); got != `"`+strings.Repeat("x", 50)+`"` {
+		t.Errorf("a value whose quoted form fits is not quoted whole: %s", got)
+	}
+	if got := bounded(strings.Repeat("x", 10000)); !strings.HasSuffix(got, "… (10000 bytes)") {
+		t.Errorf("a long value does not say its length: %s", got)
+	}
+}
+
+// A refusal quotes the key it names within valueQuoteLimit.
+func TestCanonicalize_QuotesAKeyWithinTheLimit(t *testing.T) {
+	long := "@" + strings.Repeat("x", 10000)
+	_, err := testContexts(t).Canonicalize(map[string]any{"@id": "urn:s", "urn:p": map[string]any{"@value": "v", long: "w"}})
+	if err == nil || !strings.Contains(err.Error(), excerpt.Quoted(long, valueQuoteLimit)) || len(err.Error()) > 512 {
+		t.Errorf("%.300v", err)
+	}
+}
+
+// A literal or an IRI that is not valid UTF-8 is refused with the byte where
+// it stops being UTF-8, which the quote, written as valid UTF-8, cannot show.
+func TestSpellable_NamesTheFirstByteThatIsNotUTF8(t *testing.T) {
+	if err := spellableNode(ld.NewLiteral("a\xffb", "", "")); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 1") {
+		t.Errorf("literal: %v", err)
+	}
+	if err := spellableIRI("urn:a\xffb"); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 5") {
+		t.Errorf("IRI: %v", err)
+	}
+}
+
+// A value too long to quote whole keeps at least 31 bytes of its head as
+// quoted, its length written after it.
+func TestBounded_KeepsAHeadOfALongValue(t *testing.T) {
+	got := bounded(strings.Repeat("x", 10000))
+	head, _, ok := strings.Cut(strings.TrimPrefix(got, `"`), `"`)
+	if !ok || len(head) < 31 {
+		t.Errorf("%s: a head of %d bytes", got, len(head))
 	}
 }

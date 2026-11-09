@@ -527,7 +527,7 @@ func spellableNode(n ld.Node) error {
 		return fmt.Errorf("literal typed %s carries language tag %s", bounded(lit.Datatype), bounded(lit.Language))
 	}
 	if !utf8.ValidString(lit.Value) {
-		return fmt.Errorf("literal %s is not valid UTF-8, which canonical N-Quads cannot write", bounded(lit.Value))
+		return fmt.Errorf("literal %s is not valid UTF-8 at byte %d, which canonical N-Quads cannot write", bounded(lit.Value), notUTF8At(lit.Value))
 	}
 	for i, r := range lit.Value {
 		if spelledApart(r) {
@@ -537,9 +537,22 @@ func spellableNode(n ld.Node) error {
 	return nil
 }
 
+// notUTF8At is the byte at which s stops being valid UTF-8, which the quote
+// of s, written as valid UTF-8, cannot show; len(s) when s is valid.
+func notUTF8At(s string) int {
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			return i
+		}
+		i += size
+	}
+	return len(s)
+}
+
 func spellableIRI(s string) error {
 	if !utf8.ValidString(s) {
-		return fmt.Errorf("IRI %s is not valid UTF-8, which canonical N-Quads cannot write", bounded(s))
+		return fmt.Errorf("IRI %s is not valid UTF-8 at byte %d, which canonical N-Quads cannot write", bounded(s), notUTF8At(s))
 	}
 	for i, r := range s {
 		if r <= 0x20 || strings.ContainsRune("<>\"{}|^`\\", r) {
@@ -549,15 +562,22 @@ func spellableIRI(s string) error {
 	return nil
 }
 
-// bounded quotes at most the first 32 bytes of s, so an error never carries a
-// whole literal.
-func bounded(s string) string {
-	const max = 32
-	if len(s) <= max {
-		return fmt.Sprintf("%q", s)
-	}
-	return fmt.Sprintf("%q…", s[:max])
-}
+// valueQuoteLimit bounds a key or value a refusal quotes, its quotes, escapes
+// and length included. excerpt takes no limit under excerpt.MinLimit; at 64,
+// a key or value too long to quote whole leaves 64 - excerpt.MinLimit = 31
+// bytes or more for its head as quoted, whatever its length (an escape that
+// does not fit is left out, and an escaped byte takes more than one), so a
+// refusal still says which one it names.
+const valueQuoteLimit = 64
+
+// valueQuoteLimit is at least excerpt.MinLimit: the constant expression would
+// not compile otherwise.
+const _ = uint(valueQuoteLimit - excerpt.MinLimit)
+
+// bounded is s quoted for a refusal, as excerpt quotes it within
+// valueQuoteLimit: whole when its quoted form fits, or else its head and its
+// length, valid UTF-8; so an error never carries a whole literal.
+func bounded(s string) string { return excerpt.Quoted(s, valueQuoteLimit) }
 
 // spelledApart reports whether RDFC-1.0 Appendix A and URDNA2015 write r
 // differently in a literal: RDFC-1.0 writes BS and FF as ECHAR, and as UCHAR

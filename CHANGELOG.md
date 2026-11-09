@@ -612,6 +612,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`'s refusals quote a key or value they name as `excerpt`
+  quotes it, within 64 bytes: whole when its quoted form fits, or else its
+  head and its length, escapes counted, as valid UTF-8. Before, they quoted
+  its first 32 bytes, cut maybe within a character, escapes not counted (up
+  to about 130 bytes), and no length. So a key or value of 33 to 62 bytes
+  with nothing escaped is now quoted whole, while one of 32 bytes or fewer
+  whose escapes make its quoted form longer than 64 bytes is now cut, and a
+  byte that is not UTF-8 is written as U+FFFD, not as `\xNN`. The refusal of
+  a literal or an IRI that is not valid UTF-8 now names the byte where it
+  stops being UTF-8.
 - `canon/urdna2015`'s refusals quote the path of what they refuse within
   256 bytes: whole when it fits, or else its head and its length (the
   refusal of a scalar in `@graph` now quotes its path too). A json-gold
