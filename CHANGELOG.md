@@ -972,9 +972,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   64 KiB of request headers (net/http's default is 1 MiB). It drops a request
   whose body stalls while it is read, on HTTP/1 and HTTP/2 alike: one that
   delivers nothing for 30 seconds or, chunked on HTTP/1, fewer than 16 KiB;
-  and a body the handler leaves unread gets the same 30 seconds while
-  net/http discards it. As for writes, the bound is on progress, not rate: a
-  body trickled a byte at a time is not dropped. A large body sent at a
+  and on HTTP/1, what net/http reads of a body itself, to discard what a
+  handler leaves of it (when the handler closes it, answers before reading
+  it to its end, or returns), is held to 30 seconds counted from the end of
+  the handler's last read of it; a body whose read failed is not read
+  further, and its connection is closed after the answer. As for writes, the
+  bound is on progress, not rate: a body trickled a byte at a time is not
+  dropped. A large body sent at a
   steady pace, and a response streamed after the body, are not cut. The
   outer request-size bound (derived from the configured size limits) now
   also covers HTTP/2 streams on the cleartext (h2c) listener, besides HTTP/1

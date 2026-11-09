@@ -28,8 +28,12 @@ const shutdownTimeout = 15 * time.Second
 // body that stalls is dropped: one that delivers nothing for bodyStallTimeout,
 // or, chunked on HTTP/1, fewer than stallReadBytes. As with HTTP2Server's
 // WriteByteTimeout, the bound is on progress, not on rate: a body trickled a
-// byte at a time is not dropped. The body has no deadline between reads, so a
-// long response streamed after the body is not cut.
+// byte at a time is not dropped. On HTTP/1, net/http also reads the body
+// itself, to discard what is left when a handler closes it, answers before
+// reading it to its end, or returns; what it reads there is held to the
+// stall bound counted from the end of the handler's last read of the body.
+// Once the body has ended or been closed the server sets no read deadline of
+// its own, so a long response streamed after the body is not cut.
 //
 // Besides, the body must be read to its end within bodyReadTimeout of the
 // request's start, whatever its pace, so the server spends a bounded time
@@ -103,10 +107,11 @@ func BuildServer(coreCfg *core.CoreConfig, tlsConf *tls.Config, handler http.Han
 }
 
 // boundReads bounds a request body to maxBytes (http.MaxBytesReader), each
-// read of it to bodyStallTimeout, and the whole of it to bodyReadTimeout. A
-// body the handler leaves unread, which net/http then discards on HTTP/1
-// before the next request, gets the stall window or the time left of the
-// whole-body limit, whichever is shorter, for that too.
+// read of it to bodyStallTimeout, and the whole of it to bodyReadTimeout. On
+// HTTP/1 net/http discards what a handler leaves of a body: when the handler
+// closes it, answers before reading it to its end, or returns. What it reads
+// there is held to the deadline the body keeps on the connection between
+// reads (stallBoundedBody), and a body whose read failed is not read further.
 func boundReads(handler http.Handler, maxBytes int) http.Handler {
 	stall, whole := bodyStallTimeout, bodyReadTimeout
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +120,8 @@ func boundReads(handler http.Handler, maxBytes int) http.Handler {
 		var body *stallBoundedBody
 		bounded := r
 		if hasBody {
-			body = &stallBoundedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(maxBytes)), rc: rc, timeout: stall, end: time.Now().Add(whole)}
+			body = &stallBoundedBody{ReadCloser: http.MaxBytesReader(w, r.Body, int64(maxBytes)), rc: rc, timeout: stall, end: time.Now().Add(whole), http1: r.ProtoMajor == 1}
+			body.rest()
 			// Inherit the bodies already bounded only when this request's body
 			// is the last of them (the cleartext path's HTTP/1 request, bounded
 			// around h2c and inside it). An upgraded h2c connection serves its
@@ -133,9 +139,6 @@ func boundReads(handler http.Handler, maxBytes int) http.Handler {
 			bounded.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 		}
 		handler.ServeHTTP(w, bounded)
-		if body != nil && !body.ended && r.ProtoMajor == 1 {
-			_ = rc.SetReadDeadline(body.deadline(time.Now()))
-		}
 	})
 }
 
@@ -156,8 +159,11 @@ func IsStreamingBody(handler http.Handler) bool {
 }
 
 // LiftBodyReadLimit lifts the whole-body read limit of the request ctx belongs
-// to, if its route was marked by StreamingBody; otherwise it does nothing. It
-// is meant for the handler's goroutine, which reads the body.
+// to, if its route was marked by StreamingBody; otherwise it does nothing.
+// The next reads of the body, and the deadline between them, keep the stall
+// bound only; until the next read the connection keeps the deadline it had,
+// which comes no later. It sets no read deadline itself. It is meant for the
+// handler's goroutine, which reads the body.
 func LiftBodyReadLimit(ctx context.Context) {
 	if lift, _ := ctx.Value(liftableKey{}).(bool); !lift {
 		return
@@ -186,19 +192,71 @@ func boundBodies(ctx context.Context) []*stallBoundedBody {
 	return b
 }
 
-// stallBoundedBody sets a read deadline only while a read of the body is in
-// progress, and reads at most stallReadBytes at a time: a read of a chunked
-// HTTP/1 body fills what it is given across many reads of the connection.
-// Between reads there is no deadline (http.Server's ReadTimeout is unset, so
-// none is cleared), and once the body has ended it no longer touches the
-// deadline, which HTTP/1 then uses to watch the connection while a response
-// streams.
+// stallBoundedBody sets a read deadline for each read of the body, and reads
+// at most stallReadBytes at a time: a read of a chunked HTTP/1 body fills what
+// it is given across many reads of the connection.
+//
+// On HTTP/1, net/http reads the body itself too, to discard what a handler
+// leaves of it (when the handler closes it, answers before reading it to its
+// end, or returns), so the connection keeps a read deadline between reads as
+// well (rest), by the body's state:
+//
+//	state   from                                       deadline between reads
+//	open    the body's wrapping                        that of a read starting when the last one ended
+//	                                                   (or at the wrapping): the stall bound, or the
+//	                                                   whole-body limit if that comes first
+//	ended   a read reaching the body's end             none
+//	failed  a read failing (the stall bound, the size  now: nothing more is read of the body, and
+//	        bound, the peer)                           net/http closes the connection after the answer
+//	closed  its Close; a read that finds net/http      none: net/http reads the connection itself from
+//	        closed it (http.ErrBodyReadAfterClose)     then on, with no deadline, or closes it after
+//	                                                   the answer
+//
+// So each discard net/http makes gets one window, counted from the end of the
+// handler's last read of the body: a handler that works past it and leaves
+// the body unread has its connection closed after the answer, not reused.
+// The body sets no deadline once it has ended or been closed: net/http then
+// watches the connection itself, while a response streams. When one read both
+// reaches the body's end and passes the size bound, net/http has begun to
+// watch the connection, and the deadline of the failed read ends that,
+// cancelling the request's context while the handler answers; the connection
+// is closed after the answer either way. On HTTP/2 there is
+// no deadline between reads: net/http does not read the body itself, and
+// closing it ends the stream. http1 is also true of the HTTP/1.1 request an
+// h2c upgrade serves as its first stream, which has no body of its own. The
+// body is read and closed from one goroutine at a time, the handler's.
 type stallBoundedBody struct {
 	io.ReadCloser
 	rc      *http.ResponseController
 	timeout time.Duration
-	end     time.Time // the whole-body limit; zero for a Streaming handler
-	ended   bool
+	end     time.Time // the whole-body limit; zero for a lifted body
+	state   bodyState
+	http1   bool // the request is HTTP/1, so net/http reads the body itself too
+}
+
+type bodyState int
+
+const (
+	bodyOpen bodyState = iota
+	bodyEnded
+	bodyFailed
+	bodyClosed
+)
+
+// rest sets the read deadline an HTTP/1 connection keeps between reads of the
+// body, by its state (the table in stallBoundedBody's doc).
+func (b *stallBoundedBody) rest() {
+	if !b.http1 {
+		return
+	}
+	switch b.state {
+	case bodyOpen:
+		_ = b.rc.SetReadDeadline(b.deadline(time.Now()))
+	case bodyFailed:
+		_ = b.rc.SetReadDeadline(time.Now())
+	case bodyEnded, bodyClosed:
+		_ = b.rc.SetReadDeadline(time.Time{})
+	}
 }
 
 // deadline is the read deadline for a read starting at now: the stall bound,
@@ -215,7 +273,7 @@ func (b *stallBoundedBody) deadline(now time.Time) time.Time {
 // bytes: an error whose text is UTF-8 within the limit as it is, any other cut
 // and wrapped, so errors.Is and errors.As still find it.
 func (b *stallBoundedBody) Read(p []byte) (int, error) {
-	if b.ended {
+	if b.state != bodyOpen {
 		n, err := b.ReadCloser.Read(p)
 		return n, excerpt.OfError(err, readErrorLimit)
 	}
@@ -224,17 +282,31 @@ func (b *stallBoundedBody) Read(p []byte) (int, error) {
 	}
 	_ = b.rc.SetReadDeadline(b.deadline(time.Now()))
 	n, err := b.ReadCloser.Read(p)
-	_ = b.rc.SetReadDeadline(time.Time{})
-	if err != nil {
-		b.ended = true
+	switch {
+	case err == nil:
+	case err == io.EOF:
+		b.state = bodyEnded
+	case errors.Is(err, http.ErrBodyReadAfterClose):
+		b.state = bodyClosed
+	default:
+		b.state = bodyFailed
+	}
+	if b.http1 {
+		b.rest()
+	} else {
+		_ = b.rc.SetReadDeadline(time.Time{})
 	}
 	return n, excerpt.OfError(err, readErrorLimit)
 }
 
-// Close closes the body, which on HTTP/1 reads what is left of it, and returns
-// its error with the text bounded as Read's is.
+// Close closes the body and returns its error with the text bounded as Read's
+// is. On HTTP/1, closing a body not read to its end reads what is left of it,
+// under the deadline rest keeps on the connection; on HTTP/2 closing ends the
+// stream without reading. The body sets no deadline after it.
 func (b *stallBoundedBody) Close() error {
-	return excerpt.OfError(b.ReadCloser.Close(), readErrorLimit)
+	err := b.ReadCloser.Close()
+	b.state = bodyClosed
+	return excerpt.OfError(err, readErrorLimit)
 }
 
 // HTTP2Server builds the HTTP/2 server used by both transport paths — h2c
