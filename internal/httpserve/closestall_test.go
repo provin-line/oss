@@ -334,32 +334,41 @@ func TestBuildServer_HoldsAnAnswerBeforeTheBodyToTheStallBound(t *testing.T) {
 	}
 }
 
-// With a whole-body limit of 300 ms and a stall bound of 1 s, a handler that
-// lifts the limit, waits past it, and answers before reading a stalled body
-// has net/http's discard held to the deadline the connection kept from
-// before the lift, which had passed: the lift sets no deadline itself, so the
-// answer comes at once. A read after the lift is held to the stall bound
+// With a whole-body limit of 300 ms and a stall bound of 3 s, a handler that
+// lifts the limit, waits past the whole-body limit, and answers before
+// reading a stalled body has net/http's discard held to the deadline the
+// connection kept from before the lift, which had passed: the lift sets no
+// deadline itself, so the answer is written at once. Only the answer is
+// timed, not the wait; a deadline set again at the lift would hold it until
+// the stall bound from the lift ran out, some 2.5 s after the wait. A wait
+// so late that such a deadline would have run out by the answer tells
+// neither apart, and skips. A read after the lift is held to the stall bound
 // only (TestBuildServer_StreamingBodyKeepsTheStallBound).
 func TestBuildServer_HoldsALiftedBodyToTheDeadlineFromBeforeTheLiftOutsideReads(t *testing.T) {
-	defer httpserve.SetBodyStallTimeout(time.Second)()
+	defer httpserve.SetBodyStallTimeout(3 * time.Second)()
 	defer httpserve.SetBodyReadTimeout(300 * time.Millisecond)()
-	took := make(chan time.Duration, 1)
+	type timing struct{ waited, took time.Duration }
+	got := make(chan timing, 1)
 	addr := serve(t, httpserve.StreamingBody(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
 		httpserve.LiftBodyReadLimit(r.Context())
+		lifted := time.Now()
 		time.Sleep(500 * time.Millisecond)
+		start := time.Now()
 		w.WriteHeader(http.StatusAccepted)
 		w.(http.Flusher).Flush()
-		took <- time.Since(start)
+		got <- timing{waited: start.Sub(lifted), took: time.Since(start)}
 	})), 1<<20)
 	send(t, addr, stalledHTTP1("/", "application/octet-stream"))
 	select {
-	case d := <-took:
-		if d > 900*time.Millisecond {
-			t.Errorf("answer after the lift took %v, want at once after the wait (the deadline from before the lift had passed)", d)
+	case g := <-got:
+		if g.waited >= 2*time.Second {
+			t.Skipf("the wait took %v: a deadline set again at the lift would have run out by the answer too", g.waited)
 		}
-	case <-time.After(3 * time.Second):
-		t.Error("answer after the lift: handler still serving after 3s")
+		if d := g.took; d > time.Second {
+			t.Errorf("answer after the lift took %v, want at once (the deadline from before the lift had passed)", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("answer after the lift: handler still serving after 5s")
 	}
 }
 
