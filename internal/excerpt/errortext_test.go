@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -202,4 +203,68 @@ func TestErrorTextUnderPanicNil(t *testing.T) {
 			t.Errorf("under GODEBUG=panicnil=1, %s did not pass:\n%s", name, out)
 		}
 	}
+}
+
+// sliceError is an error of a type == cannot compare.
+type sliceError struct{ parts []string }
+
+func (e sliceError) Error() string { return strings.Join(e.parts, ", ") }
+
+// OfErrorChanged returns what OfError does, and says by its bool whether that
+// is a new error in place of err: false for err itself (and for nil), true for
+// a new error that wraps err. Its caller need not compare the errors, which
+// panics for a value == cannot compare.
+func TestOfErrorChanged(t *testing.T) {
+	const limit = 64
+	for _, c := range []struct {
+		name    string
+		err     error
+		changed bool
+	}{
+		{"fits", errors.New("fits"), false},
+		{"long", errors.New(strings.Repeat("a", 100)), true},
+		{"not UTF-8", errors.New("a\xffb"), true},
+		{"panics", panickingError{"boom"}, true},
+		{"nil pointer", (*nilPointerError)(nil), true},
+		{"nil pointer whose Error returns", (*safeNilError)(nil), false},
+		{"of a type == cannot compare", sliceError{[]string{"a", "b"}}, false},
+		{"long, of a type == cannot compare", sliceError{[]string{strings.Repeat("a", 100)}}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var got, plain error
+			var changed bool
+			returns(t, func() {
+				got, changed = excerpt.OfErrorChanged(c.err, limit)
+				plain = excerpt.OfError(c.err, limit)
+			})
+			if changed != c.changed {
+				t.Fatalf("changed = %v, want %v", changed, c.changed)
+			}
+			if !changed {
+				if !same(got, c.err) || !same(plain, c.err) {
+					t.Errorf("unchanged, but OfErrorChanged = %v and OfError = %v, not the error itself", got, plain)
+				}
+			} else if len(got.Error()) > limit || !same(errors.Unwrap(got), c.err) {
+				t.Errorf("changed: %q (%d bytes), does not wrap the error", got, len(got.Error()))
+			}
+			if got.Error() != plain.Error() {
+				t.Errorf("OfError's text %q is not OfErrorChanged's %q", plain, got)
+			}
+		})
+	}
+	if got, changed := excerpt.OfErrorChanged(nil, limit); got != nil || changed {
+		t.Errorf("OfErrorChanged(nil) = %v, %v", got, changed)
+	}
+}
+
+// same reports whether a and b are one error value, also for a value ==
+// cannot compare, which it tells apart by its contents.
+func same(a, b error) bool {
+	if reflect.TypeOf(a) != reflect.TypeOf(b) {
+		return false
+	}
+	if a == nil || reflect.ValueOf(a).Comparable() {
+		return a == b
+	}
+	return reflect.DeepEqual(a, b)
 }

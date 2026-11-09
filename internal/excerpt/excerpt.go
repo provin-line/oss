@@ -85,16 +85,29 @@ func Quoted(s string, limit int) string {
 // is called. Only its text is bounded: the error it wraps is whole, and a tool
 // that writes the wrapped errors out writes them whole.
 func OfError(err error, limit int) error {
+	out, _ := OfErrorChanged(err, limit)
+	return out
+}
+
+// OfErrorChanged is OfError(err, limit), and whether it returns a new error
+// in place of err: false when it returns err itself (nil and false for nil),
+// true when it returns a new error that wraps err, whose text is Of the text
+// ErrorText takes for err (cut, made UTF-8, or taken where Error panicked). A
+// caller tells which by the bool rather than by comparing the errors, which
+// panics when err's value is one == cannot compare (it holds a slice, a map
+// or a func, also inside an interface field). Returning err itself takes Error
+// to return the same text each time it is called.
+func OfErrorChanged(err error, limit int) (error, bool) {
 	check(limit)
 	if err == nil {
-		return nil
+		return nil, false
 	}
 	s, own := errorText(err)
 	text, _ := Of(s, limit)
 	if own && text == s {
-		return err
+		return err, false
 	}
-	return &cutError{text: text, err: err}
+	return &cutError{text: text, err: err}, true
 }
 
 // ErrorText is the text of err that this package cuts, taken so that a panic

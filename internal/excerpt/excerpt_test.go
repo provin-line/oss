@@ -107,10 +107,12 @@ func FuzzOfAndQuoted(f *testing.F) {
 // whatever the text, even one that would fit.
 func TestALimitUnderMinLimitPanics(t *testing.T) {
 	for name, f := range map[string]func(){
-		"Of":             func() { excerpt.Of("", excerpt.MinLimit-1) },
-		"Quoted":         func() { excerpt.Quoted("", excerpt.MinLimit-1) },
-		"OfError":        func() { excerpt.OfError(errors.New(""), excerpt.MinLimit-1) },
-		"OfError of nil": func() { excerpt.OfError(nil, excerpt.MinLimit-1) },
+		"Of":                    func() { excerpt.Of("", excerpt.MinLimit-1) },
+		"Quoted":                func() { excerpt.Quoted("", excerpt.MinLimit-1) },
+		"OfError":               func() { excerpt.OfError(errors.New(""), excerpt.MinLimit-1) },
+		"OfError of nil":        func() { excerpt.OfError(nil, excerpt.MinLimit-1) },
+		"OfErrorChanged":        func() { excerpt.OfErrorChanged(errors.New(""), excerpt.MinLimit-1) },
+		"OfErrorChanged of nil": func() { excerpt.OfErrorChanged(nil, excerpt.MinLimit-1) },
 	} {
 		func() {
 			defer func() {
