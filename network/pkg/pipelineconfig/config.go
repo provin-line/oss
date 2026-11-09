@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/allowlist"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -67,8 +69,10 @@ const (
 	// name the exact key in its own fatal message without duplicating the
 	// literal (this package already uses it below for the same reason).
 	VCStoreBearerKey           = pipelineKey + ".vc-store-bearer"
+	credentialOriginsKey       = pipelineKey + ".credential-origins"
 	maxCredentialSizeKey       = pipelineKey + ".max-credential-size"
 	maxPushBodySizeKey         = pipelineKey + ".max-push-body-size"
+	maxInlinePayloadSizeKey    = pipelineKey + ".max-inline-payload-size"
 	maxRetainChunkSizeKey      = pipelineKey + ".max-retain-chunk-size"
 	maxRetainPayloadSizeKey    = pipelineKey + ".max-retain-payload-size"
 	tlogMirrorKey              = pipelineKey + ".tlog-mirror"
@@ -84,6 +88,18 @@ const (
 	arIntervalKey              = auditRunnerKey + ".interval"
 	arBatchSizeKey             = auditRunnerKey + ".batch-size"
 	arMaxAttemptsKey           = auditRunnerKey + ".max-attempts"
+
+	decisionRecordKey              = "provin.decision-record"
+	decisionRecordLevelKey         = decisionRecordKey + ".level"
+	decisionRecordSinkKey          = decisionRecordKey + ".sink"
+	decisionRecordPathKey          = decisionRecordKey + ".path"
+	decisionRecordSummaryWindowKey = decisionRecordKey + ".summary-window"
+)
+
+// Where decision records are written.
+const (
+	DecisionRecordOutputLog   = "log"
+	DecisionRecordOutputJSONL = "jsonl"
 )
 
 // claimByName maps the config transformation-claim token to the vc constant. The
@@ -109,19 +125,36 @@ type Config struct {
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
 	// and whenever any consuming loop runs (the async batch resolver presents the same
-	// token for peer predecessor fetches) — a tokenless client would be rejected at
-	// runtime, so LoadPipelineConfig fails closed on both.
+	// token to the peers PresentsCredentialTo admits) — a tokenless client would be
+	// rejected at runtime, so LoadPipelineConfig fails closed on both.
 	VCStoreBearer string
-	// MaxCredentialSize bounds the bytes of a single VC on the fetch/store path (the
-	// VCResolverService client and handler) — a hostile peer must not OOM the node with a
-	// bloated body. Node-level: it governs every fetch/store, not just the async resolver.
-	// Sourced from reference.conf (no Go default); a non-positive value fails startup.
+	// CredentialOrigins are origins, besides the destinations the operator configured
+	// (VCStoreEndpoint's and each loop's upstream endpoint), that VCStoreBearer may be
+	// shown to: peers the pipeline learns of at runtime (see PresentsCredentialTo).
+	// The loader writes each as "scheme://host[:port]", scheme and host lower case,
+	// without the scheme's default port; PresentsCredentialTo reads any spelling of an
+	// origin. Empty by default.
+	CredentialOrigins []string
+	// MaxCredentialSize bounds the bytes of a single VC the node takes in: on the
+	// fetch/store path (the VCResolverService client and handler), and in an envelope a
+	// pipeline loop receives over the transport (envelopecodec.Limits) — a hostile peer
+	// must not OOM the node with a bloated body. Node-level: it governs every fetch/store
+	// and every loop. Sourced from reference.conf (no Go default); a non-positive value
+	// fails startup.
 	MaxCredentialSize int
-	// MaxPushBodySize bounds an HTTP push request body (the apipush adapter). Distinct
-	// from MaxCredentialSize: that key bounds credentials on the fetch/store path, this
-	// one bounds a raw ingest payload. Sourced from reference.conf (no Go default); a
-	// non-positive value fails startup.
+	// MaxPushBodySize bounds a raw ingest payload: an HTTP push request body (the
+	// apipush adapter), and a raw input a source loop receives on its ingest subject
+	// (ingest.Config.MaxPayloadSize), so the two refuse the same payloads. Distinct from
+	// MaxCredentialSize: that key bounds credentials, this one bounds a raw ingest
+	// payload. Sourced from reference.conf (no Go default); a non-positive value fails
+	// startup.
 	MaxPushBodySize int
+	// MaxInlinePayloadSize bounds the bytes of an inline payload in an envelope a
+	// pipeline loop receives over the transport (envelopecodec.Limits); with
+	// MaxCredentialSize it also bounds the whole message, which the codec refuses before
+	// decoding it. Node-level: it governs every loop. Sourced from reference.conf (no Go
+	// default); a non-positive value fails startup.
+	MaxInlinePayloadSize int
 	// MaxRetainChunkSize bounds one RetainPayload chunk frame (PayloadStoreService —
 	// mounted as the per-RPC connect read cap in netcompose). Sourced from
 	// reference.conf (no Go default); a non-positive value fails startup.
@@ -141,6 +174,24 @@ type Config struct {
 	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
 	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
 	AuditRunner AuditRunnerConfig
+	// DecisionRecord is how this node records its delivery decisions. Sourced
+	// from reference.conf (default: every decision, to the log).
+	DecisionRecord DecisionRecordConfig
+}
+
+// DecisionRecordConfig selects what is recorded of each delivery decision
+// (provin.decision-record.*) and where.
+type DecisionRecordConfig struct {
+	// Level is how much is written: all, refusals, summary or none.
+	Level decisionrecord.Level
+	// Output is DecisionRecordOutputLog or DecisionRecordOutputJSONL (the HOCON
+	// key is provin.decision-record.sink; "sink" is not used for Go names here
+	// because the Sink Process owns that word).
+	Output string
+	// Path is the JSON-lines file; set exactly when Output is DecisionRecordOutputJSONL.
+	Path string
+	// SummaryWindow is how often counts are written at the summary level. Positive.
+	SummaryWindow time.Duration
 }
 
 // HasConsumingLoop reports whether any loop consumes upstream credentials — a sink,
@@ -460,6 +511,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.MaxPushBodySize, err = loadPositiveInt(cfg, maxPushBodySizeKey); err != nil {
 		return nil, err
 	}
+	if out.MaxInlinePayloadSize, err = loadPositiveInt(cfg, maxInlinePayloadSizeKey); err != nil {
+		return nil, err
+	}
 	if out.MaxRetainChunkSize, err = loadPositiveInt(cfg, maxRetainChunkSizeKey); err != nil {
 		return nil, err
 	}
@@ -475,10 +529,61 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.BatchResolver, err = loadBatchResolver(cfg); err != nil {
 		return nil, err
 	}
+	if out.CredentialOrigins, err = loadCredentialOrigins(cfg); err != nil {
+		return nil, err
+	}
 	if out.AuditRunner, err = loadAuditRunner(cfg); err != nil {
 		return nil, err
 	}
+	if out.DecisionRecord, err = loadDecisionRecord(cfg); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadDecisionRecord reads provin.decision-record.* (defaults in reference.conf).
+// An unknown level or sink, a jsonl sink without a path, or a non-positive
+// window fails startup naming the key.
+func loadDecisionRecord(cfg *hoconconfig.Config) (DecisionRecordConfig, error) {
+	var dr DecisionRecordConfig
+	level, err := cfg.String(decisionRecordLevelKey)
+	if err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordLevelKey, err)
+	}
+	if dr.Level, err = decisionrecord.ParseLevel(level); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordLevelKey, err)
+	}
+	if dr.Output, err = cfg.String(decisionRecordSinkKey); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordSinkKey, err)
+	}
+	hasPath := cfg.Has(decisionRecordPathKey)
+	if hasPath {
+		if dr.Path, err = cfg.String(decisionRecordPathKey); err != nil {
+			return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordPathKey, err)
+		}
+		if dr.Path == "" {
+			return dr, fmt.Errorf("pipeline: config %s must not be empty", decisionRecordPathKey)
+		}
+	}
+	switch dr.Output {
+	case DecisionRecordOutputLog:
+		if hasPath {
+			return dr, fmt.Errorf("pipeline: config %s is only valid when %s is %q", decisionRecordPathKey, decisionRecordSinkKey, DecisionRecordOutputJSONL)
+		}
+	case DecisionRecordOutputJSONL:
+		if !hasPath {
+			return dr, fmt.Errorf("pipeline: config %s is required when %s is %q", decisionRecordPathKey, decisionRecordSinkKey, DecisionRecordOutputJSONL)
+		}
+	default:
+		return dr, fmt.Errorf("pipeline: config %s: unknown sink %q (want %q or %q)", decisionRecordSinkKey, dr.Output, DecisionRecordOutputLog, DecisionRecordOutputJSONL)
+	}
+	if dr.SummaryWindow, err = cfg.Duration(decisionRecordSummaryWindowKey); err != nil {
+		return dr, fmt.Errorf("pipeline: config %s: %w", decisionRecordSummaryWindowKey, err)
+	}
+	if dr.SummaryWindow <= 0 {
+		return dr, fmt.Errorf("pipeline: config %s must be positive, got %s", decisionRecordSummaryWindowKey, dr.SummaryWindow)
+	}
+	return dr, nil
 }
 
 // loadAuditRunner reads the async audit-runner tuning from the (layered) config. All three
@@ -614,6 +719,56 @@ func loadBatchResolver(cfg *hoconconfig.Config) (BatchResolverConfig, error) {
 	}
 	br.Interval = interval
 	return br, nil
+}
+
+// loadCredentialOrigins reads credential-origins, each in its one spelling.
+func loadCredentialOrigins(cfg *hoconconfig.Config) ([]string, error) {
+	listed, err := cfg.StringList(credentialOriginsKey)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: config %s: %w", credentialOriginsKey, err)
+	}
+	var out []string
+	for _, o := range listed {
+		parsed, err := origin.Parse(o)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: config %s: %w", credentialOriginsKey, err)
+		}
+		out = append(out, parsed)
+	}
+	return out, nil
+}
+
+// PresentsCredentialTo reports whether a fetch the pipeline makes may present
+// VCStoreBearer to endpoint, whichever part of the pipeline makes it: whether
+// endpoint's origin is that of a destination the operator configured
+// (VCStoreEndpoint, or a loop's upstream endpoint) or one of CredentialOrigins.
+// Any other endpoint — one a StoreVC caller hints, or an issuer's DID document
+// names — is fetched from without it, so the node's L1 token reaches only the
+// parties the operator named. An endpoint that is not an http(s) URL, or that
+// carries user information, is presented nothing. A fetch that presents it
+// follows no redirect.
+func (c *Config) PresentsCredentialTo(endpoint string) bool {
+	return origin.In(endpoint, append(c.configuredDestinations(), c.CredentialOrigins...))
+}
+
+// configuredDestinations returns the origins of the endpoints the operator
+// configured: VCStoreEndpoint's and each loop's upstream endpoint's.
+func (c *Config) configuredDestinations() []string {
+	var out []string
+	add := func(endpoint string) {
+		if o, ok := origin.Of(endpoint); ok {
+			out = append(out, o)
+		}
+	}
+	add(c.VCStoreEndpoint)
+	for _, lc := range c.Loops {
+		add(lc.Sink.UpstreamEndpoint)
+		add(lc.Chained.UpstreamEndpoint)
+		for _, in := range lc.Aggregate.Ingresses {
+			add(in.UpstreamEndpoint)
+		}
+	}
+	return out
 }
 
 // producingIdentity extracts a producing loop's (output subject, issuer DID);

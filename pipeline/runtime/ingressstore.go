@@ -42,6 +42,8 @@ type StoredHead struct {
 // network/pkg/services/vcresolver.StoreVCResult directly — this package stays
 // network-agnostic (network/ and pipeline/ never import each other, AGENTS.md
 // rule 2). cmd/pipeline's vcStoreAdapter adapts a wire client to this interface.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type IngressStorer interface {
 	StoreVC(ctx context.Context, credential []byte, upstreamEndpoint string, assemblyDepth int) (StoredHead, error)
 }
@@ -50,6 +52,8 @@ type IngressStorer interface {
 // owns this local interface; its wireAuditRegistrar (a wire client to
 // AuditService.RegisterAuditHead) satisfies it in production, and an adapter
 // over *auditor.MemQueue (or the file-backed audit queue) satisfies it in tests.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type AuditRegistrar interface {
 	Add(head StoredHead) error
 }

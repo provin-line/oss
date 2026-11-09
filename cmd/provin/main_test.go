@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -443,5 +444,25 @@ func TestRun_BundleExport_AggregateCompleteDefaultsOn(t *testing.T) {
 	}
 	if !strings.Contains(usage, "--aggregate-complete=false") {
 		t.Fatal("top-level usage must advertise the =false opt-out")
+	}
+}
+
+// --credential-origin names, repeatably, an origin the token may be shown to,
+// read in its one spelling; a value that is not an origin is refused.
+func TestRun_BundleExport_CredentialOrigin(t *testing.T) {
+	fs, o := bundleExportFlagSet()
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse([]string{"--credential-origin", "HTTPS://Peer.Example:443", "--credential-origin", "http://10.0.0.7:8080"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []string{"https://peer.example", "http://10.0.0.7:8080"}; !slices.Equal(o.credentialOrigins, want) {
+		t.Errorf("credential origins = %q, want %q", o.credentialOrigins, want)
+	}
+	for _, bad := range []string{"https://peer.example/path", "https://user@peer.example", "peer.example", "https://peer.example?q=1"} {
+		fs, _ := bundleExportFlagSet()
+		fs.SetOutput(io.Discard)
+		if err := fs.Parse([]string{"--credential-origin", bad}); err == nil {
+			t.Errorf("--credential-origin %q: taken", bad)
+		}
 	}
 }

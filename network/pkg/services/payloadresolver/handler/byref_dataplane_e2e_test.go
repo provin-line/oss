@@ -11,6 +11,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // This is the by-reference DATA PATH e2e: a payload is retained at the serving
 // boundary, an envelope is delivered WITHOUT the payload (by-reference), and a
 // consuming sink dereferences it over the real PayloadService, binds it against
@@ -69,7 +79,7 @@ func TestByReference_DataPath_SinkFetchesAndDelivers(t *testing.T) {
 	p, err := sink.New(sink.Config{
 		Strategy:         contract.VerificationAdjacent,
 		Kind:             contract.SinkObservationOnly,
-		Codec:            envelopecodec.New(),
+		Codec:            testCodec(),
 		Verifier:         e2eVerifier{},
 		Store:            e2eIngressStore{},
 		Writer:           w,
@@ -83,7 +93,7 @@ func TestByReference_DataPath_SinkFetchesAndDelivers(t *testing.T) {
 
 	// A by-reference envelope: the credential binds to the payload, but no
 	// payload rides inline.
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: e2eCred(t, hash), Payload: nil, SequenceNo: 1,
 	})
 	if err != nil {
@@ -113,7 +123,7 @@ func TestByReference_DataPath_MissingPayload_Rejected(t *testing.T) {
 	p, err := sink.New(sink.Config{
 		Strategy:         contract.VerificationAdjacent,
 		Kind:             contract.SinkObservationOnly,
-		Codec:            envelopecodec.New(),
+		Codec:            testCodec(),
 		Verifier:         e2eVerifier{},
 		Store:            e2eIngressStore{},
 		Writer:           w,
@@ -124,7 +134,7 @@ func TestByReference_DataPath_MissingPayload_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sink.New: %v", err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: e2eCred(t, missing), Payload: nil, SequenceNo: 1,
 	})
 	if err != nil {

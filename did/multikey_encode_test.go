@@ -9,10 +9,7 @@ import (
 func TestEncodeEd25519Multikey_RoundTrips(t *testing.T) {
 	// A key that cannot be read back is a key that was never published. The
 	// encoder and the decoder are each other's only real test.
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = byte(i)
-	}
+	key := mustDecodeHex(t, w3cSigningKeyHex)
 	vm, err := did.NewMultikeyVerificationMethod(subject+"#k1", subject, key)
 	if err != nil {
 		t.Fatalf("NewMultikeyVerificationMethod: %v", err)

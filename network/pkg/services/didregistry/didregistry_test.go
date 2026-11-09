@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
+	"github.com/provin-line/oss/multibase"
 	"github.com/provin-line/oss/network/pkg/services/didregistry"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
@@ -32,6 +35,18 @@ func mustMultikeyVM(id, controller string, pub []byte) did.VerificationMethod {
 		panic(err) // a non-Ed25519 fixture key is a test bug
 	}
 	return vm
+}
+
+// rawMultikeyVM builds a Multikey verification method for any 32 bytes,
+// encoding them by hand: did.NewMultikeyVerificationMethod refuses an unusable
+// Ed25519 key, and an adversarial owner document is not built with it.
+func rawMultikeyVM(id, controller string, pub []byte) did.VerificationMethod {
+	return did.VerificationMethod{
+		ID:                 id,
+		Type:               "Multikey",
+		Controller:         controller,
+		PublicKeyMultibase: multibase.EncodeBase58Btc(append([]byte{0xed, 0x01}, pub...)),
+	}
 }
 
 const (
@@ -167,7 +182,7 @@ func ed25519JWK(pub []byte) map[string]any {
 // a self-signed Data Integrity proof over the document body.
 func signedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, aka []string) *did.DIDDocument {
 	t.Helper()
-	base := did.New(did.DocumentFields{
+	return signedOwnerDocFields(t, signer, did.DocumentFields{
 		Context:            did.IssuedDocumentContexts(),
 		ID:                 ownerDID,
 		Controller:         ownerDID,
@@ -175,7 +190,18 @@ func signedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, aka []st
 		VerificationMethod: []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub)},
 		AssertionMethod:    []string{ownerDID + "#signing"},
 	})
-	body := base.Body()
+}
+
+// signedOwnerDocFields signs the document built from fields with the owner's
+// #signing key.
+func signedOwnerDocFields(t *testing.T, signer crypto.Signer, fields did.DocumentFields) *did.DIDDocument {
+	t.Helper()
+	return signedOwnerDocBody(t, signer, did.New(fields).Body())
+}
+
+// signedOwnerDocBody self-signs the owner document body under #signing.
+func signedOwnerDocBody(t *testing.T, signer crypto.Signer, body map[string]any) *did.DIDDocument {
+	t.Helper()
 	proof, err := vc.CreateProof(signer, ownerDID, string(keystore.KeyIDSigning), ownerDID+"#signing", body, vc.CryptosuiteEdDSAJCS2022)
 	if err != nil {
 		t.Fatalf("CreateProof: %v", err)
@@ -791,24 +817,38 @@ func TestIssuePipeline_MintPath_StillPopulatesKeystore(t *testing.T) {
 // A malformed (short or absent) external public key is fail-closed
 // InvalidArgument, never silently zero-padded or accepted into a document a
 // holder cannot actually use.
-func TestIssuePipeline_ExternalKeys_RejectsMalformedKeyLength(t *testing.T) {
+func TestIssuePipeline_ExternalKeys_RejectsInvalidKeys(t *testing.T) {
 	validKP := localKeyPair(t)
 	cases := []struct {
-		name string
-		ext  *didregistry.ExternalPublicKeys
+		name       string
+		ext        *didregistry.ExternalPublicKeys
+		smallOrder bool
 	}{
-		{"short auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: []byte{1, 2, 3}, SigningPublicKey: validKP.PublicKey}},
-		{"short signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: []byte{1, 2, 3}}},
-		{"zero-length auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: nil, SigningPublicKey: validKP.PublicKey}},
-		{"zero-length signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: nil}},
-		{"oversized auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: append(append([]byte{}, validKP.PublicKey...), 0xff), SigningPublicKey: validKP.PublicKey}},
+		{"short auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: []byte{1, 2, 3}, SigningPublicKey: validKP.PublicKey}, false},
+		{"short signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: []byte{1, 2, 3}}, false},
+		{"zero-length auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: nil, SigningPublicKey: validKP.PublicKey}, false},
+		{"zero-length signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: nil}, false},
+		{"oversized auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: append(append([]byte{}, validKP.PublicKey...), 0xff), SigningPublicKey: validKP.PublicKey}, false},
 		// An all-zeros key is a small-order point no private key matches —
 		// forgeable by anyone; the mint path can never produce it.
-		{"all-zeros auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: make([]byte, 32), SigningPublicKey: validKP.PublicKey}},
-		{"all-zeros signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: make([]byte, 32)}},
+		{"all-zeros auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: make([]byte, 32), SigningPublicKey: validKP.PublicKey}, true},
+		{"all-zeros signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: make([]byte, 32)}, true},
+		// Every small-order point is a key anyone can sign with, in any encoding.
+		{"identity as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000"), SigningPublicKey: validKP.PublicKey}, true},
+		{"identity as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")}, true},
+		{"identity with sign bit as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000080"), SigningPublicKey: validKP.PublicKey}, true},
+		{"identity with sign bit as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0100000000000000000000000000000000000000000000000000000000000080")}, true},
+		{"order-2 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-2 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")}, true},
+		{"order-4 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "0000000000000000000000000000000000000000000000000000000000000080"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-4 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "0000000000000000000000000000000000000000000000000000000000000080")}, true},
+		{"order-8 point as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"), SigningPublicKey: validKP.PublicKey}, true},
+		{"order-8 point as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a")}, true},
+		{"non-canonical identity as auth key", &didregistry.ExternalPublicKeys{AuthPublicKey: mustHex(t, "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"), SigningPublicKey: validKP.PublicKey}, true},
+		{"non-canonical identity as signing key", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: mustHex(t, "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")}, true},
 		// The mint path always produces DISTINCT auth/signing keys; the external
 		// path preserves that separation.
-		{"identical auth and signing keys", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: validKP.PublicKey}},
+		{"identical auth and signing keys", &didregistry.ExternalPublicKeys{AuthPublicKey: validKP.PublicKey, SigningPublicKey: validKP.PublicKey}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -819,6 +859,9 @@ func TestIssuePipeline_ExternalKeys_RejectsMalformedKeyLength(t *testing.T) {
 			_, _, err := svc.IssuePipeline(ctx, pipelineDID, mustDelegate(t, signer, pipelineDID), tc.ext)
 			if !errors.Is(err, didregistry.ErrInvalidArgument) {
 				t.Errorf("err = %v, want ErrInvalidArgument", err)
+			}
+			if got := errors.Is(err, ed25519.ErrSmallOrder); got != tc.smallOrder {
+				t.Errorf("errors.Is(err, ErrSmallOrder) = %v, want %v (err = %v)", got, tc.smallOrder, err)
 			}
 			// The rejected attempt must leave no trace: no document, no keys.
 			if _, rerr := svc.ResolveDID(ctx, pipelineDID); !errors.Is(rerr, store.ErrNotFound) {
@@ -882,5 +925,298 @@ func TestIssuePipeline_ExternalKeys_LocalPrivateKeySignsAndVerifiesAgainstResolv
 	}
 	if _, err := vc.VerifyProofWithContract(ed25519.Verifier{}, pub, encoding, proof, body); err != nil {
 		t.Errorf("credential signed locally does not verify against the registry-resolved document: %v", err)
+	}
+}
+
+func mustHex(t *testing.T, h string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// Every Ed25519 key in an owner document is checked, whatever relationship
+// lists it: an honest #signing beside an unusable #auth is refused, and the
+// owner is never served.
+func TestRegisterOwner_RefusesInvalidKeyInAnyVerificationMethod(t *testing.T) {
+	keys := []struct {
+		name string
+		key  []byte
+		want error
+	}{
+		{"identity", mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000"), ed25519.ErrSmallOrder},
+		{"off the curve", mustHex(t, "0200000000000000000000000000000000000000000000000000000000000000"), ed25519.ErrInvalidPoint},
+		{"31 bytes", make([]byte, 31), ed25519.ErrPublicKeySize},
+	}
+	for _, k := range keys {
+		for _, rel := range []string{"authentication", "assertionMethod"} {
+			t.Run(k.name+"/"+rel, func(t *testing.T) {
+				svc, signer, signPub := newService(t)
+				fields := did.DocumentFields{
+					Context:    did.IssuedDocumentContexts(),
+					ID:         ownerDID,
+					Controller: ownerDID,
+					VerificationMethod: []did.VerificationMethod{
+						mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub),
+						rawMultikeyVM(ownerDID+"#auth", ownerDID, k.key),
+					},
+					AssertionMethod: []string{ownerDID + "#signing"},
+				}
+				if rel == "authentication" {
+					fields.Authentication = []string{ownerDID + "#auth"}
+				} else {
+					fields.AssertionMethod = append(fields.AssertionMethod, ownerDID+"#auth")
+				}
+				doc := signedOwnerDocFields(t, signer, fields)
+
+				_, err := svc.RegisterOwner(context.Background(), doc, nil)
+				if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, did.ErrInvalidPublicKey) || !errors.Is(err, k.want) {
+					t.Fatalf("err = %v, want ErrInvalidArgument wrapping did.ErrInvalidPublicKey and %v", err, k.want)
+				}
+				if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+					t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
+				}
+			})
+		}
+	}
+}
+
+// The proof's own key is held to the same rule as every other listed key: an
+// owner document whose #signing key is unusable is an invalid argument, with
+// the key's error kept, and the owner is never served.
+func TestRegisterOwner_RefusesInvalidSigningKeyAsInvalidArgument(t *testing.T) {
+	identity := mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")
+	svc, signer, _ := newService(t)
+	doc := signedOwnerDocFields(t, signer, did.DocumentFields{
+		Context:            did.IssuedDocumentContexts(),
+		ID:                 ownerDID,
+		Controller:         ownerDID,
+		VerificationMethod: []did.VerificationMethod{rawMultikeyVM(ownerDID+"#signing", ownerDID, identity)},
+		AssertionMethod:    []string{ownerDID + "#signing"},
+	})
+
+	_, err := svc.RegisterOwner(context.Background(), doc, nil)
+	if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, did.ErrInvalidPublicKey) || !errors.Is(err, ed25519.ErrSmallOrder) {
+		t.Fatalf("err = %v, want ErrInvalidArgument wrapping did.ErrInvalidPublicKey and ErrSmallOrder", err)
+	}
+	if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+		t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
+	}
+}
+
+// signedOwnerDocWith signs an owner document built from fields after mutate
+// edits its body: the way to build shapes did.DocumentFields cannot express
+// (embedded methods, extra members).
+func signedOwnerDocWith(t *testing.T, signer crypto.Signer, fields did.DocumentFields, mutate func(body map[string]any)) *did.DIDDocument {
+	t.Helper()
+	body := did.New(fields).Body()
+	if mutate != nil {
+		mutate(body)
+	}
+	return signedOwnerDocBody(t, signer, body)
+}
+
+func multikeyMap(id, controller string, pub []byte) map[string]any {
+	return map[string]any{"id": id, "type": "Multikey", "controller": controller,
+		"publicKeyMultibase": multibase.EncodeBase58Btc(append([]byte{0xed, 0x01}, pub...))}
+}
+
+// The registry stores an owner document only when every key in it is one a
+// reader here extracts: every verification method and every entry of
+// authentication and assertionMethod resolves through did.ExtractPublicKey,
+// and nothing else in the document carries a key (an embedded method, the
+// legacy publicKey member). The registry serves the document to resolvers
+// outside this repository, whose readers may pick among other keys
+// differently.
+func TestRegisterOwner_RefusesKeysNoReaderHereExtracts(t *testing.T) {
+	identity := mustHex(t, "0100000000000000000000000000000000000000000000000000000000000000")
+	other, err := ed25519.Generator{}.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherOrg = "did:dplaax:poc.dplaax.dev:org:other"
+	cases := []struct {
+		name        string
+		vms         func(signPub []byte) []did.VerificationMethod
+		auth        []string
+		mutate      func(body map[string]any)
+		unusableKey bool
+		reason      string // a part of the error the case must fail with; empty for any
+	}{
+		{name: "an unlisted method with a usable key", vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), mustMultikeyVM(ownerDID+"#spare", ownerDID, other.PublicKey)}
+		}},
+		{name: "an unlisted method with a small-order key", vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), rawMultikeyVM(ownerDID+"#spare", ownerDID, identity)}
+		}},
+		{name: "two methods sharing a listed id, one with a small-order key", auth: []string{ownerDID + "#auth"}, vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), mustMultikeyVM(ownerDID+"#auth", ownerDID, other.PublicKey), rawMultikeyVM(ownerDID+"#auth", ownerDID, identity)}
+		}},
+		{name: "two #signing methods", vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), mustMultikeyVM(ownerDID+"#signing", ownerDID, other.PublicKey)}
+		}},
+		{name: "a listed method with another multicodec", auth: []string{ownerDID + "#auth"}, vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), {
+				ID: ownerDID + "#auth", Type: "Multikey", Controller: ownerDID,
+				PublicKeyMultibase: multibase.EncodeBase58Btc(append([]byte{0x12, 0x20}, other.PublicKey...)),
+			}}
+		}},
+		{name: "a listed method of an unknown type", auth: []string{ownerDID + "#auth"}, vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), {
+				ID: ownerDID + "#auth", Type: "X25519KeyAgreementKey2020", Controller: ownerDID,
+				PublicKeyMultibase: "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc",
+			}}
+		}},
+		{name: "a listed method controlled by another DID", auth: []string{ownerDID + "#auth"}, vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), mustMultikeyVM(ownerDID+"#auth", otherOrg, other.PublicKey)}
+		}},
+		{name: "a listed JWK method that is not Ed25519", auth: []string{ownerDID + "#auth"}, vms: func(p []byte) []did.VerificationMethod {
+			return []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, p), {
+				ID: ownerDID + "#auth", Type: "JsonWebKey2020", Controller: ownerDID,
+				PublicKeyJWK: map[string]any{"kty": "EC", "crv": "P-256", "x": "AAAA", "y": "AAAA"},
+			}}
+		}},
+		{name: "a reference to a key of another DID", mutate: func(b map[string]any) {
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), otherOrg+"#signing")
+		}},
+		{name: "a reference to no method", mutate: func(b map[string]any) {
+			b["authentication"] = []any{ownerDID + "#missing"}
+		}},
+		{name: "an embedded method with a small-order key", mutate: func(b map[string]any) {
+			b["authentication"] = []any{multikeyMap(ownerDID+"#embedded", ownerDID, identity)}
+		}},
+		{name: "an embedded second #signing", mutate: func(b map[string]any) {
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), multikeyMap(ownerDID+"#signing", ownerDID, other.PublicKey))
+		}},
+		{name: "an embedded method under keyAgreement", mutate: func(b map[string]any) {
+			b["keyAgreement"] = []any{multikeyMap(ownerDID+"#agree", ownerDID, other.PublicKey)}
+		}},
+		{name: "the legacy publicKey member", mutate: func(b map[string]any) {
+			b["publicKey"] = []any{multikeyMap(ownerDID+"#legacy", ownerDID, other.PublicKey)}
+		}},
+		{name: "a method whose id names another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(otherOrg+"#signing", ownerDID, other.PublicKey))
+			b["authentication"] = []any{otherOrg + "#signing"}
+		}},
+		{name: "a method id with two fragments", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#x#auth", ownerDID, other.PublicKey))
+			b["authentication"] = []any{ownerDID + "#x#auth"}
+		}},
+		{name: "a reference with two fragments that resolves to #signing here", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["authentication"] = []any{"#x#signing"}
+		}},
+		{name: "a bare reference without #", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["authentication"] = []any{"signing"}
+		}},
+		{name: "a reference with an empty fragment", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["capabilityInvocation"] = []any{ownerDID + "#"}
+		}},
+		{name: "a percent-encoded fragment read elsewhere as #signing", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sign%69ng", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), "#sign%69ng")
+		}},
+		{name: "a fragment with a tab", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sig\tning", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#sig\tning")
+		}},
+		{name: "a fragment with a trailing space", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#signing ", ownerDID, other.PublicKey))
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#signing ")
+		}},
+		{name: "a non-ASCII fragment", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), multikeyMap(ownerDID+"#sígning", ownerDID, other.PublicKey))
+			b["authentication"] = []any{ownerDID + "#sígning"}
+		}},
+		{name: "a capabilityDelegation reference to another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["capabilityDelegation"] = []any{otherOrg + "#signing"}
+		}},
+		{name: "a keyAgreement reference to another DID", reason: "invalid key reference", mutate: func(b map[string]any) {
+			b["keyAgreement"] = []any{otherOrg + "#agree"}
+		}},
+		{name: "keyAgreement as a single embedded method", mutate: func(b map[string]any) {
+			b["keyAgreement"] = multikeyMap(ownerDID+"#agree", ownerDID, other.PublicKey)
+		}},
+		{name: "capabilityInvocation as a single reference to another DID", mutate: func(b map[string]any) {
+			b["capabilityInvocation"] = otherOrg + "#signing"
+		}},
+		{name: "capabilityDelegation as a single embedded method", mutate: func(b map[string]any) {
+			b["capabilityDelegation"] = multikeyMap(ownerDID+"#delegate", ownerDID, identity)
+		}},
+		{name: "publicKey as a single method", mutate: func(b map[string]any) {
+			b["publicKey"] = multikeyMap(ownerDID+"#legacy", ownerDID, other.PublicKey)
+		}},
+		{name: "a verificationMethod entry that is not an object", mutate: func(b map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), ownerDID+"#signing")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, signer, signPub := newService(t)
+			vms := []did.VerificationMethod{mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub)}
+			if tc.vms != nil {
+				vms = tc.vms(signPub)
+			}
+			doc := signedOwnerDocWith(t, signer, did.DocumentFields{
+				Context:            did.IssuedDocumentContexts(),
+				ID:                 ownerDID,
+				Controller:         ownerDID,
+				VerificationMethod: vms,
+				AssertionMethod:    []string{ownerDID + "#signing"},
+				Authentication:     tc.auth,
+			}, tc.mutate)
+			_, err := svc.RegisterOwner(context.Background(), doc, nil)
+			if !errors.Is(err, didregistry.ErrInvalidArgument) {
+				t.Fatalf("err = %v, want ErrInvalidArgument", err)
+			}
+			if got := errors.Is(err, did.ErrInvalidPublicKey); got != tc.unusableKey {
+				t.Errorf("errors.Is(err, did.ErrInvalidPublicKey) = %v, want %v (err = %v)", got, tc.unusableKey, err)
+			}
+			if tc.reason != "" && !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("err = %v, want one about %q", err, tc.reason)
+			}
+			if strings.Contains(err.Error(), "\n") {
+				t.Errorf("the error spans lines: %q", err)
+			}
+			if _, rerr := svc.ResolveDID(context.Background(), ownerDID); !errors.Is(rerr, store.ErrNotFound) {
+				t.Errorf("resolve after refused registration: want ErrNotFound, got %v", rerr)
+			}
+		})
+	}
+}
+
+// A document whose every key a reader here extracts is registered, with
+// methods listed under one relationship or both.
+func TestRegisterOwner_AcceptsDocumentsWhoseKeysAllExtract(t *testing.T) {
+	auth, err := ed25519.Generator{}.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := ed25519.Generator{}.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, signer, signPub := newService(t)
+	doc := signedOwnerDocWith(t, signer, did.DocumentFields{
+		Context:    did.IssuedDocumentContexts(),
+		ID:         ownerDID,
+		Controller: ownerDID,
+		VerificationMethod: []did.VerificationMethod{
+			mustMultikeyVM(ownerDID+"#signing", ownerDID, signPub),
+			mustMultikeyVM(ownerDID+"#auth", ownerDID, auth.PublicKey),
+			mustMultikeyVM(ownerDID+"#both", ownerDID, both.PublicKey),
+		},
+		AssertionMethod: []string{ownerDID + "#signing", ownerDID + "#both"},
+		Authentication:  []string{ownerDID + "#auth", "#both"},
+	}, func(b map[string]any) {
+		// A relative method id, and a reference to an own key under another
+		// relationship.
+		vms := b["verificationMethod"].([]any)
+		vms[1].(map[string]any)["id"] = "#auth"
+		b["keyAgreement"] = []any{ownerDID + "#auth"}
+	})
+	if _, err := svc.RegisterOwner(context.Background(), doc, nil); err != nil {
+		t.Fatalf("RegisterOwner: %v", err)
 	}
 }

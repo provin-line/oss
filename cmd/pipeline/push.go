@@ -8,6 +8,7 @@ package main
 // copy.
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -19,14 +20,14 @@ import (
 	"github.com/provin-line/oss/pipeline/source/ingest/apipush"
 )
 
-// mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/.
-// Zero bindings mount nothing. The bindings themselves (pipelineruntime.
-// PushBinding) come from the data plane's loop builders
-// (pipeline/runtime.Build); this file owns only the HTTP mounting that
-// consumes them.
-func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding, verifier auth.Verifier, maxBodyBytes int) error {
+// mountPushRoutes mounts one apipush adapter per binding under /ingest/<name>/,
+// each bounding a body by its binding's MaxBodySize. Zero bindings mount
+// nothing. The bindings themselves (pipelineruntime.PushBinding) come from the
+// data plane's loop builders (pipeline/runtime.Build); this file owns only the
+// HTTP mounting that consumes them.
+func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding, verifier auth.Verifier) error {
 	for _, b := range bindings {
-		inner, err := apipush.New(apipush.Config{Publisher: b.Publisher, MaxBodyBytes: maxBodyBytes})
+		inner, err := apipush.New(apipush.Config{Publisher: b.Publisher, MaxBodyBytes: b.MaxBodySize})
 		if err != nil {
 			return fmt.Errorf("pipeline: loop %q: push adapter: %w", b.Name, err)
 		}
@@ -42,16 +43,18 @@ func mountPushRoutes(mux *http.ServeMux, bindings []pipelineruntime.PushBinding,
 //     but readiness-gated — a green health before the loop can receive would
 //     invite publishes that core NATS silently drops.
 //   - every other path (the push route) is PDP-guarded FIRST — an
-//     unauthenticated caller learns nothing about body gates or node state —
-//     then readiness-gated, then handed to the adapter.
+//     unauthenticated caller learns nothing about body gates or node state,
+//     except that the PDP is down (503 with Retry-After) — then
+//     readiness-gated, then handed to the adapter.
 //
 // The PDP check is the same L1 seam the RPC interceptors enforce elsewhere in
 // this module: bearer from the Authorization header into the context, then
 // auth.Verifier.Verify with resource "ingest", action "push" (proto
-// policy-option naming convention). Missing/empty bearer → 401; any Verify
-// failure → 403 — this binary mounts no ConnectRPC services of its own, so
-// there is no interceptor chain to share this check with; it is enforced
-// here directly instead.
+// policy-option naming convention). Missing/empty bearer → 401; a PDP that
+// cannot answer (interceptors.ErrBackendUnavailable) → 503 with Retry-After, so
+// the sender retries; any other Verify failure → 403. This binary mounts no
+// ConnectRPC services of its own, so there is no interceptor chain to share
+// this check with; it is enforced here directly instead.
 func pushRoutes(inner http.Handler, verifier auth.Verifier, ready <-chan struct{}) http.Handler {
 	requireReady := func(w http.ResponseWriter) bool {
 		select {
@@ -78,6 +81,11 @@ func pushRoutes(inner http.Handler, verifier auth.Verifier, ready <-chan struct{
 		}
 		ctx := interceptors.WithBearerToken(r.Context(), token)
 		if err := verifier.Verify(ctx, "ingest", "push"); err != nil {
+			if errors.Is(err, interceptors.ErrBackendUnavailable) {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "authorization backend unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

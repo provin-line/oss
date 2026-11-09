@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/provin-line/oss/appraisal"
 	chainappraisal "github.com/provin-line/oss/appraisal/chain"
 	"github.com/provin-line/oss/appraisal/inputcapture"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/pipeline/chained"
 	jsonataconv "github.com/provin-line/oss/pipeline/chained/converter/jsonata"
@@ -46,14 +48,19 @@ import (
 // and an optional sink Writer override. They are zero for a source-only node — a
 // source loop uses neither.
 type Deps struct {
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Resolver resolver.Resolver
 	// ChainResolver resolves predecessor credentials by content address for a
 	// synchronous exact-view appraisal. Required only by an agent-access sink.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	ChainResolver chainwalk.CredentialResolver
 	// ChainResolverFor optionally returns a resolver scoped to one sink's
 	// declared upstream endpoint. It takes precedence over ChainResolver and
 	// lets a separated deployment synchronously resolve evidence that has not
 	// yet replicated into its local registry.
+	//
+	// The errors of the resolvers it returns keep the rule for a part's errors in package contract's doc.
 	ChainResolverFor func(upstreamEndpoint string) chainwalk.CredentialResolver
 	// AppraisalMaxDepth bounds synchronous chain assembly. Zero selects
 	// chainwalk.DefaultMaxDepth.
@@ -78,6 +85,8 @@ type Deps struct {
 	// SchemaResolver refines the consuming loops' data-integrity axis with schema
 	// content-hash resolution (credential.schema-ref). Nil leaves schema references
 	// shape-checked only. main wires the local registry bridge.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	SchemaResolver vc.SchemaResolver
 	// SchemaGetter resolves a producing loop's config schema-ref against the
 	// registry at boot (fail-closed). Nil is a boot error for any loop that
@@ -105,6 +114,8 @@ type Deps struct {
 // PayloadRetainStore retains a producing loop's payload bytes keyed by their
 // content address, recording ownerDID (the producing pipeline) for serving
 // authorization. *payloadresolver.Service satisfies it.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type PayloadRetainStore interface {
 	Store(ctx context.Context, payload []byte, ownerDID string) (string, error)
 }
@@ -224,6 +235,10 @@ type Runtime struct {
 	// adapter per binding, read through PushBindings(). The bound publishers
 	// ride the shared conn — no separate teardown path.
 	pushBindings []PushBinding
+	// decisions records the purpose-first sinks' delivery decisions; nil when
+	// no loop is purpose-first. Run flushes it after the loops drain; Close
+	// releases its file.
+	decisions *decisionRecording
 }
 
 // Tlogs returns the emission-log registry (log id = producing output subject
@@ -290,6 +305,9 @@ type PushBinding struct {
 	Name      string
 	Publisher transport.Publisher
 	Ready     <-chan struct{}
+	// MaxBodySize bounds a body the push route accepts: Config's
+	// MaxIngestPayloadSize, the bound the loop applies to what it receives.
+	MaxBodySize int
 }
 
 // readySubscriber decorates a transport.Subscriber with a readiness latch that
@@ -333,12 +351,24 @@ func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
 // credentials through deps.Resolver and delivers consumed events to its
 // config-selected output surface (sink.output; deps.SinkWriter overrides for
 // tests).
-func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps Deps) (*Runtime, error) {
+//
+// keyStore's errors keep the rule for a part's errors in package contract's doc.
+func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps Deps) (rt *Runtime, err error) {
 	if len(cfg.Loops) == 0 {
 		return &Runtime{}, nil
 	}
 	if cfg.NATS.URL == "" {
 		return nil, fmt.Errorf("runtime: data-plane loops require nats configuration (empty NATS URL)")
+	}
+	codec, err := envelopecodec.New(envelopecodec.Limits{
+		MaxCredentialSize:    cfg.MaxCredentialSize,
+		MaxInlinePayloadSize: cfg.MaxInlinePayloadSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime: data-plane loops: %w", err)
+	}
+	if cfg.MaxIngestPayloadSize <= 0 && slices.ContainsFunc(cfg.Loops, func(lc LoopConfig) bool { return lc.Role == RoleSource }) {
+		return nil, fmt.Errorf("runtime: source loops: MaxIngestPayloadSize %d: %w", cfg.MaxIngestPayloadSize, ingest.ErrInvalidMaxPayloadSize)
 	}
 
 	conn, err := natstransport.Connect(ctx, natstransport.Config{
@@ -351,6 +381,13 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 	}
 
 	dp := &Runtime{conn: conn, tlogs: map[string]tlog.Log{}}
+	// Every error return releases what Build opened: the connection, the
+	// durable logs and the decision record file.
+	defer func() {
+		if err != nil {
+			_ = dp.Close()
+		}
+	}()
 	builder := vc.NewBuilder(keyStore)
 	// newEmission builds one producing loop's emission log and registers it
 	// under its log id (the output subject). Durable + checkpoint-armed when
@@ -480,6 +517,19 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 		}
 		return ref, nil
 	}
+	// ensureDecisions builds the node's one delivery decision recorder on the
+	// first purpose-first sink loop, so a node without one needs no record
+	// configuration. It is shared by every such loop (one file, one summary).
+	ensureDecisions := func(loopName string) (decisionrecord.Recorder, error) {
+		if dp.decisions == nil {
+			d, err := newDecisionRecording(cfg.DecisionRecord, slog.Default())
+			if err != nil {
+				return nil, fmt.Errorf("runtime: loop %q: sink.agent-access needs a valid runtime.Config.DecisionRecord: %w", loopName, err)
+			}
+			dp.decisions = d
+		}
+		return dp.decisions.recorder(), nil
+	}
 	pw := payloadWiring{store: deps.PayloadStore, resolver: deps.PayloadResolver}
 	sinkWriters := newSinkWriters(deps.SinkWriter)
 	for _, lc := range cfg.Loops {
@@ -499,16 +549,17 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 				rs := newReadySubscriber(sub)
 				sub = rs
 				dp.pushBindings = append(dp.pushBindings, PushBinding{
-					Name:      lc.Name,
-					Publisher: conn.Publisher(lc.IngressSubject),
-					Ready:     rs.Ready(),
+					Name:        lc.Name,
+					Publisher:   conn.Publisher(lc.IngressSubject),
+					Ready:       rs.Ready(),
+					MaxBodySize: cfg.MaxIngestPayloadSize,
 				})
 			}
 			var schemaRef vc.SchemaRef
 			if schemaRef, err = resolveSchema(lc.Name, lc.Source.SchemaRef); err == nil {
 				var emission tlog.Log
 				if emission, err = newEmission(lc.Name, lc.Source.OutputSubject, lc.Source.Issuer); err == nil {
-					loop, err = buildSourceLoop(sub, conn, builder, publisher, emission, schemaRef, pw, lc)
+					loop, err = buildSourceLoop(sub, conn, codec, cfg.MaxIngestPayloadSize, builder, publisher, emission, schemaRef, pw, lc)
 				}
 			}
 		case RoleSink:
@@ -566,8 +617,12 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 						}
 					}
 				}
+				var recorder decisionrecord.Recorder
+				if err == nil && lc.Sink.AgentAccess.Enabled {
+					recorder, err = ensureDecisions(lc.Name)
+				}
 				if err == nil {
-					loop, err = buildSinkLoop(conn, vcnt, exactAppraiser, ingressStore, w, receipts, rejectLog, pw, lc)
+					loop, err = buildSinkLoop(conn, codec, vcnt, exactAppraiser, recorder, ingressStore, w, receipts, rejectLog, pw, lc)
 				}
 			}
 		case RoleChained:
@@ -578,7 +633,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 				if schemaRef, err = resolveSchema(lc.Name, lc.Chained.SchemaRef); err == nil {
 					var emission tlog.Log
 					if emission, err = newEmission(lc.Name, lc.Chained.OutputSubject, lc.Chained.Issuer); err == nil {
-						loop, err = buildChainedLoop(conn, builder, publisher, vcnt, ingressStore, emission, schemaRef, pw, lc)
+						loop, err = buildChainedLoop(conn, codec, builder, publisher, vcnt, ingressStore, emission, schemaRef, pw, lc)
 					}
 				}
 			}
@@ -606,12 +661,11 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 				if schemaRef, err = resolveSchema(lc.Name, lc.Aggregate.SchemaRef); err == nil {
 					var emission tlog.Log
 					if emission, err = newEmission(lc.Name, lc.Aggregate.OutputSubject, lc.Aggregate.Issuer); err == nil {
-						agg, err = buildAggregateProcess(conn, builder, vcnt, ingressStore, registrar, emission, schemaRef, pw, lc)
+						agg, err = buildAggregateProcess(conn, codec, builder, vcnt, ingressStore, registrar, emission, schemaRef, pw, lc)
 					}
 				}
 			}
 			if err != nil {
-				_ = conn.Close()
 				return nil, err
 			}
 			dp.aggregates = append(dp.aggregates, agg)
@@ -624,11 +678,9 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 		default:
 			// The config layer fails closed on unknown/unsupported roles; this guards the
 			// assembly seam against a role string that bypassed validation.
-			_ = conn.Close()
 			return nil, fmt.Errorf("runtime: loop %q: unsupported role %q", lc.Name, lc.Role)
 		}
 		if err != nil {
-			_ = conn.Close()
 			return nil, err
 		}
 		dp.loops = append(dp.loops, loop)
@@ -649,7 +701,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 // emission log. The config layer has already validated that lc.Role is source. The
 // caller supplies the ingress Subscriber (push-enabled loops wrap it with a
 // readiness latch).
-func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder *vc.Builder, publisher CredentialPublisher, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
+func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, codec *envelopecodec.Codec, maxPayloadSize int, builder *vc.Builder, publisher CredentialPublisher, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
 	src := lc.Source
 	if src.TransformationClaim == vc.ClaimAggregate {
 		// An ingest source loop signs via SignFirstDrop (N=0, no consumed set); the
@@ -677,7 +729,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 	if publisher != nil {
 		sourceSigner = &publishingSigner{inner: signer, publisher: publisher}
 	}
-	proc, err := ingest.New(ingest.Config{Signer: sourceSigner})
+	proc, err := ingest.New(ingest.Config{Signer: sourceSigner, MaxPayloadSize: maxPayloadSize})
 	if err != nil {
 		return nil, fmt.Errorf("runtime: loop %q: ingest processor: %w", lc.Name, err)
 	}
@@ -687,7 +739,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 		Processor:         proc,
 		Subscriber:        sub,
 		Publisher:         conn.Publisher(src.OutputSubject),
-		Codec:             envelopecodec.New(),
+		Codec:             codec,
 		Emission:          emission,
 		PayloadRetainer:   pw.retainerFor(src.OutputSubject),
 		StrippedPublisher: pw.strippedPublisherFor(conn, src.OutputSubject),
@@ -702,7 +754,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, builder
 // processor (verify the upstream credential, enforce payload binding, write
 // out-of-network) with NO Publisher/Codec/Emission (the ChainTerminating contract — the
 // sink processor holds its own Codec). The config layer has validated lc.Sink.
-func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, appraiser sink.Appraiser, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
+func buildSinkLoop(conn *natstransport.Conn, codec *envelopecodec.Codec, verifier provenance.Verifier, appraiser sink.Appraiser, recorder decisionrecord.Recorder, store contract.IngressVCStore, writer sink.Writer, receipts sink.ReceiptIssuer, rejectLog sink.RejectLog, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
 	strategy, err := verificationStrategy(lc.Sink.VerificationStrategy)
 	if err != nil {
 		return nil, fmt.Errorf("runtime: loop %q: %w", lc.Name, err)
@@ -714,10 +766,11 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, appra
 	cfg := sink.Config{
 		Strategy:         strategy,
 		Kind:             kind,
-		Codec:            envelopecodec.New(),
+		Codec:            codec,
 		Verifier:         verifier,
 		Appraiser:        appraiser,
 		AgentBoundaryID:  lc.Sink.AgentAccess.BoundaryID,
+		DecisionRecorder: recorder,
 		Store:            store,
 		Writer:           writer,
 		UpstreamEndpoint: lc.Sink.UpstreamEndpoint,
@@ -749,7 +802,7 @@ func buildSinkLoop(conn *natstransport.Conn, verifier provenance.Verifier, appra
 // filter/convert, re-sign a ChainPreserving credential linking the predecessor) → output
 // Publisher, with a memlog emission log. It both consumes (verifier + store) and produces
 // (signer + Publisher + Codec + Emission). The config layer has validated lc.Chained.
-func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher CredentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
+func buildChainedLoop(conn *natstransport.Conn, codec *envelopecodec.Codec, builder *vc.Builder, publisher CredentialPublisher, verifier provenance.Verifier, store contract.IngressVCStore, emission tlog.Log, schema vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*transport.Loop, error) {
 	cc := lc.Chained
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -778,7 +831,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher C
 		Strategy:          strategy,
 		IngressConformant: true,
 		UpstreamEndpoint:  cc.UpstreamEndpoint,
-		Codec:             envelopecodec.New(),
+		Codec:             codec,
 		Verifier:          verifier,
 		Store:             store,
 		Signer:            chainedSigner,
@@ -810,7 +863,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher C
 		Processor:         proc,
 		Subscriber:        conn.Subscriber(lc.IngressSubject),
 		Publisher:         conn.Publisher(cc.OutputSubject),
-		Codec:             envelopecodec.New(),
+		Codec:             codec,
 		Emission:          emission,
 		PayloadRetainer:   pw.retainerFor(cc.OutputSubject),
 		StrippedPublisher: pw.strippedPublisherFor(conn, cc.OutputSubject),
@@ -827,7 +880,7 @@ func buildChainedLoop(conn *natstransport.Conn, builder *vc.Builder, publisher C
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
 // wired. When a VC store is configured the signer publishes each issued FirstDrop
 // (fail-closed), like a source. The config layer has validated lc.Role is aggregate.
-func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, schemaRef vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*aggregate.Process, error) {
+func buildAggregateProcess(conn *natstransport.Conn, codec *envelopecodec.Codec, builder *vc.Builder, verifier provenance.Verifier, store contract.IngressVCStore, registrar aggregate.EmissionRegistrar, emission tlog.Log, schemaRef vc.SchemaRef, pw payloadWiring, lc LoopConfig) (*aggregate.Process, error) {
 	ac := lc.Aggregate
 	signer, err := vcdid.NewSigner(vcdid.Config{
 		Builder:             builder,
@@ -848,7 +901,7 @@ func buildAggregateProcess(conn *natstransport.Conn, builder *vc.Builder, verifi
 		Verifier:  verifier,
 		Store:     store,
 		Publisher: conn.Publisher(ac.OutputSubject),
-		Codec:     envelopecodec.New(),
+		Codec:     codec,
 		Emission:  emission,
 		Fold:      aggregate.ManifestFold{},
 		Window:    ac.Window,
@@ -926,6 +979,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if r.decisions != nil {
+		r.decisions.start(ctx)
+	}
 
 	var wg sync.WaitGroup
 	errs := make(chan error, total)
@@ -948,6 +1004,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	close(errs)
+	if r.decisions != nil {
+		r.decisions.stopAndFlush(ctx)
+	}
 
 	for err := range errs {
 		if err != nil {
@@ -980,6 +1039,12 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 	closeErr := r.conn.Close()
+	if r.decisions != nil {
+		if err := r.decisions.close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		r.decisions = nil
+	}
 	for _, c := range r.tlogClosers {
 		if err := c.Close(); err != nil && closeErr == nil {
 			closeErr = err

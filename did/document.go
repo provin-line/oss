@@ -2,13 +2,13 @@ package did
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/jcs"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/multibase"
 )
 
@@ -48,9 +48,9 @@ const (
 // VerificationMethod is a public key entry in a DID Document. Two key
 // encodings are read, selected by Type: JWK (type "JsonWebKey2020",
 // publicKeyJwk) and Multikey (type "Multikey", publicKeyMultibase). The type
-// and the encoding are mutually exclusive — a method carrying the encoding
-// its type does not name, or both encodings at once, is rejected at
-// extraction (see ExtractPublicKey). Documents this repository ISSUES use the
+// carries exactly one key member, its type's — a method carrying another key
+// member (the other type's encoding, a deprecated or future one), is rejected
+// at extraction (see ExtractPublicKey). Documents this repository ISSUES use the
 // JWK form; Multikey is a read capability for interoperating with W3C
 // Data Integrity verifiers and controller documents. The PoC supports
 // Ed25519 keys in both encodings.
@@ -90,7 +90,9 @@ type DocumentFields struct {
 
 // New assembles a DID Document body from typed fields. The inputs are copied
 // into the body, so later mutation of the argument slices does not affect the
-// document.
+// document. A verification method's PublicKeyJWK must be a JSON value, so
+// acyclic; it is copied at any depth, and Hash refuses one nested more than
+// 10,000 objects and arrays deep.
 func New(fields DocumentFields) *DIDDocument {
 	body := map[string]any{keyID: fields.ID}
 	if len(fields.Context) > 0 {
@@ -292,17 +294,31 @@ const (
 // Multikey (type "Multikey"). The relationship and controller checks are
 // security gates: a key not listed under the required relationship, or whose
 // controller is not the document subject, is rejected (key-confusion and
-// cross-document injection defense). The method type and its key encoding are
-// enforced as mutually exclusive — see decodeVMPublicKey.
+// cross-document injection defense). A method carries exactly one key member,
+// its type's (see checkEncodingExclusivity). Key references, and every method
+// id in the document, are read in one form (AbsoluteKeyID); a document with
+// any method id outside it, or a reference outside it, is refused with
+// ErrInvalidKeyReference.
+//
+// The key must be a usable Ed25519 public key: one that
+// ed25519.ValidatePublicKey accepts. A key of the wrong size, of small order,
+// off the curve, or not canonically encoded is refused with an error wrapping
+// ErrInvalidPublicKey and that function's sentinel, so a caller can tell an
+// unusable key from a method that is absent, unlisted, or malformed in another
+// way.
 func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationship) ([]byte, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("did: nil document")
 	}
-	frag := fragmentOf(keyID)
-	if frag == "" {
-		return nil, fmt.Errorf("did: empty key reference")
-	}
 	subject := doc.ID()
+	// Resolve the reference to an absolute method id against the document
+	// subject, and match by that absolute id — NOT by fragment alone. Fragment-
+	// only matching lets a verification method with a different DID id but the
+	// same fragment be selected (key-confusion / fragment-collision injection).
+	wantID, err := AbsoluteKeyID(subject, keyID)
+	if err != nil {
+		return nil, err
+	}
 
 	// The key must be listed under the required relationship.
 	var refs []string
@@ -314,15 +330,9 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	default:
 		return nil, fmt.Errorf("did: unknown verification relationship %q", rel)
 	}
-	// Resolve the reference to an absolute method id against the document
-	// subject, and match by that absolute id — NOT by fragment alone. Fragment-
-	// only matching lets a verification method with a different DID id but the
-	// same fragment be selected (key-confusion / fragment-collision injection).
-	wantID := absoluteKeyID(subject, keyID)
-
 	listed := false
 	for _, r := range refs {
-		if absoluteKeyID(subject, r) == wantID {
+		if keyIDOf(subject, r) == wantID {
 			listed = true
 			break
 		}
@@ -334,10 +344,17 @@ func ExtractPublicKey(doc *DIDDocument, keyID string, rel VerificationRelationsh
 	// Locate the verification method by exact absolute id. Duplicate matching
 	// ids are ambiguous (a substituted key could shadow the genuine one) and are
 	// rejected rather than silently resolving to the first.
+	// A method whose id is not in the one form is refused, not skipped: a
+	// reader that splits ids differently might take it for the key asked for.
 	methods := doc.VerificationMethod()
+	for i := range methods {
+		if _, err := AbsoluteKeyID(subject, methods[i].ID); err != nil {
+			return nil, fmt.Errorf("verification method: %w", err)
+		}
+	}
 	var vm *VerificationMethod
 	for i := range methods {
-		if absoluteKeyID(subject, methods[i].ID) != wantID {
+		if keyIDOf(subject, methods[i].ID) != wantID {
 			continue
 		}
 		if vm != nil {
@@ -412,10 +429,10 @@ func ExtractPublicKeyAndEncoding(doc *DIDDocument, keyID string, rel Verificatio
 // verificationMethodByID returns the typed method with the given absolute id.
 func (d *DIDDocument) verificationMethodByID(keyID string) (*VerificationMethod, error) {
 	subject := d.ID()
-	wantID := absoluteKeyID(subject, keyID)
+	wantID := keyIDOf(subject, keyID)
 	methods := d.VerificationMethod()
 	for i := range methods {
-		if absoluteKeyID(subject, methods[i].ID) == wantID {
+		if wantID != "" && keyIDOf(subject, methods[i].ID) == wantID {
 			return &methods[i], nil
 		}
 	}
@@ -430,33 +447,40 @@ func (d *DIDDocument) rawVMByID(subject, wantID string) (map[string]any, error) 
 		if !ok {
 			continue
 		}
-		if absoluteKeyID(subject, getString(m, "id")) == wantID {
+		if keyIDOf(subject, getString(m, "id")) == wantID {
 			return m, nil
 		}
 	}
 	return nil, fmt.Errorf("did: no verification method for key %q", wantID)
 }
 
-// checkEncodingExclusivity rejects a method that carries the encoding member
-// belonging to the other type, whatever its value.
+// checkEncodingExclusivity rejects a method that carries a key member other
+// than its type's own encoding, whatever its value: the other type's
+// encoding, any other publicKey* or secretKey* member (the DID specification
+// registries' deprecated ones, and any later one), or an account identifier
+// (blockchainAccountId, ethereumAddress). A reader elsewhere may read any of
+// them, some before publicKeyMultibase.
 //
-// Presence is the violation. A null, empty, or wrong-typed foreign member is
-// still a member the document's hash commits to, and a reader that keys on raw
-// presence would see a dual-encoded method where the typed projection sees a
-// clean one — the disagreement about key identity this exclusivity exists to
-// prevent.
+// Presence is the violation. A null, empty, or wrong-typed member is still a
+// member the document's hash commits to, and a reader that keys on raw
+// presence would see a second key where the typed projection sees none.
 func checkEncodingExclusivity(raw map[string]any, vm *VerificationMethod) error {
-	var foreign string
+	var own string
 	switch vm.Type {
 	case vmTypeMultikey:
-		foreign = "publicKeyJwk"
+		own = "publicKeyMultibase"
 	case vmTypeJSONWebKey2020:
-		foreign = "publicKeyMultibase"
+		own = "publicKeyJwk"
 	default:
 		return nil // decodeVMPublicKey rejects the unknown type with a better message
 	}
-	if _, present := raw[foreign]; present {
-		return fmt.Errorf("did: %s method %q also carries %s (type and encoding are exclusive)", vm.Type, vm.ID, foreign)
+	for member := range raw {
+		if member == own {
+			continue
+		}
+		if strings.HasPrefix(member, "publicKey") || strings.HasPrefix(member, "secretKey") || member == "blockchainAccountId" || member == "ethereumAddress" {
+			return fmt.Errorf("did: %s method %q also carries %s (a method carries one key, in its type's encoding)", vm.Type, vm.ID, member)
+		}
 	}
 	return nil
 }
@@ -501,8 +525,8 @@ var ed25519PubMulticodec = []byte{0xed, 0x01}
 
 // decodeEd25519Multikey extracts the 32-byte Ed25519 public key from a
 // Multikey publicKeyMultibase value: multibase base58btc ("z" prefix) over
-// the ed25519-pub multicodec prefix + raw key. Any other multibase base,
-// multicodec, or key length fails closed.
+// the ed25519-pub multicodec prefix + raw key. Any other multibase base or
+// multicodec, and any key checkEd25519PublicKey refuses, fails closed.
 func decodeEd25519Multikey(s string) ([]byte, error) {
 	raw, err := multibase.DecodeBase58Btc(s)
 	if err != nil {
@@ -512,34 +536,85 @@ func decodeEd25519Multikey(s string) ([]byte, error) {
 		return nil, fmt.Errorf("did: publicKeyMultibase is not an ed25519-pub Multikey (want multicodec 0xed01 prefix)")
 	}
 	key := raw[len(ed25519PubMulticodec):]
-	if len(key) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	if err := checkEd25519PublicKey(key); err != nil {
+		return nil, err
 	}
 	return key, nil
 }
 
-// absoluteKeyID resolves a DID URL key reference to its absolute form against
-// the document subject: a reference that already carries a DID part before its
-// "#" (e.g. "did:…:proc1#signing") is returned verbatim; a relative "#signing"
-// or a bare "signing" becomes "<subject>#signing". This is what lets key
-// matching compare full ids rather than fragments alone.
-func absoluteKeyID(subject, ref string) string {
-	if i := strings.Index(ref, "#"); i > 0 {
-		return ref // already absolute: a DID part precedes the fragment
+// checkEd25519PublicKey refuses what ed25519.ValidatePublicKey refuses — a
+// wrong size, a point of small order, a value off the curve, a non-canonical
+// encoding — with an error wrapping ErrInvalidPublicKey and its sentinel. Every
+// Ed25519 key this package reads or writes passes through it, so no reader of a
+// DID document is handed a key whose signatures prove nothing about who made
+// them.
+func checkEd25519PublicKey(key []byte) error {
+	if err := ed25519.ValidatePublicKey(key); err != nil {
+		return fmt.Errorf("%w: Ed25519: %w", ErrInvalidPublicKey, err)
 	}
-	return subject + "#" + fragmentOf(ref)
+	return nil
 }
 
-// fragmentOf returns the fragment of a key reference: the part after the last
-// "#", or the whole string when there is no "#" (a bare fragment id).
-func fragmentOf(ref string) string {
-	if i := strings.LastIndex(ref, "#"); i >= 0 {
-		return ref[i+1:]
+// AbsoluteKeyID resolves a key reference against the document subject: a
+// reference "#fragment" or "<subject>#fragment", with a single "#" and a
+// fragment of [A-Za-z0-9._-] that is not only dots, resolves to
+// "<subject>#fragment". Anything else is ErrInvalidKeyReference: a reference
+// with another DID part (a key of another document, never this one's), a bare
+// "fragment", more than one "#", an empty fragment, or a fragment with other
+// characters. Those are the spellings that URL readers elsewhere read
+// differently — "#x#signing" and "signing" as something other than "#signing",
+// "#sign%69ng" and "#signing " as "#signing" — so a key is named in one form
+// that every reader reads alike.
+//
+// subject must itself be a DID — "did:" and a method, no fragment, query or
+// path — or every reference is refused: the result has exactly one "#".
+func AbsoluteKeyID(subject, ref string) (string, error) {
+	if _, err := MethodOf(subject); err != nil || strings.ContainsAny(subject, "#?/") {
+		return "", fmt.Errorf("%w: the document id %q is not a DID", ErrInvalidKeyReference, subject)
 	}
-	return ref
+	prefix, fragment, found := strings.Cut(ref, "#")
+	if !found || !isKeyFragment(fragment) || (prefix != "" && prefix != subject) {
+		return "", fmt.Errorf("%w: %q (want #fragment or %q#fragment)", ErrInvalidKeyReference, ref, subject)
+	}
+	return subject + "#" + fragment, nil
+}
+
+// keyIDOf is AbsoluteKeyID for matching: the absolute id, or "" for a
+// reference that names no key of the subject (which then matches nothing).
+func keyIDOf(subject, ref string) string {
+	id, err := AbsoluteKeyID(subject, ref)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+// isKeyFragment reports whether s is a key fragment: [A-Za-z0-9._-]+, not only
+// dots. The set is this profile's restriction, narrower than DID Core: it
+// leaves out every character a URL reader may decode or split on ("%", "#",
+// whitespace, ":", "~" and the rest), so no fragment has two readings. A
+// document of another method that uses other fragments is not read here.
+func isKeyFragment(s string) bool {
+	if s == "" {
+		return false
+	}
+	onlyDots := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			onlyDots = false
+		case r == '.':
+		default:
+			return false
+		}
+	}
+	return !onlyDots
 }
 
 // decodeEd25519JWK extracts the 32-byte Ed25519 public key from an OKP JWK.
+// x must be the one spelling of the key — unpadded base64url with zero trailing
+// bits and no line breaks, as RFC 8037 encodes it — so one key cannot appear
+// under several x values. Any key checkEd25519PublicKey refuses fails closed.
 func decodeEd25519JWK(jwk map[string]any) ([]byte, error) {
 	if jwk == nil {
 		return nil, fmt.Errorf("did: verification method has no publicKeyJwk")
@@ -558,8 +633,11 @@ func decodeEd25519JWK(jwk map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("did: JWK x is not valid base64url: %w", err)
 	}
-	if len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("did: Ed25519 public key length %d, want %d", len(raw), ed25519.PublicKeySize)
+	if base64.RawURLEncoding.EncodeToString(raw) != x {
+		return nil, fmt.Errorf("did: JWK x is not the canonical unpadded base64url spelling of its bytes")
+	}
+	if err := checkEd25519PublicKey(raw); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }
@@ -588,6 +666,8 @@ func toAnySlice(s []string) []any {
 	return out
 }
 
+// deepCopyMap copies m, a value as encoding/json decodes into any, with
+// deepCopyValue.
 func deepCopyMap(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
@@ -596,37 +676,74 @@ func deepCopyMap(m map[string]any) map[string]any {
 	return out
 }
 
+// deepCopyValue copies v, a value as encoding/json decodes into any. It keeps
+// its own stack rather than recursing, so it copies a value of any depth: a
+// publicKeyJwk is a caller's map, and a recursive copy of one built deep
+// enough would exhaust the goroutine stack, a fatal error. v must be acyclic,
+// as a JSON value is; a part v holds in two places is copied for each.
+// Scalars (string, json.Number, bool, nil) are immutable and shared.
 func deepCopyValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		return deepCopyMap(t)
-	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = deepCopyValue(e)
-		}
-		return out
-	default:
-		// Scalars (string, json.Number, bool, nil) are immutable.
-		return v
+	// copyTask copies src to where place puts it: a member of toMap, an item
+	// of toSlice, or else the copy returned.
+	type copyTask struct {
+		src     any
+		toMap   map[string]any
+		key     string
+		toSlice []any
+		index   int
 	}
+	var out any
+	place := func(t copyTask, x any) {
+		switch {
+		case t.toMap != nil:
+			t.toMap[t.key] = x
+		case t.toSlice != nil:
+			t.toSlice[t.index] = x
+		default:
+			out = x
+		}
+	}
+	stack := []copyTask{{src: v}}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch s := t.src.(type) {
+		case map[string]any:
+			m := make(map[string]any, len(s))
+			place(t, m)
+			for k, e := range s {
+				stack = append(stack, copyTask{src: e, toMap: m, key: k})
+			}
+		case []any:
+			a := make([]any, len(s))
+			place(t, a)
+			for i, e := range s {
+				stack = append(stack, copyTask{src: e, toSlice: a, index: i})
+			}
+		default:
+			place(t, s)
+		}
+	}
+	return out
 }
 
 // EncodeEd25519Multikey renders an Ed25519 public key as a Multikey
 // publicKeyMultibase value: multibase base58btc ("z") over the ed25519-pub
 // multicodec prefix + the raw key. It is the inverse of the decoder above, and
 // exists as the one place issuance builds the value — a second, hand-rolled
-// encoder is how a key that cannot be read back gets published.
+// encoder is how a key that cannot be read back gets published. For the same
+// reason it refuses every key the decoder refuses, with the same error.
 func EncodeEd25519Multikey(key []byte) (string, error) {
-	if len(key) != ed25519.PublicKeySize {
-		return "", fmt.Errorf("did: Ed25519 public key length %d, want %d", len(key), ed25519.PublicKeySize)
+	if err := checkEd25519PublicKey(key); err != nil {
+		return "", err
 	}
 	return multibase.EncodeBase58Btc(append(append([]byte{}, ed25519PubMulticodec...), key...)), nil
 }
 
 // NewMultikeyVerificationMethod builds a Multikey verification method for an
 // Ed25519 key — the encoding the W3C eddsa-jcs-2022 suite requires
-// (signer.suite.eddsa-jcs-2022).
+// (signer.suite.eddsa-jcs-2022). It refuses the keys EncodeEd25519Multikey
+// refuses, with the same error.
 func NewMultikeyVerificationMethod(id, controller string, key []byte) (VerificationMethod, error) {
 	mb, err := EncodeEd25519Multikey(key)
 	if err != nil {

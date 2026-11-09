@@ -125,7 +125,7 @@ func New(guard *core.URLGuard, opts ...Option) *Resolver {
 // ErrDIDNotFound for a registry miss and ErrDIDIdentityMismatch when the returned
 // document's id differs from didStr; transport, status, size, and parse failures
 // are wrapped. It does NOT validate the document's keys/relationships — that is
-// the consumer's policy step (wireauth.ExtractPublicKey).
+// the consumer's policy step (did.ExtractPublicKey).
 func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	doc, _, err := r.ResolveDocument(ctx, didStr)
 	return doc, err

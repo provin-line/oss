@@ -54,6 +54,7 @@ package bundle
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -118,6 +119,61 @@ type Manifest struct {
 	// the bundled source credentials — a lying receipt cannot produce a
 	// false Verified, it can only fail. nil on v1 manifests.
 	Receipts map[string][]string `json:"receipts,omitempty"`
+}
+
+// UnmarshalJSON reads m as Verify reads a manifest: under canon.StrictDecoder's
+// rules, in the exact wire shape of its version (an unknown member, or a
+// member of another version, is refused), with the scope its version names.
+// Keys that collide, exactly or by case, are ErrBundleIntegrity.
+//
+// The manifest is read afresh, as its version shapes it: a member the document
+// omits is zero, whatever m held. On an error m is left as it was. It checks
+// the value it is given: an enclosing value that omits the manifest, or values
+// after it in a stream, are the caller's to check. A struct that embeds
+// Manifest gets this method, so encoding/json hands it the whole object and
+// does not decode the struct's own fields: such a struct needs its own
+// UnmarshalJSON.
+func (m *Manifest) UnmarshalJSON(data []byte) error {
+	got, err := decodeManifest(data)
+	if err != nil {
+		return err
+	}
+	*m = *got
+	return nil
+}
+
+// MarshalJSON writes m in the exact wire shape of its version, as Export
+// writes a manifest, so what it writes UnmarshalJSON reads. A v1 manifest
+// with receipts, or a version no wire shape names, is an error.
+func (m Manifest) MarshalJSON() ([]byte, error) {
+	wire, err := m.wire()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(wire)
+}
+
+// wire returns m as the wire struct of its version.
+func (m Manifest) wire() (any, error) {
+	switch m.V {
+	case 1:
+		if m.Receipts != nil {
+			return nil, fmt.Errorf("bundle: a v1 manifest carries no receipts")
+		}
+		return &manifestWireV1{
+			V: m.V, Scope: m.Scope, Head: m.Head, Chain: m.Chain,
+			DIDDocuments: m.DIDDocuments, Files: m.Files,
+			CreatedAt: m.CreatedAt, Source: m.Source,
+		}, nil
+	case 2:
+		return &manifestWireV2{
+			V: m.V, Scope: m.Scope, Head: m.Head, Chain: m.Chain,
+			DIDDocuments: m.DIDDocuments, Files: m.Files,
+			CreatedAt: m.CreatedAt, Source: m.Source, Receipts: m.Receipts,
+		}, nil
+	default:
+		return nil, fmt.Errorf("bundle: unsupported manifest version %d", m.V)
+	}
 }
 
 // The wire shapes are PER-VERSION EXACT structs: a v1 manifest carrying any

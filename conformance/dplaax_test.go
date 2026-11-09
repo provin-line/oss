@@ -441,9 +441,11 @@ func runConfidenceLifecycle(t *testing.T, v dplaaxVector) {
 	cred, pub := signedFixtureCred(t)
 	if input.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
 		// The suite under test is unsignable by construction (only
-		// eddsa-jcs-2022 is registered); carry it via wire mutation. The
-		// verifier's lifecycle gate is evaluated before the signature, so
-		// the vector's verdict still hinges on the registry state.
+		// eddsa-jcs-2022 is registered); carry it via wire mutation. A
+		// suite no claim contract names is refused before the lifecycle
+		// gate, so its verdict is failed whatever the registry says; for
+		// a suite one names, the lifecycle gate is evaluated before the
+		// signature, so the verdict hinges on the registry state.
 		cred = mutateWire(t, cred, func(m map[string]any) {
 			m["proof"].(map[string]any)["cryptosuite"] = input.Cryptosuite
 		})

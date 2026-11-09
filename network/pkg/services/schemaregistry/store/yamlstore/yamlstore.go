@@ -17,6 +17,8 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/yamlrecord"
+
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 )
 
@@ -32,15 +34,16 @@ func New(dir string) *Store {
 	return &Store{root: dir}
 }
 
-// record is the on-disk shape. SchemaBody is []byte so the body round-trips
-// byte-faithfully regardless of format (the store treats it as opaque).
+// record is the on-disk shape. SchemaBody is the body's bytes, written as one
+// base64 string, so the body round-trips byte-faithfully whatever its format
+// (the store treats it as opaque).
 type record struct {
-	Name         string `yaml:"name"`
-	Version      string `yaml:"version"`
-	Prerelease   string `yaml:"prerelease"`
-	SchemaFormat string `yaml:"schemaFormat"`
-	SchemaBody   []byte `yaml:"schemaBody"`
-	Deprecated   bool   `yaml:"deprecated"`
+	Name         string           `yaml:"name"`
+	Version      string           `yaml:"version"`
+	Prerelease   string           `yaml:"prerelease"`
+	SchemaFormat string           `yaml:"schemaFormat"`
+	SchemaBody   yamlrecord.Bytes `yaml:"schemaBody"`
+	Deprecated   bool             `yaml:"deprecated"`
 }
 
 func toRecord(s *store.Schema) *record {
@@ -49,7 +52,7 @@ func toRecord(s *store.Schema) *record {
 		Version:      s.Version,
 		Prerelease:   s.Prerelease,
 		SchemaFormat: s.SchemaFormat,
-		SchemaBody:   s.SchemaBody,
+		SchemaBody:   yamlrecord.Bytes(s.SchemaBody),
 		Deprecated:   s.Deprecated,
 	}
 }
@@ -60,7 +63,7 @@ func fromRecord(r *record) *store.Schema {
 		Version:      r.Version,
 		Prerelease:   r.Prerelease,
 		SchemaFormat: r.SchemaFormat,
-		SchemaBody:   r.SchemaBody,
+		SchemaBody:   []byte(r.SchemaBody),
 		Deprecated:   r.Deprecated,
 	}
 }
@@ -94,12 +97,12 @@ func (s *Store) Save(sc *store.Schema) error {
 	if err != nil {
 		return err
 	}
+	data, err := yamlrecord.Encode(toRecord(sc))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("yamlstore: mkdir: %w", err)
-	}
-	data, err := yaml.Marshal(toRecord(sc))
-	if err != nil {
-		return fmt.Errorf("yamlstore: marshal: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
 	if err != nil {
@@ -186,9 +189,9 @@ func (s *Store) Deprecate(name, version string) error {
 		return nil
 	}
 	r.Deprecated = true
-	data, err := yaml.Marshal(r)
+	data, err := yamlrecord.Encode(r)
 	if err != nil {
-		return fmt.Errorf("yamlstore: marshal: %w", err)
+		return err
 	}
 	return atomicWrite(p, data)
 }

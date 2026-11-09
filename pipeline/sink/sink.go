@@ -46,6 +46,25 @@
 // audit-queue registration, and durable logging behind those seams live in the
 // composition root, not this runtime.
 //
+// # Delivery decision record
+//
+// A purpose-first sink (Config.Appraiser set) writes one decisionrecord.Record
+// per delivery decision through Config.DecisionRecorder. An envelope that does
+// not decode is recorded refused (check "decode"). The appraisal's decision is
+// recorded at Stage 2: accepted on ACCEPT, refused (check "appraisal")
+// otherwise. A decision recorded as accepted that a later stage refuses is
+// recorded again under the same DecisionID, as refused, with the check
+// equal to that stage's RejectReason; a context cancellation before the write
+// is refused with check "cancelled". If the accepted record cannot be written
+// the delivery is rejected (RejectDecisionRecord) before anything is stored or
+// written. Records after the accepted one are best effort, written on a
+// context detached from the processing one: if one cannot be written the
+// accepted record stands. A Writer error or cancellation is never recorded as
+// a refusal, because the Writer may have delivered: it is a further accepted
+// record whose Reason says the write outcome is unknown. A record holds
+// content addresses, never payload bytes. The legacy verifier path records
+// nothing.
+//
 // Still deferred: by-reference (nil) payload ingress is not implemented — it
 // lands with the resolver client.
 //
@@ -58,6 +77,7 @@ package sink
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -68,7 +88,11 @@ import (
 	"github.com/provin-line/oss/agentaccess"
 	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/appraisal"
+	"github.com/provin-line/oss/contentaddress"
+	"github.com/provin-line/oss/decisionrecord"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/vc"
 )
@@ -90,6 +114,14 @@ type Record struct {
 
 // Writer delivers one consumed event to the external world. Implementations
 // (console, warehouse, EDC, …) live in subpackages or extension repositories.
+//
+// An error from Write does not promise that nothing was delivered: a Writer may
+// have delivered before it failed or was cancelled. On the purpose-first path
+// the delivery decision record therefore stays accepted and gets a further
+// accepted record whose Reason says the write outcome is unknown; it is never
+// recorded as refused.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Writer interface {
 	Write(ctx context.Context, rec Record) error
 }
@@ -97,6 +129,8 @@ type Writer interface {
 // Appraiser performs synchronous full-chain appraisal and returns both the
 // portable evidence view and the implementation's detailed verifier result.
 // It is injected by the composition root; sink owns only call ordering.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Appraiser interface {
 	Appraise(ctx context.Context, head *vc.PipelinePassCredential) (*appraisal.View, *vc.VerifyResult, error)
 }
@@ -141,27 +175,40 @@ const (
 	// RejectAppraisal — exact-view construction, identity validation, or local
 	// policy did not produce ACCEPT.
 	RejectAppraisal RejectReason = "appraisal"
+	// RejectDecisionRecord — the delivery decision could not be recorded; a
+	// decision without its record is refused.
+	RejectDecisionRecord RejectReason = "decision-record"
 )
 
 // RejectRecord is one durable reject-log entry. Identity fields are best-effort —
 // empty when unknown at the reject point (e.g. a decode failure yields no
-// credential hash or issuer). The record NEVER carries the payload: a sink must
-// not hoard the bytes it refused in its evidence store.
+// credential hash or issuer). A sink never records the refused payload itself:
+// it must not hoard the bytes it refused in its evidence store. The sink
+// writes Detail, the reject's error text, which may quote an excerpt of them
+// (an error names a token it could not read), and IssuerDID each within 1024
+// bytes of UTF-8, whatever was refused.
 type RejectRecord struct {
 	// Timestamp is when the reject occurred.
 	Timestamp time.Time `json:"timestamp"`
 	// Reason is the closed-set reject class.
 	Reason RejectReason `json:"reason"`
-	// Detail is the human-readable reject message (no payload bytes).
+	// Detail is the human-readable reject message, written within 1024 bytes
+	// of UTF-8: whole, or its head and its length, "… (N bytes)", when longer.
 	Detail string `json:"detail"`
-	// CredentialHash is the consumed credential's content address, if it decoded.
+	// CredentialHash is the consumed credential's content address, if it
+	// decoded: the credential's full identity, whatever was cut elsewhere.
 	CredentialHash string `json:"credentialHash,omitempty"`
-	// IssuerDID is the consumed credential's issuer, if readable.
+	// IssuerDID is the consumed credential's issuer, if readable, written
+	// within 1024 bytes of UTF-8. An issuer longer than that (a DID carrying a
+	// large key, say) is written as its head and its length, which is not a
+	// DID: match on CredentialHash, not on a cut IssuerDID.
 	IssuerDID string `json:"issuerDid,omitempty"`
 }
 
 // RejectLog durably records an archival sink's rejects (hash-chained, durable).
 // Configured only for the archival kind; nil disables reject recording.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type RejectLog interface {
 	RecordReject(ctx context.Context, rec RejectRecord) error
 }
@@ -173,6 +220,8 @@ type RejectLog interface {
 // is published to the local audit substrate — VC store + a dedicated tlog + the
 // audit queue — and optionally to a remote store, but NEVER in-band on the chain
 // (the ChainTerminating invariant). Implementations live in the composition root.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type ReceiptIssuer interface {
 	IssueReceipt(ctx context.Context, consumed *vc.PipelinePassCredential) error
 }
@@ -191,6 +240,10 @@ var (
 	// first by-reference event).
 	ErrMissingPayloadResolver = errors.New("sink: PayloadResolver is required when PayloadDelivery is by-reference")
 	ErrInvalidAgentAppraisal  = errors.New("sink: Appraiser and a versioned AgentBoundaryID are required together and only on production or archival sinks")
+	// ErrMissingDecisionRecorder — a purpose-first sink must record every
+	// delivery decision, so an Appraiser without a recorder is refused at
+	// construction rather than delivering unrecorded.
+	ErrMissingDecisionRecorder = errors.New("sink: DecisionRecorder is required when Appraiser is set")
 )
 
 // Config holds construction-time configuration for a Sink Process runtime.
@@ -212,6 +265,14 @@ type Config struct {
 	// AgentBoundaryID is the versioned identity written into successful delivery
 	// records. Required exactly when Appraiser is set.
 	AgentBoundaryID string
+	// DecisionRecorder receives one record per delivery decision of the
+	// purpose-first path. Required when Appraiser is set (New fails closed
+	// otherwise); unused on the legacy verifier path. If it returns an error
+	// the delivery is rejected. Its level (decisionrecord.Filter) is the
+	// composition root's choice.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
+	DecisionRecorder decisionrecord.Recorder
 	// Store persists the verified ingress VC. Required.
 	Store contract.IngressVCStore
 	// Writer delivers the consumed event externally. Required.
@@ -294,6 +355,9 @@ func New(cfg Config) (*Processor, error) {
 		if cfg.Kind == contract.SinkObservationOnly || agentaccess.ValidateBoundaryID(cfg.AgentBoundaryID) != nil {
 			return nil, ErrInvalidAgentAppraisal
 		}
+		if cfg.DecisionRecorder == nil {
+			return nil, ErrMissingDecisionRecorder
+		}
 	} else if cfg.AgentBoundaryID != "" {
 		return nil, ErrInvalidAgentAppraisal
 	}
@@ -322,7 +386,11 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// Stage 1 — Decode.
 	envelope, err := p.cfg.Codec.UnmarshalEnvelope(input)
 	if err != nil {
-		return p.reject(ctx, RejectDecodeFailure, fmt.Sprintf("decode envelope: %v", err), nil, "", "", ""), nil
+		msg := fmt.Sprintf("decode envelope: %s", excerpt.ErrorText(err))
+		if p.cfg.Appraiser != nil {
+			p.recordUndecided(ctx, checkDecode, nil, "", msg)
+		}
+		return p.reject(ctx, nil, RejectDecodeFailure, msg, nil, "", "", ""), nil
 	}
 	cred := envelope.Credential
 
@@ -344,26 +412,44 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// unclear which evidence the delivery decision actually consumed.
 	var evidenceView *appraisal.View
 	var verifyResult *vc.VerifyResult
+	var dec *decision
 	if p.cfg.Appraiser != nil {
 		evidenceView, verifyResult, err = p.cfg.Appraiser.Appraise(ctx, cred)
 		if err != nil {
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("exact-view appraisal failed: %v", err), nil, consumedRef, "", issuerDIDOf(cred)), nil
+			msg := fmt.Sprintf("exact-view appraisal failed: %s", excerpt.ErrorText(err))
+			p.recordUndecided(ctx, string(RejectAppraisal), nil, "", msg)
+			return p.reject(ctx, nil, RejectAppraisal, msg, nil, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		if evidenceView == nil || verifyResult == nil {
-			return p.reject(ctx, RejectAppraisal, "exact-view appraiser returned no view or verifier result", nil, consumedRef, "", issuerDIDOf(cred)), nil
+			msg := "exact-view appraiser returned no view or verifier result"
+			p.recordUndecided(ctx, string(RejectAppraisal), nil, "", msg)
+			return p.reject(ctx, nil, RejectAppraisal, msg, nil, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		if err := evidenceView.ValidateID(); err != nil {
-			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("evidence view identity invalid: %v", err), nil, consumedRef, "", issuerDIDOf(cred)), nil
+			msg := fmt.Sprintf("evidence view identity invalid: %s", excerpt.ErrorText(err))
+			p.recordUndecided(ctx, string(RejectAppraisal), nil, "", msg)
+			return p.reject(ctx, nil, RejectAppraisal, msg, nil, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		if evidenceView.PolicyDecision == nil || evidenceView.PolicyDecision.Decision != appraisal.DecisionAccept {
 			decision := "missing"
 			if evidenceView.PolicyDecision != nil {
 				decision = string(evidenceView.PolicyDecision.Decision)
 			}
-			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("local appraisal decision %s: production delivery requires ACCEPT", decision), &verifyResult.Overall, consumedRef, "", issuerDIDOf(cred)), nil
+			msg := fmt.Sprintf("local appraisal decision %s: production delivery requires ACCEPT", decision)
+			p.recordUndecided(ctx, string(RejectAppraisal), evidenceView, decision, msg)
+			return p.reject(ctx, nil, RejectAppraisal, msg, &verifyResult.Overall, consumedRef, "", issuerDIDOf(cred)), nil
+		}
+		// The accepted decision is on record before anything is stored or
+		// written: without its record the delivery is refused.
+		dec, err = p.recordAccepted(ctx, evidenceView)
+		if err != nil {
+			if isCtxErr(err) {
+				return nil, err
+			}
+			return p.reject(ctx, nil, RejectDecisionRecord, fmt.Sprintf("record delivery decision: %s — never deliver a decision without its record", excerpt.ErrorText(err)), &verifyResult.Overall, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 	} else {
 		verifyResult, err = p.cfg.Verifier.Verify(ctx, cred)
@@ -374,7 +460,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			// A verification transport error (resolver outage, chain hole) IS the
 			// indeterminate verdict — the verdict could not be computed. Synthesize
 			// it and fall through to the SinkKind policy.
-			p.logger.Warn("sink: verification error treated as indeterminate", "err", err)
+			p.logger.Warn("sink: verification error treated as indeterminate", "err", pipeexcerpt.ErrorText(err))
 			verifyResult = &vc.VerifyResult{Overall: vc.ConfidenceIndeterminate}
 		}
 	}
@@ -383,7 +469,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// Stage 3 — SinkKind verdict policy. Observation writes regardless;
 	// production/archival reject any non-verified verdict.
 	if p.cfg.Kind != contract.SinkObservationOnly && verdict != vc.ConfidenceVerified {
-		return p.reject(ctx, RejectVerdict, fmt.Sprintf("verification verdict %v: a %v sink rejects non-verified credentials (fail-closed)", verdict, kindName(p.cfg.Kind)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		return p.reject(ctx, dec, RejectVerdict, fmt.Sprintf("verification verdict %v: a %v sink rejects non-verified credentials (fail-closed)", verdict, kindName(p.cfg.Kind)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 	}
 
 	// Stage 3.5 — Issuer allow-list. When configured (production/archival admit
@@ -397,7 +483,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			issuer = cred.Issuer()
 		}
 		if !p.issuerAllowed(issuer) {
-			return p.reject(ctx, RejectAllowList, fmt.Sprintf("issuer %q is not in the sink allow-list (fail-closed)", issuer), &verdict, consumedRef, "", issuer), nil
+			return p.reject(ctx, dec, RejectAllowList, fmt.Sprintf("issuer %s is not in the sink allow-list (fail-closed)", pipeexcerpt.Value(issuer)), &verdict, consumedRef, "", issuer), nil
 		}
 	}
 
@@ -409,9 +495,10 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	if verdict == vc.ConfidenceVerified {
 		if err := p.cfg.Store.StoreIngressVC(ctx, cred, p.cfg.UpstreamEndpoint); err != nil {
 			if isCtxErr(err) {
+				p.recordRefusal(ctx, dec, checkCancelled, "cancelled while storing the ingress VC: "+excerpt.ErrorText(err), "")
 				return nil, err
 			}
-			return p.reject(ctx, RejectIngressStoreFailure, fmt.Sprintf("store ingress VC: %v — never continue without the audit trail", err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+			return p.reject(ctx, dec, RejectIngressStoreFailure, fmt.Sprintf("store ingress VC: %s — never continue without the audit trail", excerpt.ErrorText(err)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 	}
 
@@ -419,10 +506,10 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// keys on the declared outputHash, and the binding gate compares against it.
 	subject, err := cred.Subject()
 	if err != nil {
-		return p.reject(ctx, RejectMalformedCredential, fmt.Sprintf("credential subject unreadable: %v", err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		return p.reject(ctx, dec, RejectMalformedCredential, fmt.Sprintf("credential subject unreadable: %s", excerpt.ErrorText(err)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 	}
 	if subject.OutputHash == "" {
-		return p.reject(ctx, RejectMalformedCredential, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+		return p.reject(ctx, dec, RejectMalformedCredential, "credential declares no outputHash: binding undecidable, fail closed", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 	}
 
 	// Stage 5.5 — Payload acquisition per agreed delivery mode. A payload whose
@@ -430,8 +517,9 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// by-reference nil is dereferenced from the serving boundary by outputHash.
 	// Fetch runs only here (after verify + verdict + allow-list + store), so the
 	// sink never fetches bytes for a credential it will refuse.
-	payload, rej, ctxErr := p.acquirePayload(ctx, envelope, subject.OutputHash, verdict, consumedRef, cred)
+	payload, rej, ctxErr := p.acquirePayload(ctx, dec, envelope, subject.OutputHash, verdict, consumedRef, cred)
 	if ctxErr != nil {
+		p.recordRefusal(ctx, dec, checkCancelled, "cancelled while acquiring the payload: "+excerpt.ErrorText(ctxErr), "")
 		return nil, ctxErr
 	}
 	if rej != nil {
@@ -447,7 +535,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// by-reference payload this is the sole integrity check on the fetched bytes —
 	// the serving boundary is untrusted.
 	if inputHash != subject.OutputHash {
-		return p.reject(ctx, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, subject.OutputHash), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
+		return p.reject(ctx, dec, RejectBindingGate, fmt.Sprintf("payload does not match the credential's outputHash (payload %s, credential declares %s): tampered or substituted bytes", inputHash, pipeexcerpt.Value(subject.OutputHash)), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 	}
 
 	// Stage 7 — Construct the exact successful-delivery record, then perform the
@@ -458,14 +546,17 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	if evidenceView != nil {
 		delivery, err = agentaccess.NewDelivery(p.cfg.AgentBoundaryID, payload, subject.OutputHash, evidenceView)
 		if err != nil {
-			return p.reject(ctx, RejectAppraisal, fmt.Sprintf("construct Agent delivery: %v", err), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
+			return p.reject(ctx, dec, RejectAppraisal, fmt.Sprintf("construct Agent delivery: %s", excerpt.ErrorText(err)), &verdict, consumedRef, inputHash, issuerDIDOf(cred)), nil
 		}
 	}
 	if err := p.cfg.Writer.Write(ctx, Record{Credential: cred, Payload: payload, Verdict: verifyResult, EvidenceView: evidenceView, Delivery: delivery}); err != nil {
 		if isCtxErr(err) {
+			p.recordWriteUnknown(ctx, dec, err, inputHash)
 			return nil, err
 		}
-		return p.errored(ctx, fmt.Sprintf("external write: %v", err), &verdict, consumedRef, inputHash), nil
+		msg := fmt.Sprintf("external write: %s", excerpt.ErrorText(err))
+		p.recordWriteUnknown(ctx, dec, err, inputHash)
+		return p.errored(ctx, msg, &verdict, consumedRef, inputHash), nil
 	}
 
 	// Stage 7.5 — Receipt issuance. After the external write, a receipt-configured
@@ -481,7 +572,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("issue sink receipt: %v (external write already completed — at-most-once, not rolled back)", err), &verdict, consumedRef, inputHash), nil
+			return p.errored(ctx, fmt.Sprintf("issue sink receipt: %s (external write already completed — at-most-once, not rolled back)", excerpt.ErrorText(err)), &verdict, consumedRef, inputHash), nil
 		}
 	}
 
@@ -518,23 +609,23 @@ func isCtxErr(err error) bool {
 // archival sink's durable reject log. Cancellation is detected via ctx.Err()
 // rather than the fetch error's type, because the network resolver returns a
 // transport-wrapped error that may not unwrap to context.Canceled.
-func (p *Processor) acquirePayload(ctx context.Context, envelope *contract.Envelope, outputHash string, verdict vc.ConfidenceState, consumedRef string, cred *vc.PipelinePassCredential) (payload []byte, rej *contract.Result, ctxErr error) {
+func (p *Processor) acquirePayload(ctx context.Context, dec *decision, envelope *contract.Envelope, outputHash string, verdict vc.ConfidenceState, consumedRef string, cred *vc.PipelinePassCredential) (payload []byte, rej *contract.Result, ctxErr error) {
 	switch p.cfg.PayloadDelivery {
 	case contract.DeliveryByReference:
 		if envelope.Payload != nil {
-			return nil, p.reject(ctx, RejectPayloadDeliveryViolation, "by-reference delivery agreed but the envelope carries an inline payload (export-seam misconfiguration; possible payload leak)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+			return nil, p.reject(ctx, dec, RejectPayloadDeliveryViolation, "by-reference delivery agreed but the envelope carries an inline payload (export-seam misconfiguration; possible payload leak)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		bytes, err := p.cfg.PayloadResolver.ResolvePayload(ctx, p.cfg.UpstreamEndpoint, outputHash)
 		if err != nil {
 			if cErr := ctx.Err(); cErr != nil {
 				return nil, nil, cErr
 			}
-			return nil, p.reject(ctx, RejectPayloadFetch, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+			return nil, p.reject(ctx, dec, RejectPayloadFetch, fmt.Sprintf("fetch by-reference payload at %s from %s: %s", pipeexcerpt.Value(outputHash), p.cfg.UpstreamEndpoint, excerpt.ErrorText(err)), &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		return bytes, nil, nil
 	default: // DeliveryInline
 		if envelope.Payload == nil {
-			return nil, p.reject(ctx, RejectPayloadDeliveryViolation, "inline delivery agreed but the envelope carries no payload (stripped in error)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
+			return nil, p.reject(ctx, dec, RejectPayloadDeliveryViolation, "inline delivery agreed but the envelope carries no payload (stripped in error)", &verdict, consumedRef, "", issuerDIDOf(cred)), nil
 		}
 		return envelope.Payload, nil, nil
 	}
@@ -576,20 +667,168 @@ func kindName(k contract.SinkKind) string {
 // write, receipt) uses errored, which records nothing. A reject-log write failure
 // does not change the reject outcome — the event is already refused — but is
 // logged loudly so a broken archival audit trail is visible.
-func (p *Processor) reject(ctx context.Context, reason RejectReason, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash, issuerDID string) *contract.Result {
+func (p *Processor) reject(ctx context.Context, dec *decision, reason RejectReason, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash, issuerDID string) *contract.Result {
+	p.recordRefusal(ctx, dec, string(reason), msg, "")
 	if p.cfg.RejectLog != nil {
 		rec := RejectRecord{
 			Timestamp:      p.now(),
 			Reason:         reason,
-			Detail:         msg,
+			Detail:         pipeexcerpt.Text(msg),
 			CredentialHash: consumedVCRef,
-			IssuerDID:      issuerDID,
+			IssuerDID:      pipeexcerpt.Text(issuerDID),
 		}
 		if err := p.cfg.RejectLog.RecordReject(ctx, rec); err != nil {
-			p.logger.Error("sink: reject-log write failed", "reason", reason, "err", err)
+			p.logger.Error("sink: reject-log write failed", "reason", reason, "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 	return p.errored(ctx, msg, confidence, consumedVCRef, inputHash)
+}
+
+// Checks written to decisionrecord.Record.Check. A refusal by a reject stage
+// carries that stage's RejectReason; these are the checks no RejectReason names.
+const (
+	// checkDecode — an envelope that did not decode, on a purpose-first sink.
+	checkDecode = "decode"
+	// checkCancelled — processing cut off by context cancellation after the
+	// decision was recorded as accepted.
+	checkCancelled = "cancelled"
+)
+
+// afterAcceptTimeout bounds each record written after a decision was recorded
+// as accepted: the processing context may already be done.
+const afterAcceptTimeout = 5 * time.Second
+
+// decision is one delivery decision of the purpose-first path that was
+// recorded as accepted: the identity its later records continue.
+type decision struct {
+	id      string
+	view    contentaddress.Address
+	profile string
+	outcome string
+}
+
+// record is a record of d; payload is the zero Address when there is none.
+func (d *decision) record(at time.Time, point string, o decisionrecord.Outcome, check, reason string, payload contentaddress.Address) decisionrecord.Record {
+	ev := []decisionrecord.Evidence{{Role: "evidenceView", Address: d.view}}
+	if !payload.IsZero() {
+		ev = append(ev, decisionrecord.Evidence{Role: "payload", Address: payload})
+	}
+	return decisionrecord.Record{
+		DecisionID: d.id,
+		Point:      point,
+		At:         at.UTC(),
+		Outcome:    o,
+		Check:      check,
+		Reason:     pipeexcerpt.Text(reason),
+		Evidence:   ev,
+		Attributes: map[string]string{"appraisalDecision": d.outcome, "decisionProfile": d.profile},
+	}
+}
+
+func newDecisionID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("decision id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// recordAccepted writes the accepted record of a decision whose appraisal
+// decided ACCEPT. The view's PolicyDecision is non-nil and its ID validated.
+func (p *Processor) recordAccepted(ctx context.Context, view *appraisal.View) (*decision, error) {
+	id, err := newDecisionID()
+	if err != nil {
+		return nil, err
+	}
+	viewAddress, err := contentaddress.Parse(view.EvidenceViewID)
+	if err != nil {
+		return nil, fmt.Errorf("decision record: evidence view: %w", err)
+	}
+	d := &decision{
+		id:      id,
+		view:    viewAddress,
+		profile: view.PolicyDecision.DecisionProfileID,
+		outcome: string(view.PolicyDecision.Decision),
+	}
+	if err := p.cfg.DecisionRecorder.Record(ctx, d.record(p.now(), p.cfg.AgentBoundaryID, decisionrecord.Accepted, "", "", contentaddress.Address{})); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// recordAfterAccept writes a further record of an accepted decision on a
+// context detached from the processing one (which may be cancelled) with its
+// own timeout. The decision's outcome is already settled, so a failure to
+// record is logged and changes nothing. A nil dec (the legacy path, or a
+// decision never accepted) records nothing.
+func (p *Processor) recordAfterAccept(ctx context.Context, dec *decision, o decisionrecord.Outcome, check, reason, payload string) {
+	if dec == nil {
+		return
+	}
+	var payloadAddress contentaddress.Address
+	if payload != "" {
+		a, err := contentaddress.Parse(payload)
+		if err != nil {
+			p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", pipeexcerpt.ErrorText(fmt.Errorf("payload: %w", err)))
+			return
+		}
+		payloadAddress = a
+	}
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterAcceptTimeout)
+	defer cancel()
+	rec := dec.record(p.now(), p.cfg.AgentBoundaryID, o, check, reason, payloadAddress)
+	if err := p.cfg.DecisionRecorder.Record(detached, rec); err != nil {
+		p.logger.Error("sink: delivery decision record not written", "decisionId", dec.id, "outcome", o, "check", check, "err", pipeexcerpt.ErrorText(err))
+	}
+}
+
+// recordRefusal records, under the same DecisionID, that a decision recorded
+// as accepted was refused by a later stage. It is best effort: if it cannot be
+// written the accepted record stands.
+func (p *Processor) recordRefusal(ctx context.Context, dec *decision, check, reason, payload string) {
+	p.recordAfterAccept(ctx, dec, decisionrecord.Refused, check, reason, payload)
+}
+
+// recordWriteUnknown records, under the same DecisionID, that the external
+// write returned an error. A Writer may have delivered before it failed, and
+// a refused record decides a decision for good, so the record stays Accepted
+// and says the outcome is unknown.
+func (p *Processor) recordWriteUnknown(ctx context.Context, dec *decision, err error, payload string) {
+	p.recordAfterAccept(ctx, dec, decisionrecord.Accepted, "", "write outcome unknown: "+excerpt.ErrorText(err), payload)
+}
+
+// recordUndecided records a decision refused before any was accepted: the
+// appraisal's refusals and an envelope that did not decode. view is nil when
+// there is no usable view, and then the record names no evidence.
+func (p *Processor) recordUndecided(ctx context.Context, check string, view *appraisal.View, appraised, reason string) {
+	id, err := newDecisionID()
+	if err != nil {
+		p.logger.Error("sink: delivery decision refusal not recorded", "err", pipeexcerpt.ErrorText(err))
+		return
+	}
+	rec := decisionrecord.Record{
+		DecisionID: id,
+		Point:      p.cfg.AgentBoundaryID,
+		At:         p.now().UTC(),
+		Outcome:    decisionrecord.Refused,
+		Check:      check,
+		Reason:     pipeexcerpt.Text(reason),
+	}
+	if view != nil {
+		viewAddress, err := contentaddress.Parse(view.EvidenceViewID)
+		if err != nil {
+			p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", pipeexcerpt.ErrorText(fmt.Errorf("evidence view: %w", err)))
+			return
+		}
+		rec.Evidence = []decisionrecord.Evidence{{Role: "evidenceView", Address: viewAddress}}
+		rec.Attributes = map[string]string{"appraisalDecision": appraised}
+		if view.PolicyDecision != nil {
+			rec.Attributes["decisionProfile"] = view.PolicyDecision.DecisionProfileID
+		}
+	}
+	if err := p.cfg.DecisionRecorder.Record(ctx, rec); err != nil {
+		p.logger.Error("sink: delivery decision refusal not recorded", "decisionId", id, "err", pipeexcerpt.ErrorText(err))
+	}
 }
 
 // issuerDIDOf returns cred's issuer DID, or "" when cred is nil (best-effort
@@ -604,7 +843,7 @@ func issuerDIDOf(cred *vc.PipelinePassCredential) string {
 func (p *Processor) errored(ctx context.Context, msg string, confidence *vc.ConfidenceState, consumedVCRef, inputHash string) *contract.Result {
 	r := &contract.Result{
 		Status:     contract.StatusErrored,
-		Error:      msg,
+		Error:      pipeexcerpt.Text(msg),
 		Confidence: confidence,
 	}
 	p.notify(ctx, r, consumedVCRef, inputHash)
@@ -629,7 +868,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, consumedVCRe
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

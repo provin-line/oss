@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/did/v1/didpbconnect"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	"github.com/provin-line/oss/internal/origin"
 )
 
 // Env is the per-invocation environment every command runs against: the
@@ -27,7 +28,24 @@ type Env struct {
 	Stdout     io.Writer
 }
 
+// httpClient is the client for calls to the registry that carry the token. The
+// default client, or an *http.Client given, is confined: it follows no
+// redirect, so the token goes to the registry's origin only. Another
+// connect.HTTPClient (a test's) is used as given.
 func (e Env) httpClient() connect.HTTPClient {
+	switch c := e.HTTPClient.(type) {
+	case nil:
+		return origin.Confine(http.DefaultClient)
+	case *http.Client:
+		return origin.Confine(c)
+	default:
+		return c
+	}
+}
+
+// publicHTTPClient is the client for the registry's public routes, which carry
+// no token: it follows redirects as the default client does.
+func (e Env) publicHTTPClient() connect.HTTPClient {
 	if e.HTTPClient == nil {
 		return http.DefaultClient
 	}

@@ -29,6 +29,19 @@ equivalence registry; nothing in this package resolves equivalence.
 
 - **Public-key extraction from a DID Document lives here, once.** No consumer
   maintains its own copy (a known source of drift in the predecessor codebase).
+- **A key reference has one form.** `AbsoluteKeyID` reads `#fragment` or
+  `<subject>#fragment` (a single `#`, a fragment of `[A-Za-z0-9._-]`) and
+  refuses everything else with `ErrInvalidKeyReference`, so this package and a
+  URL reader elsewhere name the same key. A method carries one key member, its
+  type's.
+- **Ed25519 keys are checked where they are read and written.**
+  `ExtractPublicKey` (and `ExtractPublicKeyAndEncoding`) refuse a key that
+  `crypto/ed25519.ValidatePublicKey` refuses — wrong size, small order, off the
+  curve, non-canonical point encoding — with an error wrapping
+  `ErrInvalidPublicKey` and that function's sentinel. A JWK `x` must be the
+  canonical unpadded base64url spelling of the key. `EncodeEd25519Multikey` and
+  `NewMultikeyVerificationMethod` refuse the same keys, so issuance cannot
+  publish a key no reader accepts.
 - **Dispatch fails closed.** `MethodOf` rejects anything that is not
   `did:` + lowercase `[a-z0-9]` method + non-empty method-specific id;
   routing on an unvalidated method name is a bug.

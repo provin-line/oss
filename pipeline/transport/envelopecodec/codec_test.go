@@ -13,6 +13,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 var _ contract.EnvelopeCodec = (*envelopecodec.Codec)(nil)
 
 func newTestCredential(t *testing.T) *vc.PipelinePassCredential {
@@ -75,7 +85,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	for name, cred := range cases {
 		t.Run(name, func(t *testing.T) {
-			codec := envelopecodec.New()
+			codec := testCodec()
 			in := &contract.Envelope{
 				Credential: cred,
 				Payload:    []byte(`{"v":1}`),
@@ -131,7 +141,7 @@ func TestWireCredentialIsCanonical(t *testing.T) {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
 
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: cred,
 		Payload:    []byte(`{"v":1}`),
 		SequenceNo: 1,
@@ -149,7 +159,7 @@ func TestWireCredentialIsCanonical(t *testing.T) {
 }
 
 func TestRoundTripByReference(t *testing.T) {
-	codec := envelopecodec.New()
+	codec := testCodec()
 	in := &contract.Envelope{
 		Credential: newTestCredential(t),
 		Payload:    nil, // by-reference delivery
@@ -169,7 +179,7 @@ func TestRoundTripByReference(t *testing.T) {
 }
 
 func TestMarshalRejections(t *testing.T) {
-	codec := envelopecodec.New()
+	codec := testCodec()
 	cred := newTestCredential(t)
 	cases := []struct {
 		name string
@@ -191,7 +201,7 @@ func TestMarshalRejections(t *testing.T) {
 }
 
 func TestUnmarshalRejections(t *testing.T) {
-	codec := envelopecodec.New()
+	codec := testCodec()
 	mustWire := func(pb *pipeline.Envelope) []byte {
 		t.Helper()
 		b, err := proto.Marshal(pb)

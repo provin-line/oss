@@ -3,8 +3,6 @@ package aggregate
 import (
 	"context"
 	"testing"
-
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // Config.StrippedPublisher threads through to the emitter's dual-emit
@@ -24,14 +22,14 @@ func TestProcess_StrippedPublisher_DualEmits(t *testing.T) {
 	if len(stripped.calls) != 1 {
 		t.Fatalf("stripped publishes = %d, want 1", len(stripped.calls))
 	}
-	env, err := envelopecodec.New().UnmarshalEnvelope(stripped.calls[0])
+	env, err := testCodec().UnmarshalEnvelope(stripped.calls[0])
 	if err != nil {
 		t.Fatalf("decode stripped envelope: %v", err)
 	}
 	if env.Payload != nil {
 		t.Errorf("stripped envelope Payload = %v, want nil", env.Payload)
 	}
-	primary, err := envelopecodec.New().UnmarshalEnvelope(h.pub.calls[0])
+	primary, err := testCodec().UnmarshalEnvelope(h.pub.calls[0])
 	if err != nil {
 		t.Fatalf("decode primary envelope: %v", err)
 	}

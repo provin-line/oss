@@ -41,6 +41,8 @@ import (
 // source commitment over the consumed conformant set — for a stateless
 // 1:1 process that set is exactly {predecessor} (all-consumed
 // semantics).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type ChainedSigner interface {
 	SignChainPreserving(ctx context.Context, payload []byte, inputHash, outputHash string, predecessor *vc.PipelinePassCredential) (*vc.PipelinePassCredential, error)
 }
@@ -60,6 +62,8 @@ type ChainedSigner interface {
 //
 // A consumer that exercises only one path should depend on a narrower,
 // consumer-defined interface, so it cannot call the path it never uses.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type SourceSigner interface {
 	SignFirstDrop(ctx context.Context, payload []byte, inputHash, outputHash string) (*vc.PipelinePassCredential, error)
 	// SignAggregateFirstDrop signs an aggregate FirstDrop over a consumed set of
@@ -73,6 +77,8 @@ type SourceSigner interface {
 
 // Verifier verifies one credential and returns the confidence verdict
 // (weakest-link composition over the normative axes).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Verifier interface {
 	Verify(ctx context.Context, cred *vc.PipelinePassCredential) (*vc.VerifyResult, error)
 }
@@ -83,6 +89,8 @@ type Verifier interface {
 // verification was retired in slice-17j; chains are no longer walked synchronously on
 // the consume path.) Chain retrieval — walking previousCredential by content address —
 // is the implementation's concern; the verification semantics are vc.Verifier.VerifyChain's.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type ChainVerifier interface {
 	VerifyChain(ctx context.Context, head *vc.PipelinePassCredential) (*vc.VerifyResult, error)
 }

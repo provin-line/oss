@@ -9,7 +9,10 @@ the byte strings this repository puts on the wire: Data Integrity `proofValue`
 
 - `EncodeBase58Btc(data []byte) string` — "z" + Bitcoin-alphabet base58
 - `DecodeBase58Btc(s string) ([]byte, error)` — rejects any value without the
-  "z" prefix
+  "z" prefix, and any value of more than 8192 characters after it (about 6 KB,
+  every byte string of up to 5998 bytes) before decoding it: base58 decoding
+  costs the square of the length. ML-DSA keys and signatures fit; SLH-DSA
+  signatures (7856 bytes and more) do not
 
 ## Conventions
 

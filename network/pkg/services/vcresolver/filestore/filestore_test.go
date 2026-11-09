@@ -1,13 +1,16 @@
 package filestore_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	"github.com/provin-line/oss/vc"
@@ -162,5 +165,37 @@ func TestPool_DamagedEntryIsSkippedAndRepaired(t *testing.T) {
 	}
 	if e, ok := p.Get(h); !ok || e.AssemblyDepth != 4 {
 		t.Fatalf("repaired entry = %+v ok=%v", e, ok)
+	}
+}
+
+// A pool entry whose stored hash is not a content address is skipped with a
+// warning that names its error within netexcerpt.TextLimit bytes, quoted, on
+// one line, however long the hash the file holds.
+func TestPool_ADamagedEntryIsLoggedWithinTheLimit(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	dir := t.TempDir()
+	long := strings.Repeat("a\n", 64<<10)
+	raw, err := json.Marshal(map[string]any{"v": 1, "seq": 1, "hash": long, "assembly_depth": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, strings.Repeat("0", 64)+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filestore.NewPool(dir); err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSuffix(logged.String(), "\n")
+	if strings.Contains(line, "\n") || !strings.Contains(line, "skipping damaged pool entry") {
+		t.Fatalf("log = %.300q, want one line of the damaged entry", line)
+	}
+	// The error is quoted twice, by netexcerpt and by the handler, each
+	// escape counted; the rest of the line is short.
+	if max := 2*netexcerpt.TextLimit + 512; len(line) > max || !strings.Contains(line, "bytes)") {
+		t.Errorf("log line: %d bytes, want at most %d with the length of the cut: %.300q", len(line), max, line)
 	}
 }

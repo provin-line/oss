@@ -12,11 +12,39 @@ the target:
   entry points (no ad-hoc `json.Marshal` of signing scopes); `json.Marshal` /
   `json.NewEncoder` in a canon-importing file requires a
   `canonicalizer-hygiene-exempt` comment. Same aliased-import rejection.
+- `check-number-hygiene.sh` — every JSON number read as a double goes through
+  `canon.Float64` (the RFC 8259 grammar only, correctly rounded, whatever the
+  number's spelling). Any other `Float64` method (`json.Number`'s, called, as a
+  method value or as a method expression) and any `ParseFloat` (`strconv`'s
+  under any import name, or `math/big`'s) needs a `number-hygiene-exempt`
+  comment stating why the string is not a JSON number; `rand.Float64()` and a
+  mention of `canon.Float64` pass. The check is line-based and textual: it
+  does not resolve imports or types.
+- `check-rdfc-registration.sh` — no non-test file refers to
+  `vc.RegisterEdDSARDFC2022` but its definition in `vc/cryptosuite.go`. It
+  opens `eddsa-rdfc-2022` for the whole process, so only a program's own
+  `main` or an `init` function of its main package calls it, never a package
+  of this module. Comments and string, raw string and rune literals are
+  skipped, across lines; a `//go:linkname` directive is read as code. It
+  also fails when a non-test package other than `vc` and `canon/urdna2015`
+  imports `canon/urdna2015` or json-gold, so JSON-LD processing is reached
+  only through `vc`, and when a non-test file outside it imports
+  `internal/rdfccorpus`, the documents the RDFC tests read, or a package
+  below it, so no program carries them. Generated
+  code is scanned too; there is no exemption.
 - `check-gofmt.sh` — all Go files, including generated `gen/`, are gofmt-clean.
 
-Exemption comments go on the flagged line, the line directly above it, or the
-`"encoding/json"` import line (whole-file exemption), and must state *why* the
-hygiene rule cannot matter at that site.
+The decoder, canonicalizer and number checks skip `gen/` (generated code).
+In `internal/jsonschema/`, a copy of an upstream library, the decoder check
+skips `loader.go` and `content.go` (decoding its schema package does not
+enable) and fails if a package other than `schema/internal/schemadoc` imports
+the copy; the number check skips `kind/kind.go` (error-message formatting).
+See that directory's README.
+
+Exemption comments go on the flagged line or the line directly above it (for
+the decoder and canonicalizer checks, also on the `"encoding/json"` import
+line, as a whole-file exemption), and must state *why* the hygiene rule cannot
+matter at that site.
 
 Non-check scripts:
 

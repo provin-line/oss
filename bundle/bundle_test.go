@@ -1,6 +1,7 @@
 package bundle_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -454,7 +455,11 @@ func TestVerify_TamperedDIDDocument(t *testing.T) {
 		// A validly-encoded DIFFERENT key: the honest tamper is substitution,
 		// not corruption — an undecodable value would fail earlier for a
 		// different reason than the signature mismatch this test pins.
-		mb, err := did.EncodeEd25519Multikey([]byte(strings.Repeat("k", 32)))
+		other, err := ed25519.Generator{}.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mb, err := did.EncodeEd25519Multikey(other.PublicKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -719,5 +724,48 @@ func TestExport_FailedExport_LeavesNoDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err == nil {
 		t.Fatalf("failed export left %s behind", dir)
+	}
+}
+
+// A manifest key that matches a field of the manifest only by case is damage
+// too, at the wire-struct stage.
+func TestVerify_ManifestFieldMatchedOnlyByCase_Rejected(t *testing.T) {
+	f := buildFixture(t, originDID, childDID)
+	dir, _ := exportFixture(t, f)
+	path := filepath.Join(dir, "manifest.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte(`"scope"`), []byte(`"SCOPE"`), 1)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = bundle.Verify(context.Background(), dir, bundle.VerifyOptions{ExpectedHead: f.head})
+	if !errors.Is(err, bundle.ErrBundleIntegrity) {
+		t.Fatalf("SCOPE for scope: err=%v, want ErrBundleIntegrity", err)
+	}
+}
+
+// A manifest whose keys collide, exactly or by case, is damage at the first
+// stage too.
+func TestVerify_ManifestKeysThatCollide_Rejected(t *testing.T) {
+	for name, edit := range map[string]func([]byte) []byte{
+		"exact duplicate":   func(raw []byte) []byte { return bytes.Replace(raw, []byte(`{`), []byte(`{"v":1,`), 1) },
+		"version in a case": func(raw []byte) []byte { return bytes.Replace(raw, []byte(`"v"`), []byte(`"V"`), 1) },
+	} {
+		f := buildFixture(t, originDID, childDID)
+		dir, _ := exportFixture(t, f)
+		path := filepath.Join(dir, "manifest.json")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, edit(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bundle.Verify(context.Background(), dir, bundle.VerifyOptions{ExpectedHead: f.head}); !errors.Is(err, bundle.ErrBundleIntegrity) {
+			t.Errorf("%s: err=%v, want ErrBundleIntegrity", name, err)
+		}
 	}
 }

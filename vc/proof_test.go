@@ -53,7 +53,7 @@ const (
 
 // fixture wires a real Ed25519 signer/verifier and a document, returning the
 // signer, the public key, and the unsigned document body.
-func fixture(t *testing.T) (crypto.Signer, []byte, map[string]any) {
+func fixture(t testing.TB) (crypto.Signer, []byte, map[string]any) {
 	t.Helper()
 	kp, err := (ed25519.Generator{}).Generate()
 	if err != nil {

@@ -1,7 +1,6 @@
 package handler_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -313,10 +312,17 @@ func TestPeerHandler_DomainError_Mapped(t *testing.T) {
 	}
 }
 
-// pubForEvidence is a fixture #auth public key (Ed25519 length) used only to
-// exercise did.ExtractPublicKey through authDoc — never a real signature
-// check (the spyVerifier does not verify anything).
-var pubForEvidence = bytes.Repeat([]byte{7}, 32)
+// pubForEvidence is a fixture #auth public key used only to exercise
+// did.ExtractPublicKey through authDoc — never a real signature check (the
+// spyVerifier does not verify anything). It is a generated key: extraction
+// refuses 32 bytes that are not a usable Ed25519 point.
+var pubForEvidence = func() []byte {
+	kp, err := ed25519.Generator{}.Generate()
+	if err != nil {
+		panic(err)
+	}
+	return kp.PublicKey
+}()
 
 // A successful RegisterSubscription, with evidence configured, records the
 // resolved doc's #auth key material alongside the signed view — AFTER the

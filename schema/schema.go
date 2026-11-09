@@ -13,13 +13,18 @@ import (
 )
 
 // ValidateJSONSchema reports whether document is a well-formed, self-contained
-// JSON Schema: it must strict-decode, compile under Draft 2020-12, and reference
-// no external $ref. This is the registry-admission check — the schema registry
+// JSON Schema: it must strict-decode, hold no number longer than 256 bytes or
+// whose exponent part lies beyond ±400, compile under Draft 2020-12, and
+// reference no external $ref. This is the registry-admission check — the schema registry
 // rejects any document this rejects, so it never holds a schema a downstream
 // Validator would refuse — and the precondition the local Validator enforces
-// before storing. It registers nothing and resolves no reference. (JSON Schema
-// specific by name: a second schema language, e.g. CDDL, would get its own
-// admission entry rather than overloading this one.)
+// before storing. It registers nothing and resolves no reference. It does not
+// bound the size of document: its caller does, as the network's schema
+// registration does at 1 MiB. Its bounds, and so what a call costs, grow with
+// the schema's size (the package README gives the worst measured). (JSON
+// Schema specific by name: a second schema language,
+// e.g. CDDL, would get its own admission entry rather than overloading this
+// one.)
 func ValidateJSONSchema(document []byte) error {
 	return schemadoc.Validate(document)
 }

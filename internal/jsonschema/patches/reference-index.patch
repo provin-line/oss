@@ -1,0 +1,111 @@
+diff --git a/compile_test.go b/compile_test.go
+index a222806..2145e22 100644
+--- a/compile_test.go
++++ b/compile_test.go
+@@ -4,6 +4,8 @@ package jsonschema_test
+ 
+ import (
+ 	"errors"
++	"fmt"
++	"runtime"
+ 	"strings"
+ 	"testing"
+ 
+@@ -100,3 +102,40 @@ func TestCompile_ReadsAnArrayIndexAsRFC6901WritesIt(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A reference is resolved once for each URL it resolves to, not once for
++// each reference: n references to a resource at a location 4n bytes long
++// allocate about n times as much as one, not n squared, where resolving each
++// would build the resource's location again.
++func TestCompile_ResolvesEachURLOnce(t *testing.T) {
++	refs := func(n int, ref string) string {
++		items := make([]string, n)
++		for i := range items {
++			items[i] = fmt.Sprintf(`{"$ref":%q}`, ref)
++		}
++		return strings.Join(items, ",")
++	}
++	for name, shape := range map[string]func(n int) string{
++		"by id": func(n int) string {
++			return `{"$defs":{"` + strings.Repeat("a", 4*n) + `":{"$id":"urn:x"}},"allOf":[` + refs(n, "urn:x") + `]}`
++		},
++		"by id and a pointer": func(n int) string {
++			return `{"$defs":{"` + strings.Repeat("a", 4*n) + `":{"$id":"urn:x","$defs":{"d":{}}}},"allOf":[` + refs(n, "urn:x#/$defs/d") + `]}`
++		},
++	} {
++		allocated := func(n int) uint64 {
++			var before, after runtime.MemStats
++			runtime.GC()
++			runtime.ReadMemStats(&before)
++			if _, err := compileString(t, shape(n)); err != nil {
++				t.Fatalf("%s, %d: %v", name, n, err)
++			}
++			runtime.ReadMemStats(&after)
++			return after.TotalAlloc - before.TotalAlloc
++		}
++		short, long := allocated(2000), allocated(16000)
++		if ratio := float64(long) / float64(short); ratio > 16 {
++			t.Errorf("%s: 8 times the references and the location allocated %.0f times as much (%d, %d)", name, ratio, short, long)
++		}
++	}
++}
+diff --git a/compiler.go b/compiler.go
+index 5e281e2..28e3517 100644
+--- a/compiler.go
++++ b/compiler.go
+@@ -303,8 +303,27 @@ func (c *Compiler) compileObject(obj map[string]any, sch *Schema, r *root, q *qu
+ type queue struct { // compile index
+ 	list  []*Schema          // compile index
+ 	index map[urlPtr]*Schema // compile index
++	refs  map[refKey]*Schema // reference index: the target of each local reference, by the URL it resolves to
+ } // compile index
+ 
++// refKey is a reference resolved in a root: the root's URL, and the URL and
++// decoded fragment the reference resolves to.
++type refKey struct { // reference index
++	root url     // reference index
++	uf   urlFrag // reference index
++} // reference index
++
++// addRef records the target of a local reference, so a reference that
++// resolves to the same URL in the same root takes it from here rather than
++// building the target's location again: a resource's id stays with the one
++// resource for the compile, so its target does not change.
++func (q *queue) addRef(key refKey, sch *Schema) { // reference index
++	if q.refs == nil { // reference index
++		q.refs = map[refKey]*Schema{} // reference index
++	} // reference index
++	q.refs[key] = sch // reference index
++} // reference index
++
+ func (q *queue) append(sch *Schema) {
+ 	q.list = append(q.list, sch) // compile index
+ 	if q.index == nil {          // compile index
+diff --git a/objcompiler.go b/objcompiler.go
+index 4b56d97..6ccc624 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -367,13 +367,19 @@ func (c *objCompiler) enqueueRefVal(ref string) (*Schema, error) {
+ 		return nil, err
+ 	}
+ 
++	key := refKey{c.r.url, *uf}       // reference index
++	if sch, ok := c.q.refs[key]; ok { // reference index
++		return sch, nil // reference index
++	} // reference index
+ 	up, err := c.r.resolve(*uf)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	if up != nil {
+ 		// local ref
+-		return c.enqueuePtr(up.ptr), nil
++		sch := c.enqueuePtr(up.ptr) // reference index
++		c.q.addRef(key, sch)        // reference index
++		return sch, nil             // reference index
+ 	}
+ 
+ 	// remote ref

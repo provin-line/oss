@@ -34,6 +34,8 @@ type Schema struct {
 // instead satisfied by cmd/pipeline's wireSchemaGetter, a WIRE client to
 // SchemaService.GetSchema — two layers, two owners, no shared instance
 // (cmd/pipeline never runs the registry itself).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type SchemaGetter interface {
 	Get(ctx context.Context, name, version string) (*Schema, error)
 }

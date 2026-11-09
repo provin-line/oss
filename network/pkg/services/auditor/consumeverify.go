@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -83,13 +85,21 @@ func NewConsumeVerifier(scv SourceCommitmentVerifier, src SourceResolver) (*Cons
 //     else unavailable), no recompute;
 //   - context cancellation -> abort: returns the ctx error and a ZERO verdict, so the caller
 //     records NOTHING (matching the emit-locus runner discipline).
+//
+// The verdict's Notation is within 1024 bytes of UTF-8, whatever the errors it names.
 func (v *ConsumeVerifier) Verify(ctx context.Context, aggCred *vc.PipelinePassCredential, consumedHashes []string) (ConsumeVerdict, error) {
+	verdict, err := v.verify(ctx, aggCred, consumedHashes)
+	verdict.Notation, _ = excerpt.Of(verdict.Notation, netexcerpt.TextLimit)
+	return verdict, err
+}
+
+func (v *ConsumeVerifier) verify(ctx context.Context, aggCred *vc.PipelinePassCredential, consumedHashes []string) (ConsumeVerdict, error) {
 	// Precondition: every supplied hash is a well-formed content address. A malformed hash is a
 	// caller/discovery data error (never resolves on retry), so fail closed with an error rather
 	// than misrouting it to a transient Indeterminate (the runner's isContentAddress discipline).
 	for _, h := range consumedHashes {
 		if !isContentAddress(h) {
-			return ConsumeVerdict{}, fmt.Errorf("%w: %q", ErrInvalidConsumedHash, h)
+			return ConsumeVerdict{}, fmt.Errorf("%w: %s", ErrInvalidConsumedHash, netexcerpt.ValueText(h))
 		}
 	}
 	sources := make([]*vc.PipelinePassCredential, 0, len(consumedHashes))
@@ -101,10 +111,10 @@ func (v *ConsumeVerifier) Verify(ctx context.Context, aggCred *vc.PipelinePassCr
 				return ConsumeVerdict{}, err // abort — record nothing, retry later
 			case errors.Is(err, ErrSourceNotFound):
 				return ConsumeVerdict{State: vc.ConfidenceIndeterminate, Reason: ReasonOrphan,
-					Notation: "consume-locus: source " + truncateForNote(h) + " not found at resolver"}, nil
+					Notation: "consume-locus: source " + netexcerpt.ValueText(h) + " not found at resolver"}, nil
 			default:
 				return ConsumeVerdict{State: vc.ConfidenceIndeterminate, Reason: ReasonUnavailable,
-					Notation: "consume-locus: source " + truncateForNote(h) + " unavailable: " + err.Error()}, nil
+					Notation: "consume-locus: source " + netexcerpt.ValueText(h) + " unavailable: " + err.Error()}, nil
 			}
 		}
 		// Tamper gate: the fetched body must content-address to the requested hash, else the
@@ -115,11 +125,11 @@ func (v *ConsumeVerifier) Verify(ctx context.Context, aggCred *vc.PipelinePassCr
 			// the resolver returned (not a transient fetch failure) → fail-closed mismatch,
 			// consistent with the tamper gate below.
 			return ConsumeVerdict{State: vc.ConfidenceFailed, Reason: ReasonMismatch,
-				Notation: "consume-locus: fetched source for " + truncateForNote(h) + " not hashable: " + herr.Error()}, nil
+				Notation: "consume-locus: fetched source for " + netexcerpt.ValueText(h) + " not hashable: " + herr.Error()}, nil
 		}
 		if got != h {
 			return ConsumeVerdict{State: vc.ConfidenceFailed, Reason: ReasonMismatch,
-				Notation: "consume-locus: fetched body hash " + truncateForNote(got) + " != requested " + truncateForNote(h)}, nil
+				Notation: "consume-locus: fetched body hash " + netexcerpt.ValueText(got) + " != requested " + netexcerpt.ValueText(h)}, nil
 		}
 		sources = append(sources, cred)
 	}

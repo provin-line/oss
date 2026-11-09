@@ -33,9 +33,10 @@ type AuditScope struct {
 }
 
 // AuditRecord is the recorded verdict for one head: the vc.VerifyChain projection plus
-// coverage and the audit time. For a real verdict the Overall/Axes/Notations are verbatim
-// from VerifyChain; for an assembly hole they are a synthetic Indeterminate (all axes
-// explicitly Indeterminate — the AxisResult zero value is Failed, so it must be set).
+// coverage and the audit time. For a real verdict the Overall/Axes/Notations are those of
+// VerifyChain, each notation within 1024 bytes of UTF-8 (the runner bounds what it
+// records); for an assembly hole they are a synthetic Indeterminate (all axes explicitly
+// Indeterminate — the AxisResult zero value is Failed, so it must be set).
 //
 // SourceCommitment is the DISTINCT consumed-set verdict (slice-17o): the VerifySourceCommitment
 // result, separate from Overall (the linear verdict), populated only when

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
@@ -166,6 +168,12 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		return "", err
 	}
 
+	// The connection info is another organization's: it is held to the keys
+	// and characters this side uses before anything is wired or stored.
+	if err := checkConnectionInfo(connInfo); err != nil {
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		return "", fmt.Errorf("%w: %v", ErrRemotePeer, err)
+	}
 	remoteSubject, remoteAccountKey := importTargets(connInfo)
 	// The remote-supplied import subject is asserted against what THIS side
 	// derives for the agreed mode before any local wiring: a buggy or lying
@@ -281,10 +289,8 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 // compensationCtx returns a context detached from the caller's cancellation (but
 // preserving its values) for best-effort teardown after a remote side-effect has
 // already happened: a canceled/timed-out caller must not prevent the compensating
-// Disconnect/RemoveImport from reaching the publisher (D-s5; Codex P2). The
-// compensation calls are awaited synchronously, so the detached context needs no
-// explicit deadline here; bounding it belongs with the real (nats) transport in
-// C2, where the calls actually do I/O.
+// Disconnect/RemoveImport from reaching the publisher (D-s5). The detached
+// context has no deadline; peerclient bounds every call to a publisher itself.
 func compensationCtx(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
@@ -348,6 +354,30 @@ func assertModeOffered(requested string, offered []string) error {
 		}
 	}
 	return fmt.Errorf("%w: %q", ErrPayloadModeUnsupported, mode)
+}
+
+// connectionInfoKeys are the keys a publisher's connection info may carry:
+// those the NATS transport writes (infra/nats AddExport).
+var connectionInfoKeys = map[string]bool{"subject": true, "account": true, "url": true, "publishType": true}
+
+// connectionInfoValue is the form of a connection-info value: empty, or a
+// letter or digit followed by at most 999 of the characters a URL, a NATS
+// subject or account key, or a DID uses. The subscription store keeps every
+// such value as written.
+var connectionInfoValue = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9._~:/?@!$&'()*+,;=%\[\]-]{0,999})?$`)
+
+// checkConnectionInfo refuses connection info from a publisher with a key
+// this side does not use or a value outside connectionInfoValue.
+func checkConnectionInfo(info map[string]string) error {
+	for k, v := range info {
+		if !connectionInfoKeys[k] {
+			return fmt.Errorf("publisher returned connection info with an unknown key %s", netexcerpt.ValueText(k))
+		}
+		if !connectionInfoValue.MatchString(v) {
+			return fmt.Errorf("publisher returned connection info %q with a value outside the allowed form", k)
+		}
+	}
+	return nil
 }
 
 // importTargets derives the AddImport/RemoveImport REMOTE-side arguments from

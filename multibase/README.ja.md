@@ -8,7 +8,9 @@
 ## API
 
 - `EncodeBase58Btc(data []byte) string` — "z" + Bitcoin アルファベットの base58
-- `DecodeBase58Btc(s string) ([]byte, error)` — "z" プレフィックスのない値は拒否
+- `DecodeBase58Btc(s string) ([]byte, error)` — "z" プレフィックスのない値は拒否。
+  プレフィックスの後が 8192 字を超える値（約 6 KB。5998 バイトまでのバイト列はすべて収まる）も、
+  デコードの前に拒否する。base58 のデコードの手間は長さの 2 乗になるため。ML-DSA の鍵と署名は収まり、SLH-DSA の署名（7856 バイト以上）は収まらない
 
 ## 規約
 

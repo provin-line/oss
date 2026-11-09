@@ -19,7 +19,8 @@
 //
 //  1. reject a cancelled context (Go error);
 //  2. reject empty input (profile norm: a producing process never emits an
-//     empty payload — see contract.Envelope);
+//     empty payload — see contract.Envelope), and input longer than
+//     Config.MaxPayloadSize, before reading it;
 //  3. gate the bytes through the strict canonical-JSON decoder. A Source signs
 //     the bytes it emits, so malformed JSON (duplicate keys, trailing data,
 //     precision drift) must never be laundered into a signed FirstDrop. This
@@ -50,11 +51,12 @@
 //
 // # Result error split (mirrors chained)
 //
-// Domain failures (empty input, strict-decode failure, signer error) are
-// StatusErrored Results with a non-empty Error string and a nil Go error. The
-// Go error return is reserved for context cancellation (ctx.Err()) and
-// internal invariant violations (a just-signed credential that cannot be
-// hashed) where returning a result would be dishonest.
+// Domain failures (empty input, input past MaxPayloadSize, strict-decode
+// failure, signer error) are StatusErrored Results with a non-empty Error
+// string and a nil Go error. The Go error return is reserved for context
+// cancellation (ctx.Err()) and internal invariant violations (a just-signed
+// credential that cannot be hashed) where returning a result would be
+// dishonest.
 //
 // # Payload profile assumption
 //
@@ -74,12 +76,18 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/vc"
 )
 
 // ErrMissingSigner is returned when Config.Signer is nil.
 var ErrMissingSigner = errors.New("ingest: Signer is required")
+
+// ErrInvalidMaxPayloadSize is returned when Config.MaxPayloadSize is not
+// positive.
+var ErrInvalidMaxPayloadSize = errors.New("ingest: MaxPayloadSize must be positive")
 
 // firstDropSigner is the narrow signing capability the ingest (N=0) runtime
 // exercises — only the FirstDrop path. Depending on this consumer-defined interface
@@ -96,6 +104,8 @@ type firstDropSigner interface {
 // stores nothing, and transforms nothing.
 type Config struct {
 	// Signer issues the FirstDrop output credential. Required.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Signer firstDropSigner
 
 	// Observers are notified after every outcome (passed/errored).
@@ -107,6 +117,11 @@ type Config struct {
 
 	// Now is the clock used for ProcessEvent.Timestamp. nil = time.Now.
 	Now func() time.Time
+
+	// MaxPayloadSize bounds the bytes of an input: Process refuses a longer
+	// one before reading it. Required and positive: what a subscription
+	// delivers has no bound that holds regardless of the messaging backend.
+	MaxPayloadSize int
 }
 
 // Processor is the Source ingest event processor. Construct with New.
@@ -118,10 +133,14 @@ type Processor struct {
 }
 
 // New validates cfg and returns a ready-to-use Processor, or ErrMissingSigner
-// if the signer is absent.
+// if the signer is absent, or ErrInvalidMaxPayloadSize if MaxPayloadSize is
+// not positive.
 func New(cfg Config) (*Processor, error) {
 	if cfg.Signer == nil {
 		return nil, ErrMissingSigner
+	}
+	if cfg.MaxPayloadSize <= 0 {
+		return nil, fmt.Errorf("%w (got %d)", ErrInvalidMaxPayloadSize, cfg.MaxPayloadSize)
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -150,9 +169,13 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	}
 
 	// Stage 1 — Non-empty input guard. A producing process never emits an
-	// empty payload (profile norm — see contract.Envelope).
+	// empty payload (profile norm — see contract.Envelope). An input longer
+	// than MaxPayloadSize is refused before it is read.
 	if len(input) == 0 {
 		return p.errored(ctx, "empty input: a Source Process never emits an empty FirstDrop payload (profile norm)", "", ""), nil
+	}
+	if len(input) > p.cfg.MaxPayloadSize {
+		return p.errored(ctx, fmt.Sprintf("input of %d bytes, beyond the bound of %d", len(input), p.cfg.MaxPayloadSize), "", ""), nil
 	}
 
 	// Stage 2 — Strict canonical-JSON decode gate. A Source signs the bytes it
@@ -160,7 +183,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// must never be laundered into a signed FirstDrop.
 	var strictIn interface{}
 	if err := canon.NewStrictDecoder(input).Decode(&strictIn); err != nil {
-		return p.errored(ctx, fmt.Sprintf("strict decode of ingest input: %v", err), "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("strict decode of ingest input: %s", excerpt.ErrorText(err)), "", ""), nil
 	}
 
 	// Stage 3 — Hash. Verbatim ingestion: output == input, so inputHash and
@@ -174,7 +197,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		if isCtxErr(err) {
 			return nil, err
 		}
-		return p.errored(ctx, fmt.Sprintf("sign: %v", err), hash, hash), nil
+		return p.errored(ctx, fmt.Sprintf("sign: %s", excerpt.ErrorText(err)), hash, hash), nil
 	}
 
 	// Stage 5 — Assemble Result. Confidence stays nil: VerificationNone, no
@@ -222,7 +245,7 @@ func hashBytes(data []byte) string {
 func (p *Processor) errored(ctx context.Context, msg, inputHash, outputHash string) *contract.Result {
 	r := &contract.Result{
 		Status: contract.StatusErrored,
-		Error:  msg,
+		Error:  pipeexcerpt.Text(msg),
 	}
 	p.notify(ctx, r, inputHash, outputHash, "")
 	return r
@@ -244,7 +267,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, inputHash, o
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

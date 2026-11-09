@@ -82,6 +82,16 @@ func CreateProof(
 // typed proof fields (cryptosuite, created, purpose, verificationMethod) breaks
 // the check.
 //
+// The proof's @context is not covered that way, because the config takes the
+// document's: so when the document has a @context, the proof's must mirror
+// it, and when the document has none, the proof must carry none. A proof
+// without a proof-local @context over a document with one is therefore
+// refused. A legacy eddsa-jcs-2022 proof, which has none, is verified under
+// its contract with VerifyProofWithContract or VerifyProofUnderContract. An
+// eddsa-rdfc-2022 proof without one is refused by every verify function in
+// this package, whose RDFC contract requires the member, though vc-di-eddsa
+// §3.2.1 does not add it.
+//
 // It deliberately does NOT do the following — these are the high-level
 // Verifier's obligations (see verifier.go), because VerifyProof is a primitive
 // handed an already-resolved key and a typed proof:
@@ -91,11 +101,11 @@ func CreateProof(
 //     supplied here; a caller passing a key unrelated to verificationMethod
 //     gets a meaningless verdict.
 //   - Reject a proof carrying members outside the typed DataIntegrityProof set
-//     (e.g. domain / challenge / a proof-local @context). The provin profile's
-//     proof is exactly {type, cryptosuite, verificationMethod, proofPurpose,
-//     created, proofValue}; any extra wire member is NOT covered by the
-//     signature and so would be malleable if a consumer ever trusted it. The
-//     Verifier MUST reject such proofs.
+//     (e.g. domain / challenge). The provin profile's proof is the six members
+//     {type, cryptosuite, verificationMethod, proofPurpose, created,
+//     proofValue} and the mirrored @context; any other wire member is NOT
+//     covered by the signature and so would be malleable if a consumer ever
+//     trusted it. The Verifier MUST reject such proofs.
 //   - Validate proof.type == "DataIntegrityProof", the proofPurpose policy, the
 //     cryptosuite lifecycle phase at proof.created, and that created is a
 //     well-formed, in-window datetime.
@@ -122,24 +132,35 @@ func VerifyProof(
 		return err
 	}
 	// The config below is rebuilt from the DOCUMENT's context, so the wire
-	// proof.@context member would otherwise ride outside this check — the same
-	// artifact could verify here and fail under VerifyProofWithContract. Every
-	// entry point pins the member the same way.
-	if proof.Context != nil {
+	// proof.@context is pinned to it here (see the doc above).
+	if _, docHas := document[keyContext]; docHas {
 		if err := requireProofContextMirrorsDocument(proof, document); err != nil {
 			return err
 		}
+	} else if proof.Context != nil {
+		return errors.New("vc: the proof carries @context but the document has none")
 	}
 	ctx, hasCtx := document[keyContext]
 	cfg := proofConfigMap(proof.Type, proof.Cryptosuite, proof.VerificationMethod, proof.ProofPurpose, proof.Created, ctx, hasCtx)
+	return verifyProofValue(verifier, publicKey, proof, c.Canonicalize, cfg, document)
+}
 
-	hd, err := proofHashData(c, cfg, document)
+// verifyProofValue verifies the proof's signature over the hashData of
+// proofConfig and document. It decodes proofValue through ProofValueBytes
+// before it canonicalizes proofConfig and document: a proofValue that does not
+// decode is refused at the cost of reading it, where canonicalizing a
+// document not yet authenticated can cost far more. A value that decodes
+// still costs the canonicalization. VerifyProof and VerifyProofUnderContract
+// both verify through it, so both decode, canonicalize and verify in the
+// same order.
+func verifyProofValue(verifier crypto.Verifier, publicKey []byte, proof *DataIntegrityProof, canonFn canonicalizerFunc, proofConfig, document map[string]any) error {
+	sig, err := proof.ProofValueBytes()
 	if err != nil {
 		return err
 	}
-	sig, err := multibase.DecodeBase58Btc(proof.ProofValue)
+	hd, err := proofHashDataFunc(canonFn, proofConfig, document)
 	if err != nil {
-		return fmt.Errorf("vc: decode proofValue: %w", err)
+		return err
 	}
 	ok, err := verifier.Verify(publicKey, hd, sig)
 	if err != nil {

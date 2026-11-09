@@ -4,6 +4,7 @@ import (
 	stded25519 "crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/provin-line/oss/did"
@@ -161,12 +162,11 @@ func TestExtractPublicKey_FragmentCollisionInjection_Rejected(t *testing.T) {
 	}
 	doc := docWith([]did.VerificationMethod{attacker, real})
 
+	// The attacker's method names another DID: the document is refused, so
+	// neither key is handed out, and certainly not the attacker's.
 	got, err := did.ExtractPublicKey(doc, subjectDID+"#signing", did.RelationshipAssertionMethod)
-	if err != nil {
-		t.Fatalf("ExtractPublicKey: %v", err)
-	}
-	if string(got) != string(realPub) {
-		t.Error("a fragment-colliding attacker key was selected instead of the named key")
+	if !errors.Is(err, did.ErrInvalidKeyReference) {
+		t.Fatalf("ExtractPublicKey = (%x, %v), want ErrInvalidKeyReference", got, err)
 	}
 }
 

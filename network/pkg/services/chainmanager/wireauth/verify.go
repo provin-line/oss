@@ -155,7 +155,10 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 //
 // op is the RPC's view discriminator and fields its business object, both of
 // which the caller reconstructs from the request being served (never from the
-// proof). authorize may be nil to skip the signer-to-actor check.
+// proof). fields nested more than 9,999 objects and arrays deep, the fields
+// object counted (the view holds them one level down), is refused with
+// ErrInvalidView before the signer is resolved. authorize may be nil to skip
+// the signer-to-actor check.
 func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any, proof Proof, authorize Authorizer) error {
 	// 1. Structural / malformed checks (fail-fast, side-effect-free).
 	if proof.SignerDID == "" || proof.Nonce == "" || len(proof.Signature) == 0 {

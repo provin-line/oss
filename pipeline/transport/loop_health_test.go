@@ -5,7 +5,6 @@ import (
 
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // The control-plane by-reference health gate reads a loop's stripped-publish
@@ -20,7 +19,7 @@ func TestLoop_StrippedPublishHealthAccessors(t *testing.T) {
 		Processor:         &fakeProcessor{results: []*contract.Result{passedResult(t, []byte(`{"k":"v"}`))}, errs: []error{nil}},
 		Subscriber:        sub,
 		Publisher:         &fakePublisher{},
-		Codec:             envelopecodec.New(),
+		Codec:             testCodec(),
 		Emission:          &fakeTlog{},
 		StrippedPublisher: &failingPublisher{}, // every stripped publish fails
 	})
@@ -68,7 +67,7 @@ func TestLoop_EmitCounters_NilSafeBeforeRun(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  &fakePublisher{},
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	})
 	if err != nil {

@@ -5,6 +5,8 @@
 package transport
 
 // Publisher publishes events to one subject.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Publisher interface {
 	Publish(data []byte) error
 	// Healthy reports whether the underlying connection can serve traffic
@@ -14,6 +16,8 @@ type Publisher interface {
 }
 
 // Subscriber consumes events from one subject.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Subscriber interface {
 	// Subscribe registers handler and confirms the subscription with the
 	// broker before returning. Handlers are invoked sequentially per

@@ -266,6 +266,10 @@ func (g *URLGuard) DialContext(ctx context.Context, network, addr string) (net.C
 	return nil, firstErr
 }
 
+// maxResponseHeaderBytes bounds the response headers HTTPClient takes from one
+// server.
+const maxResponseHeaderBytes = 64 << 10
+
 // HTTPClient returns an *http.Client whose every connection is guarded: the dial
 // is pinned to validated IPs (DialContext) and each redirect hop is re-checked
 // (CheckRedirect). This is the safe way to fetch a data-supplied endpoint; it
@@ -281,6 +285,9 @@ func (g *URLGuard) HTTPClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = g.DialContext
 	t.Proxy = nil
+	// The servers this client reaches are other parties'; net/http's default
+	// would take 10 MiB of response headers from one.
+	t.MaxResponseHeaderBytes = maxResponseHeaderBytes
 	return &http.Client{
 		Transport:     t,
 		CheckRedirect: g.CheckRedirect,

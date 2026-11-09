@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/schema/local"
@@ -139,5 +141,151 @@ func TestValidate_FormatIsAnnotationOnly(t *testing.T) {
 	}
 	if err := v.Validate(context.Background(), []byte(`{"email":"not-an-email"}`), ref("schema:email", doc)); err != nil {
 		t.Errorf("format must be annotation-only (no assertion), got error: %v", err)
+	}
+}
+
+// numbersSchema makes the library read each payload number: minimum and
+// multipleOf compare it, and uniqueItems over more than 20 items hashes it.
+var numbersSchema = []byte(`{
+	"type": "array",
+	"uniqueItems": true,
+	"items": {"type": "number", "minimum": -1e400, "multipleOf": 1e-400}
+}`)
+
+// payloadOf is an array of 21 distinct numbers, the last one n.
+func payloadOf(n string) []byte {
+	var b strings.Builder
+	b.WriteString("[")
+	for i := range 20 {
+		fmt.Fprintf(&b, "%d,", i)
+	}
+	return []byte(b.String() + n + "]")
+}
+
+// A payload number the JSON Schema library would read slowly, or cannot read
+// (one whose exponent is beyond ±10^6 made validation panic), is refused
+// before the library reads the payload; one within the bounds is validated as
+// before.
+func TestValidate_RefusesAPayloadNumberBeyondTheBounds(t *testing.T) {
+	v := local.New()
+	if err := v.Add("schema:numbers", numbersSchema); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	r := ref("schema:numbers", numbersSchema)
+	for _, n := range []string{"1e999999", "1e-999999", "1e401", "1e1000001", "1e-1000001", strings.Repeat("7", 257)} {
+		if err := v.Validate(context.Background(), payloadOf(n), r); err == nil {
+			t.Errorf("payload number %.40s: want error", n)
+		}
+	}
+	for _, n := range []string{"1e400", "1e-400", strings.Repeat("7", 256)} {
+		if err := v.Validate(context.Background(), payloadOf(n), r); err != nil {
+			t.Errorf("payload number %.40s: %v", n, err)
+		}
+	}
+}
+
+// A schema number beyond the bounds is refused when the schema is added,
+// also one the library cannot read and dropped from the schema.
+func TestAdd_RefusesASchemaNumberBeyondTheBounds(t *testing.T) {
+	for _, n := range []string{"1e999999", "1e1000001", "1e-1000001"} {
+		if err := local.New().Add("schema:big", []byte(`{"type":"number","maximum":`+n+`}`)); err == nil {
+			t.Errorf("maximum %s: want error", n)
+		}
+	}
+}
+
+// Content assertion is off: a string the schema says holds JSON is not
+// decoded by the library, so its numbers are not read either.
+func TestValidate_DoesNotDecodeContent(t *testing.T) {
+	doc := []byte(`{"type":"string","contentMediaType":"application/json"}`)
+	v := local.New()
+	if err := v.Add("schema:content", doc); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := v.Validate(context.Background(), []byte(`"{\"a\": 1e1000001"`), ref("schema:content", doc)); err != nil {
+		t.Errorf("content string: %v", err)
+	}
+}
+
+// validatorFor registers doc and returns its validator and reference.
+func validatorFor(t *testing.T, doc string) (*local.Validator, vc.SchemaRef) {
+	t.Helper()
+	v := local.New()
+	if err := v.Add("schema:bound", []byte(doc)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	return v, ref("schema:bound", []byte(doc))
+}
+
+// The work of validating a payload is bounded by a budget that grows with
+// the payload's size: one within it is validated, one that needs more is
+// refused, naming the budget.
+func TestValidate_BoundsTheWorkOnAPayload(t *testing.T) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprint(i)
+	}
+	v, r := validatorFor(t, `{"type": "array", "items": {"enum": [`+strings.Join(entries, ",")+`]}}`)
+	array := func(items int) []byte {
+		return []byte("[" + strings.TrimSuffix(strings.Repeat("99,", items), ",") + "]")
+	}
+	if err := v.Validate(context.Background(), array(1_000), r); err != nil {
+		t.Errorf("1 000 values: %v", err)
+	}
+	err := v.Validate(context.Background(), array(10_000), r)
+	if err == nil || !strings.Contains(err.Error(), "work budget") {
+		t.Errorf("10 000 values, each compared with 100 entries: err = %v, want the work budget named", err)
+	}
+}
+
+// A payload nested deeper than 512 levels is refused, naming the bound; one
+// at the bound is validated.
+func TestValidate_BoundsThePayloadDepth(t *testing.T) {
+	v, r := validatorFor(t, `{"uniqueItems": true, "items": {"$ref": "#"}}`)
+	nested := func(depth int) []byte {
+		return []byte(strings.Repeat("[", depth-1) + "0" + strings.Repeat("]", depth-1))
+	}
+	if err := v.Validate(context.Background(), nested(512), r); err != nil {
+		t.Errorf("512 deep: %v", err)
+	}
+	err := v.Validate(context.Background(), nested(513), r)
+	if err == nil || !strings.Contains(err.Error(), "bound of 512 levels") {
+		t.Errorf("513 deep: err = %v, want the depth bound named", err)
+	}
+}
+
+// A payload that fails at the bottom of a recursive schema, at the depth
+// bound, is answered: refused as non-conforming or for its budget.
+func TestValidate_AnswersADeepFailure(t *testing.T) {
+	v, r := validatorFor(t, `{"required": ["name"], "properties": {"c": {"$ref": "#"}}}`)
+	payload := strings.Repeat(`{"name":"n","c":`, 510) + `{}` + strings.Repeat("}", 510)
+	if err := v.Validate(context.Background(), []byte(payload), r); err == nil {
+		t.Error("a missing name at depth 511: want an error")
+	}
+}
+
+// A conformance error states the first failure only, in at most 1 KiB, however
+// many values fail.
+func TestValidate_StatesOnlyTheFirstFailure(t *testing.T) {
+	v, r := validatorFor(t, `{"type": "array", "items": {"type": "string"}}`)
+	err := v.Validate(context.Background(), []byte("["+strings.TrimSuffix(strings.Repeat("1,", 50_000), ",")+"]"), r)
+	if err == nil {
+		t.Fatal("50 000 numbers against strings: want error")
+	}
+	if n := len(err.Error()); n > 2<<10 {
+		t.Errorf("error of %d bytes, want at most about 1 KiB", n)
+	}
+	if !strings.Contains(err.Error(), "/0") {
+		t.Errorf("error does not name the first failure: %.200s", err)
+	}
+}
+
+// A schema is checked against the metaschema whatever id it is added under,
+// one below json-schema.org included: {"multipleOf":0} is refused.
+func TestValidator_AddChecksEverySchemaAgainstTheMetaschema(t *testing.T) {
+	for _, id := range []string{"urn:x", "https://json-schema.org/x", "http://json-schema.org/draft-07/x"} {
+		if err := local.New().Add(id, []byte(`{"multipleOf":0}`)); err == nil {
+			t.Errorf("added under %s: a multipleOf of 0 accepted", id)
+		}
 	}
 }

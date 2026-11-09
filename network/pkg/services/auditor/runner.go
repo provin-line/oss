@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/vc"
 )
@@ -160,7 +161,7 @@ func (r *Runner) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return nil
 				}
-				r.logger.Printf("auditor: drain tick: %v", err)
+				r.logger.Printf("auditor: drain tick: %s", netexcerpt.ErrorText(err))
 			}
 		}
 	}
@@ -197,7 +198,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		r.remove(c.HeadHash)
 		return
 	} else if err != nil && !errors.Is(err, ErrNotFound) {
-		r.logger.Printf("auditor: %s: damaged verdict record, re-auditing: %v", c.HeadHash, err)
+		r.logger.Printf("auditor: %s: damaged verdict record, re-auditing: %s", c.HeadHash, netexcerpt.ErrorText(err))
 	}
 
 	head, err := r.head.ResolveVC(ctx, c.HeadHash)
@@ -219,11 +220,11 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		// unresolvable=false — damage is a different failure class from "this
 		// content was never obtained".
 		if errors.Is(err, vcresolver.ErrNotFound) {
-			r.logger.Printf("auditor: %s: head not resolvable, retaining: %v", c.HeadHash, err)
+			r.logger.Printf("auditor: %s: head not resolvable, retaining: %s", c.HeadHash, netexcerpt.ErrorText(err))
 			r.bumpOrDrop(c, "head not resolvable", true)
 			return
 		}
-		r.logger.Printf("auditor: %s: head unreadable (damaged evidence?), retaining: %v", c.HeadHash, err)
+		r.logger.Printf("auditor: %s: head unreadable (damaged evidence?), retaining: %s", c.HeadHash, netexcerpt.ErrorText(err))
 		r.bumpOrDrop(c, "head unreadable", false)
 		return
 	}
@@ -263,7 +264,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		return // ctx cancelled mid-evaluation: record nothing, leave queued
 	}
 	if err := r.recordVerdict(c.HeadHash, rec); err != nil {
-		r.logger.Printf("auditor: %s: record verdict: %v", c.HeadHash, err)
+		r.logger.Printf("auditor: %s: record verdict: %s", c.HeadHash, netexcerpt.ErrorText(err))
 		return // keep queued, retry next tick
 	}
 	switch {
@@ -278,16 +279,6 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 		// Assembled but linear-Indeterminate (a non-hole reason) — bound by the attempt backstop.
 		r.bumpOrDrop(c, "assembled but indeterminate", false)
 	}
-}
-
-// truncateForNote bounds a possibly-long/unsanitized string (e.g. a corrupt receipt entry)
-// before it flows into a wire notation.
-func truncateForNote(s string) string {
-	const max = 80
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	return s
 }
 
 // evaluateSourceCommitment folds the DISTINCT consumed-set verdict into rec when this head
@@ -311,7 +302,7 @@ func (r *Runner) evaluateSourceCommitment(ctx context.Context, headHash string, 
 		// verdict rather than presenting linear-only as intended coverage.
 		rec.SourceCommitment = vc.ConfidenceFailed
 		rec.Scope.SourceCommitmentEvaluated = true
-		rec.SourceCommitmentNotations = []string{scLocus + ": unreadable receipt: " + truncateForNote(err.Error())}
+		rec.SourceCommitmentNotations = []string{scLocus + ": unreadable receipt: " + err.Error()}
 		return false
 	}
 	// A malformed content address in the receipt is a corrupt receipt → fail-closed, no
@@ -320,7 +311,7 @@ func (r *Runner) evaluateSourceCommitment(ctx context.Context, headHash string, 
 		if !isContentAddress(h) {
 			rec.SourceCommitment = vc.ConfidenceFailed
 			rec.Scope.SourceCommitmentEvaluated = true
-			rec.SourceCommitmentNotations = []string{scLocus + ": corrupt receipt entry " + truncateForNote(h)}
+			rec.SourceCommitmentNotations = []string{scLocus + ": corrupt receipt entry " + netexcerpt.ValueText(h)}
 			return false
 		}
 	}
@@ -389,7 +380,8 @@ const scLocus = "source-commitment: self-audit (emit locus)"
 // burned while the hole is still being worked — a deep, legitimately-assembling chain is
 // never wrongly dropped (D-17h-4).
 func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash string) {
-	if err := r.recordIndeterminate(c.HeadHash, "unresolved predecessor "+holeHash); err != nil {
+	named := netexcerpt.ValueText(holeHash)
+	if err := r.recordIndeterminate(c.HeadHash, "unresolved predecessor "+named); err != nil {
 		return // status write failed — keep queued, retry next tick (do not advance state)
 	}
 
@@ -407,15 +399,17 @@ func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash stri
 	// observation would wrongly drop a still-completing chain (Codex P2). So bound it by the
 	// attempt grace instead: the transient window bumps at most once (the next tick the hole
 	// is queued again → no bump), while a genuinely abandoned hole accrues toward max-attempts.
-	r.bumpOrDrop(c, "predecessor "+holeHash+" absent from store and pool", false)
+	r.bumpOrDrop(c, "predecessor "+named+" absent from store and pool", false)
 }
 
 // recordVerdict durably writes one verdict record and, on success, counts the write by its
 // linear overall verdict — the single funnel every runner status.Put goes through, so the
 // counters behind VerdictCounts stay exactly "successful verdict-record writes" with no
-// per-call-site judgment. It returns the store error unchanged (a failed write counts
-// nothing: no durable record, no verdict).
+// per-call-site judgment. Each notation it writes is within 1024 bytes of UTF-8
+// (boundRecord, netexcerpt.TextLimit). It returns the store error unchanged (a failed write counts nothing: no
+// durable record, no verdict).
 func (r *Runner) recordVerdict(headHash string, rec AuditRecord) error {
+	rec = boundRecord(rec)
 	if err := r.status.Put(headHash, rec); err != nil {
 		return err
 	}
@@ -459,7 +453,7 @@ func (r *Runner) recordIndeterminate(headHash, notation string) error {
 		Scope:     AuditScope{LinearChain: true},
 		AuditedAt: r.now(),
 	}); err != nil {
-		r.logger.Printf("auditor: %s: record indeterminate: %v", headHash, err)
+		r.logger.Printf("auditor: %s: record indeterminate: %s", headHash, netexcerpt.ErrorText(err))
 		return err
 	}
 	return nil
@@ -478,7 +472,7 @@ func (r *Runner) recordIndeterminate(headHash, notation string) error {
 func (r *Runner) bumpOrDrop(c AuditCandidate, reason string, unresolvable bool) {
 	if c.Attempts+1 >= r.cfg.MaxAttempts {
 		if err := r.markAbandoned(c.HeadHash, reason, unresolvable); err != nil {
-			r.logger.Printf("auditor: %s: mark abandoned: %v", c.HeadHash, err)
+			r.logger.Printf("auditor: %s: mark abandoned: %s", c.HeadHash, netexcerpt.ErrorText(err))
 			return // keep queued, retry next tick (the marker must not be lost)
 		}
 		r.logger.Printf("auditor: dropping %s: exhausted %d audit attempts (%s)", c.HeadHash, r.cfg.MaxAttempts, reason)
@@ -486,7 +480,7 @@ func (r *Runner) bumpOrDrop(c AuditCandidate, reason string, unresolvable bool) 
 		return
 	}
 	if err := r.queue.IncrementAttempt(c.HeadHash); err != nil {
-		r.logger.Printf("auditor: %s: increment attempt: %v", c.HeadHash, err)
+		r.logger.Printf("auditor: %s: increment attempt: %s", c.HeadHash, netexcerpt.ErrorText(err))
 	}
 }
 
@@ -529,7 +523,7 @@ func (r *Runner) markAbandoned(headHash, reason string, unresolvable bool) error
 
 func (r *Runner) remove(headHash string) {
 	if err := r.queue.Remove(headHash); err != nil {
-		r.logger.Printf("auditor: %s: remove from queue: %v", headHash, err)
+		r.logger.Printf("auditor: %s: remove from queue: %s", headHash, netexcerpt.ErrorText(err))
 	}
 }
 

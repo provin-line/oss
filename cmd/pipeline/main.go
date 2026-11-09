@@ -41,6 +41,7 @@ import (
 
 	"github.com/provin-line/oss/hoconconfig"
 	"github.com/provin-line/oss/internal/httpserve"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -201,7 +202,7 @@ func main() {
 
 	// Mirror shippers (D-T6): one per durable custody log, signed as that
 	// log's own checkpoint-signer identity.
-	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
+	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
 	if err != nil {
 		log.Fatalf("pipeline: %v", err)
@@ -214,12 +215,12 @@ func main() {
 	// health (P1 fix, branch review — every report used to hardcode
 	// healthy=true regardless of the producer's actual state; see
 	// emitHealthReporterSpecsFor's doc).
-	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient())
+	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
 	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 
 	mountIngest := func(mux *http.ServeMux) error {
-		return mountPushRoutes(mux, dp.PushBindings(), verifier, pipeCfg.MaxPushBodySize)
+		return mountPushRoutes(mux, dp.PushBindings(), verifier)
 	}
 	var natsHealthy func() bool
 	if dp.Conn() != nil {
@@ -241,7 +242,7 @@ func main() {
 		log.Printf("pipeline: metrics exposition mounted at /metrics")
 	}
 
-	maxHTTPRequestBytes := outerRequestCapBytes(pipeCfg.MaxPushBodySize)
+	maxHTTPRequestBytes := outerRequestCapBytes(rtCfg.MaxIngestPayloadSize)
 	srv, listen, mode, err := httpserve.BuildServer(coreCfg, tlsConf, handler, maxHTTPRequestBytes)
 	if err != nil {
 		log.Fatalf("pipeline: build server: %v", err)

@@ -6,6 +6,18 @@
 // The contract is transport-agnostic and VC-implementation-agnostic: it
 // depends on vc types only — never on a broker client, never on
 // generated proto code.
+//
+// A part's errors. A part plugged into the pipeline (a value one of the
+// pipeline's interfaces, configs or constructors takes from its caller)
+// returns errors whose methods that fmt calls to write them (Error, and Format
+// if they have one) and that errors.Is and errors.As call (Unwrap, Is, As)
+// return without a panic, also for a nil pointer they may be. The pipeline
+// takes the text of such an error through package excerpt where it writes
+// one into a result, a record, a reason or a log line, and wraps one with
+// fmt.Errorf's %w as it is. fmt recovers an ordinary panic of Error and
+// Format; a panic whose value it cannot write either, a panic of Unwrap, Is
+// or As, or a method that does not return can make a step panic or not
+// return.
 package contract
 
 import (
@@ -160,6 +172,8 @@ type Result struct {
 // window aggregation) implement Process directly and never pass through an
 // EventProcessor. First-stage push ingestion is event-triggered in this sense —
 // the external push is the event.
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type EventProcessor interface {
 	Process(ctx context.Context, input []byte) (*Result, error)
 }
@@ -172,6 +186,8 @@ type EventProcessor interface {
 // terminating consumer). A Custom Process with several output sides
 // composes one Process per side — which processes a binary hosts is
 // decided by their signing paths, never by packaging.
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type Process interface {
 	// Run consumes and processes events until ctx is cancelled, then drains
 	// gracefully.
@@ -250,6 +266,12 @@ type Envelope struct {
 // EnvelopeCodec marshals envelopes to and from their wire form. The concrete
 // wire encoding is pinned at the proto layer; processes and external
 // adapters depend only on this interface.
+//
+// What a process hands UnmarshalEnvelope is a message as the transport
+// delivered it, with no bound that holds regardless of the messaging backend: an
+// implementation bounds what it decodes (envelopecodec does, by its Limits).
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type EnvelopeCodec interface {
 	MarshalEnvelope(e *Envelope) ([]byte, error)
 	UnmarshalEnvelope(data []byte) (*Envelope, error)
@@ -290,6 +312,8 @@ type ProcessEvent struct {
 // ProcessObserver is notified after each processed event. Observation is
 // fire-and-forget: failures are logged by the caller, never propagated into
 // the processing path.
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type ProcessObserver interface {
 	OnProcessComplete(ctx context.Context, ev ProcessEvent) error
 }
@@ -304,6 +328,8 @@ type ProcessObserver interface {
 // The upstreamEndpoint names where the upstream credential can later be
 // fetched from (the publisher's serving boundary): in-org it comes from
 // ingress wiring config, cross-org from the subscription record.
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type IngressVCStore interface {
 	StoreIngressVC(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) error
 }

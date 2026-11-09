@@ -240,3 +240,69 @@ func TestAllowListStore_CorruptIsError(t *testing.T) {
 		t.Errorf("Get on a corrupt file returned rules %+v, want none", got)
 	}
 }
+
+// unfaithful are values YAML reads back as something else, or not at all.
+var unfaithful = map[string]map[string]string{
+	"tab in a key":        {"sub\tject": "x"},
+	"newline in a key":    {"a\nb": "x"},
+	"merge key":           {"<<": "x"},
+	"question-mark key":   {"? a": "x"},
+	"invalid UTF-8 key":   {"a\xff": "x"},
+	"invalid UTF-8 value": {"subject": "a\xffb"},
+	"tab in a value":      {"subject": "a\tb"},
+	"leading tab":         {"subject": "\ta"},
+	"CR in a value":       {"subject": "a\rb"},
+	"nan":                 {"subject": ".nan"},
+	"trailing spaces":     {"subject": "x    \n"},
+}
+
+// A subscription YAML would not read back as written is refused, so the store
+// never holds one that changes or fails when read: a later List still works.
+func TestSubscriptionStore_RefusesARecordThatWouldNotReadBackAsWritten(t *testing.T) {
+	for name, info := range unfaithful {
+		s := NewSubscriptionStore(t.TempDir())
+		sub := sampleSub()
+		sub.ConnectionInfo = info
+		if err := s.Save(sub); err == nil {
+			t.Errorf("%s: Save: want error", name)
+		}
+		if subs, err := s.List(); err != nil || len(subs) != 0 {
+			t.Errorf("%s: List after the refusal = %v, %v; want none, nil", name, subs, err)
+		}
+	}
+}
+
+// Values YAML reads back as written are stored as before.
+func TestSubscriptionStore_StoresWhatReadsBackAsWritten(t *testing.T) {
+	for _, info := range []map[string]string{
+		{"subject": "~"}, {"subject": "null"}, {"subject": " lead"}, {"subject": "trail "},
+		{"subject": "#c"}, {"subject": "*a"}, {"- a": "x"}, {"a: b": "x"}, {"": "x"},
+		{"subject": " "}, {"subject": "a\nb"},
+	} {
+		s := NewSubscriptionStore(t.TempDir())
+		sub := sampleSub()
+		sub.ConnectionInfo = info
+		if err := s.Save(sub); err != nil {
+			t.Errorf("%q: Save: %v", info, err)
+			continue
+		}
+		got, err := s.Get(sub.ID)
+		if err != nil || len(got.ConnectionInfo) != len(info) {
+			t.Errorf("%q: Get = %v, %v", info, got, err)
+			continue
+		}
+		for k, v := range info {
+			if got.ConnectionInfo[k] != v {
+				t.Errorf("%q: read back %q", info, got.ConnectionInfo)
+			}
+		}
+	}
+}
+
+// The allow list is held to the same rule.
+func TestAllowListStore_RefusesARuleThatWouldNotReadBackAsWritten(t *testing.T) {
+	s := NewAllowListStore(t.TempDir())
+	if err := s.Save("did:dplaax:reg:org:acme:pipeline:p1", []store.AllowRule{{Pattern: "a\tb"}}); err == nil {
+		t.Error("pattern with a tab: want error")
+	}
+}

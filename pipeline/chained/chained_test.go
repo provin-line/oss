@@ -25,6 +25,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // compile-time: *Processor must implement contract.EventProcessor.
 var _ contract.EventProcessor = (*chained.Processor)(nil)
 
@@ -194,7 +204,7 @@ func newIngressCred(t *testing.T, payload []byte) *vc.PipelinePassCredential {
 // encodeEnvelope marshals credential+payload using the real codec.
 func encodeEnvelope(t *testing.T, cred *vc.PipelinePassCredential, payload []byte) []byte {
 	t.Helper()
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: cred,
 		Payload:    payload,
 		SequenceNo: 1,
@@ -235,7 +245,7 @@ func baseAdjacentConfig(v *fakeVerifier, s *fakeStore, sig *fakeSigner) chained.
 		Strategy:          contract.VerificationAdjacent,
 		IngressConformant: true,
 		UpstreamEndpoint:  "https://example.com/upstream",
-		Codec:             envelopecodec.New(),
+		Codec:             testCodec(),
 		Verifier:          v,
 		Store:             s,
 		Signer:            sig,
@@ -247,7 +257,7 @@ func baseAdjacentConfig(v *fakeVerifier, s *fakeStore, sig *fakeSigner) chained.
 // ---------------------------------------------------------------------------
 
 func TestNew_Validation(t *testing.T) {
-	codec := envelopecodec.New()
+	codec := testCodec()
 	verifier := &fakeVerifier{result: verifiedResult()}
 	store := &fakeStore{}
 	signer := &fakeSigner{}
@@ -568,7 +578,7 @@ func TestProcess_CallOrder(t *testing.T) {
 		Strategy:          contract.VerificationAdjacent,
 		IngressConformant: true,
 		UpstreamEndpoint:  "https://example.com/upstream",
-		Codec:             envelopecodec.New(),
+		Codec:             testCodec(),
 		Verifier:          logVerifier,
 		Store:             logStore,
 		Signer:            logSigner,

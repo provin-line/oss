@@ -1,17 +1,18 @@
 package tlog_test
 
 import (
+	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/provin-line/oss/tlog"
+	"github.com/provin-line/oss/tlog/internal/rfc6962"
 )
 
 // SignedView is the byte contract every checkpoint signature covers — pinned
-// here against hand-built goldens (JCS key order is alphabetical). Two
-// timestamps are pinned: UTC and a zoned offset — the view does NOT
-// normalize to UTC, and a UTC-only golden could not detect an accidental
-// normalization creeping in.
+// here against a hand-built golden (JCS key order is alphabetical). The
+// timestamp is UTC to the second, its one spelling.
 func TestSignedViewGolden(t *testing.T) {
 	utc := &tlog.Checkpoint{
 		Origin:    "did:x:pipeline:p",
@@ -29,15 +30,15 @@ func TestSignedViewGolden(t *testing.T) {
 		t.Errorf("UTC view:\n got %s\nwant %s", got, wantUTC)
 	}
 
-	zoned := *utc
-	zoned.Timestamp = time.Date(2026, 7, 7, 18, 0, 0, 0, time.FixedZone("JST", 9*3600))
-	wantZoned := `{"head":"headhash","logId":"did:x:pipeline:p","purpose":"dplaax-tlog-checkpoint","signedBy":"did:x#signing","size":"42","timestamp":"2026-07-07T18:00:00+09:00","v":1}`
-	got, err = zoned.SignedView()
+	// An offset of zero in another location is the same instant, spelled Z.
+	zero := *utc
+	zero.Timestamp = utc.Timestamp.In(time.FixedZone("UTC0", 0))
+	got, err = zero.SignedView()
 	if err != nil {
-		t.Fatalf("SignedView(zoned): %v", err)
+		t.Fatalf("SignedView(zero offset): %v", err)
 	}
-	if string(got) != wantZoned {
-		t.Errorf("zoned view (must NOT be normalized to UTC):\n got %s\nwant %s", got, wantZoned)
+	if string(got) != wantUTC {
+		t.Errorf("zero-offset view:\n got %s\nwant %s", got, wantUTC)
 	}
 }
 
@@ -120,5 +121,91 @@ func TestVerifyInclusionRejectionRules(t *testing.T) {
 		if err := tlog.VerifyInclusion(tc.cp, tc.proof, []byte{}); err == nil {
 			t.Errorf("%s: want error", name)
 		}
+	}
+}
+
+// A checkpoint has one spelling of what it signs: its head is in lower case,
+// and its timestamp is UTC to the second, as the signed view writes it.
+// Anything else is refused, not re-spelled.
+func TestSignedView_RefusesAHeadOrTimestampNotInItsOneSpelling(t *testing.T) {
+	base := tlog.Checkpoint{Origin: "log", Size: 1, Head: "ab12", Timestamp: time.Date(2026, 7, 7, 9, 0, 0, 0, time.UTC), SignedBy: "did:x#s"}
+	if _, err := base.SignedView(); err != nil {
+		t.Fatalf("lower-case head, UTC whole seconds: %v", err)
+	}
+	for name, set := range map[string]func(*tlog.Checkpoint){
+		"head in upper case":     func(c *tlog.Checkpoint) { c.Head = "AB12" },
+		"a fraction of a second": func(c *tlog.Checkpoint) { c.Timestamp = c.Timestamp.Add(500 * time.Millisecond) },
+		"another offset": func(c *tlog.Checkpoint) {
+			c.Timestamp = time.Date(2026, 7, 7, 18, 0, 0, 0, time.FixedZone("JST", 9*3600))
+		},
+		"an offset with seconds":       func(c *tlog.Checkpoint) { c.Timestamp = c.Timestamp.In(time.FixedZone("", 30)) },
+		"a year RFC 3339 cannot write": func(c *tlog.Checkpoint) { c.Timestamp = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) },
+		"a year before zero":           func(c *tlog.Checkpoint) { c.Timestamp = time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC) },
+	} {
+		c := base
+		set(&c)
+		if _, err := c.SignedView(); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	signer := &tlog.CheckpointSigner{LogID: "log", VerificationMethod: "did:x#s"}
+	if _, err := tlog.SignCheckpoint(1, "ab12", signer, time.Date(2026, 7, 7, 18, 0, 0, 0, time.FixedZone("JST", 9*3600))); err == nil {
+		t.Error("SignCheckpoint at a time not in UTC: want error")
+	}
+}
+
+// merkle builds a tree of n leaves and returns its leaf hashes.
+func merkle(n int) [][rfc6962.HashSize]byte {
+	leaves := make([][rfc6962.HashSize]byte, n)
+	for i := range leaves {
+		leaves[i] = rfc6962.LeafHash([]byte{byte(i)})
+	}
+	return leaves
+}
+
+func path(p [][rfc6962.HashSize]byte) [][]byte {
+	out := make([][]byte, len(p))
+	for i := range p {
+		out[i] = p[i][:]
+	}
+	return out
+}
+
+// Consistency compares heads in their one spelling: under a valid proof, a
+// head in upper case is refused, so one root is not equal as bytes and
+// unequal as text.
+func TestVerifyConsistency_RefusesAHeadNotInLowerCase(t *testing.T) {
+	leaves := merkle(3)
+	oldRoot, newRoot := rfc6962.Root(leaves[:2]), rfc6962.Root(leaves)
+	older := &tlog.Checkpoint{Origin: "a", Size: 2, Head: hex.EncodeToString(oldRoot[:])}
+	newer := &tlog.Checkpoint{Origin: "a", Size: 3, Head: hex.EncodeToString(newRoot[:])}
+	proof := &tlog.ConsistencyProof{OldSize: 2, NewSize: 3, Path: path(rfc6962.ConsistencyPath(leaves, 2))}
+	if err := tlog.VerifyConsistency(older, newer, proof); err != nil {
+		t.Fatalf("lower-case heads: %v", err)
+	}
+	upperOld, upperNew := *older, *newer
+	upperOld.Head = strings.ToUpper(older.Head)
+	upperNew.Head = strings.ToUpper(newer.Head)
+	if err := tlog.VerifyConsistency(&upperOld, newer, proof); err == nil {
+		t.Error("older head in upper case: want error")
+	}
+	if err := tlog.VerifyConsistency(older, &upperNew, proof); err == nil {
+		t.Error("newer head in upper case: want error")
+	}
+}
+
+// Inclusion reads the head in its one spelling too.
+func TestVerifyInclusion_RefusesAHeadNotInLowerCase(t *testing.T) {
+	leaves := merkle(3)
+	root := rfc6962.Root(leaves)
+	cp := &tlog.Checkpoint{Origin: "a", Size: 3, Head: hex.EncodeToString(root[:])}
+	proof := &tlog.InclusionProof{LeafIndex: 1, TreeSize: 3, Path: path(rfc6962.InclusionPath(leaves, 1))}
+	if err := tlog.VerifyInclusion(cp, proof, []byte{1}); err != nil {
+		t.Fatalf("lower-case head: %v", err)
+	}
+	upper := *cp
+	upper.Head = strings.ToUpper(cp.Head)
+	if err := tlog.VerifyInclusion(&upper, proof, []byte{1}); err == nil {
+		t.Error("head in upper case: want error")
 	}
 }

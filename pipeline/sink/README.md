@@ -93,6 +93,37 @@ boundary ID. Partial or unversioned configuration is a boot error. The shipped
 profile rejects console output; embedders may inject a dedicated Agent writer
 and must evaluate that writer's authentication and persistence separately.
 
+**Delivery decision record.** Every delivery decision of this path is given to
+the decision recorder (`decisionrecord`; the keys are `provin.decision-record.*`,
+on by default — `level = none` writes nothing, though a malformed record is
+still refused; `refusals` and `summary` keep less, by design). At `all`, no payload is delivered without its accepted record;
+records of refusals are best effort (a failure is logged, the refusal stands). An envelope that does not decode is recorded
+refused with check `decode`. The appraisal's decision is recorded first:
+accepted on `ACCEPT`, otherwise refused with check `appraisal` (the record's
+`appraisalDecision` attribute holds the appraisal's decision, `decisionProfile`
+the profile). A decision recorded as accepted that a later stage refuses is
+recorded again under the same `DecisionID` as refused, with the check equal to
+the reject reason of that stage (`verdict`, `allow-list`,
+`ingress-store-failure`, `malformed-credential`, `payload-fetch`,
+`payload-delivery-violation`, `binding-gate`, `appraisal`); a context
+cancellation before the write is refused with `cancelled`. A `Writer` error or
+cancellation is never recorded as a refusal, because the writer may have
+delivered before it failed: it is a further accepted record whose reason starts
+`write outcome unknown:`. If the accepted record cannot be written the
+delivery is rejected (reject reason `decision-record`) and nothing is stored or
+written. Records after the accepted one are best effort: if one cannot be
+written the accepted record stands, so the audit may show an acceptance that
+was not delivered, never a delivery without its acceptance. Records hold
+content addresses, never payload bytes: the `evidenceView` address, and the
+`payload` address on the write-outcome record. The sink is constructed with a
+`DecisionRecorder`; without one an `Appraiser` sink fails closed at
+construction.
+
+The `jsonl` output writes each line to the OS without `fsync` (the same posture
+as `file/`), grows without bound (rotate with copytruncate or a restart), and
+`O_CREATE` with mode 0600 does not change the mode of an existing file. If the
+file ends mid-line at startup, a newline is written first.
+
 The current selection policy is `projected-chain@1`: resolve each predecessor
 body address to the local or explicitly declared upstream registry's projected
 signed variant, verify the complete selection once, and fix every

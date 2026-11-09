@@ -102,14 +102,15 @@ func TestNew_Validation(t *testing.T) {
 		},
 		{
 			name:    "valid minimal config accepted",
-			cfg:     ingest.Config{Signer: signer},
+			cfg:     ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer},
 			wantErr: false,
 		},
 		{
 			name: "valid with observers accepted",
 			cfg: ingest.Config{
-				Signer:    signer,
-				Observers: []contract.ProcessObserver{&fakeObserver{}},
+				MaxPayloadSize: 1 << 20,
+				Signer:         signer,
+				Observers:      []contract.ProcessObserver{&fakeObserver{}},
 			},
 			wantErr: false,
 		},
@@ -131,7 +132,7 @@ func TestNew_Validation(t *testing.T) {
 
 // nil Logger and nil Now must default without panicking.
 func TestNew_NilLoggerAndNowDefault(t *testing.T) {
-	p, err := ingest.New(ingest.Config{Signer: &fakeSourceSigner{}})
+	p, err := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: &fakeSourceSigner{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -156,8 +157,9 @@ func TestProcess_HappyPath(t *testing.T) {
 	obs := &fakeObserver{}
 
 	p, err := ingest.New(ingest.Config{
-		Signer:    signer,
-		Observers: []contract.ProcessObserver{obs},
+		MaxPayloadSize: 1 << 20,
+		Signer:         signer,
+		Observers:      []contract.ProcessObserver{obs},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -232,7 +234,7 @@ func TestProcess_HappyPath(t *testing.T) {
 // The issued credential is a FirstDrop: no previousCredential (chain origin).
 func TestProcess_IssuesFirstDrop(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"x":1}`))
 	if goErr != nil {
@@ -252,7 +254,7 @@ func TestProcess_IssuesFirstDrop(t *testing.T) {
 func TestProcess_JSONArrayInput_Passes(t *testing.T) {
 	input := []byte(`[1,2,3]`)
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), input)
 	if goErr != nil {
@@ -279,8 +281,9 @@ func TestProcess_EmptyInput_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{}
 	obs := &fakeObserver{}
 	p, _ := ingest.New(ingest.Config{
-		Signer:    signer,
-		Observers: []contract.ProcessObserver{obs},
+		MaxPayloadSize: 1 << 20,
+		Signer:         signer,
+		Observers:      []contract.ProcessObserver{obs},
 	})
 
 	result, goErr := p.Process(context.Background(), []byte{})
@@ -301,7 +304,7 @@ func TestProcess_EmptyInput_Errored(t *testing.T) {
 
 func TestProcess_NilInput_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), nil)
 	if goErr != nil {
@@ -318,7 +321,7 @@ func TestProcess_NilInput_Errored(t *testing.T) {
 
 func TestProcess_DuplicateKeyInput_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"a":1,"a":2}`))
 	if goErr != nil {
@@ -334,7 +337,7 @@ func TestProcess_DuplicateKeyInput_Errored(t *testing.T) {
 
 func TestProcess_TrailingDataInput_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"a":1} {"b":2}`))
 	if goErr != nil {
@@ -350,7 +353,7 @@ func TestProcess_TrailingDataInput_Errored(t *testing.T) {
 
 func TestProcess_NotJSONInput_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`not json at all`))
 	if goErr != nil {
@@ -367,7 +370,7 @@ func TestProcess_NotJSONInput_Errored(t *testing.T) {
 
 func TestProcess_SignerFails_Errored(t *testing.T) {
 	signer := &fakeSourceSigner{returnErr: errors.New("signing key unavailable")}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"x":1}`))
 	if goErr != nil {
@@ -387,7 +390,7 @@ func TestProcess_CtxCancelled_GoError(t *testing.T) {
 	cancel() // cancelled before Process is called
 
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(ctx, []byte(`{"x":1}`))
 	if !errors.Is(goErr, context.Canceled) {
@@ -405,7 +408,7 @@ func TestProcess_CtxCancelled_GoError(t *testing.T) {
 // Go error (not a StatusErrored domain failure) so the transport loop drains.
 func TestProcess_SignerCancellation_PropagatesGoError(t *testing.T) {
 	signer := &fakeSourceSigner{returnErr: context.Canceled}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"x":1}`))
 	if !errors.Is(goErr, context.Canceled) {
@@ -426,8 +429,9 @@ func TestProcess_ObserverError_DoesNotPropagate(t *testing.T) {
 	obs2 := &fakeObserver{}
 
 	p, _ := ingest.New(ingest.Config{
-		Signer:    signer,
-		Observers: []contract.ProcessObserver{obs1, obs2},
+		MaxPayloadSize: 1 << 20,
+		Signer:         signer,
+		Observers:      []contract.ProcessObserver{obs1, obs2},
 	})
 
 	result, goErr := p.Process(context.Background(), []byte(`{"x":1}`))
@@ -453,9 +457,10 @@ func TestProcess_ProcessEventFields_Passed(t *testing.T) {
 	fixedTime := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
 
 	p, _ := ingest.New(ingest.Config{
-		Signer:    signer,
-		Observers: []contract.ProcessObserver{obs},
-		Now:       func() time.Time { return fixedTime },
+		MaxPayloadSize: 1 << 20,
+		Signer:         signer,
+		Observers:      []contract.ProcessObserver{obs},
+		Now:            func() time.Time { return fixedTime },
 	})
 
 	_, _ = p.Process(context.Background(), input)
@@ -491,7 +496,7 @@ func TestProcess_ProcessEventFields_Passed(t *testing.T) {
 
 func TestProcess_HashFormat(t *testing.T) {
 	signer := &fakeSourceSigner{}
-	p, _ := ingest.New(ingest.Config{Signer: signer})
+	p, _ := ingest.New(ingest.Config{MaxPayloadSize: 1 << 20, Signer: signer})
 
 	_, _ = p.Process(context.Background(), []byte(`{"x":1}`))
 

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // fakeRetainer records payloads it is asked to retain and whether a publish had
@@ -43,7 +42,7 @@ func (r *fakeRetainer) Retain(_ context.Context, payload []byte) (string, error)
 func TestEmitter_Retain_BeforePublish(t *testing.T) {
 	pub := &fakePublisher{}
 	ret := &fakeRetainer{pub: pub}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -68,7 +67,7 @@ func TestEmitter_Retain_BeforePublish(t *testing.T) {
 func TestEmitter_Retain_FailClosed(t *testing.T) {
 	pub := &fakePublisher{}
 	ret := &fakeRetainer{pub: pub, err: errors.New("store down")}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -100,7 +99,7 @@ func TestEmitter_Retain_BindingGate(t *testing.T) {
 	// credential's outputHash (equivalently, emitting bytes the credential does
 	// not describe).
 	ret := &fakeRetainer{pub: pub, forceHash: "sha256:" + hex.EncodeToString(make([]byte, 32))}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil, transport.WithPayloadRetainer(ret))
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}
@@ -118,7 +117,7 @@ func TestEmitter_Retain_BindingGate(t *testing.T) {
 // publish as before).
 func TestEmitter_NoRetainer_Unchanged(t *testing.T) {
 	pub := &fakePublisher{}
-	e, err := transport.NewEmitter(context.Background(), pub, envelopecodec.New(), &fakeTlog{}, nil)
+	e, err := transport.NewEmitter(context.Background(), pub, testCodec(), &fakeTlog{}, nil)
 	if err != nil {
 		t.Fatalf("NewEmitter: %v", err)
 	}

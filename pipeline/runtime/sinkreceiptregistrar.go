@@ -39,6 +39,8 @@ var _ sink.ReceiptIssuer = (*sinkReceiptRegistrar)(nil)
 // buildSinkReceiptRegistrar's loop-config-driven log construction. Exported
 // for composition-level tests that arm a receipt registrar by hand (e.g. over
 // an in-memory log) outside Build's own assembly path.
+//
+// receiptLog's errors keep the rule for a part's errors in package contract's doc.
 func NewSinkReceiptRegistrar(signer provenance.ChainedSigner, local IngressStorer, receiptLog tlog.Log, audit AuditRegistrar, publisher CredentialPublisher) sink.ReceiptIssuer {
 	return &sinkReceiptRegistrar{signer: signer, local: local, receiptLog: receiptLog, audit: audit, publisher: publisher}
 }

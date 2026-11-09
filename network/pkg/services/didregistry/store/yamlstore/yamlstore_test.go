@@ -2,8 +2,13 @@ package yamlstore_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -358,5 +363,43 @@ func TestSaveShapeGuards(t *testing.T) {
 	}
 	if err := s.SavePipeline(owner, doc(ownerDID, ownerDID), sampleDelegation(ownerDID)); err == nil {
 		t.Error("SavePipeline with an owner DID: want error")
+	}
+}
+
+// An event YAML would not read back as written is refused, so a later read of
+// the log still works; the outward snapshot is written as one base64 string.
+func TestAppendLifecycleEvent_RefusesWhatWouldNotReadBackAsWritten(t *testing.T) {
+	root := t.TempDir()
+	s := yamlstore.New(root)
+	d := mustParse(t, ownerDID)
+	if err := s.SaveOwner(d, doc(ownerDID, ownerDID)); err != nil {
+		t.Fatal(err)
+	}
+	bad := store.LifecycleEvent{
+		EventType: "register", DIDDocSnapshot: "sha256:aaa", WitnessSource: "self\tasserted",
+		WitnessedAt: time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC),
+	}
+	if err := s.AppendLifecycleEvent(d, bad); err == nil {
+		t.Error("witness source with a tab: want error")
+	}
+	good := bad
+	good.WitnessSource = "self-asserted"
+	good.OutwardSnapshot = bytes.Repeat([]byte{0, 0xff, 'x'}, 1000)
+	if err := s.AppendLifecycleEvent(d, good); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	evs, err := s.ReadLifecycleLog(d)
+	if err != nil || len(evs) != 1 || !bytes.Equal(evs[0].OutwardSnapshot, good.OutwardSnapshot) {
+		t.Fatalf("ReadLifecycleLog = %d events, %v", len(evs), err)
+	}
+	var raw []byte
+	_ = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err == nil && !e.IsDir() && strings.Contains(p, "lifecycle") {
+			raw, _ = os.ReadFile(p)
+		}
+		return nil
+	})
+	if want := "outwardSnapshot: " + base64.StdEncoding.EncodeToString(good.OutwardSnapshot) + "\n"; !bytes.Contains(raw, []byte(want)) {
+		t.Errorf("outward snapshot not written as one base64 string:\n%.300s", raw)
 	}
 }

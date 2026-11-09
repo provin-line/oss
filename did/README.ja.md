@@ -17,4 +17,6 @@ method 横断の identity — did:dplaax の Owner と `did:web` 等の対外 id
 ## 規約
 
 - **DID Document からの公開鍵抽出はここで一元管理する。** consumer が独自コピーを持つことはない（前身コードベースで知られた drift 源）。
+- **鍵の参照の書き方は 1 つ。** `AbsoluteKeyID` は `#fragment` か `<subject>#fragment`（`#` は 1 つ、fragment は `[A-Za-z0-9._-]`）だけを読み、ほかは `ErrInvalidKeyReference` で断る。この package と外の URL の読み手が同じ鍵を指す。method は、型の鍵の欄を 1 つだけ持つ。
+- **Ed25519 の鍵は、読むときと書くときに確かめる。** `ExtractPublicKey`（と `ExtractPublicKeyAndEncoding`）は、`crypto/ed25519.ValidatePublicKey` が断る鍵（長さの違い、位数の小さい点、曲線の外、点の正規でない書き方）を、`ErrInvalidPublicKey` とその関数の sentinel を包んだ error で断る。JWK の `x` は、鍵の正規の書き方（padding のない base64url）でなければならない。`EncodeEd25519Multikey` と `NewMultikeyVerificationMethod` も同じ鍵を断るので、どの読み手も受け付けない鍵を発行で公開することはない。
 - **dispatch は fail-closed。** `MethodOf` は `did:` + 小文字 `[a-z0-9]` の method 名 + 非空 method-specific id 以外をすべて拒否する。未検証の method 名で routing するのはバグである。

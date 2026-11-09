@@ -66,8 +66,11 @@ type Checkpoint struct {
 	Origin string
 	Size   uint64
 	// Head is the commitment value: the chain head hash (hash-chain
-	// implementations) or the Merkle root (tree implementations).
-	Head      string
+	// implementations) or the Merkle root (tree implementations), in
+	// lower-case hex.
+	Head string
+	// Timestamp is when the checkpoint was signed, in UTC to the second (see
+	// SignedView).
 	Timestamp time.Time
 	// SignedBy is the verification method DID URL of the signing key.
 	SignedBy  string

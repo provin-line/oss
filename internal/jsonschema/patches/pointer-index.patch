@@ -1,0 +1,88 @@
+pointer index: a JSON pointer reads an array index only as RFC 6901 §4
+writes one ("0", or digits not beginning with "0"). v6.0.3 reads it with
+strconv.Atoi, so "00", "+0" and "-0" each reach the first item, against
+RFC 6901. This fixes the library's conformance to RFC 6901 and is a
+candidate to offer upstream.
+
+diff --git a/compile_test.go b/compile_test.go
+index 6c7aa54..a222806 100644
+--- a/compile_test.go
++++ b/compile_test.go
+@@ -63,3 +63,40 @@ func TestCompileWithBudget_ChecksTheSchemaWithinItsBudget(t *testing.T) {
+ 		t.Errorf("Compile, without a budget: %v", err)
+ 	}
+ }
++
++func compileString(t *testing.T, schema string) (*jsonschema.Schema, error) {
++	t.Helper()
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	if err := c.AddResource("schema.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	return c.Compile("schema.json")
++}
++
++// A JSON pointer reads an array index only as RFC 6901 §4 writes one, "0"
++// or digits not beginning with 0, so an item has one pointer: read as a
++// number, "00", "+0" and "-0" would each reach the first item, and a
++// reference by each would compile its subtree again.
++func TestCompile_ReadsAnArrayIndexAsRFC6901WritesIt(t *testing.T) {
++	for index, found := range map[string]bool{
++		"0": true, "1": true, "10": true,
++		"00": false, "01": false, "+0": false, "-0": false, "+1": false, " 1": false, "1 ": false,
++	} {
++		items := make([]string, 11)
++		for i := range items {
++			items[i] = `{"type":"string"}`
++		}
++		_, err := compileString(t, `{"anyOf":[{"$ref":"#/allOf/`+index+`"}],"allOf":[`+strings.Join(items, ",")+`]}`)
++		var notFound *jsonschema.JSONPointerNotFoundError
++		if found && err != nil {
++			t.Errorf("%q: %v", index, err)
++		}
++		if !found && !errors.As(err, &notFound) {
++			t.Errorf("%q: %v, want a JSONPointerNotFoundError", index, err)
++		}
++	}
++}
+diff --git a/util.go b/util.go
+index 138dd87..61395b0 100644
+--- a/util.go
++++ b/util.go
+@@ -231,7 +231,7 @@ func (up *urlPtr) lookup(v any) (any, error) {
+ 				continue
+ 			}
+ 		case []any:
+-			if index, err := strconv.Atoi(tok); err == nil {
++			if index, ok := arrayIndex(tok); ok { // pointer index
+ 				if index >= 0 && index < len(val) {
+ 					v = val[index]
+ 					continue
+@@ -243,6 +243,23 @@ func (up *urlPtr) lookup(v any) (any, error) {
+ 	return v, nil
+ }
+ 
++// arrayIndex reads an array index as RFC 6901 §4 writes one: "0", or
++// digits not beginning with 0. Read as a number, "00", "+0" and "-0" would
++// each reach the first item, so one item would have many pointers and a
++// reference by each would compile its subtree again.
++func arrayIndex(tok string) (int, bool) { // pointer index
++	if tok == "" || (tok[0] == '0' && len(tok) > 1) { // pointer index
++		return 0, false // pointer index
++	} // pointer index
++	for i := 0; i < len(tok); i++ { // pointer index
++		if tok[i] < '0' || tok[i] > '9' { // pointer index
++			return 0, false // pointer index
++		} // pointer index
++	} // pointer index
++	index, err := strconv.Atoi(tok) // pointer index
++	return index, err == nil        // pointer index
++} // pointer index
++
+ func (up *urlPtr) format(tok string) string {
+ 	return fmt.Sprintf("%s#%s/%s", up.url, encode(string(up.ptr)), encode(escape(tok)))
+ }

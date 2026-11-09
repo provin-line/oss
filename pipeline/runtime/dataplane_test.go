@@ -19,6 +19,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
@@ -31,6 +32,16 @@ import (
 	"github.com/provin-line/oss/tlog/memlog"
 	"github.com/provin-line/oss/vc"
 )
+
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
 
 // fakeVCStore is a minimal IngressStorer test double: it derives a
 // deterministic body address (sha256 of the credential bytes) and does no
@@ -134,7 +145,7 @@ func dpKeyStore(t *testing.T) keystore.KeyStore {
 }
 
 func dpPipelineCfg() *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "src",
 		Role:           RoleSource,
 		IngressSubject: dpIngress,
@@ -201,7 +212,7 @@ loop:
 		}
 	}
 
-	env, err := envelopecodec.New().UnmarshalEnvelope(wire)
+	env, err := testCodec().UnmarshalEnvelope(wire)
 	if err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
@@ -263,11 +274,11 @@ func TestDataPlane_FirstLoopErrorCancelsSiblings(t *testing.T) {
 	badLC.Name = "bad"
 	badLC.IngressSubject = "bad subject" // embedded space => nats ErrBadSubject at Subscribe
 
-	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, goodLC)
+	good, err := buildSourceLoop(conn.Subscriber(goodLC.IngressSubject), conn, testCodec(), 1<<20, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, goodLC)
 	if err != nil {
 		t.Fatalf("build good loop: %v", err)
 	}
-	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
+	bad, err := buildSourceLoop(conn.Subscriber(badLC.IngressSubject), conn, testCodec(), 1<<20, builder, nil, memlog.New(), vc.SchemaRef{}, payloadWiring{}, badLC)
 	if err != nil {
 		t.Fatalf("build bad loop: %v", err)
 	}
@@ -327,7 +338,7 @@ func (stubResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
 }
 
 func dpSinkCfg() *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "archive",
 		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,
@@ -364,9 +375,71 @@ func TestBuildDataPlane_SinkLoopAssembles(t *testing.T) {
 	}
 }
 
+func TestBuildDataPlane_AgentAccessRequiresDecisionRecord(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	cfg := dpSinkCfg()
+	cfg.Loops[0].Sink.Kind = SinkProduction
+	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
+	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
+		Enabled: true, BoundaryID: "provin-agent-delivery@1",
+		DecisionProfileID: "purpose-first-agent-access@1",
+		RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+	}
+	_, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
+		Resolver:      stubResolver{},
+		ChainResolver: stubChainResolver{},
+		SinkWriter:    console.New(io.Discard),
+		VCStore:       dpVCStore(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime.Config.DecisionRecord") || !strings.Contains(err.Error(), `loop "archive"`) {
+		t.Fatalf("zero DecisionRecord on a purpose-first sink: got %v", err)
+	}
+}
+
+type stubChainResolver struct{}
+
+func (stubChainResolver) ResolveCredential(context.Context, string) (*vc.PipelinePassCredential, error) {
+	return nil, fmt.Errorf("stub chain resolver")
+}
+
+func TestBuildDataPlane_AgentAccessRecordsToConfiguredFile(t *testing.T) {
+	url, accSeed := dpAccountServer(t)
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	cfg := dpSinkCfg()
+	cfg.DecisionRecord = DecisionRecordConfig{Level: decisionrecord.LevelAll, Output: DecisionRecordOutputJSONL, Path: path, SummaryWindow: time.Minute}
+	cfg.Loops[0].Sink.Kind = SinkProduction
+	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
+	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
+		Enabled: true, BoundaryID: "provin-agent-delivery@1",
+		DecisionProfileID: "purpose-first-agent-access@1",
+		RequiredScopes:    []string{"LINEAR_ATTESTATION@1"},
+	}
+	dp, err := Build(context.Background(), withNATS(url, accSeed, cfg), dpKeyStore(t), Deps{
+		Resolver:      stubResolver{},
+		ChainResolver: stubChainResolver{},
+		SinkWriter:    console.New(io.Discard),
+		VCStore:       dpVCStore(),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("decision record file: stat=%v err=%v, want a 0600 file", st, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dp.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := dp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestBuildDataPlane_AgentAccessRequiresChainResolver(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	cfg := dpSinkCfg()
+	cfg.DecisionRecord = DecisionRecordConfig{Level: decisionrecord.LevelAll, Output: DecisionRecordOutputLog, SummaryWindow: time.Minute}
 	cfg.Loops[0].Sink.Kind = SinkProduction
 	cfg.Loops[0].Sink.AllowIssuers = []string{"did:dplaax:reg:org:acme:*"}
 	cfg.Loops[0].Sink.AgentAccess = AgentAccessConfig{
@@ -472,7 +545,7 @@ func TestBuildDataPlane_MetricsBookkeepingDualEmitChainedAggregate(t *testing.T)
 	}
 
 	// Aggregate: the early-continue path appends exactly once, producer+consumer.
-	aggCfg := &Config{Loops: []LoopConfig{{
+	aggCfg := &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name: "agg",
 		Role: RoleAggregate,
 		Aggregate: AggregateConfig{
@@ -601,7 +674,7 @@ const (
 )
 
 func dpChainedCfg(converter string) *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "relay",
 		Role:           RoleChained,
 		IngressSubject: dpPipelineDID,
@@ -716,7 +789,7 @@ func dpArchivalSinkCfg() *Config {
 // ONLY in that identity — the axis the reject-log rekeying fix (Task 7) must
 // key storage on.
 func dpArchivalSinkCfgWithIssuer(issuerDID string) *Config {
-	return &Config{Loops: []LoopConfig{{
+	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "archive",
 		Role:           RoleSink,
 		IngressSubject: dpPipelineDID,

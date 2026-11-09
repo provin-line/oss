@@ -1,0 +1,23 @@
+diff --git a/compiler.go b/compiler.go
+index 31bf1b0..c2215d3 100644
+--- a/compiler.go
++++ b/compiler.go
+@@ -3,7 +3,6 @@ package jsonschema
+ import (
+ 	"fmt"
+ 	"regexp"
+-	"slices"
+ )
+ 
+ // Compiler compiles json schema into *Schema.
+@@ -223,8 +222,8 @@ func (c *Compiler) compileValue(v any, sch *Schema, r *root, q *queue) error {
+ 	// if resource, enqueue dynamic anchors for compilation
+ 	if sch.DraftVersion >= 2020 && sch.up == sch.resource.up {
+ 		res := r.resource(sch.up.ptr)
+-		for anchor, anchorPtr := range res.anchors {
+-			if slices.Contains(res.dynamicAnchors, anchor) {
++		for _, anchor := range res.dynamicAnchors { // dynamic anchor set: each dynamic anchor, found in the anchors, rather than each anchor searched for in the dynamic ones
++			if anchorPtr, ok := res.anchors[anchor]; ok { // dynamic anchor set
+ 				up := urlPtr{sch.up.url, anchorPtr}
+ 				danchorSch := c.enqueue(q, up)
+ 				if sch.dynamicAnchors == nil {

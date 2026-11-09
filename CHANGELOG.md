@@ -12,12 +12,677 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+This release fixes twelve security advisories and bounds what a node takes in
+before it checks a signature. It has breaking changes: read **Breaking
+changes** before upgrading.
+
+### Security
+
+- **`eddsa-rdfc-2022` proofs cover every value of a document**
+  ([GHSA-f2pv-v7jx-372m](https://github.com/provin-line/oss/security/advisories/GHSA-f2pv-v7jx-372m);
+  affects 0.2.0 to 0.3.0).
+  JSON-LD processing drops some values without an error, so a document could
+  carry values its proof did not cover. `canon/urdna2015` now counts a
+  document's values in the document, in its expanded form and in the dataset,
+  and refuses a document whose counts disagree. So that each value stays one
+  value at every stage, the RDFC path also refuses forms JSON-LD drops or
+  merges, among them blank node labels, `@set` and the framing keywords,
+  `@language` outside a value object, a language tag outside ASCII, the RDF
+  collection vocabulary written out, the same RDF term twice on one node's
+  property, a node object that adds no statement, a value object or an empty
+  object or array where JSON-LD keeps none, an array inside an array, a
+  member named `""` outside a context, and a context that sets `@base` or
+  defines a map container. Where
+  a program reads documents' own contexts (`WithLocalContexts`, under
+  Breaking changes), more context forms are refused, aliases of `@context`
+  and `@json` among them. `canon/urdna2015`'s package doc lists what is
+  refused, and by which stage. What is signed is the document's meaning:
+  spellings JSON-LD gives one RDF term are signed as that term, and a
+  property's values outside a list as a set. A document 0.3.0 accepted that
+  meets these keeps its canonical bytes; one that writes a value twice is now
+  refused, such as a self-issued credential whose issuer and subject, one id,
+  both carry the same `name`.
+  `eddsa-jcs-2022` is not affected.
+- **The `cedar` PDP backend authenticates the caller**
+  ([GHSA-f7pq-gwf9-m29h](https://github.com/provin-line/oss/security/advisories/GHSA-f7pq-gwf9-m29h);
+  affects 0.1.0 to 0.3.0).
+  0.3.0 gave the Cedar agent the raw bearer token as the principal, without
+  verifying it. The node now verifies the bearer as a JWT (a signature by the
+  configured key set or HS256 secret, `exp` and `nbf` with 30 s of leeway,
+  `iss`, an `aud` containing the configured audience, a non-empty `sub`), in
+  its one compact-JWS spelling, with its claims read under
+  `canon.StrictDecoder`'s rules, and gives the agent its `sub`. The
+  configuration it needs is under Breaking changes.
+- **A credential reaches only the parties its operator names**
+  ([GHSA-7gqg-xf9h-699j](https://github.com/provin-line/oss/security/advisories/GHSA-7gqg-xf9h-699j);
+  affects 0.1.0 to 0.3.0).
+  The batch resolver presented the node's L1 bearer (`vc-store-bearer`) to
+  every peer it fetched from, including endpoints others choose; it now
+  presents it only to the origins of the configured destinations and of the
+  new `pipeline.credential-origins`. `provin bundle export` showed `--token`
+  to every endpoint the exported chain's issuers advertise; it now shows it
+  only to `--registry`'s origin and to the new `--credential-origin` origins.
+  No call of the node, the pipeline or the CLI that carries a credential
+  follows a redirect. What to configure is under Breaking changes.
+- **A request that stops arriving no longer holds the node's HTTP server**
+  ([GHSA-94vw-4854-vgp3](https://github.com/provin-line/oss/security/advisories/GHSA-94vw-4854-vgp3);
+  affects 0.1.0 to 0.3.0).
+  Before any handler decides on a request, the server of both node binaries
+  (`internal/httpserve`):
+  - takes at most 64 KiB of headers (net/http's default is 1 MiB);
+  - drops a request whose body delivers nothing for 30 seconds (or, chunked on
+    HTTP/1, fewer than 16 KiB), or is not read to its end within 60 seconds of
+    the request's start. `RetainPayload`, the one client-streaming RPC, lifts
+    the 60-second bound once its caller has proven its DID in the first frame,
+    and keeps the stall bound;
+  - on HTTP/1, holds what net/http reads of a body itself, to discard what a
+    handler leaves of it, to the same 30 seconds, and after a failed read
+    reads the body no further and closes the connection after the answer;
+  - applies the outer request-size bound to HTTP/2 streams on the cleartext
+    (h2c) listener too;
+  - returns the error of a failed read or close of a body within 512 bytes of
+    UTF-8, wrapping the original (net/http quotes what it read in some).
+
+  The bound is on progress, not rate: a body sent at a steady pace and a
+  response streamed after the body are not cut. The deployment guide gives the
+  limits.
+- **A deeply nested document no longer crashes the process**
+  ([GHSA-rrqg-h838-mfjv](https://github.com/provin-line/oss/security/advisories/GHSA-rrqg-h838-mfjv);
+  affects 0.1.0 to 0.3.0).
+  `canon.StrictDecoder` refuses a document nested deeper than 10,000 arrays
+  and objects before walking it. Built with Go 1.26 or earlier, about a
+  megabyte of `[` overflowed the goroutine stack, a fatal error, before any
+  signature was checked. `encoding/json` refuses the same depth, so no
+  document that decoded is refused now. The refusal is a plain error naming
+  the limit, not a `*json.SyntaxError`.
+- **Checks made before a signature is checked take time linear in their
+  input**
+  ([GHSA-r57m-fpfp-vpr7](https://github.com/provin-line/oss/security/advisories/GHSA-r57m-fpfp-vpr7);
+  affects 0.1.0 to 0.3.0).
+  - `canon.AdmitSafeNumbers` reads each number in time linear in its length,
+    without `math/big` (a 9-byte literal such as `1e-999999` cost about
+    10 ms). Every RFC 8259 number keeps its verdict, but for the range under
+    Breaking changes; a `json.Number` that is not an RFC 8259 number, which
+    only a caller building one can pass, is refused.
+  - `canon.StrictDecoder` walks a document in time linear in its length (it
+    copied a value's path for each of its siblings: 823 KB nested 8,704 deep
+    took 8.5 s).
+  - `multibase.DecodeBase58Btc` refuses a value of more than 8,192 characters
+    after its prefix before decoding it (decoding costs the square of the
+    length: 700 KB took 7.8 s). 8,192 characters hold every byte string of up
+    to 5,998 bytes: every Ed25519, ECDSA and BLS key and signature, and
+    ML-DSA's, but not SLH-DSA's.
+  - `canon/urdna2015` canonicalizes within a work bound in each stage:
+    building the dataset, writing the canonical form, and labelling its blank
+    nodes, as RDFC-1.0 §4.4.3 requires (json-gold's labelling had no bound: 7
+    blank nodes no quad tells apart took 240 ms, each one more about 9 times
+    as long). A document past a bound is refused with the new
+    `urdna2015.ErrTooComplex`, which `errors.Is` finds through `vc`'s create
+    and verify functions. One property of one node holds at most about 1,460
+    distinct values. Ordinary credentials use at most 2% of the dataset's
+    bound, 3% of the canonical form's and less than half of the labelling's,
+    and every dataset within them keeps its canonical bytes. The package doc
+    states the bounds.
+- **Schema admission and payload validation are bounded**
+  ([GHSA-893p-p56r-f82x](https://github.com/provin-line/oss/security/advisories/GHSA-893p-p56r-f82x);
+  affects 0.1.0 to 0.3.0).
+  The JSON Schema library read every number as an exact rational (a megabyte
+  of large exponents could cost minutes, and a number it could not read made
+  validation panic or a schema bound disappear), compiled some shapes in time
+  far above linear, and ran any regular expression Go compiles. Now:
+  - a number longer than 256 bytes, or whose exponent part lies beyond ±400,
+    is refused before the library reads it;
+  - a schema is refused past bounds on its depth, its objects and its pointers
+    and URLs, or when its check against its metaschema needs more than a work
+    budget. It compiles in time about linear in its size; one of 1 MiB keeps
+    at most about 170 MB once compiled;
+  - a payload is validated within a work budget of 2^20 steps and 16 per byte
+    of the payload, nested at most 512 deep;
+  - a regular expression is accepted only in the forms ECMA-262 and Go's
+    regexp read alike (Unicode classes by general category only, groups
+    nested at most 32 deep), within 8,192 instructions, and a schema's
+    regular expressions together within 2^14 plus one per 4 bytes of the
+    schema; matching one is charged to the budget;
+  - an error states its first failure, within 1 KiB.
+
+  `schema` and `schema/local` do not bound a schema's or a payload's size:
+  their callers do, as the network's schema registration does at 1 MiB.
+  `schema/README.md` gives the bounds and what a schema and a validation cost
+  at worst. What is newly refused is under Breaking changes.
+- **A document no longer ends the program that canonicalizes it for
+  `eddsa-rdfc-2022`**
+  ([GHSA-5g26-3jj5-v85f](https://github.com/provin-line/oss/security/advisories/GHSA-5g26-3jj5-v85f);
+  affects 0.2.0 to 0.3.0).
+  json-gold, which `canon/urdna2015` uses for JSON-LD expansion and the
+  dataset, panics on some documents, before a proof's signature is checked.
+  `canon/urdna2015`, and with it `vc`, return such a panic as an error, its
+  text within 128 bytes; json-gold keeps no state between calls.
+  `eddsa-rdfc-2022` is also off until a program turns it on, and reads only
+  the contexts `vc` embeds (Breaking changes).
+- **RDFC's canonical N-Quads are one-to-one**
+  ([GHSA-445x-fhpg-78wj](https://github.com/provin-line/oss/security/advisories/GHSA-445x-fhpg-78wj);
+  affects 0.2.0 to 0.3.0).
+  `canon/urdna2015` refuses a document whose dataset holds an IRI that is not
+  valid UTF-8 or holds a character N-Quads' IRIREF excludes unescaped (a
+  space, `<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` `` or `\`); a literal that is
+  not valid UTF-8 or holds a character RDFC-1.0 (Appendix A) writes escaped
+  and URDNA2015 writes as it is (BS, FF, U+0000–U+0007, VT, U+000E–U+001F,
+  DEL, U+FFFE, U+FFFF); or an `rdf:langString` literal without a language
+  tag. Two documents of different meaning could have the same canonical
+  bytes. The bytes signed are now RDFC-1.0's canonical form, and no byte the
+  frozen v0 wire signs changes. `eddsa-jcs-2022` is not affected.
+- **A JSON number is canonicalized as its value**
+  ([GHSA-w66m-v92r-p775](https://github.com/provin-line/oss/security/advisories/GHSA-w66m-v92r-p775);
+  affects 0.2.0 to 0.3.0).
+  Built with Go 1.26 or earlier, `canon/jcs` and the jsonata filter and
+  converter read some long number literals as another value. Every reader of
+  a `json.Number` as a double in this module now reads it through the new
+  `canon.Float64`: the double nearest its value, whatever its spelling, from
+  RFC 8259 numbers only.
+- **Rejection records and audit notations do not grow with what others
+  sent**
+  ([GHSA-6whw-pc5x-jv9v](https://github.com/provin-line/oss/security/advisories/GHSA-6whw-pc5x-jv9v);
+  affects 0.1.0 to 0.3.0).
+  A sink's reject record (`Detail`, `IssuerDID`), a delivery decision's
+  `Reason`, the errored `Result.Error` of a sink, a chained step and an ingest
+  step, apipush's 400 answer, and each audit notation the auditor records or
+  serves (`GetAuditStatus`, `ListAuditStatuses`) are within 1,024 bytes of
+  UTF-8: whole when they fit, or else their head and their length,
+  `… (N bytes)`. A value they name is quoted within 128 bytes. A record
+  stored before is not rewritten; it is served bounded. A reject record never
+  carries the refused payload; its `Detail` may quote an excerpt of it within
+  that bound.
+- **Small-order Ed25519 keys are refused**
+  ([GHSA-h2g5-9vcc-8j6f](https://github.com/provin-line/oss/security/advisories/GHSA-h2g5-9vcc-8j6f);
+  affects 0.1.0 to 0.3.0).
+  The new `crypto/ed25519.ValidatePublicKey` (errors `ErrPublicKeySize`,
+  `ErrSmallOrder`, `ErrInvalidPoint` of the new type `ed25519.Error`)
+  refuses a key that is not 32 bytes, is of small order in any encoding, or
+  is not the canonical encoding of a point. `crypto/ed25519.Verifier.Verify`
+  applies it, and returns `ErrSmallOrder` for a signature whose R is of small
+  order (`crypto.Verifier` documents that a verifier may return an error).
+  `did.ExtractPublicKey` and `did.ExtractPublicKeyAndEncoding` refuse such a
+  key in either encoding, wrapping the new `did.ErrInvalidPublicKey`, so every
+  reader of keys from DID documents here refuses it, and so do
+  `did.EncodeEd25519Multikey` and `did.NewMultikeyVerificationMethod`. The
+  DID registry refuses one in `IssuePipeline` and `IssueProcess` (replacing
+  the all-zero check) and in an owner document's `authentication` or
+  `assertionMethod` methods (`ErrInvalidArgument`).
+- A pipeline loop bounds what it takes in over the transport, whatever the
+  messaging backend delivers: an envelope's credential by
+  `pipeline.max-credential-size`, its inline payload by the new
+  `pipeline.max-inline-payload-size` (1 MiB), the whole message by the two
+  and the envelope's framing before it is decoded, and a source loop's raw
+  input by `pipeline.max-push-body-size`, as the push route bounds it. With
+  the three keys and NATS's `max_payload` at their defaults (1 MiB each)
+  nothing changes. A node that lowered `max-credential-size` or
+  `max-push-body-size` below 1 MiB now refuses transport messages past them
+  too. A refused message is dropped and logged (an archival sink records a
+  decode failure), its error naming two sizes only.
+- The node's clients for other organizations' servers bound what they take:
+  `chainmanager/peerclient` reads at most 256 KiB a response and ends every
+  call within 30 seconds; `payloadresolver/client` refuses a streamed frame
+  larger than its `MaxBytes` without holding it; the batch resolver's fetch
+  and a sink's fetch from its upstream registry end within 30 seconds;
+  `provin bundle export --aggregate-complete` reads at most 1 MiB a response
+  within 30 seconds; and the SSRF-guarded HTTP client takes at most 64 KiB of
+  response headers. None of them accepts compression.
+- Error texts do not grow with the input:
+  - `canon.UnsafeNumberError` and `canon.DuplicateKeyError` write each
+    literal, key and path within 128 bytes (their fields still hold the
+    values verbatim), and `canon.StrictDecoder` returns every error within
+    1,024 bytes;
+  - `canon/urdna2015`'s refusals quote a key or value within 64 bytes, and a
+    path and json-gold's error within 256, and name the byte where a literal
+    or an IRI stops being UTF-8;
+  - every service of the network node answers an error within 1,024 bytes of
+    UTF-8, keeping its code and details; the log lines of the batch resolver,
+    the auditor, the resolver's pool and the audit stores name an error
+    within 1,024 bytes, and the batch resolver's a DID or an endpoint within
+    128;
+  - every log line of the pipeline names an error within 1,024 bytes.
+
+  A text is cut as its head and its length, `… (N bytes)`, where a character
+  starts, and a cut error wraps the original, so `errors.Is` and `errors.As`
+  find it. An error whose `Error` method panics, as a nil pointer's may, no
+  longer makes `canon.StrictDecoder`, a network answer, a pipeline step or a
+  log call panic: its text is what `fmt` writes for it, or a fixed text naming
+  its type.
+- Walks of a value built in Go refuse one nested past 10,000 objects and
+  arrays before their recursion could exhaust the goroutine stack:
+  `canon.AdmitSafeNumbers`, `canon/jcs`, `canon/urdna2015` (wrapping
+  `urdna2015.ErrTooComplex`), `wireauth.Sign` and `Verify`, `appraisal`'s
+  `Manifest` and `SpineEntry`, and `did`'s `Hash` (`did.New` and `Body` copy
+  a `publicKeyJwk` without recursing). A value decoded by encoding/json or
+  `canon.StrictDecoder` is never deeper.
+- A Data Integrity proof verifies in one wire form.
+  `vc.VerifyProofUnderContract` verifies a proof only under the contract of
+  the suite it names, and pins the proof's `@context` under every contract,
+  as `vc.VerifyProofWithContract` did: under the W3C contracts it mirrors the
+  document's, under the legacy one there is none. `vc.VerifyProof` requires
+  the mirror whenever the document has a `@context`. A proof whose `@context`
+  was swapped, removed or added after signing verified on these paths;
+  nothing the issuer signed could change. The proofs now refused are under
+  Breaking changes.
+- Each value has one spelling:
+  - `canon.StrictDecoder` refuses two keys of one object that differ only in
+    case, and a key that matches a struct field only by case (encoding/json
+    read both into one field);
+  - a Data Integrity proof, a delegation credential and a bundle manifest
+    decoded with encoding/json go through the strict checks their verifiers
+    run;
+  - an `appraisal.Manifest`'s identity covers every member it was read from;
+  - a JWK verification method's `x` must be the canonical unpadded base64url
+    spelling of the key;
+  - a tlog checkpoint signs a lower-case head and a UTC timestamp to the
+    second, so two checkpoints within a second cannot share a signature and
+    one root gets one verdict;
+  - `pagination.DecodeToken` accepts a page token only as `EncodeToken`
+    writes it.
+- Keys in DID documents are read one way. `did.ExtractPublicKey`, and every
+  reader of keys here, reads a key reference and every method id only as
+  `#fragment` or `<the document's DID>#fragment`, a fragment of
+  `[A-Za-z0-9._-]` (the new `did.AbsoluteKeyID`); anything else, and a
+  document holding it, is the new `did.ErrInvalidKeyReference`. A method
+  carries only its type's key member. `RegisterOwner` checks an owner
+  document's keys before its proof, and stores it only when every key in it
+  is one `did.ExtractPublicKey` extracts through `authentication` or
+  `assertionMethod` (`ErrInvalidArgument` otherwise); a member that carries
+  keys must be a list. Refusals that were `ErrUnauthorized` (permission
+  denied on the wire), such as a duplicated `#signing`, one controlled by
+  another DID, or an unusable key of the proof, are now `ErrInvalidArgument`.
+  Documents stored before are not checked again.
+- What `canon.AdmitSafeNumbers` admits, RFC 8785 writes within ±(2^53−1), so
+  a check of a credential's canonical bytes agrees with the check of its
+  value (a credential could be stored on one node and refused on the next,
+  and `resolver/cache` could answer a hit with another spelling of a number).
+  It also spells the path to a refused number once: refusing one 10,000
+  levels deep allocated 160 MB. The range is under Breaking changes.
+- The YAML stores hold only records that read back as written, so a stored
+  value, also one another organization sent, cannot change when it is read
+  or make reading the store fail. A byte field is written as base64: reading
+  a 1 MiB schema body allocated about 1.4 GB, and now 17 times less. A record
+  0.3.0 wrote reads as it did. Times are stored in UTC.
+- `(*local.Validator).Add` checks a schema against its metaschema whatever id
+  it is added under; one added under an id below `json-schema.org` skipped
+  the check.
+- `tlog/filelog` and `tlog/merklelog` open their file in time and memory
+  linear in its size (a 10 MB log took about 10 s, now 0.2 s), and
+  `canon/urdna2015` builds the path to a refused value only for its error (a
+  document nested 8,000 deep allocated 546 MB, now 53 MB).
+
+### Breaking changes
+
+- **`eddsa-rdfc-2022` is off by default and reads only the contexts `vc`
+  embeds** (Go API, wire).
+  - `vc`'s init registers `eddsa-jcs-2022` alone. Until a process calls the
+    new `vc.RegisterEdDSARDFC2022`, `vc.CreateProof`, the `vc.Builder` and
+    every verify function refuse the suite with an error wrapping the new
+    `vc.ErrCryptosuiteNotRegistered`, and a `vc.Verifier` finds signer
+    authenticity failed. `vc.CreateProof`, the `vc.Builder` and
+    `vc.VerifyProof` wrap it for any suite nothing registers too, where their
+    error wrapped nothing. `vc.RegisterCryptosuite` refuses the suite's
+    name, and `make lint` keeps this module's packages from calling the
+    function. This amends the v0.2.0 credential wire freeze, for security.
+  - With the suite on, `vc` accepts as `@context` only the IRIs of the three
+    contexts it embeds (the W3C VC v2 context, dplaax's and provin's), and
+    refuses a document or a proof holding a context written in it, at any
+    depth, `null` or another IRI, before canonicalizing it. 0.3.0 accepted a
+    context written in the document.
+  - provin's binaries do not call the function, so they refuse an
+    `eddsa-rdfc-2022` credential they verified before; this release has no
+    setting that turns the suite on in them.
+  - `canon/urdna2015`'s `Canonicalize` refuses by default a document holding
+    a `@context` other than the IRIs of contexts its `Canonicalizer` serves.
+    A program that canonicalizes documents with their own contexts passes the
+    new `urdna2015.WithLocalContexts()` to `NewCanonicalizer`, only for
+    documents it trusts, and bounds their size: with its own context a
+    document can make the work grow as the square of its size. Observed on
+    darwin/arm64 with the option, not bounds: about 2.7 GB allocated for
+    250 KB and about 37 GB for 1 MiB (a long `urn:` `@vocab`), and about 18 s
+    for 250 KB and more than 150 s for 1 MiB (a long default language).
+    `NewCanonicalizer` takes options (`...urdna2015.Option`): every call
+    compiles as before, but it no longer assigns to a variable of type
+    `func(map[string][]byte) *urdna2015.Canonicalizer`.
+
+  Migration: a process that issues or verifies `eddsa-rdfc-2022` calls
+  `vc.RegisterEdDSARDFC2022` once, from its `main` or an `init` of its main
+  package, its documents use only the embedded contexts, and it bounds the
+  size of what it verifies: `vc` does not, and within its bounds the
+  costliest 1 MiB shape measured takes about 1 s and 0.9 GB (the function's
+  doc).
+  `eddsa-jcs-2022`, the issuance default, is unchanged.
+- **`vc` refuses proofs it cannot verify earlier** (Go API).
+  - `vc.VerifyProof` refuses a proof without a proof-local `@context` over a
+    document with one. An `eddsa-rdfc-2022` proof without one, the shape
+    vc-di-eddsa §3.2.1 produces, is refused by every verify function.
+  - `vc.Verifier` refuses a proof under a cryptosuite no claim contract
+    names, or whose `proofValue` does not decode, before looking up the
+    suite's lifecycle or the issuer's key: it fails such a proof where a
+    transient issuer-key error made it indeterminate, whatever a lifecycle
+    registry says. `delegation.Verify` returns the decode error without
+    resolving the issuer.
+  - `vc.VerifyProofUnderContract` refuses a proof whose suite is not the
+    contract's, a proof `@context` that does not mirror the document's under
+    a W3C contract or is present under the legacy one, and, under a W3C
+    contract, a document without `@context`.
+
+  Migration: verify a legacy `eddsa-jcs-2022` proof, which has no
+  `@context`, with `vc.VerifyProofWithContract` or
+  `vc.VerifyProofUnderContract`.
+- **`canon` reads more strictly** (Go API, wire).
+  - `canon.AdmitSafeNumbers` refuses a number of magnitude 2^53 − 0.5 or
+    more, integer or not (`9007199254740991.5` was admitted), with one new
+    `UnsafeNumberError.Reason` text for every number refused for its
+    magnitude. `canon/testdata/number-literals.json` gives the verdicts.
+    `vc.CreateProof`, the DID registry, the VC resolver's `StoreVC` and
+    `resolver/cache` refuse the same numbers.
+  - `canon.StrictDecoder` refuses, as a `*canon.DuplicateKeyError` naming
+    both, two keys of one object that differ only in case as encoding/json
+    folds names, and a key that matches a struct field only that way. So do
+    the paths that decode others' JSON with it: the push ingress (HTTP 400),
+    the ingest loop, the jsonata filter and converter, the DID registry, the
+    VC resolver, and JSON Schema documents and payloads. `bundle.Verify`
+    reports colliding keys as `ErrBundleIntegrity`.
+  - `canon.StrictDecoder` refuses a decode target it reaches through more
+    than 64 pointers and interfaces, as one that holds itself, which
+    encoding/json follows without end.
+  - `vc.DataIntegrityProof` and `delegation.DelegationCredential` are read
+    under `canon.StrictDecoder`'s rules on every path, encoding/json
+    included; a number inside a proof's `@context` is a `json.Number`.
+
+  Migration: code that matched the old `Reason` text, or builds
+  `canon.DuplicateKeyError` as an unkeyed literal (it gained `Other`),
+  changes; a struct embedding `delegation.DelegationCredential` needs its own
+  `UnmarshalJSON`.
+- **Schemas and payloads past the new bounds are refused** (Go API, wire).
+  `schema.ValidateJSONSchema`, `(*local.Validator).Add` and `Validate` refuse
+  a schema or payload holding a number longer than 256 bytes or whose
+  exponent part lies beyond ±400; a regular expression not in the forms
+  ECMA-262 and Go read alike (among the forms Go compiled: inline flags such
+  as `(?i)`, `\pL`, `\z`, `\Q…\E`, POSIX classes, and a `-` Go reads as a
+  literal after a class escape, as in `[\w-.]`); a schema past its shape
+  bounds or its metaschema budget, or referring by a JSON pointer whose array
+  index is not written as RFC 6901 writes one; and a payload nested deeper
+  than 512 levels, past its work budget, or applying schemas within one
+  another more than 10,000 deep. `schema/README.md` states the bounds. The
+  schema registry's `RegisterSchema` refuses such a schema with
+  `InvalidArgument`, and admits a schema name or prerelease only of 1 to 128
+  characters of `[A-Za-z0-9._-]`, the first a letter or digit (0.3.0 refused
+  only an empty name, `.`, `..`, and one with `/`, `\` or NUL). A schema
+  stored before is not checked again, but `(*local.Validator).Add` refuses
+  it when a validator loads it.
+
+  Migration: write such patterns in the shared forms. SchemaStore's schemas
+  are within the shape bounds and need at most 11.5% of the metaschema
+  budget.
+- **Manifests are read and written in one shape** (Go API, wire).
+  - Decoding a `bundle.Manifest` with encoding/json reads it as
+    `bundle.Verify` does, afresh and in the exact shape of its version;
+    encoding writes that shape (a v2 manifest always has `receipts`), and is
+    an error for a v1 manifest with receipts or a version no shape names.
+  - An evaluation view manifest (`appraisal.Manifest`) is read member by
+    member, exactly as named: a known field in another case, and `null` for
+    the manifest, a spine entry or a field, are refused, and every other
+    member is kept as an extension in its identity. So a manifest whose spine
+    entries carry other members has a different `EvidenceViewID` than in
+    0.3.0, and one stored for it no longer passes `ValidateID`.
+  - `appraisal.SpineEntry` holds a map (`Extensions`), so it is no longer
+    comparable, and an unkeyed literal with its two values no longer
+    compiles. A decoded entry's `Extensions` is an empty map, not nil. A
+    number in an extension that `canon.AdmitSafeNumbers` refuses gets no
+    identity.
+
+  Migration: a struct embedding `bundle.Manifest` needs its own
+  `UnmarshalJSON`; an `EvidenceViewID` stored for such a manifest is computed
+  again.
+- **A tlog checkpoint has one spelling of what it signs** (Go API).
+  `(*tlog.Checkpoint).SignedView`, `tlog.SignCheckpoint` and every checkpoint
+  verification refuse a head with an upper-case letter and a timestamp not
+  in UTC, with a fraction of a second, or outside 0000–9999;
+  `tlog.VerifyConsistency` and `tlog.VerifyInclusion` refuse a head not in
+  lower case. The logs here write nothing refused. Migration: sign with a UTC
+  time in whole seconds.
+- **Pipeline parts and the runtime take explicit bounds and a decision
+  recorder** (Go API).
+  - `envelopecodec.New` takes `envelopecodec.Limits` (`MaxCredentialSize`,
+    `MaxInlinePayloadSize`) and returns an error (`ErrInvalidLimits`); a codec
+    without bounds can no longer be made, and the zero `Codec` refuses every
+    message. `UnmarshalEnvelope` refuses what passes them
+    (`ErrMessageTooLarge`, `ErrCredentialTooLarge`,
+    `ErrInlinePayloadTooLarge`).
+  - `ingest.New` requires `ingest.Config.MaxPayloadSize`
+    (`ErrInvalidMaxPayloadSize`); `Process` refuses a longer input.
+  - `runtime.Config` gains `MaxCredentialSize` and `MaxInlinePayloadSize`,
+    which `runtime.Build` requires, before it dials, when a loop is
+    configured, and `MaxIngestPayloadSize`, which it requires when a source
+    loop is: it bounds the loop's raw input and, through the new
+    `PushBinding.MaxBodySize`, its push route.
+  - `sink.New` with an `Appraiser` and no `DecisionRecorder` fails with
+    `sink.ErrMissingDecisionRecorder`, and `runtime.Build` with a sink loop
+    that has `agent-access` fails unless `runtime.Config.DecisionRecord` is
+    set.
+
+  Migration: a program that calls `runtime.Build` sets the new fields;
+  `cmd/pipeline` sets them from its configuration.
+- **Authorization configuration and answers** (config, wire).
+  - `backend = "cedar"` needs `provin.network.auth.cedar.jwt.{issuer,audience}`
+    and exactly one of `jwks-url` (https) or `secret` (with an optional
+    `secret-encoding`: `utf8`, `hex` or `base64`), or the node does not boot.
+    With `jwks-url` the key set is cached 10 minutes, refetched at most every
+    30 seconds, and kept for known key ids for 30 minutes during a JWKS
+    outage, so a withdrawn key can be trusted for up to 40 minutes.
+  - A PDP at a non-loopback `http://` URL is refused unless its `host:port`
+    is listed in the new `provin.network.auth.plain-internal`.
+  - A PDP outage (HTTP 429, 502, 503, 504, or a timeout) fails an L1-guarded
+    RPC with `Unavailable` instead of `Internal`, and the pipeline's push
+    endpoint answers 503 with `Retry-After` instead of 403, so the
+    pipeline's wire retry retries through it. HTTP 500 and a
+    malformed answer stay `Internal` and 403; with `cedar`, a failed token
+    check stays `Unauthenticated`.
+  - With the `o3co` backend an allow requires HTTP 200 with a complete
+    decision envelope; an empty 200 or a 204 no longer allows, and the PDP
+    must not redirect.
+
+  Migration: a cedar deployment adds the JWT settings, and a plaintext PDP on
+  a private network is listed in `plain-internal`.
+- **Credentials are presented only to named origins** (config, CLI). The
+  batch resolver fetches from a peer outside its configured destinations and
+  `pipeline.credential-origins` without `vc-store-bearer`, and
+  `provin bundle export` calls an endpoint outside `--registry`'s origin and
+  its `--credential-origin` origins without `--token`. Neither follows a
+  redirect with a credential. Migration: list other L1-protected peers in
+  `credential-origins` (with the CLI, `--credential-origin`) before
+  upgrading, and configure each destination at its final URL. The quickstart
+  needs no change.
+- **Input newly refused by the security fixes** (Go API, wire). Besides the
+  entries above, the Security section lists input this release refuses that
+  0.3.0 accepted: RDFC documents in the forms listed there, a base58btc value
+  of more than 8,192 characters, a small-order Ed25519 key, a DID key
+  reference or owner document read in more than one way (the DID registry
+  answers `InvalidArgument` where it answered permission denied), a JWK `x`
+  or a page token in another spelling, and a schema added below
+  `json-schema.org` that its metaschema refuses.
+- **The module needs Go 1.26** (build). `go.mod` sets `go 1.26.0`, which
+  `protobuf.interceptors` v0.6.0 requires, and `toolchain go1.26.10`; the
+  images build on `golang:1.26.10-alpine`. Go 1.25 no longer receives
+  security fixes.
+
+### Added
+
+- `keybinding`: the key binding, a `KeyBindingCredential` in which an issuer
+  binds a key (`keyId` and a public JWK: Ed25519, P-256 or RSA) to a subject,
+  of a kind, with roles, of a key class, for one relying party, from
+  `validFrom` until `validUntil`, with an entry in the issuer's revocation
+  list, and that list (a W3C `BitstringStatusListCredential`). `Issue` and
+  `IssueStatusList` sign with `eddsa-jcs-2022`. `Verifier.VerifyBinding`
+  checks a binding against the trust `Anchor` and the held list;
+  `Verifier.VerifyStatusList` refuses a list older than the one held, one
+  that clears a mark (a revocation is not reversible), one not yet valid, and
+  one whose id is not a DID URL of its issuer; `Verifier.RestoreStatusList`
+  rebuilds the held list after a restart. Each refusal is a constant
+  `keybinding.Error`. The package doc states the rules.
+- `decisionrecord`: the record a deciding party writes for each decision
+  (`Record`: id, deciding party, time, outcome `Accepted`, `Refused` or
+  `Unenforced`, the refusing check and reason, the parties, and what was
+  decided on as content addresses, never a payload), and `Filter`, which
+  writes it at a level chosen explicitly: `all`, `refusals`, `summary`
+  (counts per window, through `SummaryRecorder`) or `none`. At `all` a record
+  the sink does not accept is an error, so the decision is refused; at the
+  other levels it is a warning. Sinks: JSON lines (`NewJSONLines`) and
+  structured log (`NewLog`). The purpose-first sink writes its delivery
+  decisions through it (Changed).
+- `contentaddress`: the content address of dPLaaX (`sha256:` and 64
+  lowercase hex digits) as a type, `Address`, made only by `Of` and `Parse`,
+  comparable, written and read as JSON text in its one spelling.
+- `vc.IssuerVerifier`, `vc.WithIssuerVerifier`, `vc.NewDIDDocumentIssuers`,
+  `vc.IssuerKey` and `vc.ErrIssuerNotFound` (of the new type `vc.Error`): how
+  a `vc.Verifier` establishes an issuer, the key its proof verifies under and
+  the Owner responsible, can be replaced, so a deployment that registers its
+  stages elsewhere needs no DID document per stage. The default reads both
+  from DID documents. An error wrapping `ErrIssuerNotFound` reads as failed,
+  any other as indeterminate; `AttributeOwner` and `ClassifyChain` wrap it for
+  an Owner established not to exist.
+- `vc.ValidateChainLinks(chain)` and `vc.ValidateChainFrom(chain,
+  originInput)`: the links of a chain without its signatures, through the
+  same implementation as `VerifyChain`; a broken link is a
+  `*vc.ChainLinkError` with the credential's index.
+- `vc.Credential` and `(*vc.Verifier).VerifySignerAuthenticity`: the
+  signer-authenticity axis alone, for a Data Integrity credential of any
+  type, as `vc.SignerAuthenticityResult`.
+- `(*vc.DataIntegrityProof).ProofValueBytes`: the bytes a proof's
+  `proofValue` encodes, decoded by its cryptosuite's encoding and bounded as
+  `multibase.DecodeBase58Btc` bounds it. It verifies nothing.
+- `crypto/es256` and `crypto/rs256`: `crypto.Verifier` implementations for
+  ES256 (ECDSA P-256, SHA-256; SEC1 uncompressed key, `r || s` signature)
+  and RS256 (RSASSA-PKCS1-v1_5, SHA-256; PKCS #1 key, 2048 to 4096 bits).
+  ES256 signature bytes are not unique, so nothing may count or deduplicate
+  signatures by them.
+- `canon.Float64(n json.Number) (float64, error)`: the IEEE 754 double
+  nearest a JSON number's value (ties to even), from the RFC 8259 grammar
+  only, in time linear in its length. Its errors wrap `canon.ErrNotJSONNumber`
+  or `canon.ErrBeyondDoubleRange`, of the new type `canon.Error`.
+- `canon.DuplicateKeyError.Other`: for a key refused because it differs from
+  another key or a struct field only in case, that other name.
+- `(*delegation.DelegationCredential).UnmarshalJSON`,
+  `(*bundle.Manifest).UnmarshalJSON` and `bundle.Manifest.MarshalJSON`, and
+  `appraisal.SpineEntry.Extensions` with its own `MarshalJSON` and
+  `UnmarshalJSON`: these are read and written in one shape (Breaking changes).
+- Types and errors the entries above name: `urdna2015.Error`, `did.Error`,
+  `ed25519.Error` (with `ErrSignatureSize`), `sink.RejectDecisionRecord`, and
+  `DecisionRecord` in `pipelineconfig.Config` and `runtime.Config`.
+- Configuration keys:
+  - `provin.network.auth.plain-internal` (list of `host:port`, default empty):
+    the PDP endpoints that may be called over plaintext `http://`, reached
+    only at a private address. The quickstart sets it for
+    `policy-verifier:3001`.
+  - `provin.network.pipeline.credential-origins` (default `[]`): origins the
+    pipeline may show `vc-store-bearer` to besides its configured
+    destinations (`pipelineconfig.Config.CredentialOrigins`,
+    `PresentsCredentialTo`).
+  - `provin.network.pipeline.max-inline-payload-size` (default 1 MiB): the
+    most bytes of an inline payload in an envelope a loop receives
+    (`pipelineconfig.Config.MaxInlinePayloadSize`).
+  - `provin.decision-record.level` (`all`, the default, `refusals`,
+    `summary` or `none`), `.sink` (`log`, the default, or `jsonl`), `.path`
+    (the JSON-lines file, required with `jsonl`) and `.summary-window`
+    (default `1m`).
+
+  A malformed value fails startup.
+- `provin bundle export --credential-origin <origin>` (repeatable): an origin
+  the `--token` may be shown to, besides `--registry`'s.
+
 ### Changed
 
-- CLI: `owner init`, `pipeline create`, `process create`, `bundle export`,
-  and `bundle verify` now reject unexpected positional arguments after
-  flags as a usage error, matching the Stage 2 commands. Previously stray
-  arguments were silently ignored and the command proceeded.
+- **Delivery decisions are recorded by default.** Every delivery decision of
+  the purpose-first sink (a sink loop with an `agent-access` block) writes a
+  `decisionrecord.Record` through the new `sink.Config.DecisionRecorder`: an
+  envelope that does not decode is refused (check `decode`); the appraisal's
+  decision is accepted on `ACCEPT` and refused (check `appraisal`) otherwise;
+  a decision accepted that a later stage refuses is recorded again under the
+  same id as refused, the check being that stage's reject reason. A writer's
+  error is never recorded as a refusal (the writer may have delivered).
+  Records hold content addresses, never payload bytes. At level `all`, if the
+  accepted record cannot be written the delivery is refused (new reject
+  reason `decision-record`), and the default `log` output writes one `info`
+  entry per record; turn it off with `provin.decision-record.level = "none"`.
+  Records after the accepted one are best effort. Existing configs keep
+  booting. The legacy verifier path is unchanged.
+- `vc.VerifyProof` and `vc.VerifyProofUnderContract`, and through them
+  `vc.VerifyProofWithContract`, decode `proofValue` before they canonicalize
+  anything: a `proofValue` that does not decode is refused in about 1 µs,
+  where an `eddsa-rdfc-2022` proof over an ordinary credential took about
+  560 µs. A proof whose `proofValue` does not decode, over a document that
+  does not canonicalize, is refused with the decode error.
+- `canon/jcs` and the jsonata filter and converter read a JSON number as a
+  double through `canon.Float64`: `jcs` refuses a `json.Number` that is not
+  an RFC 8259 number (`+1`, `.5`, `01`), and the jsonata filter and converter
+  refuse a document holding a number beyond the double range; their errors
+  match `canon.ErrNotJSONNumber` or `canon.ErrBeyondDoubleRange`.
+  `scripts/check-number-hygiene.sh` (in `make lint`) flags any other reading
+  of a double.
+- `vc` judges `credential.claim.charset` with tables generated from Unicode
+  15.0.0, the version the specification pins, instead of Go's `unicode`
+  tables, so a toolchain of another Unicode version judges a claim the same.
+  `go generate ./vc` rebuilds them from pinned files.
+- `chainmanager`'s `Subscribe` refuses a publisher's connection info with a
+  key other than `subject`, `account`, `url` and `publishType`, or a value
+  other than empty or a letter or digit followed by up to 999 characters
+  that a URL, a NATS subject or account key, or a DID uses
+  (`ErrRemotePeer`): the remote registration is undone and nothing is
+  imported or stored.
+- The pipeline's interfaces, configs and constructors through which a part is
+  plugged in state, by pointing to one rule in `pipeline/contract`'s doc,
+  that the methods of a part's errors that `fmt` and `errors.Is` and
+  `errors.As` call return without a panic, also for a nil pointer. A part
+  that already does so is unaffected.
+- The JSON Schema library is a copy inside this module,
+  `internal/jsonschema`: `santhosh-tekuri/jsonschema/v6` v6.0.3 (Apache-2.0,
+  its LICENSE copied unchanged) with a work budget and with a number
+  `big.Rat` cannot read reported as an error. `go.mod` no longer requires
+  `santhosh-tekuri/jsonschema/v6` (0.3.0 required v6.0.2). The schema package
+  goes back to the upstream module when upstream bounds its own work
+  (`internal/jsonschema/README.md`).
+- Quickstart: the auth layer moves to provin.auth v0.3 (the `:v0.3` images,
+  `AUTH_REF=v0.3.0`). Its policy-verifier accepts only RFC 9068 access
+  tokens, so every token the quickstart uses carries `iss` and `aud`, and the
+  ones it mints are typed `at+jwt`; the audience is
+  `https://quickstart.provin.invalid` (`OAUTH_JWT_AUDIENCE`). The shared HS256
+  secret is now long enough to carry 32 bytes of key material, and the issuer
+  is `http://localhost:3000`; an existing `.env` that sets `OAUTH_JWT_SECRET`
+  or `OAUTH_JWT_ISSUER` must meet the same rules. The service token
+  `provision` mints for the nodes lives 24 hours (`-service-ttl`, was 30
+  days): the verifier refuses a token older than that from its `iat`
+  whatever its `exp` says, so a longer lifetime was not honoured; `docker
+  compose up --force-recreate` re-mints it and restarts the nodes, which
+  read it once at boot.
+- Dependencies, from 0.3.0: `connectrpc.com/connect` 1.20.0 → 1.21.1,
+  `github.com/o3co/protobuf.interceptors` (and its `connectrpc` module)
+  0.2.0 / 0.2.1 → 0.6.0 (it authorizes a stream before its handler runs and
+  re-checks it per message), `nats-server` 2.12.6 → 2.15.1, `nats.go`
+  1.50.0 → 1.55.0, `nats-io/jwt` 2.8.1 → 2.8.2, `nkeys` 0.4.15 → 0.4.16,
+  `piprate/json-gold` 0.8.0 → 0.9.1, `o3co/go.hocon` 1.8.0 → 1.14.2,
+  `prometheus/client_golang` 1.23.2 → 1.25.0, OpenTelemetry 1.44.0 → 1.47.0
+  (`exporters/prometheus` 0.66.0 → 0.69.0), `golang.org/x/net` 0.55.0 →
+  0.61.0, `golang.org/x/sys` 0.45.0 → 0.49.0, `golang.org/x/crypto` 0.52.0 →
+  0.58.0, `golang.org/x/text` 0.39.0 → 0.43.0, `golang.org/x/time` 0.15.0 →
+  0.16.0, `google.golang.org/protobuf` 1.36.11 → 1.36.12, and
+  `github.com/go-jose/go-jose/v4` 4.1.6 (new, for the cedar JWT check). The
+  quickstart's broker image moves from `nats:2.12.6` to `nats:2.15.1`.
+  `govulncheck` reported 18 standard-library vulnerabilities on the old
+  toolchain; on `go1.26.10` it reports none that this module's code reaches.
+
+### Fixed
+
+- The signer-authenticity axis fails a credential whose issuer is empty
+  before resolving anything; with a bare-fragment `verificationMethod` it was
+  indeterminate during a resolver outage. `Verify`'s overall verdict does not
+  change.
+- CLI: `owner init`, `pipeline create`, `process create`, `bundle export` and
+  `bundle verify` reject unexpected positional arguments after flags as a
+  usage error; they were ignored.
 
 ## [0.3.0] - 2026-08-05
 
@@ -101,6 +766,16 @@ credentials and is a **next-MAJOR** change. The freeze is enforced by tests
 in this repository (W3C vectors, KATs, context digests), not by process.
 Exported Go API and configuration keys remain `0.x`-mutable; the wire freeze
 is deliberately stricter than the API surface.
+
+**Amended (0.4.0), for security, not compatibility:** `eddsa-rdfc-2022`
+stays frozen on the wire: for a document it accepts, the bytes it
+canonicalizes and signs do not change. It is now opt-in for verifying as well
+as for issuing: a process accepts it only once it calls
+`vc.RegisterEdDSARDFC2022`, since verifying it runs JSON-LD processing on the
+untrusted document before the signature is checked. `canon/urdna2015` also
+refuses a document some value of which the canonical form would not hold,
+and a document past its work bounds (0.4.0, Security), so a credential
+signed under the suite over such a document no longer verifies here.
 
 Out of scope of this declaration: the repository's OTHER signed views — the
 tlog checkpoint `SignedView`, the chain-manager/payload-resolver wire-auth
@@ -780,6 +1455,8 @@ Initial internal release — pinned for internal (private) deployment and soak.
 - The quickstart pins the `provin.auth` policy-verifier / auth-provider images
   and `AUTH_REF` to `v0.1.0` (built from provin.auth's matching tag).
 
-[Unreleased]: https://github.com/provin-line/oss/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/provin-line/oss/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/provin-line/oss/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/provin-line/oss/releases/tag/v0.3.0
 [0.2.0]: https://github.com/provin-line/oss/releases/tag/v0.2.0
 [0.1.0]: https://github.com/provin-line/oss/releases/tag/v0.1.0

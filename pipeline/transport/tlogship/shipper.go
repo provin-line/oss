@@ -41,6 +41,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -52,6 +54,8 @@ const DefaultFlushInterval = 5 * time.Second
 // the package doc for why this interface is defined here rather than
 // importing network/pkg/services/tlogservice/client directly.
 // *client.Client (that package) satisfies this structurally.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type MirrorClient interface {
 	// MirrorLogSegment ships payloads [fromIndex, fromIndex+len(payloads))
 	// under cp (a checkpoint covering exactly that end) and returns the
@@ -141,6 +145,8 @@ type Shipper struct {
 // checkpointAtLog); *filelog.Log does. A log that does not (e.g. memlog,
 // merklelog) is rejected here, at construction, rather than failing on the
 // first tick.
+//
+// log's errors keep the rule for a part's errors in package contract's doc.
 func New(log tlog.Log, logID string, mc MirrorClient, cfg Config) (*Shipper, error) {
 	if log == nil {
 		return nil, ErrMissingLog
@@ -191,7 +197,7 @@ func (s *Shipper) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return nil
 				}
-				s.logger.Error("tlogship: flush tick failed", "log_id", s.logID, "err", err)
+				s.logger.Error("tlogship: flush tick failed", "log_id", s.logID, "err", pipeexcerpt.ErrorText(err))
 			}
 		}
 	}
@@ -215,7 +221,7 @@ func (s *Shipper) Drain(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("tlogship: drain: %w (last flush error: %v)", ctx.Err(), lastErr)
+			return fmt.Errorf("tlogship: drain: %w (last flush error: %s)", ctx.Err(), excerpt.ErrorText(lastErr))
 		case <-time.After(s.interval):
 		}
 	}

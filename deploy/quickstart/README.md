@@ -35,7 +35,7 @@ separated topology provin.e2e's own compose-runtime scenarios (e.g.
 - **Docker** with Compose v2 (`docker compose`), BuildKit enabled (default).
 - The auth-layer services (`policy-verifier`, `auth-provider`) are **published
   images** (`ghcr.io/provin-line/auth-*`, built by provin.auth's
-  publish-images workflow and pinned to the moving `v0.2` minor tag in the
+  publish-images workflow and pinned to the moving `v0.3` minor tag in the
   compose file — to pin an exact build, use the image digest
   (`@sha256:<digest>`, printed in the publish run's job summary); a
   `sha-<sha>` tag names the source commit but is still a movable registry
@@ -81,7 +81,7 @@ PIPELINE_URL=http://localhost:8444    # pipeline — /ingest/<loop>/push, /metri
 OWNER=did:dplaax:poc.dplaax.dev:org:acme
 PIPELINE=$OWNER:pipeline:readings
 PROCESS=$PIPELINE:process:s1
-SECRET=quickstart-dev-secret-change-me      # matches the compose default
+SECRET=quickstart-dev-only-shared-hs256-secret-change-me-before-sharing      # matches the compose default
 ```
 
 ### 2a. Mint a bootstrap token and register the first owner
@@ -93,7 +93,8 @@ signed with the shared secret (see [First-owner bootstrap](#first-owner-bootstra
 
 ```sh
 BOOTSTRAP=$(deploy/quickstart/bin/mint-bootstrap-token.sh \
-  --owner "$OWNER" --secret "$SECRET" --issuer http://auth-provider:3000)
+  --owner "$OWNER" --secret "$SECRET" \
+  --issuer "${OAUTH_JWT_ISSUER:-http://localhost:3000}")
 
 $PROVIN owner init --did "$OWNER" --key /tmp/acme-owner.jwk \
   --registry "$REGISTRY" --token "$BOOTSTRAP"
@@ -119,6 +120,13 @@ TOKEN=$(node deploy/quickstart/bin/did-token.mjs \
   --key /tmp/acme-owner.jwk --did "$OWNER" \
   --provider http://localhost:3000 --client quickstart)
 ```
+
+The helper signs the quickstart's audience (`https://quickstart.provin.invalid`,
+or `$OAUTH_JWT_AUDIENCE`) into the challenge. The provider accepts only the
+audiences in `auth-provider/quickstart.conf`, and the policy-verifier accepts
+only tokens whose `aud` is its own `OAUTH_JWT_AUDIENCE` — so all three must
+agree if you change it. The bootstrap token and the pipeline's service token
+carry the same `aud`.
 
 ### 2c. Create the pipeline + process (external-key mode), then push a record
 
@@ -280,8 +288,13 @@ artifact to describe itself.
   nothing cryptographic is committed to the repo. The sys-user files and the
   pipeline keys are trust material — in anything beyond this dev stack, guard
   them like signing keys. Re-running `docker compose up` **reuses** existing
-  trust material and keys (only the service token is re-minted — it carries
-  an expiry); partial material from an interrupted run — or material from a
+  trust material and keys (only the service token is re-minted — it lives
+  24 hours, the longest the policy-verifier accepts a token for after its
+  `iat`, so a stack left up longer answers the nodes' own L1 calls with 401
+  until `docker compose up --force-recreate` re-mints it and restarts the
+  nodes with the new token, which they read once at boot;
+  `provision -service-ttl` sets the lifetime); partial material from an
+  interrupted run — or material from a
   pre-directory-resolver or pre-separated-topology quickstart — fails closed
   with a pointer to the reset below.
 - **`policy-verifier`** and **`auth-provider`** are *generated* by
@@ -321,7 +334,10 @@ Each node's PDP backend is configurable (`provin.network.auth.backend`):
 `o3co` (this quickstart), `opa`, `cedar`, or `static`. `static` is an in-process
 allow-list and is **not authentication** — see the network `reference.conf` and
 the deployment note in the repo README. This quickstart uses `o3co` precisely to
-exercise real JWT verification end-to-end.
+exercise real JWT verification end-to-end. The PDP is plaintext `http://` to the
+`policy-verifier` service, so both node configs list it in
+`provin.network.auth.plain-internal = ["policy-verifier:3001"]`; without that
+entry the node refuses to start.
 
 ## Going to production
 

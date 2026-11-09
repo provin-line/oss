@@ -6,8 +6,8 @@ Pipeline プロセス間のメッセージング境界：`Publisher` / `Subscrib
 
 ## 規約
 
-- ここは pub-sub バックエンドの**Hub スワップポイント**である：`nats/`（JetStream）が OSS デフォルト；SQS/SNS その他はプロセスロジックに触れることなくここで置き換える。
-- `envelopecodec/` はパイプライン envelope の wire codec（`contract.EnvelopeCodec` の参照実装、`dplaax.pipeline.v1` 上）。stateless かつ購読非依存：wire 上の payload 不在は nil（by-reference）に写像し、不在が正当かどうかは購読の合意配送モードを知る層が判定する — codec は決して判定しない。空 inline payload（marshal 側）と sequence number ゼロ（両方向）は fail-closed に拒否する。codec 外モード検査の覆す条件：runtime loop の実装で「配送モードを知る単一の層が存在しない」と判明した場合は mode-aware なラッパーを純追加する — 検査をこの codec に押し込むことは決してしない。
+- ここは pub-sub バックエンドの**Hub スワップポイント**である：`nats/`（core NATS）が OSS デフォルト；SQS/SNS その他はプロセスロジックに触れることなくここで置き換える。
+- `envelopecodec/` はパイプライン envelope の wire codec（`contract.EnvelopeCodec` の参照実装、`dplaax.pipeline.v1` 上）。stateless かつ購読非依存：wire 上の payload 不在は nil（by-reference）に写像し、不在が正当かどうかは購読の合意配送モードを知る層が判定する — codec は決して判定しない。空 inline payload（marshal 側）と sequence number ゼロ（両方向）は fail-closed に拒否する。subscriber が渡すものには、backend に依らずに成り立つ上限が無いので、`envelopecodec.New` は `Limits`（node の設定で、どの購読にも同じ）を受け取り、限りの無い codec は作れない：2 つの限りと envelope の field の枠を越える message を読む前に断り、次に限りを越える credential と inline payload を断る。誤りの文には 2 つの大きさだけを書く。codec 外モード検査の覆す条件：runtime loop の実装で「配送モードを知る単一の層が存在しない」と判明した場合は mode-aware なラッパーを純追加する — 検査をこの codec に押し込むことは決してしない。
 - サブジェクト命名、クレデンシャル、接続ライフサイクル（シャットダウン時のドレイン、サブスクライブ後のフラッシュ）はここで管理 — プロセスはブローカークライアントを直接インポートしない。
 - ランタイムループは意図的に最小限：メッセージごとの同期処理、「passed」でパブリッシュ（生産プロセスのみ — 終端プロセスは外部に書き出し、何もパブリッシュしない）、「filtered」/「error」でログ付きドロップ。リトライ / デッドレターポリシーはプロセス内部ではなく、このセームでプラグインされる。
   `Loop`（`loop.go`）は `contract.Process` を実装し、1 つの購読を駆動する：

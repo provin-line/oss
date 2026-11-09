@@ -6,7 +6,6 @@ import (
 
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 )
 
 // LoopConfig.StrippedPublisher threads through to the Emitter's dual-emit
@@ -25,7 +24,7 @@ func TestLoop_StrippedPublisher_DualEmits(t *testing.T) {
 		Processor:         proc,
 		Subscriber:        sub,
 		Publisher:         pub,
-		Codec:             envelopecodec.New(),
+		Codec:             testCodec(),
 		Emission:          &fakeTlog{},
 		StrippedPublisher: stripped,
 	})
@@ -46,7 +45,7 @@ func TestLoop_StrippedPublisher_DualEmits(t *testing.T) {
 	if stripped.callCount() != 1 {
 		t.Fatalf("stripped publishes = %d, want 1", stripped.callCount())
 	}
-	env, err := envelopecodec.New().UnmarshalEnvelope(stripped.calls[0])
+	env, err := testCodec().UnmarshalEnvelope(stripped.calls[0])
 	if err != nil {
 		t.Fatalf("decode stripped envelope: %v", err)
 	}
@@ -76,7 +75,7 @@ func TestLoop_NoStrippedPublisher_Unchanged(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	})
 	if err != nil {

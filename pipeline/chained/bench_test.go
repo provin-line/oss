@@ -18,7 +18,6 @@ import (
 	filterjsonata "github.com/provin-line/oss/pipeline/chained/filter/jsonata"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/provenance/vcdid"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
@@ -166,7 +165,7 @@ func benchSetup(b *testing.B, payload []byte, nFilters int) (*chained.Processor,
 		Strategy:          contract.VerificationAdjacent,
 		IngressConformant: true,
 		UpstreamEndpoint:  "bench://upstream",
-		Codec:             envelopecodec.New(),
+		Codec:             testCodec(),
 		Verifier:          vc.NewVerifier(res, ed25519.Verifier{}),
 		Store:             benchNopStore{},
 		Signer:            benchVCDIDSigner(b, benchChainedDID, "chained", chainedSigner),
@@ -183,7 +182,7 @@ func benchSetup(b *testing.B, payload []byte, nFilters int) (*chained.Processor,
 	if err != nil {
 		b.Fatalf("ingress SignFirstDrop: %v", err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{Credential: ingress, Payload: payload, SequenceNo: 1})
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{Credential: ingress, Payload: payload, SequenceNo: 1})
 	if err != nil {
 		b.Fatalf("marshal envelope: %v", err)
 	}

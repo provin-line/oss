@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -533,6 +536,7 @@ func TestBundleExport_AuditAdvertisementRoutesReceipts(t *testing.T) {
 		DIDBases:          map[string]string{registryID: srv.URL},
 		AllowLoopback:     true,
 		AggregateComplete: true,
+		CredentialOrigins: []string{advertised},
 	})
 	if err != nil {
 		t.Fatalf("BundleExport via #audit advertisement: %v", err)
@@ -723,5 +727,146 @@ func TestBundleExport_VCResolverAdvertisementEmptyEndpointFails(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "empty endpoint") {
 		t.Fatalf("empty #vc-resolver endpoint: want derivation-seam error, got %v", err)
+	}
+}
+
+// The token is shown to the --registry origin and to the origins the caller
+// names, and to no other: an issuer's advertised endpoint at another origin is
+// called without it, because the token lets its holder act as the caller.
+func TestBundleExport_PresentsTheTokenOnlyToNamedOrigins(t *testing.T) {
+	ctx := context.Background()
+	for name, named := range map[string]bool{"not named": false, "named": true} {
+		var advertised string
+		srv, head, consumed := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+			if id != aggIssuerDID || advertised == "" {
+				return nil
+			}
+			return []did.ServiceEndpoint{{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: advertised}}
+		}, true /* the local responder has no receipt */)
+		var sawBearer atomic.Bool
+		mux := http.NewServeMux()
+		auditPath, ah := auditpbconnect.NewAuditServiceHandler(stubAudit{head: head, consumed: consumed})
+		mux.Handle(auditPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				sawBearer.Store(true)
+			}
+			ah.ServeHTTP(w, r)
+		}))
+		peer := httptest.NewServer(mux)
+		t.Cleanup(peer.Close)
+		advertised = peer.URL
+		cfg := commands.BundleExportConfig{
+			Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+			DIDBases:          map[string]string{registryID: srv.URL},
+			AllowLoopback:     true,
+			AggregateComplete: true,
+		}
+		if named {
+			cfg.CredentialOrigins = []string{peer.URL}
+		}
+		if err := commands.BundleExport(ctx, env(srv, &bytes.Buffer{}), cfg); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if sawBearer.Load() != named {
+			t.Errorf("%s: the advertised endpoint saw the token: %v", name, sawBearer.Load())
+		}
+	}
+}
+
+// An endpoint at a named origin that redirects does not pass the token on:
+// a call that shows it follows no redirect.
+func TestBundleExport_ShowsTheTokenToNoServerANamedOriginRedirectsTo(t *testing.T) {
+	ctx := context.Background()
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	named := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(named.Close)
+	srv, head, _ := newAggregateNodeWith(t, "self", func(id string) []did.ServiceEndpoint {
+		if id != aggIssuerDID {
+			return nil
+		}
+		return []did.ServiceEndpoint{{ID: id + "#audit", Type: "AuditService", ServiceEndpoint: named.URL}}
+	}, true /* the local responder has no receipt */)
+	err := commands.BundleExport(ctx, env(srv, &bytes.Buffer{}), commands.BundleExportConfig{
+		Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+		DIDBases:          map[string]string{registryID: srv.URL},
+		AllowLoopback:     true,
+		AggregateComplete: true,
+		CredentialOrigins: []string{named.URL},
+	})
+	if err == nil {
+		t.Error("an export whose receipts were redirected succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the named origin redirected to saw the token")
+	}
+}
+
+// The registry is shown the token too, and a call to it follows no redirect,
+// so a registry that redirects does not pass the token on.
+func TestBundleExport_ShowsTheTokenToNoServerTheRegistryRedirectsTo(t *testing.T) {
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(registry.Close)
+	err := commands.BundleExport(context.Background(), env(registry, &bytes.Buffer{}), commands.BundleExportConfig{
+		Head: "sha256:" + strings.Repeat("ab", 32), Out: filepath.Join(t.TempDir(), "bundle"),
+		AllowLoopback: true,
+	})
+	if err == nil {
+		t.Error("an export whose registry redirected succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the registry redirected to saw the token")
+	}
+}
+
+// A #vc-resolver base at another origin is shown the token only when named.
+func TestBundleExport_ShowsTheTokenToAVCResolverBaseOnlyWhenNamed(t *testing.T) {
+	for name, named := range map[string]bool{"not named": false, "named": true} {
+		srv, head, _ := newAggregateNode(t, "" /* advertise nothing */)
+		var sawBearer atomic.Bool
+		target, _ := url.Parse(srv.URL)
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				sawBearer.Store(true)
+			}
+			proxy.ServeHTTP(w, r)
+		}))
+		t.Cleanup(peer.Close)
+		cfg := commands.BundleExportConfig{
+			Head: head, Out: filepath.Join(t.TempDir(), "bundle"),
+			DIDBases:          map[string]string{registryID: srv.URL},
+			VCResolverBases:   map[string]string{registryID: peer.URL},
+			AllowLoopback:     true,
+			AggregateComplete: true,
+		}
+		if named {
+			cfg.CredentialOrigins = []string{peer.URL}
+		}
+		err := commands.BundleExport(context.Background(), env(srv, &bytes.Buffer{}), cfg)
+		if named && err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if sawBearer.Load() != named {
+			t.Errorf("%s: the #vc-resolver base saw the token: %v", name, sawBearer.Load())
+		}
 	}
 }

@@ -43,14 +43,15 @@ func docWithVM(t *testing.T, vm map[string]any) *did.DIDDocument {
 	return &doc
 }
 
-// A valid Multikey and a valid JWK for the same curve — the two legitimate shapes.
+// One valid Ed25519 key (the W3C vc-di-eddsa signing key) as a Multikey and as
+// a JWK — the two legitimate shapes.
 func validMultikey() string { return "z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2" }
 
 func validJWK() map[string]any {
 	return map[string]any{
 		"kty": "OKP",
 		"crv": "Ed25519",
-		"x":   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"x":   "sA2Nk45_dz1RVlqtNqYj9TRPf10ZYPnPPo4SYg6igQ8",
 	}
 }
 

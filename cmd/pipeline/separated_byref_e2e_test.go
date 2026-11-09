@@ -91,6 +91,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
@@ -392,7 +393,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	// a PayloadStore (D-6), so this loop dual-emits automatically — no
 	// separate opt-in needed to prove property 1. ---
 	producerPipeCfg := &pipelineconfig.Config{
-		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20,
+		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
 		Loops: []pipelineconfig.LoopConfig{{
 			Name: "byrefsrc", Role: pipelineconfig.RoleSource, IngressSubject: byrefProducerIngress,
 			Source: pipelineconfig.SourceConfig{
@@ -430,7 +431,10 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	localResolver.Add(sepOwnerDocLocal(sepOwnerDID))
 	localResolver.Add(sepLocalProcessDoc(t, byrefProducerIssuerDID, sepOwnerDID, producerIssuerKP.PublicKey))
 	consumerPipeCfg := &pipelineconfig.Config{
-		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20,
+		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
+		DecisionRecord: pipelineconfig.DecisionRecordConfig{
+			Level: decisionrecord.LevelAll, Output: pipelineconfig.DecisionRecordOutputLog, SummaryWindow: time.Minute,
+		},
 		Loops: []pipelineconfig.LoopConfig{{
 			Name: "byrefsink", Role: pipelineconfig.RoleSink, IngressSubject: byrefProducerPipeline,
 			Sink: pipelineconfig.SinkConfig{

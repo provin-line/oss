@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/provin-line/oss/vc"
 )
@@ -50,15 +49,19 @@ func TestTransformationClaimValidateGrammar(t *testing.T) {
 	}
 }
 
-// credential.claim.charset pins its property snapshot to Unicode 15.0.
-// Validate judges via the Go unicode tables, so this guard fails loudly
-// when a toolchain upgrade bumps them: re-audit the White_Space/Cc/Cf
-// delta against the pinned snapshot before accepting the new tables
-// (newly assigned Cf code points would otherwise silently change which
-// claims this implementation accepts).
-func TestUnicodeTableSnapshot(t *testing.T) {
-	if unicode.Version != "15.0.0" {
-		t.Fatalf("Go unicode tables = %s, but credential.claim.charset pins Unicode 15.0: re-audit the class delta before accepting the new tables", unicode.Version)
+// credential.claim.charset refuses the Unicode 15.0 White_Space, Cc and Cf
+// characters, judged by tables pinned to Unicode 15.0 whatever the
+// toolchain's: a claim is accepted or refused the same by every build.
+func TestTransformationClaim_RefusesTheUnicode15Classes(t *testing.T) {
+	for _, r := range []rune{'\t', ' ', 0x0085, 0x00A0, 0x3000, 0x2028, 0x0000, 0x007F, 0x009F, 0x00AD, 0x200B, 0x200E, 0xFEFF, 0x13439, 0xE0001, '+'} {
+		if err := vc.TransformationClaim("ns:a" + string(r) + "b").Validate(); err == nil {
+			t.Errorf("U+%04X: accepted", r)
+		}
+	}
+	for _, c := range []string{"provin:filter", "ns:ünïcödé", "ns:変換", "ns:a-b_c.d"} {
+		if err := vc.TransformationClaim(c).Validate(); err != nil {
+			t.Errorf("%q: %v", c, err)
+		}
 	}
 }
 

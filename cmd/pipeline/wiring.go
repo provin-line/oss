@@ -14,6 +14,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
 	"github.com/provin-line/oss/network/pkg/core"
@@ -57,6 +58,15 @@ func pipelineRuntimeConfigFrom(chainCfg *chainconfig.Config, pipeCfg *pipelineco
 			AccountSeed: chainCfg.NATS.AccountSeed,
 			ConnectWait: chainCfg.NATS.ConnectWait,
 		},
+		MaxCredentialSize:    pipeCfg.MaxCredentialSize,
+		MaxInlinePayloadSize: pipeCfg.MaxInlinePayloadSize,
+		MaxIngestPayloadSize: pipeCfg.MaxPushBodySize,
+	}
+	cfg.DecisionRecord = pipelineruntime.DecisionRecordConfig{
+		Level:         pipeCfg.DecisionRecord.Level,
+		Output:        pipeCfg.DecisionRecord.Output,
+		Path:          pipeCfg.DecisionRecord.Path,
+		SummaryWindow: pipeCfg.DecisionRecord.SummaryWindow,
 	}
 	if dataDir != "" {
 		cfg.TlogDir = filepath.Join(dataDir, "tlog")
@@ -294,6 +304,7 @@ func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HT
 	return vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(
 		httpClient, endpoint,
 		connect.WithInterceptors(bearerInterceptor(pipeCfg.VCStoreBearer)),
+		connect.WithAcceptCompression("gzip", nil, nil),
 		connect.WithReadMaxBytes(pipeCfg.MaxCredentialSize),
 	))
 }
@@ -303,17 +314,30 @@ func newVCResolverClientAt(pipeCfg *pipelineconfig.Config, httpClient connect.HT
 // fallback is needed before asynchronous predecessor replication has caught
 // up; every selected credential is still cryptographically verified and fixed
 // in the resulting EvidenceView.
+//
+// The upstream may be another organization's registry, so a call to it ends within
+// timeout (upstreamResolveTimeout when not positive), whatever the caller's context.
 type fallbackCredentialResolver struct {
 	local    *vcresolverclient.Resolver
 	upstream *vcresolverclient.Resolver
+	timeout  time.Duration
 }
+
+// upstreamResolveTimeout bounds one call to the declared upstream registry.
+const upstreamResolveTimeout = 30 * time.Second
 
 func (r fallbackCredentialResolver) ResolveCredential(ctx context.Context, contentAddress string) (*vc.PipelinePassCredential, error) {
 	credential, localErr := r.local.ResolveCredential(ctx, contentAddress)
 	if localErr == nil {
 		return credential, nil
 	}
-	credential, upstreamErr := r.upstream.ResolveCredential(ctx, contentAddress)
+	timeout := r.timeout
+	if timeout <= 0 {
+		timeout = upstreamResolveTimeout
+	}
+	upstreamCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	credential, upstreamErr := r.upstream.ResolveCredential(upstreamCtx, contentAddress)
 	if upstreamErr == nil {
 		return credential, nil
 	}
@@ -752,7 +776,10 @@ func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstrea
 // transport whenever any loop is configured, and chainconfig.
 // LoadChainConfig requires node-did non-empty on that transport).
 func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID string) pipelineruntime.Deps {
-	httpClient := guard.HTTPClient()
+	// The clients built over httpClient present vc-store-bearer to a
+	// destination the operator configured, so none follows a redirect: the
+	// bearer goes to that destination's origin only.
+	httpClient := origin.Confine(guard.HTTPClient())
 
 	vcClient := newVCStoreClient(pipeCfg, httpClient)
 	store := vcStoreAdapter{client: vcClient}
@@ -765,7 +792,9 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		Bearer:     pipeCfg.VCStoreBearer,
 	})
 
-	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient, pipeCfg.MaxRetainChunkSize)
+	// The payload client confines its own bearer-carrying store client; its
+	// tokenless fetches from a publisher follow redirects as before.
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize)
 
 	return pipelineruntime.Deps{
 		Resolver:      didResolver,

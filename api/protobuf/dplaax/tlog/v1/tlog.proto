@@ -133,7 +133,8 @@ message GetLogCheckpointResponse {
   // size / timestamp are string-encoded (uint64 survives IEEE-754 JSON
   // consumers past 2^53; the codebase avoids google.protobuf.Timestamp).
   string size = 2;
-  // head is the chain-head hash after `size` records; empty for an empty log.
+  // head is the chain-head hash after `size` records, in lower-case hex;
+  // empty for an empty log.
   string head = 3;
   string timestamp = 4; // RFC 3339 UTC
   // signed_by is the verification-method DID URL of the producing loop's

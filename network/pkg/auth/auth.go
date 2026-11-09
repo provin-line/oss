@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"connectrpc.com/connect"
 	o3coconnect "github.com/o3co/protobuf.interceptors/connectrpc"
@@ -29,6 +30,11 @@ import (
 // key (interceptors.WithBearerToken / BearerTokenFromContext) — the seam
 // stabilizes the SIGNATURES, and an alternative Verifier implementation must
 // still read that ctx convention to see the caller.
+//
+// A backend that cannot answer (unreachable, timed out, overloaded) must
+// return an error wrapping interceptors.ErrBackendUnavailable: the RPC
+// interceptors report it as CodeUnavailable and the push receiver as 503, both
+// retryable. Any other error is a refusal or a fault, not an outage.
 type Verifier interface {
 	Verify(ctx context.Context, resource, action string) error
 }
@@ -66,11 +72,23 @@ func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 	}
 	switch cfg.Backend {
 	case BackendO3co:
-		return endpoint.NewO3coEndpoint(cfg.PolicyVerifierURL)
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewO3coEndpoint(cfg.PolicyVerifierURL, endpoint.WithO3coAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendOPA:
-		return endpoint.NewOPAEndpoint(cfg.OPA.BaseURL, cfg.OPA.PolicyPath)
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewOPAEndpoint(cfg.OPA.BaseURL, cfg.OPA.PolicyPath, endpoint.WithOPAAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendCedar:
-		return endpoint.NewCedarEndpoint(cfg.Cedar.BaseURL)
+		resolver, err := cfg.Cedar.JWT.resolver()
+		if err != nil {
+			return nil, fmt.Errorf("auth: %w", err)
+		}
+		return withPlainInternalKey(cfg, func() (Verifier, error) {
+			return endpoint.NewCedarEndpoint(cfg.Cedar.BaseURL,
+				endpoint.WithCedarPrincipalResolver(resolver.Principal),
+				endpoint.WithCedarAllowPlainInternal(cfg.PlainInternal...))
+		})
 	case BackendStatic:
 		rules := make([]endpoint.StaticRule, len(cfg.Static.Allow))
 		for i, r := range cfg.Static.Allow {
@@ -82,6 +100,23 @@ func NewVerifier(cfg *AuthConfig) (Verifier, error) {
 		// the switch stays total if a backend is added without wiring here.
 		return nil, fmt.Errorf("auth: unknown backend %q", cfg.Backend)
 	}
+}
+
+// withPlainInternalKey runs build and, on failure, names the
+// provin.network.auth.plain-internal key. The endpoint refuses a plaintext
+// non-loopback URL that is not listed, and an entry that is not a host:port it
+// could reach; both are fixed in that setting. The refusal text that points at
+// the endpoint library's allow-everything option is replaced: this package never
+// uses it, and the operator's lever is the provin key.
+func withPlainInternalKey(cfg *AuthConfig, build func() (Verifier, error)) (Verifier, error) {
+	v, err := build()
+	if err != nil {
+		if strings.Contains(err.Error(), "AllowInsecure") {
+			return nil, fmt.Errorf("auth: PDP endpoint refused: plaintext http to a non-loopback host needs its host:port in %s (configured: %q), or use https", keyPlainInternal, cfg.PlainInternal)
+		}
+		return nil, fmt.Errorf("auth: PDP endpoint (%s=%q): %w", keyPlainInternal, cfg.PlainInternal, err)
+	}
+	return v, nil
 }
 
 // validateVerifierURL rejects a URL that is empty, scheme-less, not http(s), or

@@ -2,6 +2,7 @@ package urdna2015_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -112,19 +113,24 @@ func TestCanonicalize_Deterministic(t *testing.T) {
 
 // A context IRI outside the embedded allowlist is an error — never a network
 // fetch. (There is no network seam in the implementation at all; this pins
-// the error path a hostile credential would take.)
+// the error path a hostile credential would take.) By default the IRI is
+// refused before JSON-LD processing; with a document's own contexts read, the
+// offline loader refuses it.
 func TestCanonicalize_UnknownContextIRI_Errors(t *testing.T) {
-	c := urdna2015.NewCanonicalizer(map[string][]byte{
-		ctxCredentialsV2: read(t, "credentials-v2.jsonld"),
-	})
+	served := map[string][]byte{ctxCredentialsV2: read(t, "credentials-v2.jsonld")}
 	doc := map[string]any{
 		"@context": []any{ctxCredentialsV2, "https://evil.example/context/v1"},
 		"type":     []any{"VerifiableCredential"},
 	}
-	if _, err := c.Canonicalize(doc); err == nil {
-		t.Fatal("unknown context IRI: want error, got canonical output")
-	} else if !strings.Contains(err.Error(), "evil.example") {
-		t.Errorf("error should name the refused IRI: %v", err)
+	for name, c := range map[string]*urdna2015.Canonicalizer{
+		"by default":             urdna2015.NewCanonicalizer(served),
+		"with WithLocalContexts": urdna2015.NewCanonicalizer(served, urdna2015.WithLocalContexts()),
+	} {
+		if _, err := c.Canonicalize(doc); err == nil {
+			t.Fatalf("%s: unknown context IRI: want error, got canonical output", name)
+		} else if !strings.Contains(err.Error(), "evil.example") {
+			t.Errorf("%s: error should name the refused IRI: %v", name, err)
+		}
 	}
 }
 
@@ -395,5 +401,40 @@ func TestNewCanonicalizer_DefensiveCopy(t *testing.T) {
 func TestName(t *testing.T) {
 	if got := w3cCanonicalizer(t).Name(); got != "urdna2015" {
 		t.Errorf("Name() = %q, want %q", got, "urdna2015")
+	}
+}
+
+// A document whose blank nodes are too alike to label within the work bound
+// is refused (RDFC-1.0 §4.4.3): here a list of 64 equal values, whose middle
+// nodes no quad of their own tells apart.
+func TestCanonicalize_RefusesADocumentTooComplexToLabel(t *testing.T) {
+	steps := make([]any, 64)
+	for i := range steps {
+		steps[i] = "pass"
+	}
+	const ctxSteps = "https://example.org/steps-context"
+	c := urdna2015.NewCanonicalizer(map[string][]byte{
+		ctxCredentialsV2: read(t, "credentials-v2.jsonld"),
+		ctxExamplesV2:    read(t, "examples-v2.jsonld"),
+		ctxSteps:         []byte(`{"@context": {"steps": {"@id": "https://example.org/steps", "@container": "@list"}}}`),
+	})
+	doc := map[string]any{
+		"@context":          []any{ctxCredentialsV2, ctxExamplesV2, ctxSteps},
+		"type":              []any{"VerifiableCredential"},
+		"issuer":            "did:example:issuer",
+		"validFrom":         "2026-01-01T00:00:00Z",
+		"credentialSubject": map[string]any{"steps": steps},
+	}
+	out, err := c.Canonicalize(doc)
+	if !errors.Is(err, urdna2015.ErrTooComplex) || !strings.Contains(err.Error(), "labelling:") {
+		t.Errorf("Canonicalize: err = %v, want urdna2015.ErrTooComplex, naming the labelling", err)
+	}
+	if out != nil {
+		t.Errorf("Canonicalize returned %d bytes with its refusal", len(out))
+	}
+	steps = steps[:16]
+	doc["credentialSubject"] = map[string]any{"steps": steps}
+	if _, err := c.Canonicalize(doc); err != nil {
+		t.Errorf("Canonicalize with 16 equal values: %v", err)
 	}
 }

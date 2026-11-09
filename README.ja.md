@@ -57,23 +57,29 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `did/` | DID ドメイン: W3C 文書モデル・method dispatch（`MethodOf`）。`did:dplaax` method（T1）は `did/dplaax` |
 | `canon/` | 署名スコープの正規化: JCS (RFC 8785)・URDNA2015・厳格な JSON デコード |
 | `vc/` | W3C VC Data Integrity: クレデンシャルモデル・ビルダー・検証器・暗号スイート・confidence 軸 |
-| `crypto/` | 鍵生成・署名・検証インターフェース + Ed25519 実装 |
+| `crypto/` | 鍵生成・署名・検証インターフェース。Ed25519（`crypto/ed25519`）・ES256（`crypto/es256`）・RS256（`crypto/rs256`）の実装 |
 | `delegation/` | Pipeline/Process DID 向けのオーナー署名付き委任クレデンシャル |
 | `resolver/` | DID Document 解決インターフェース + ローカル・grpc・マルチ実装 |
 | `keystore/` | 秘密鍵ストレージコントラクト（KMS モデル境界） |
 | `tlog/` | 組織ごとの transparency log: append-only・改竄検出可能なレコード列（監査基盤） |
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
+| `keybinding/` | 鍵の結び付け（発行者が、受け手のために鍵を主体に結ぶ）と、発行者の失効の一覧（W3C の Bitstring Status List） |
+| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・拒否だけ・要約・なし） |
+| `contentaddress/` | 中身の番地（`sha256:` と 64 字の小文字 hex）。自分の関数だけが作る型 |
 
 ライブラリ層内部の依存 DAG:
 
 ```text
 vc ──► did, canon, crypto
+did ──► canon, crypto, multibase
 delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
+decisionrecord ──► canon, contentaddress
+keybinding ──► vc, did, canon, crypto
 ```
 
 ## Pipeline プロセスモデル
@@ -96,8 +102,10 @@ tlog ──► crypto
 
 - **v0 credential wire は凍結済み** — credential の署名に参加するすべての
   バイト: credential の `@context` セット（embed 済み・digest pin）、Data
-  Integrity proof アルゴリズム、両暗号スイート（`eddsa-jcs-2022` が default、
-  `eddsa-rdfc-2022` は opt-in）とその正規化、source-commitment の計算形。
+  Integrity proof アルゴリズム、両暗号スイートとその正規化、source-commitment
+  の計算形。発行では `eddsa-jcs-2022` が既定。`eddsa-rdfc-2022` は、発行にも
+  確かめにも、`vc.RegisterEdDSARDFC2022` を呼んだ process だけが使う。確かめる
+  と、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るため。
   これらの変更は発行済み credential との proof 互換性を壊すため**次 MAJOR**の
   変更となる。凍結はプロセスでなくテスト（公式 W3C vc-di-eddsa vector・KAT・
   context sha256 pin）が強制する — 正確なスコープ（本宣言が意図的にカバー

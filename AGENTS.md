@@ -4,7 +4,7 @@ Guidance for AI agents and contributors working on provin OSS.
 
 ## Project shape
 
-- Go module: `github.com/provin-line/oss` (Go 1.25+)
+- Go module: `github.com/provin-line/oss` (Go 1.26+)
 - Protocol namespace: `dplaax` (proto packages `dplaax.*.v1`, DID method `did:dplaax`)
 - Product namespace: `provin` (CLI, images)
 - No database, anywhere. Persistent state is YAML files; ephemeral state is in-memory.
@@ -12,7 +12,8 @@ Guidance for AI agents and contributors working on provin OSS.
 ## Layer rules (enforced by review)
 
 1. Library packages (top-level domain libraries: `vc/`, `canon/`, `crypto/`, `did/`,
-   `delegation/`, `resolver/`, `keystore/`, `tlog/`, `hoconconfig/`, `orgverify/` —
+   `delegation/`, `resolver/`, `keystore/`, `tlog/`, `hoconconfig/`, `orgverify/`,
+   `decisionrecord/`, `keybinding/`, `contentaddress/` —
    the catalog lives in [README.md](README.md)) are pure domain: no imports of
    `gen/`, `network/`, `pipeline/`, `cmd/`.
 2. `network/` and `pipeline/` never import each other; they interact over the wire.
@@ -33,6 +34,10 @@ verification silently — treat them as hard rules:
   `canon/` (duplicate-key rejection, trailing-data rejection, `UseNumber`).
   Direct `json.Unmarshal` on protocol paths requires a `decoder-hygiene-exempt`
   comment explaining why precision/duplicates cannot matter there.
+- A `json.Number` is read as a double only through `canon.Float64` (the
+  RFC 8259 grammar, correctly rounded, whatever the spelling). Another
+  `Float64` method or `ParseFloat` requires a `number-hygiene-exempt` comment
+  explaining why the string is not a JSON number.
 - Integers above 2^53 must survive round-trips. Any proto/struct conversion that could
   lose precision must be guarded by a canonical-hash round-trip comparison.
 - JSON-LD contexts are embedded at compile time, never fetched at runtime.

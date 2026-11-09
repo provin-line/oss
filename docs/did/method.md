@@ -93,7 +93,7 @@ document state without diverging from its own log.
 
 | Operation | Mechanism | Authorization |
 | --- | --- | --- |
-| Create (owner) | `RegisterOwner` with a complete, **self-signed** document — the proof demonstrates control of the document's own key | L1 policy + the document proof |
+| Create (owner) | `RegisterOwner` with a complete, **self-signed** document — the proof demonstrates control of the document's own key. Every key in the document must be one a reader extracts through `authentication` or `assertionMethod` (a listed, uniquely identified, self-controlled Ed25519 Multikey or JWK method); embedded methods, the legacy `publicKey` list, and unlisted, duplicated or foreign keys are refused | L1 policy + the document proof |
 | Create (pipeline / process) | `IssuePipeline` / `IssueProcess`: the registry verifies an **owner-signed delegation credential** bound to exactly the target DID, requires the owner (and, for a process, the parent pipeline) to be active, then **generates** the `#auth`/`#signing` keypairs and assembles the document (`controller` = the structural parent) | L1 policy + delegation verification |
 | Read / Resolve | `ResolveDID` RPC (L1) or the public resolution route (below) | open read on the public route |
 | Update / key rotation | **Not supported.** There is no document-update or key-rotation operation | — |

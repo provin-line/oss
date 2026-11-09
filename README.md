@@ -10,7 +10,9 @@ Self-hosting a node means standing up its authorization layer too: the node is
 fail-closed and needs a policy decision point (PDP). For an authenticated stack —
 real `auth.provider` + policy-verifier + node + NATS in one command, driving a
 record to a `VERIFIED` verdict — see [`deploy/quickstart/`](deploy/quickstart/README.md).
-The PDP backend is pluggable (`o3co` | `opa` | `cedar` | `static`); `static` is an
+The PDP backend is pluggable (`o3co` | `opa` | `cedar` | `static`); a plaintext
+`http://` PDP on a private network must be listed in
+`provin.network.auth.plain-internal`; `static` is an
 authorization allow-list, **not authentication** (see
 [network/README.md](network/README.md#pdp-backends--the-locus-of-authentication)).
 
@@ -82,23 +84,29 @@ other — they interact exclusively over the wire (ConnectRPC / NATS).
 | `did/` | DID domain: W3C document model, method dispatch (`MethodOf`); the `did:dplaax` method (T1) in `did/dplaax` |
 | `canon/` | Canonicalization of signing scopes: JCS (RFC 8785), URDNA2015, strict JSON decoding |
 | `vc/` | W3C VC Data Integrity: credential model, builder, verifier, cryptosuites, confidence axes |
-| `crypto/` | Key generation / signing / verification interfaces + Ed25519 implementation |
+| `crypto/` | Key generation / signing / verification interfaces; Ed25519 (`crypto/ed25519`), ES256 (`crypto/es256`) and RS256 (`crypto/rs256`) implementations |
 | `delegation/` | Owner-signed delegation credentials for Pipeline/Process DIDs |
 | `resolver/` | DID Document resolution interface + local / grpc / multi implementations |
 | `keystore/` | Private-key storage contract (KMS-model boundary) |
 | `tlog/` | Per-organization transparency log: append-only, tamper-evident record sequences (audit substrate) |
 | `hoconconfig/` | Three-layer HOCON configuration loader |
 | `orgverify/` | DNS-based organization identity verification |
+| `keybinding/` | Key bindings (an issuer binds a key to a subject for a relying party) and the issuer's revocation list (W3C Bitstring Status List) |
+| `decisionrecord/` | The record of each decision a deciding party makes, and the levels it is written at (all, refusals, summary, none) |
+| `contentaddress/` | The content address (`sha256:` and 64 lowercase hex digits), as a type only its own functions make |
 
 Internal dependency DAG (within the library layer):
 
 ```text
 vc ──► did, canon, crypto
+did ──► canon, crypto, multibase
 delegation ──► vc, did, crypto
 resolver ──► did
 orgverify ──► did, resolver
 keystore ──► crypto
 tlog ──► crypto
+decisionrecord ──► canon, contentaddress
+keybinding ──► vc, did, canon, crypto
 ```
 
 ## Pipeline Process model
@@ -123,10 +131,13 @@ stability promises:
 
 - **The v0 credential wire is frozen** — every byte that participates in a
   credential signature: the credential `@context` set (embedded,
-  digest-pinned), the Data Integrity proof algorithm, both cryptosuites
-  (`eddsa-jcs-2022` default, `eddsa-rdfc-2022` opt-in) and their
-  canonicalizations, and the source-commitment form. Changing any of these
-  breaks proof compatibility with already-issued credentials and is a
+  digest-pinned), the Data Integrity proof algorithm, both cryptosuites and
+  their canonicalizations, and the source-commitment form. `eddsa-jcs-2022`
+  is the suite a proof is issued with by default; `eddsa-rdfc-2022` is used,
+  to issue or to verify, only by a process that calls
+  `vc.RegisterEdDSARDFC2022`, since verifying it runs JSON-LD processing on
+  the untrusted document before its signature is checked. Changing any of
+  these breaks proof compatibility with already-issued credentials and is a
   next-MAJOR change. The freeze is enforced by tests (official W3C
   vc-di-eddsa vectors, KATs, context sha256 pins), not by process — see the
   freeze declaration in the CHANGELOG for the exact scope, including the

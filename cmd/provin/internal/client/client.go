@@ -37,8 +37,8 @@ func DID(httpClient connect.HTTPClient, registry, token string) (didpbconnect.DI
 // VCResolver returns a VCResolverService client for the registry base URL,
 // presenting token as the L1 bearer on every RPC — the credential-fetch
 // surface the audit-bundle exporter walks a chain over. Same validation and
-// injection rules as DID.
-func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconnect.VCResolverServiceClient, error) {
+// injection rules as DID; opts are added to the client's options.
+func VCResolver(httpClient connect.HTTPClient, registry, token string, opts ...connect.ClientOption) (vcpbconnect.VCResolverServiceClient, error) {
 	if err := ValidateBaseURL(registry); err != nil {
 		return nil, fmt.Errorf("client: registry URL: %w", err)
 	}
@@ -48,14 +48,14 @@ func VCResolver(httpClient connect.HTTPClient, registry, token string) (vcpbconn
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return vcpbconnect.NewVCResolverServiceClient(httpClient, registry, connect.WithInterceptors(bearer(token))), nil
+	return vcpbconnect.NewVCResolverServiceClient(httpClient, registry, append([]connect.ClientOption{connect.WithInterceptors(bearer(token))}, opts...)...), nil
 }
 
 // Audit returns an AuditService client for a node base URL, presenting token
 // as the L1 bearer on every RPC — the receipt-read surface the
 // aggregate-complete exporter walks consumed sets over. Same validation and
-// injection rules as DID.
-func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.AuditServiceClient, error) {
+// injection rules as DID; opts are added to the client's options.
+func Audit(httpClient connect.HTTPClient, base, token string, opts ...connect.ClientOption) (auditpbconnect.AuditServiceClient, error) {
 	if err := ValidateBaseURL(base); err != nil {
 		return nil, fmt.Errorf("client: audit base URL: %w", err)
 	}
@@ -65,7 +65,7 @@ func Audit(httpClient connect.HTTPClient, base, token string) (auditpbconnect.Au
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return auditpbconnect.NewAuditServiceClient(httpClient, base, connect.WithInterceptors(bearer(token))), nil
+	return auditpbconnect.NewAuditServiceClient(httpClient, base, append([]connect.ClientOption{connect.WithInterceptors(bearer(token))}, opts...)...), nil
 }
 
 // Schema returns a SchemaService client for the registry base URL, presenting

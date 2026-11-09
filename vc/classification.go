@@ -26,16 +26,16 @@ const (
 	ChainMultiOwnerDerived
 )
 
-// ClassifyChain resolves each issuer's controller chain to its terminal
-// Owner DID and classifies the chain by how many distinct owners it crosses.
+// ClassifyChain establishes each issuer's Owner DID (as AttributeOwner does)
+// and classifies the chain by how many distinct owners it crosses.
 //
 // A single-credential chain is a bare origin (ChainOrigin) — no derivation
 // occurred, regardless of how many upstream sources an aggregation folded
 // (aggregation starts a fresh chain). A multi-credential chain is
 // ChainSingleOwnerDerived when every issuer resolves to one owner, otherwise
 // ChainMultiOwnerDerived. Classification is orthogonal to confidence, but it
-// shares the verified controller walk: an unreachable or broken controller
-// chain is an error (the owner cannot be attributed), not a class.
+// shares the Owner check: an Owner that cannot be established is an error
+// (the owner cannot be attributed), not a class.
 func (v *Verifier) ClassifyChain(ctx context.Context, chain []*PipelinePassCredential) (ChainClass, error) {
 	if len(chain) == 0 {
 		return ChainClassUnknown, errors.New("vc: empty chain")
@@ -45,7 +45,7 @@ func (v *Verifier) ClassifyChain(ctx context.Context, chain []*PipelinePassCrede
 	}
 	owners := make(map[string]bool, len(chain))
 	for _, cred := range chain {
-		owner, err := v.walkControllerChain(ctx, cred.Issuer())
+		owner, err := v.ownerOf(ctx, cred.Issuer())
 		if err != nil {
 			return ChainClassUnknown, fmt.Errorf("vc: classify chain: resolving owner of %q: %w", cred.Issuer(), err)
 		}

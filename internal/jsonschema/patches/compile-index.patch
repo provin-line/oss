@@ -1,0 +1,57 @@
+diff --git a/compiler.go b/compiler.go
+index 4da7361..31bf1b0 100644
+--- a/compiler.go
++++ b/compiler.go
+@@ -207,7 +207,7 @@ func (c *Compiler) doCompile(up urlPtr) (*Schema, error) {
+ 		}
+ 		compiled++
+ 	}
+-	for _, sch := range *q {
++	for _, sch := range q.list { // compile index
+ 		c.schemas[sch.up] = sch
+ 	}
+ 	return c.schemas[up], nil
+@@ -280,26 +280,34 @@ func (c *Compiler) compileObject(obj map[string]any, sch *Schema, r *root, q *qu
+ 
+ // queue --
+ 
+-type queue []*Schema
++// queue is the subschemas one Compile compiles, in the order they were
++// found, with an index by location, so a lookup takes constant time rather
++// than a search of the list.
++type queue struct { // compile index
++	list  []*Schema          // compile index
++	index map[urlPtr]*Schema // compile index
++} // compile index
+ 
+ func (q *queue) append(sch *Schema) {
+-	*q = append(*q, sch)
++	q.list = append(q.list, sch) // compile index
++	if q.index == nil {          // compile index
++		q.index = map[urlPtr]*Schema{} // compile index
++	} // compile index
++	if _, ok := q.index[sch.up]; !ok { // compile index: the first one, as the search found
++		q.index[sch.up] = sch // compile index
++	} // compile index
+ }
+ 
+ func (q *queue) at(i int) *Schema {
+-	return (*q)[i]
++	return q.list[i] // compile index
+ }
+ 
+ func (q *queue) len() int {
+-	return len(*q)
++	return len(q.list) // compile index
+ }
+ 
+ func (q *queue) get(up urlPtr) *Schema {
+-	i := slices.IndexFunc(*q, func(sch *Schema) bool { return sch.up == up })
+-	if i != -1 {
+-		return (*q)[i]
+-	}
+-	return nil
++	return q.index[up] // compile index
+ }
+ 
+ // regexp --

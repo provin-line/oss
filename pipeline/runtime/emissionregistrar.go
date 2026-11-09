@@ -14,6 +14,8 @@ import (
 // cmd/pipeline owns this local interface (capability, not concrete); a wire
 // client over AuditService.RegisterEvidence satisfies it in production
 // (*auditor.MemReceiptStore satisfies it in tests).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type ReceiptWriter interface {
 	Put(headHash string, registrantDID string, consumedHashes []string) error
 }

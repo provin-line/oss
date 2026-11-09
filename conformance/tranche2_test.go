@@ -46,6 +46,16 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// testCodec returns an envelope codec whose limits are well above what these
+// tests send.
+func testCodec() *envelopecodec.Codec {
+	c, err := envelopecodec.New(envelopecodec.Limits{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20})
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // --- commitment.store.persistence (commitment-012) ---
 //
 // The durable evidence substrate must survive a process restart. Driven exactly
@@ -637,7 +647,7 @@ func runProcessSinkVerify(t *testing.T, v dplaaxVector) {
 	if err != nil {
 		t.Fatalf("hash consumed credential: %v", err)
 	}
-	wire, err := envelopecodec.New().MarshalEnvelope(&contract.Envelope{
+	wire, err := testCodec().MarshalEnvelope(&contract.Envelope{
 		Credential: cred,
 		Payload:    payload,
 		SequenceNo: 1,
@@ -660,7 +670,7 @@ func runProcessSinkVerify(t *testing.T, v dplaaxVector) {
 		proc, err := sink.New(sink.Config{
 			Strategy:         contract.VerificationAdjacent,
 			Kind:             tc.kind,
-			Codec:            envelopecodec.New(),
+			Codec:            testCodec(),
 			Verifier:         verifier,
 			Store:            noopIngressStore{},
 			Writer:           &recordingWriter{order: order},

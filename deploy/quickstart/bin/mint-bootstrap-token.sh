@@ -15,14 +15,19 @@
 # production options.
 #
 # Usage:
-#   mint-bootstrap-token.sh --owner <owner-did> [--secret <s>] [--issuer <iss>] [--ttl <sec>]
-# The secret defaults to $OAUTH_JWT_SECRET; the issuer to $OAUTH_JWT_ISSUER.
+#   mint-bootstrap-token.sh --owner <owner-did> [--secret <s>] [--issuer <iss>]
+#                           [--audience <aud>] [--ttl <sec>]
+# The secret defaults to $OAUTH_JWT_SECRET, the issuer to $OAUTH_JWT_ISSUER
+# then to the quickstart's http://localhost:3000, and the audience to $OAUTH_JWT_AUDIENCE, then to the quickstart's
+# https://quickstart.provin.invalid. The policy-verifier accepts only RFC 9068
+# access tokens: typ at+jwt, and iss / aud equal to its own configuration.
 
 set -euo pipefail
 
 owner=""
 secret="${OAUTH_JWT_SECRET:-}"
-issuer="${OAUTH_JWT_ISSUER:-}"
+issuer="${OAUTH_JWT_ISSUER:-http://localhost:3000}"
+audience="${OAUTH_JWT_AUDIENCE:-https://quickstart.provin.invalid}"
 ttl=600
 
 while [ $# -gt 0 ]; do
@@ -30,6 +35,7 @@ while [ $# -gt 0 ]; do
 		--owner)  owner="$2"; shift 2 ;;
 		--secret) secret="$2"; shift 2 ;;
 		--issuer) issuer="$2"; shift 2 ;;
+		--audience) audience="$2"; shift 2 ;;
 		--ttl)    ttl="$2"; shift 2 ;;
 		*) echo "mint-bootstrap-token: unknown arg $1" >&2; exit 2 ;;
 	esac
@@ -50,13 +56,13 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 now="$(date +%s)"
 exp="$((now + ttl))"
 
-header='{"alg":"HS256","typ":"JWT"}'
+header='{"alg":"HS256","typ":"at+jwt"}'
 # scope is action-first (`${action}:${resourceType}`) — the policy-verifier's
 # ResourceActionScopeRuleCollector matches "register:dids" to the (dids,
 # register) request. A no-scope token would be allowed for the whole surface;
 # scoping it to register:dids keeps the bootstrap token least-privilege.
-payload="$(printf '{"sub":"%s","scope":"register:dids","iat":%s,"exp":%s,"iss":"%s"}' \
-	"$owner" "$now" "$exp" "$issuer")"
+payload="$(printf '{"sub":"%s","scope":"register:dids","iat":%s,"exp":%s,"iss":"%s","aud":"%s"}' \
+	"$owner" "$now" "$exp" "$issuer" "$audience")"
 
 h="$(printf '%s' "$header"  | b64url)"
 p="$(printf '%s' "$payload" | b64url)"

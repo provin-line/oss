@@ -12,7 +12,6 @@ import (
 
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/transport"
-	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/vc"
 )
@@ -198,7 +197,7 @@ func validPreservingConfig(t *testing.T, sub *syncSubscriber) transport.LoopConf
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  &fakePublisher{},
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 }
@@ -235,7 +234,7 @@ func TestLoop_CompileTimeInterface(t *testing.T) {
 func TestNewLoop_Validation(t *testing.T) {
 	baseSubFn := func() *syncSubscriber { return newSyncSubscriber() }
 	basePub := func() *fakePublisher { return &fakePublisher{} }
-	baseCodec := envelopecodec.New()
+	baseCodec := testCodec()
 	baseEmission := func() *fakeTlog { return &fakeTlog{} }
 
 	base := func() transport.LoopConfig {
@@ -410,7 +409,7 @@ func TestLoop_PassedProducing_PublishesAndRecords(t *testing.T) {
 	sub := newSyncSubscriber([]byte("raw input"))
 	pub := &fakePublisher{}
 	emission := &fakeTlog{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -491,7 +490,7 @@ func TestLoop_SequenceNumbers_TwoPasses(t *testing.T) {
 	sub := newSyncSubscriber([]byte("msg1"), []byte("msg2"))
 	pub := &fakePublisher{}
 	emission := &fakeTlog{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -548,7 +547,7 @@ func TestLoop_PublishFailThenSuccess_SequenceReuse(t *testing.T) {
 	sub := newSyncSubscriber([]byte("msg1"), []byte("msg2"))
 	pub := &fakePublisher{failFirst: 1}
 	emission := &fakeTlog{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -619,7 +618,7 @@ func TestLoop_MarshalFailure_DropNotAdvance(t *testing.T) {
 	sub := newSyncSubscriber([]byte("msg1"), []byte("msg2"))
 	pub := &fakePublisher{}
 	emission := &fakeTlog{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -670,7 +669,7 @@ func TestLoop_EmissionFailure_CounterAdvances(t *testing.T) {
 	sub := newSyncSubscriber([]byte("msg1"), []byte("msg2"))
 	pub := &fakePublisher{}
 	emission := &fakeTlog{failErr: errors.New("tlog unavailable")}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -726,7 +725,7 @@ func TestLoop_Filtered_NothingPublished(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -767,7 +766,7 @@ func TestLoop_Errored_NothingPublished(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -811,7 +810,7 @@ func TestLoop_ProcessorGoError_LoopContinues(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -875,7 +874,7 @@ func TestLoop_Declarations(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: newSyncSubscriber(),
 		Publisher:  &fakePublisher{},
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -902,7 +901,7 @@ func TestLoop_RunLifecycle(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1019,7 +1018,7 @@ func TestLoop_DrainAppend_CancelledCtx(t *testing.T) {
 	}
 	sub := newSyncSubscriber([]byte("raw input"))
 	pub := &fakePublisher{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -1084,7 +1083,7 @@ func TestLoop_PassedNilVC_DroppedNotPublished(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1105,7 +1104,7 @@ func TestLoop_PassedNilVC_DroppedNotPublished(t *testing.T) {
 	if pub.callCount() != 1 {
 		t.Fatalf("expected 1 publish call (nil VC dropped), got %d", pub.callCount())
 	}
-	decoded, err := envelopecodec.New().UnmarshalEnvelope(pub.calls[0])
+	decoded, err := testCodec().UnmarshalEnvelope(pub.calls[0])
 	if err != nil {
 		t.Fatalf("UnmarshalEnvelope: %v", err)
 	}
@@ -1140,7 +1139,7 @@ func TestLoop_PassedNilPayload_DroppedNotPublished(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1160,7 +1159,7 @@ func TestLoop_PassedNilPayload_DroppedNotPublished(t *testing.T) {
 	if pub.callCount() != 1 {
 		t.Fatalf("expected 1 publish call (nil Payload dropped), got %d", pub.callCount())
 	}
-	decoded, err := envelopecodec.New().UnmarshalEnvelope(pub.calls[0])
+	decoded, err := testCodec().UnmarshalEnvelope(pub.calls[0])
 	if err != nil {
 		t.Fatalf("UnmarshalEnvelope: %v", err)
 	}
@@ -1193,7 +1192,7 @@ func TestLoop_NilResult_DroppedNoPanic(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1236,7 +1235,7 @@ func TestLoop_StatusUnknown_DroppedNoPanic(t *testing.T) {
 		Processor:  proc,
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   emission,
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1276,7 +1275,7 @@ func TestLoop_EmissionRecord_SequenceNoIsString(t *testing.T) {
 	sub := newSyncSubscriber([]byte("raw input"))
 	pub := &fakePublisher{}
 	emission := &fakeTlog{}
-	codec := envelopecodec.New()
+	codec := testCodec()
 
 	cfg := transport.LoopConfig{
 		Behavior:   contract.ChainPreserving,
@@ -1341,7 +1340,7 @@ func TestNewLoop_OutOfRangeBehavior_Rejected(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  &fakePublisher{},
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	_, err := transport.NewLoop(cfg)
@@ -1367,7 +1366,7 @@ func TestLoop_DrainError_PropagatedByRun(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  &fakePublisher{},
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1397,7 +1396,7 @@ func TestLoop_CloseError_PropagatedByRun(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	loop, err := transport.NewLoop(cfg)
@@ -1429,7 +1428,7 @@ func TestLoop_DrainAndCloseError_DrainWins(t *testing.T) {
 		Processor:  &fakeProcessor{},
 		Subscriber: sub,
 		Publisher:  pub,
-		Codec:      envelopecodec.New(),
+		Codec:      testCodec(),
 		Emission:   &fakeTlog{},
 	}
 	loop, err := transport.NewLoop(cfg)

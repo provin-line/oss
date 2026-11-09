@@ -3,10 +3,13 @@ package vc
 import (
 	stded25519 "crypto/ed25519"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/provin-line/oss/canon/jcs"
 	ed25519lib "github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/multibase"
 )
 
@@ -57,13 +60,15 @@ func TestLegacyContract_VerifiesADocumentTheSuitesDisagreeOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
+	ctx := []any{"https://www.w3.org/ns/credentials/v2"}
 	doc := map[string]any{
-		"id": "urn:uuid:legacy-big-int",
-		"n":  json.Number("9007199254740993"),
+		"@context": ctx,
+		"id":       "urn:uuid:legacy-big-int",
+		"n":        json.Number("9007199254740993"),
 	}
 	created := "2026-01-01T00:00:00Z"
 	vm := "did:dplaax:o:p#signing"
-	cfg := proofConfigMap(proofType, CryptosuiteEdDSAJCS2022, vm, proofPurposeSign, created, nil, false)
+	cfg := proofConfigMap(proofType, CryptosuiteEdDSAJCS2022, vm, proofPurposeSign, created, ctx, true)
 	hd, err := proofHashData(jcs.Canonicalizer{}, cfg, doc)
 	if err != nil {
 		t.Fatalf("legacy hashData: %v", err)
@@ -81,7 +86,90 @@ func TestLegacyContract_VerifiesADocumentTheSuitesDisagreeOn(t *testing.T) {
 	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, ContractLegacyProvinEdDSAJCSInt64); err != nil {
 		t.Errorf("legacy contract rejected a genuine legacy artifact: %v", err)
 	}
-	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, ContractW3CEdDSAJCS2022); err == nil {
+	// The same proof with the proof-local @context the W3C contract requires:
+	// the mirror holds, so only the canonicalization can refuse it.
+	w3c := *proof
+	w3c.Context = ctx
+	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, &w3c, doc, ContractW3CEdDSAJCS2022); err == nil {
 		t.Error("the W3C contract verified an int64-verbatim signature — the two canonicalizations did not diverge where they must")
+	} else if strings.Contains(err.Error(), "@context") {
+		t.Errorf("the W3C contract refused at the @context check, not at the canonicalization: %v", err)
+	}
+	// A legacy proof is the six typed members: a @context added to it rides
+	// outside the signature.
+	if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, &w3c, doc, ContractLegacyProvinEdDSAJCSInt64); err == nil {
+		t.Error("the legacy contract verified a legacy proof with an added @context")
+	}
+}
+
+// hasClaimContract answers for a cryptosuite what ClassifyProof answers for
+// some shape and key: whether any claim contract names it.
+func TestHasClaimContract_AgreesWithClassifyProof(t *testing.T) {
+	for _, suite := range []string{CryptosuiteEdDSAJCS2022, CryptosuiteEdDSARDFC2022, "ecdsa-rdfc-2019", "bbs-2023", "", "none"} {
+		classifies := false
+		for _, hasCtx := range []bool{true, false} {
+			for _, enc := range []did.KeyEncoding{did.EncodingMultikey, did.EncodingJWK} {
+				if _, err := ClassifyProof(suite, hasCtx, enc); err == nil {
+					classifies = true
+				}
+			}
+		}
+		if got := hasClaimContract(suite); got != classifies {
+			t.Errorf("hasClaimContract(%q) = %t, but ClassifyProof classifies it: %t", suite, got, classifies)
+		}
+	}
+}
+
+// A contract verifies a proof of its own suite only: one signed validly
+// under a contract's canonicalization but naming another suite is refused,
+// so a proof's suite says how it was signed whichever contract a caller
+// names.
+func TestVerifyProofUnderContract_RefusesAProofOfAnotherSuite(t *testing.T) {
+	kp, err := (ed25519lib.Generator{}).Generate()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	cred, err := New(CredentialFields{
+		Issuer:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1",
+		ValidFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: CredentialSubjectFields{
+			PipelineID: "p1", ProcessID: "proc1", TransformationClaim: ClaimConvert,
+			InputHash: "sha256:" + probeHex, OutputHash: "sha256:" + probeHex,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := cred.Body()
+	ctx := doc[keyContext]
+	vm := "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1#signing"
+	for _, tc := range []struct {
+		suite    string
+		contract SuiteContract
+	}{
+		{CryptosuiteEdDSARDFC2022, ContractW3CEdDSAJCS2022},
+		{CryptosuiteEdDSARDFC2022, ContractLegacyProvinEdDSAJCSInt64},
+		{CryptosuiteEdDSAJCS2022, ContractW3CEdDSARDFC2022},
+	} {
+		canonFn, err := tc.contract.canonicalizer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		created := "2026-01-01T00:00:00Z"
+		cfg := proofConfigMap(proofType, tc.suite, vm, proofPurposeSign, created, ctx, true)
+		hd, err := proofHashDataFunc(canonFn, cfg, doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof := &DataIntegrityProof{
+			Type: proofType, Cryptosuite: tc.suite, VerificationMethod: vm, ProofPurpose: proofPurposeSign, Created: created,
+			ProofValue: multibase.EncodeBase58Btc(stded25519.Sign(stded25519.NewKeyFromSeed(kp.PrivateKey[:32]), hd)),
+		}
+		if tc.contract != ContractLegacyProvinEdDSAJCSInt64 {
+			proof.Context = ctx
+		}
+		if err := VerifyProofUnderContract(ed25519lib.Verifier{}, kp.PublicKey, proof, doc, tc.contract); err == nil || !strings.Contains(err.Error(), "is not verified under contract") {
+			t.Errorf("a proof naming %s under %s: %v, want a refusal naming the contract", tc.suite, tc.contract, err)
+		}
 	}
 }

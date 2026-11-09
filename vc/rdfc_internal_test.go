@@ -111,11 +111,13 @@ func assertVectorChain(t *testing.T, c canon.Canonicalizer, credFile, poFile, cr
 }
 
 // The eddsa-rdfc-2022 freeze anchor (W3C vc-di-eddsa Examples 8–16). The
-// canonicalizer serves the vector's two contexts; the registered production
-// suite serves the three frozen provin contexts instead, so the vector runs
-// against a test-scoped canonicalizer through the same proofHashData path.
+// canonicalizer serves the vector's two contexts, read only as the
+// registered suite reads its own (servedContextsOnly); the registered
+// production suite serves the three frozen provin contexts instead, so the
+// vector runs against a test-scoped canonicalizer through the same
+// proofHashData path.
 func TestW3CVector_EdDSARDFC2022(t *testing.T) {
-	c := urdna2015.NewCanonicalizer(map[string][]byte{
+	c := servedContextsOnly(map[string][]byte{
 		ContextCredentialsV2:                            contextCredentialsV2Document,
 		"https://www.w3.org/ns/credentials/examples/v2": readTestdata(t, "w3c-examples-v2.jsonld"),
 	})

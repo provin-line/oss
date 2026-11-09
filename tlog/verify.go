@@ -64,6 +64,11 @@ func VerifyConsistency(older, newer *Checkpoint, proof *ConsistencyProof) error 
 	if older.Origin != newer.Origin {
 		return fmt.Errorf("tlog: verify consistency: origins differ (%q vs %q) — checkpoints of different logs are not comparable", older.Origin, newer.Origin)
 	}
+	for _, cp := range []*Checkpoint{older, newer} {
+		if !lowerCaseHead(cp.Head) {
+			return fmt.Errorf("tlog: verify consistency: head %q is not in lower case", cp.Head)
+		}
+	}
 	if proof.OldSize != older.Size || proof.NewSize != newer.Size {
 		return fmt.Errorf("tlog: verify consistency: proof sizes (%d, %d) != checkpoint sizes (%d, %d)", proof.OldSize, proof.NewSize, older.Size, newer.Size)
 	}
@@ -112,6 +117,9 @@ func VerifyConsistency(older, newer *Checkpoint, proof *ConsistencyProof) error 
 
 func parseHead(head string) ([rfc6962.HashSize]byte, error) {
 	var out [rfc6962.HashSize]byte
+	if !lowerCaseHead(head) {
+		return out, fmt.Errorf("head %q is not in lower case", head)
+	}
 	b, err := hex.DecodeString(head)
 	if err != nil {
 		return out, fmt.Errorf("malformed head %q: %w", head, err)

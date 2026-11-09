@@ -94,7 +94,8 @@ type GetLogCheckpointResponse struct {
 	// size / timestamp are string-encoded (uint64 survives IEEE-754 JSON
 	// consumers past 2^53; the codebase avoids google.protobuf.Timestamp).
 	Size string `protobuf:"bytes,2,opt,name=size,proto3" json:"size,omitempty"`
-	// head is the chain-head hash after `size` records; empty for an empty log.
+	// head is the chain-head hash after `size` records, in lower-case hex;
+	// empty for an empty log.
 	Head      string `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`
 	Timestamp string `protobuf:"bytes,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // RFC 3339 UTC
 	// signed_by is the verification-method DID URL of the producing loop's

@@ -1,6 +1,7 @@
 // Package crypto defines the key-generation, signing, and verification
-// interfaces. Implementations live in subpackages (ed25519 for the PoC); the
-// interfaces carry the algorithm dimension so adding suites is non-breaking.
+// interfaces. Implementations live in subpackages: ed25519 generates, signs
+// and verifies; es256 and rs256 verify. The interfaces carry the algorithm
+// dimension, so adding suites is non-breaking.
 package crypto
 
 // KeyPair is a generated key pair. PrivateKey appears only inside the
@@ -29,7 +30,9 @@ type Signer interface {
 
 // Verifier verifies a signature against a raw public key. Implementations
 // reject malformed key/signature sizes before delegating to the underlying
-// library.
+// library, and may refuse a key or signature they consider unacceptable (for
+// example a public key of small order). A non-nil error means the signature
+// was not verified; callers treat any error as a failed verification.
 type Verifier interface {
 	Verify(publicKey []byte, data []byte, signature []byte) (bool, error)
 	Algorithm() string

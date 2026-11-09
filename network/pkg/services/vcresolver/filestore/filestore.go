@@ -37,6 +37,7 @@ import (
 	"sync"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/vc"
 )
@@ -172,7 +173,7 @@ func (p *Pool) loadAll() ([]poolEnvelope, error) {
 		}
 		env, err := p.readEnvelope(filepath.Join(p.dir, de.Name()))
 		if err != nil {
-			p.logger.Warn("filestore: skipping damaged pool entry", "file", de.Name(), "err", err)
+			p.logger.Warn("filestore: skipping damaged pool entry", "file", de.Name(), "err", netexcerpt.ErrorText(err))
 			continue
 		}
 		// A misfiled entry (envelope hash != filename) would be listed under a
@@ -247,7 +248,7 @@ func (p *Pool) Add(e vcresolver.UnresolvedEntry) error {
 		return p.writeEnvelope(existing)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		// A damaged entry is replaced wholesale: working state, latest wins.
-		p.logger.Warn("filestore: replacing damaged pool entry", "hash", e.Hash, "err", err)
+		p.logger.Warn("filestore: replacing damaged pool entry", "hash", e.Hash, "err", netexcerpt.ErrorText(err))
 	}
 	env := poolEnvelope{
 		V: 1, Seq: p.nextSeq,
@@ -274,7 +275,7 @@ func (p *Pool) Get(hash string) (vcresolver.UnresolvedEntry, bool) {
 	env, err := p.readEnvelope(path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			p.logger.Warn("filestore: damaged pool entry read as absent", "hash", hash, "err", err)
+			p.logger.Warn("filestore: damaged pool entry read as absent", "hash", hash, "err", netexcerpt.ErrorText(err))
 		}
 		return vcresolver.UnresolvedEntry{}, false
 	}

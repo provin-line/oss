@@ -1,0 +1,195 @@
+diff --git a/compile_test.go b/compile_test.go
+new file mode 100644
+index 0000000..bf38023
+--- /dev/null
++++ b/compile_test.go
+@@ -0,0 +1,33 @@
++package jsonschema_test
++
++// Tests of the local patches to how v6.0.3 compiles a schema (README.md).
++
++import (
++	"strings"
++	"testing"
++
++	"github.com/santhosh-tekuri/jsonschema/v6"
++)
++
++// A subschema is admitted whole or not at all: one a reference reaches
++// outside the schema's keywords is read when the reference is compiled, and
++// is refused by the metaschema there; had that read stayed in the compiler,
++// compiling the schema again would skip the subschema's check. Compiling
++// again fails the same way.
++func TestCompile_AdmitsASubschemaWholeOrNotAtAll(t *testing.T) {
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"$ref":"#/x/bad","x":{"bad":{"type":5}}}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	if err := c.AddResource("schema.json", doc); err != nil {
++		t.Fatal(err)
++	}
++	_, first := c.Compile("schema.json")
++	if first == nil {
++		t.Fatal("a reference to a subschema the metaschema refuses compiled")
++	}
++	if _, again := c.Compile("schema.json"); again == nil || again.Error() != first.Error() {
++		t.Errorf("compiled again: %v, want %v", again, first)
++	}
++}
+diff --git a/root.go b/root.go
+index 7bbe543..417a326 100644
+--- a/root.go
++++ b/root.go
+@@ -2,7 +2,6 @@ package jsonschema
+ 
+ import (
+ 	"fmt"
+-	"slices"
+ 	"strings"
+ )
+ 
+@@ -12,11 +11,34 @@ type root struct {
+ 	resources           map[jsonPointer]*resource
+ 	ids                 map[url]*resource // resource index: resources by id
+ 	subschemasProcessed map[jsonPointer]struct{}
++	journal             *[]func() // subschema journal: how to take back what is added, while it is set
+ }
+ 
++// record notes how to take back an addition to the root, while a journal is
++// kept (roots.ensureSubschema).
++func (r *root) record(undo func()) { // subschema journal
++	if r.journal != nil { // subschema journal
++		*r.journal = append(*r.journal, undo) // subschema journal
++	} // subschema journal
++} // subschema journal
++
+ // addResource adds res at ptr, indexed by its id too, so finding a resource
+ // by id takes constant time rather than a search of every resource.
+ func (r *root) addResource(ptr jsonPointer, res *resource) { // resource index
++	prevRes, hadRes := r.resources[ptr] // subschema journal
++	prevID, hadID := r.ids[res.id]      // subschema journal
++	r.record(func() {                   // subschema journal
++		if hadRes { // subschema journal
++			r.resources[ptr] = prevRes // subschema journal
++		} else { // subschema journal
++			delete(r.resources, ptr) // subschema journal
++		} // subschema journal
++		if hadID { // subschema journal
++			r.ids[res.id] = prevID // subschema journal
++		} else { // subschema journal
++			delete(r.ids, res.id) // subschema journal
++		} // subschema journal
++	}) // subschema journal
+ 	r.resources[ptr] = res // resource index
+ 	if r.ids == nil {      // resource index
+ 		r.ids = map[url]*resource{} // resource index
+@@ -98,6 +120,7 @@ func (r *root) collectAnchors(sch any, schPtr jsonPointer, res *resource) error
+ 				string(anchor), r.url.String(), string(ptr1), string(schPtr),
+ 			}
+ 		}
++		r.record(func() { delete(res.anchors, anchor) }) // subschema journal
+ 		res.anchors[anchor] = schPtr
+ 		return nil
+ 	}
+@@ -133,6 +156,8 @@ func (r *root) collectAnchors(sch any, schPtr jsonPointer, res *resource) error
+ 			if err := addAnchor(anchor(s)); err != nil {
+ 				return err
+ 			}
++			n := len(res.dynamicAnchors)                                     // subschema journal
++			r.record(func() { res.dynamicAnchors = res.dynamicAnchors[:n] }) // subschema journal
+ 			res.dynamicAnchors = append(res.dynamicAnchors, anchor(s))
+ 		}
+ 	}
+@@ -140,26 +165,6 @@ func (r *root) collectAnchors(sch any, schPtr jsonPointer, res *resource) error
+ 	return nil
+ }
+ 
+-func (r *root) clone() *root {
+-	processed := map[jsonPointer]struct{}{}
+-	for k := range r.subschemasProcessed {
+-		processed[k] = struct{}{}
+-	}
+-	resources := map[jsonPointer]*resource{}
+-	ids := map[url]*resource{} // resource index
+-	for k, v := range r.resources {
+-		resources[k] = v.clone()
+-		ids[v.id] = resources[k] // resource index
+-	}
+-	return &root{
+-		url:                 r.url,
+-		doc:                 r.doc,
+-		resources:           resources,
+-		ids:                 ids, // resource index
+-		subschemasProcessed: processed,
+-	}
+-}
+-
+ // --
+ 
+ type resource struct {
+@@ -174,20 +179,6 @@ func newResource(ptr jsonPointer, id url) *resource {
+ 	return &resource{ptr: ptr, id: id, anchors: make(map[anchor]jsonPointer)}
+ }
+ 
+-func (res *resource) clone() *resource {
+-	anchors := map[anchor]jsonPointer{}
+-	for k, v := range res.anchors {
+-		anchors[k] = v
+-	}
+-	return &resource{
+-		ptr:            res.ptr,
+-		id:             res.id,
+-		dialect:        res.dialect,
+-		anchors:        anchors,
+-		dynamicAnchors: slices.Clone(res.dynamicAnchors),
+-	}
+-}
+-
+ //--
+ 
+ type UnsupportedVocabularyError struct {
+diff --git a/roots.go b/roots.go
+index 5917654..976d433 100644
+--- a/roots.go
++++ b/roots.go
+@@ -74,6 +74,7 @@ func (rr *roots) collectResources(r *root, sch any, base url, schPtr jsonPointer
+ 	if err := rr._collectResources(r, sch, base, schPtr, fallback); err != nil {
+ 		return err
+ 	}
++	r.record(func() { delete(r.subschemasProcessed, schPtr) }) // subschema journal
+ 	r.subschemasProcessed[schPtr] = struct{}{}
+ 	return nil
+ }
+@@ -194,14 +195,23 @@ func (rr *roots) ensureSubschema(up urlPtr) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	rClone := r.clone()
+-	if err := rr.addSubschema(rClone, up.ptr); err != nil {
+-		return err
+-	}
+-	if err := rr.validate(rClone, v, up.ptr); err != nil {
+-		return err
+-	}
+-	rr.roots[r.url] = rClone
++	// The subschema is added to the root in place, each addition recorded,
++	// and a failure to add or check it takes them back, last first: as
++	// upstream's copy of the root did, a subschema is admitted whole or not
++	// at all, without a copy of the root for each subschema.
++	var journal []func()             // subschema journal
++	r.journal = &journal             // subschema journal
++	err = rr.addSubschema(r, up.ptr) // subschema journal
++	if err == nil {                  // subschema journal
++		err = rr.validate(r, v, up.ptr) // subschema journal
++	} // subschema journal
++	r.journal = nil // subschema journal
++	if err != nil { // subschema journal
++		for i := len(journal) - 1; i >= 0; i-- { // subschema journal
++			journal[i]() // subschema journal
++		} // subschema journal
++		return err // subschema journal
++	} // subschema journal
+ 	return nil
+ }
+ 

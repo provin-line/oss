@@ -16,6 +16,7 @@
 package filelog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -264,14 +265,14 @@ func replay(path string) (records []*tlog.Record, keep int64, err error) {
 	}
 	keep = -1
 	if n := len(raw); n > 0 && raw[n-1] != '\n' {
-		cut := strings.LastIndexByte(string(raw), '\n') + 1
+		cut := bytes.LastIndexByte(raw, '\n') + 1
 		keep = int64(cut)
 		raw = raw[:cut]
 	}
 	prev := ""
 	line := 0
 	for len(raw) > 0 {
-		nl := strings.IndexByte(string(raw), '\n')
+		nl := bytes.IndexByte(raw, '\n')
 		lineBytes := raw[:nl]
 		raw = raw[nl+1:]
 		line++

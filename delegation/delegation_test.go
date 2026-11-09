@@ -3,6 +3,7 @@ package delegation_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -340,5 +341,39 @@ func TestVerify_RejectsProofTypeOrPurpose(t *testing.T) {
 	wrongSuite.Proof.Cryptosuite = "eddsa-rdfc-2022"
 	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, wrongSuite); err == nil {
 		t.Error("Verify with an unsupported cryptosuite: want error")
+	}
+}
+
+// countingResolver answers every resolution with a transient error and
+// counts the calls.
+type countingResolver struct{ calls int }
+
+func (r *countingResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	r.calls++
+	return nil, errors.New("registry unreachable")
+}
+
+// A proofValue that does not decode is refused before the issuer is
+// resolved: no key can verify it.
+func TestVerify_UndecodableProofValueRefusedBeforeResolution(t *testing.T) {
+	signer, _ := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// With its genuine proofValue, the delegation reaches the resolver.
+	r := &countingResolver{}
+	if err := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred); err == nil || r.calls != 1 {
+		t.Fatalf("the genuine delegation: err = %v after %d resolutions, want the resolver's error after 1", err, r.calls)
+	}
+
+	cred.Proof.ProofValue = "not base58btc"
+	r = &countingResolver{}
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	if err == nil || !strings.Contains(err.Error(), "decode proofValue") {
+		t.Errorf("Verify: err = %v, want the decode error", err)
+	}
+	if r.calls != 0 {
+		t.Errorf("resolved the issuer %d times, want 0", r.calls)
 	}
 }

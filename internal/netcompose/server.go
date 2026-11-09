@@ -18,6 +18,7 @@ import (
 	signerpbconnect "github.com/provin-line/oss/gen/go/dplaax/signer/v1/signerpbconnect"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
@@ -355,6 +356,9 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	}
 
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
+	// bound is every mount's first option, so the text of each error it
+	// answers, authz's included, is held to errorText's limit.
+	bound := errorText()
 
 	// RegisterEvidence's admission gate (D1): the head variant id (the exact
 	// wire bytes StoreVC admitted — audit.proto's head_variant_address
@@ -436,20 +440,20 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	for _, p := range []handlerPair{
 		// schema bodies, DID docs/delegations, and full-replacement allowlists
 		// can exceed the proof cap → document class.
-		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), authz, docCap)),
-		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), authz, docCap)),
+		newPair(schemapbconnect.NewSchemaServiceHandler(schemahandler.New(schemaSvc), bound, authz, docCap)),
+		newPair(didpbconnect.NewDIDServiceHandler(didhandler.New(didSvc), bound, authz, docCap)),
 		// SignRequest.data can be a canonicalized credential, so it shares the
 		// credential class (the config value StoreVC uses) — not the fixed doc
 		// constant, or the two would diverge when max-credential-size is raised.
-		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
-		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), authz, connect.WithReadMaxBytes(maxCredentialSize))),
+		newPair(signerpbconnect.NewSignerServiceHandler(signerhandler.New(signerSvc), bound, authz, connect.WithReadMaxBytes(maxCredentialSize))),
+		newPair(vcpbconnect.NewVCResolverServiceHandler(vchandler.New(vcSvc), bound, authz, connect.WithReadMaxBytes(maxCredentialSize))),
 		// Read-mostly / small-request control surfaces → proof class. (When a
 		// mirror store is wired, MirrorLogSegment's OWN procedure path is
 		// additionally overridden below at its own derived cap — see that
 		// comment for why this mount stays unconditional and unchanged.)
-		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), authz, proofCap)),
-		newPair(tlogpbconnect.NewTlogServiceHandler(tlogHandlerImpl, authz, proofCap)),
-		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainOperatorOpts...), authz, docCap)),
+		newPair(auditpbconnect.NewAuditServiceHandler(audithandler.New(auditor.NewStatusService(auditStatus, auditReceipts), auditEvidence, peerVerifier), bound, authz, proofCap)),
+		newPair(tlogpbconnect.NewTlogServiceHandler(tlogHandlerImpl, bound, authz, proofCap)),
+		newPair(chainpbconnect.NewChainServiceHandler(chainhandler.NewOperator(chainSvc, chainOperatorOpts...), bound, authz, docCap)),
 		// PayloadStoreService (RetainPayload) is the L1-gated write side of
 		// by-reference payload delivery (unlike PayloadService below, mounted
 		// with NO L1 interceptor): the authz interceptor decides whether the
@@ -458,7 +462,11 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		// requiring owner_did to equal the proven signer DID. peerVerifier is
 		// reused (same DID-resolution + nonce-store infra as the L2-only
 		// surfaces below).
-		newPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, peerVerifier, uint64(maxRetainPayloadSize)), authz, retainChunkCap)),
+		// RetainPayload is client-streaming: a retained payload arrives as it
+		// is sent. Once its caller, past L1, proves its DID in the first frame,
+		// the body is held to the stall bound only, not to the whole-body read
+		// limit (httpserve.StreamingBody, liftOnProof).
+		streamingPair(payloadpbconnect.NewPayloadStoreServiceHandler(storehandler.New(payloadStore, liftOnProof{peerVerifier}, uint64(maxRetainPayloadSize)), bound, authz, retainChunkCap)),
 	} {
 		mux.Handle(p.path, p.h)
 	}
@@ -491,7 +499,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 			tlogpbconnect.TlogServiceMirrorLogSegmentProcedure,
 			tlogHandlerImpl.MirrorLogSegment,
 			connect.WithSchema(mirrorMethod),
-			connect.WithHandlerOptions(authz, connect.WithReadMaxBytes(mirrorReadCapBytes(mirror.MaxBatchBytes))),
+			connect.WithHandlerOptions(bound, authz, connect.WithReadMaxBytes(mirrorReadCapBytes(mirror.MaxBatchBytes))),
 		)
 		mux.Handle(tlogpbconnect.TlogServiceMirrorLogSegmentProcedure, mirrorHandler)
 	}
@@ -511,7 +519,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11). The
 	// read cap matters MORE here than on L1 surfaces: there is no interceptor to
 	// bound the request first, and the requests are small proofs + fields.
-	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog), proofCap)
+	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog), bound, proofCap)
 	mux.Handle(peerPath, peerHandler)
 
 	// PayloadService is the internet-facing L2 by-reference payload serving
@@ -521,7 +529,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// ServingBoundary authorizes on owner metadata BEFORE reading the bytes and
 	// collapses a not-admitted caller to NotFound (F9/F4 — no existence oracle).
 	payloadServing := payloadresolver.NewServingBoundary(payloadSvc, chainSvc)
-	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadServing, peerVerifier), proofCap)
+	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadServing, peerVerifier), bound, proofCap)
 	mux.Handle(payloadPath, payloadHandler)
 
 	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4),
@@ -555,6 +563,26 @@ type handlerPair struct {
 // returns into a struct for uniform mux registration.
 func newPair(path string, h http.Handler) handlerPair {
 	return handlerPair{path: path, h: h}
+}
+
+// streamingPair is newPair for a client-streaming RPC (see
+// httpserve.StreamingBody).
+func streamingPair(path string, h http.Handler) handlerPair {
+	return handlerPair{path: path, h: httpserve.StreamingBody(h)}
+}
+
+// liftOnProof is RetainPayload's verifier: once a caller's in-band wireauth
+// proof verifies, its stream's body is no longer held to the whole-body read
+// limit (httpserve.LiftBodyReadLimit). Before that, the first frame, which
+// carries the proof, is read under the limit like any request.
+type liftOnProof struct{ storehandler.Verifier }
+
+func (v liftOnProof) Verify(ctx context.Context, op string, fields map[string]any, proof wireauth.Proof, authorize wireauth.Authorizer) error {
+	if err := v.Verifier.Verify(ctx, op, fields, proof, authorize); err != nil {
+		return err
+	}
+	httpserve.LiftBodyReadLimit(ctx)
+	return nil
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {

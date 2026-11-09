@@ -19,13 +19,23 @@ Three-layer separation (the dPLaaX auth stack):
   (`PolicyOptionInterceptor` then `VerificationInterceptor`) to mount on a
   handler. Order is fixed: the option interceptor populates context before the
   verification interceptor reads it.
-- `NewVerifier(url, opts…) (endpoint.VerifierEndpoint, error)` — builds the
-  production verifier (the `auth.policy-verifier` REST client). The URL must carry
-  an explicit `http://`/`https://` scheme (fail-closed; no accidental plaintext).
-  Tests use `endpoint.NewStaticEndpoint` directly.
-- `AuthConfig` + `LoadAuthConfig` — the typed `provin.network.auth.*` config
-  (`policy-verifier-url`), validated fail-closed at boot (empty/scheme-less → boot
-  error, so authorization is never run against an unset endpoint).
+- `NewVerifier(cfg) (Verifier, error)` — builds the production verifier for the
+  configured backend (`o3co` | `opa` | `cedar` | `static`). The URL must carry an
+  explicit `http://`/`https://` scheme (fail-closed). Plaintext to a non-loopback
+  host is refused unless its `host:port` is listed in
+  `provin.network.auth.plain-internal`; `With*AllowInsecure` is never used.
+- `AuthConfig` + `LoadAuthConfig` — the typed `provin.network.auth.*` config,
+  validated fail-closed at boot (empty/scheme-less URL, or a missing/contradictory
+  `cedar.jwt.*` block under `backend = "cedar"` → boot error).
+- The `cedar` backend verifies the bearer JWT itself (a Cedar agent authenticates
+  nothing): `cedar.jwt.issuer`, `cedar.jwt.audience` and exactly one of
+  `cedar.jwt.jwks-url` (https) / `cedar.jwt.secret` (HS256, `cedar.jwt.secret-encoding`
+  `utf8` | `hex` | `base64`). A token needs a valid signature, `exp`, `iss`, an
+  `aud` containing the audience and a non-empty `sub` (the principal). JWKS bounds:
+  10 min cache, refetch at most every 30 s, 30 min stale grace for known `kid`s
+  (a withdrawn key can be trusted up to 40 min during a JWKS outage). The verification lives in the internal
+  `jwtprincipal` package behind a one-method interface; this package only selects
+  the backend and passes the resolver in.
 
 ## Policy declaration
 

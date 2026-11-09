@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did"
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	auditpbconnect "github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
@@ -27,10 +29,12 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	vcpbconnect "github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/chainconfig"
+	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
@@ -119,6 +123,40 @@ func TestPipelineRuntimeConfigFrom_MapsNATSAndDataDirDerivedPaths(t *testing.T) 
 	}
 	if len(cfg.Loops) != 1 || cfg.Loops[0].Name != "src" || cfg.Loops[0].Source.OutputSubject != "did:dplaax:reg:org:acme:pipeline:src" {
 		t.Errorf("Loops = %+v", cfg.Loops)
+	}
+}
+
+func TestPipelineRuntimeConfigFrom_MapsDecisionRecord(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNATS, NATS: chainconfig.NATSConfig{URL: "nats://x:4222"}}
+	pipeCfg := &pipelineconfig.Config{DecisionRecord: pipelineconfig.DecisionRecordConfig{
+		Level: decisionrecord.LevelSummary, Output: pipelineconfig.DecisionRecordOutputJSONL,
+		Path: "/var/provin/decisions.jsonl", SummaryWindow: 30 * time.Second,
+	}}
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := pipelineruntime.DecisionRecordConfig{
+		Level: decisionrecord.LevelSummary, Output: pipelineruntime.DecisionRecordOutputJSONL,
+		Path: "/var/provin/decisions.jsonl", SummaryWindow: 30 * time.Second,
+	}
+	if cfg.DecisionRecord != want {
+		t.Errorf("DecisionRecord = %+v, want %+v", cfg.DecisionRecord, want)
+	}
+	if pipelineconfig.DecisionRecordOutputLog != pipelineruntime.DecisionRecordOutputLog || pipelineconfig.DecisionRecordOutputJSONL != pipelineruntime.DecisionRecordOutputJSONL {
+		t.Error("sink names drifted between pipelineconfig and pipeline/runtime")
+	}
+}
+
+func TestPipelineRuntimeConfigFrom_MapsEnvelopeLimits(t *testing.T) {
+	chainCfg := &chainconfig.Config{Transport: chainconfig.TransportNATS, NATS: chainconfig.NATSConfig{URL: "nats://x:4222"}}
+	pipeCfg := &pipelineconfig.Config{MaxCredentialSize: 3 << 20, MaxInlinePayloadSize: 5 << 20, MaxPushBodySize: 7 << 20}
+	cfg, err := pipelineRuntimeConfigFrom(chainCfg, pipeCfg, "/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxCredentialSize != 3<<20 || cfg.MaxInlinePayloadSize != 5<<20 || cfg.MaxIngestPayloadSize != 7<<20 {
+		t.Errorf("limits = %d, %d, %d; want %d, %d, %d", cfg.MaxCredentialSize, cfg.MaxInlinePayloadSize, cfg.MaxIngestPayloadSize, 3<<20, 5<<20, 7<<20)
 	}
 }
 
@@ -1229,4 +1267,70 @@ func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t 
 		t.Fatalf("server saw %d RegisterEvidence attempts, want 3 (2 failures + 1 success)", len(auditHandler.evidenceNonces))
 	}
 	assertDistinctNonces(t, auditHandler.evidenceNonces)
+}
+
+// silentVCResolver never answers ResolveVC, and ignores the deadline the
+// client sends: each call waits until the test ends.
+type silentVCResolver struct {
+	vcpbconnect.UnimplementedVCResolverServiceHandler
+	release chan struct{}
+}
+
+func (s silentVCResolver) ResolveVC(context.Context, *connect.Request[vcpb.ResolveVCRequest]) (*connect.Response[vcpb.ResolveVCResponse], error) {
+	<-s.release
+	return nil, errors.New("released")
+}
+
+// The declared upstream is another organization's registry: a call to it ends
+// within the resolver's timeout even under a context that is never cancelled.
+func TestFallbackCredentialResolver_UpstreamCallEndsWithinTheTimeout(t *testing.T) {
+	localStore, _, _ := newVCStoreAdapter(t)
+	release := make(chan struct{})
+	_, h := vcpbconnect.NewVCResolverServiceHandler(silentVCResolver{release: release})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs before srv.Close
+	resolver := fallbackCredentialResolver{
+		local:    localStore.client,
+		upstream: vcresolverclient.New(vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL)),
+		timeout:  50 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := resolver.ResolveCredential(context.WithoutCancel(context.Background()), addr("a"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("silent upstream: want error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("silent upstream: still waiting after 5s")
+	}
+}
+
+// The pipeline's calls that carry vc-store-bearer follow no redirect, so a
+// configured destination that redirects does not pass the bearer on.
+func TestBuildDeps_ShowsTheBearerToNoServerTheVCStoreRedirectsTo(t *testing.T) {
+	var sawBearer atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawBearer.Store(true)
+		}
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(store.Close)
+	pipeCfg := &pipelineconfig.Config{VCStoreEndpoint: store.URL, VCStoreBearer: "node-token", MaxCredentialSize: 1 << 20, MaxRetainChunkSize: 1 << 20}
+	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme")
+	if _, err := deps.ChainResolver.ResolveCredential(context.Background(), addr("a")); err == nil {
+		t.Error("a redirected fetch succeeded")
+	}
+	if sawBearer.Load() {
+		t.Error("the server the VC store redirected to saw the bearer")
+	}
 }

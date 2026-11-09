@@ -35,6 +35,8 @@ import (
 	"net/http"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/transport"
 )
 
@@ -115,7 +117,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("body exceeds %d bytes", h.cfg.MaxBodyBytes), http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, pipeexcerpt.Text("read body: "+excerpt.ErrorText(err)), http.StatusBadRequest)
 		return
 	}
 	if len(body) == 0 {
@@ -126,11 +128,11 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	// drift). Validation only — the published bytes are the received bytes.
 	var strictIn interface{}
 	if err := canon.NewStrictDecoder(body).Decode(&strictIn); err != nil {
-		http.Error(w, "strict JSON decode: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, pipeexcerpt.Text("strict JSON decode: "+excerpt.ErrorText(err)), http.StatusBadRequest)
 		return
 	}
 	if err := h.cfg.Publisher.Publish(body); err != nil {
-		h.logger.Error("apipush: publish failed", "err", err)
+		h.logger.Error("apipush: publish failed", "err", pipeexcerpt.ErrorText(err))
 		http.Error(w, "publish failed", http.StatusServiceUnavailable)
 		return
 	}

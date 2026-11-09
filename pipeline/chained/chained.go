@@ -52,9 +52,11 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/pipeline/chained/converter"
 	"github.com/provin-line/oss/pipeline/chained/filter"
 	"github.com/provin-line/oss/pipeline/contract"
+	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/pipeline/provenance"
 	"github.com/provin-line/oss/schema"
 	"github.com/provin-line/oss/vc"
@@ -147,6 +149,8 @@ type Config struct {
 
 	// InputValidator validates the input payload against InputSchemaRef.
 	// Optional; nil = check skipped.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	InputValidator schema.Validator
 
 	// InputSchemaRef is required when InputValidator is non-nil.
@@ -154,6 +158,8 @@ type Config struct {
 
 	// OutputValidator validates the produced output against OutputSchemaRef.
 	// Optional; nil = check skipped.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	OutputValidator schema.Validator
 
 	// OutputSchemaRef is required when OutputValidator is non-nil.
@@ -259,7 +265,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// Stage 1 — Decode envelope.
 	envelope, err := p.cfg.Codec.UnmarshalEnvelope(input)
 	if err != nil {
-		return p.errored(ctx, fmt.Sprintf("decode envelope: %v", err), nil, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("decode envelope: %s", excerpt.ErrorText(err)), nil, "", ""), nil
 	}
 	cred := envelope.Credential
 
@@ -276,7 +282,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		// inputs. Record it as such — under a non-None strategy a nil
 		// Confidence would falsely read as "no verification ran".
 		indeterminate := vc.ConfidenceIndeterminate
-		return p.errored(ctx, fmt.Sprintf("verification error: %v", err), &indeterminate, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("verification error: %s", excerpt.ErrorText(err)), &indeterminate, "", ""), nil
 	}
 	confidence := verifyResult.Overall
 	if confidence != vc.ConfidenceVerified {
@@ -291,7 +297,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		if isCtxErr(err) {
 			return nil, err
 		}
-		return p.errored(ctx, fmt.Sprintf("store ingress VC: %v — never continue without the audit trail", err), &confidence, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("store ingress VC: %s — never continue without the audit trail", excerpt.ErrorText(err)), &confidence, "", ""), nil
 	}
 
 	// Stage 4 — Predecessor subject. Read BEFORE payload acquisition: a
@@ -299,7 +305,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// compares against it.
 	subject, err := cred.Subject()
 	if err != nil {
-		return p.errored(ctx, fmt.Sprintf("predecessor subject unreadable: %v", err), &confidence, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("predecessor subject unreadable: %s", excerpt.ErrorText(err)), &confidence, "", ""), nil
 	}
 	if subject.OutputHash == "" {
 		return p.errored(ctx, "predecessor declares no outputHash: a producing predecessor must declare one — binding undecidable, fail closed", &confidence, "", ""), nil
@@ -327,7 +333,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// by-reference payload this is the sole integrity check on the fetched
 	// bytes — the serving boundary is untrusted.
 	if got := hashBytes(payload); got != subject.OutputHash {
-		return p.errored(ctx, fmt.Sprintf("payload does not match the predecessor's outputHash (payload %s, credential declares %s): tampered or substituted bytes", got, subject.OutputHash), &confidence, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("payload does not match the predecessor's outputHash (payload %s, credential declares %s): tampered or substituted bytes", got, pipeexcerpt.Value(subject.OutputHash)), &confidence, "", ""), nil
 	}
 
 	// Stage 5 — Optional input-schema check.
@@ -336,7 +342,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("input schema validation: %v", err), &confidence, "", ""), nil
+			return p.errored(ctx, fmt.Sprintf("input schema validation: %s", excerpt.ErrorText(err)), &confidence, "", ""), nil
 		}
 	}
 
@@ -348,7 +354,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("filter[%d] step failure: %v", i, err), &confidence, "", ""), nil
+			return p.errored(ctx, fmt.Sprintf("filter[%d] step failure: %s", i, excerpt.ErrorText(err)), &confidence, "", ""), nil
 		}
 		if !res.Pass {
 			r := &contract.Result{
@@ -369,7 +375,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("converter: %v", err), &confidence, "", ""), nil
+			return p.errored(ctx, fmt.Sprintf("converter: %s", excerpt.ErrorText(err)), &confidence, "", ""), nil
 		}
 	} else {
 		output = payload
@@ -387,7 +393,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 			if isCtxErr(err) {
 				return nil, err
 			}
-			return p.errored(ctx, fmt.Sprintf("output schema validation: %v", err), &confidence, "", ""), nil
+			return p.errored(ctx, fmt.Sprintf("output schema validation: %s", excerpt.ErrorText(err)), &confidence, "", ""), nil
 		}
 	}
 
@@ -396,7 +402,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// explicit gate against duplicate keys, trailing data, and precision drift.
 	var strictOut interface{}
 	if err := canon.NewStrictDecoder(output).Decode(&strictOut); err != nil {
-		return p.errored(ctx, fmt.Sprintf("strict decode of converter output: %v", err), &confidence, "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("strict decode of converter output: %s", excerpt.ErrorText(err)), &confidence, "", ""), nil
 	}
 
 	// Stage 10 — Hash computation.
@@ -414,7 +420,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		if isCtxErr(err) {
 			return nil, err
 		}
-		return p.errored(ctx, fmt.Sprintf("sign: %v", err), &confidence, inputHash, outputHash), nil
+		return p.errored(ctx, fmt.Sprintf("sign: %s", excerpt.ErrorText(err)), &confidence, inputHash, outputHash), nil
 	}
 
 	// Stage 12 — Assemble Result. (Non-empty output is guarded at the
@@ -479,7 +485,7 @@ func (p *Processor) acquirePayload(ctx context.Context, envelope *contract.Envel
 			if cErr := ctx.Err(); cErr != nil {
 				return nil, nil, cErr
 			}
-			return nil, p.errored(ctx, fmt.Sprintf("fetch by-reference payload at %s from %s: %v", outputHash, p.cfg.UpstreamEndpoint, err), &confidence, "", ""), nil
+			return nil, p.errored(ctx, fmt.Sprintf("fetch by-reference payload at %s from %s: %s", pipeexcerpt.Value(outputHash), p.cfg.UpstreamEndpoint, excerpt.ErrorText(err)), &confidence, "", ""), nil
 		}
 		return bytes, nil, nil
 	default: // DeliveryInline
@@ -505,7 +511,7 @@ func hashBytes(data []byte) string {
 func (p *Processor) errored(ctx context.Context, msg string, confidence *vc.ConfidenceState, inputHash, outputHash string) *contract.Result {
 	r := &contract.Result{
 		Status:     contract.StatusErrored,
-		Error:      msg,
+		Error:      pipeexcerpt.Text(msg),
 		Confidence: confidence,
 	}
 	p.notify(ctx, r, inputHash, outputHash, "")
@@ -528,7 +534,7 @@ func (p *Processor) notify(ctx context.Context, r *contract.Result, inputHash, o
 	}
 	for _, obs := range p.cfg.Observers {
 		if err := obs.OnProcessComplete(ctx, ev); err != nil {
-			p.logger.Error("observer error", "err", err)
+			p.logger.Error("observer error", "err", pipeexcerpt.ErrorText(err))
 		}
 	}
 }

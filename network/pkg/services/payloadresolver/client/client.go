@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 )
@@ -158,6 +160,10 @@ type Resolver struct {
 	retainClient payloadpbconnect.PayloadStoreServiceClient
 }
 
+// frameOverhead is the most a ResolvePayloadResponse adds to its chunk: the
+// field's tag and length (1 and at most 10 bytes).
+const frameOverhead = 16
+
 // New returns a Resolver from cfg, applying the Default* bounds for any
 // non-positive value.
 func New(cfg Config) *Resolver {
@@ -179,7 +185,13 @@ func New(cfg Config) *Resolver {
 	}
 	var retainClient payloadpbconnect.PayloadStoreServiceClient
 	if cfg.StoreEndpoint != "" {
-		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(cfg.HTTPClient, cfg.StoreEndpoint,
+		// The store client carries the bearer, so it follows no redirect: the
+		// bearer goes to StoreEndpoint's origin only.
+		storeClient := cfg.HTTPClient
+		if c, ok := storeClient.(*http.Client); ok {
+			storeClient = origin.Confine(c)
+		}
+		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(storeClient, cfg.StoreEndpoint,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)))
 	}
 	return &Resolver{
@@ -309,7 +321,14 @@ func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, cont
 		}()
 	}
 
-	svc := payloadpbconnect.NewPayloadServiceClient(r.httpClient, upstreamEndpoint)
+	// The upstream is another organization's server. Compression is not
+	// accepted, so a frame takes in memory what it takes on the wire, and a
+	// frame larger than the payload cap and its protobuf framing is refused
+	// without being held in memory; the running total below is the exact
+	// bound.
+	svc := payloadpbconnect.NewPayloadServiceClient(r.httpClient, upstreamEndpoint,
+		connect.WithAcceptCompression("gzip", nil, nil),
+		connect.WithReadMaxBytes(r.maxBytes+frameOverhead))
 	stream, err := svc.ResolvePayload(ctx, connect.NewRequest(&payloadpb.ResolvePayloadRequest{
 		AuthProof:   ap,
 		ContentHash: contentHash,

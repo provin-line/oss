@@ -11,8 +11,9 @@ import (
 
 // sinkRejectLog is the composition-root sink.RejectLog: it serializes each reject
 // record to JSON and appends it to a durable, hash-chained log, giving an archival
-// sink its reject-with-audit-log obligation. The record type carries no payload,
-// so a rejected event's bytes are never hoarded in the evidence store.
+// sink its reject-with-audit-log obligation. A sink records no refused payload,
+// and writes a record's Detail and IssuerDID within 1024 bytes each, so a
+// rejected event's bytes are never hoarded in the evidence store.
 type sinkRejectLog struct {
 	log tlog.Log
 }

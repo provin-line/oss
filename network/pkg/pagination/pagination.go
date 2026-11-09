@@ -33,8 +33,9 @@ const MaxPageSize = 256
 var (
 	// ErrInvalidPageSize reports a negative page_size (maps to InvalidArgument).
 	ErrInvalidPageSize = errors.New("pagination: page_size must not be negative")
-	// ErrInvalidToken reports a malformed, unversioned, or filter-mismatched
-	// page token (maps to InvalidArgument).
+	// ErrInvalidToken reports a malformed, unversioned, listing- or
+	// filter-mismatched page token, or one not spelled as EncodeToken writes
+	// it (maps to InvalidArgument).
 	ErrInvalidToken = errors.New("pagination: invalid page token")
 )
 
@@ -68,7 +69,10 @@ func EncodeToken(listing, cursor string, filters ...string) string {
 
 // DecodeToken unpacks a continuation token issued by EncodeToken, verifying
 // it was issued by the same listing with the same filter fields. An empty
-// token starts from the beginning.
+// token starts from the beginning. A token must be spelled exactly as
+// EncodeToken writes it: base64 decoding skips line breaks and ignores the
+// unused bits of the last character, so without that check one cursor would
+// have many tokens.
 func DecodeToken(listing, token string, filters ...string) (cursor string, err error) {
 	if token == "" {
 		return "", nil
@@ -76,6 +80,9 @@ func DecodeToken(listing, token string, filters ...string) (cursor string, err e
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidToken, err)
+	}
+	if base64.RawURLEncoding.EncodeToString(raw) != token {
+		return "", fmt.Errorf("%w: not spelled as issued", ErrInvalidToken)
 	}
 	parts := strings.SplitN(string(raw), ":", 3)
 	if len(parts) != 3 || parts[0] != tokenVersion {

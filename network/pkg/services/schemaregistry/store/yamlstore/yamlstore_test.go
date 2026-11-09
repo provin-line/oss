@@ -2,10 +2,13 @@ package yamlstore_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/goccy/go-yaml"
 
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
@@ -169,5 +172,78 @@ func TestPathTraversal_Rejected(t *testing.T) {
 	escaped := filepath.Join(filepath.Dir(root), "evil")
 	if _, err := os.Stat(escaped); err == nil {
 		t.Errorf("a file escaped the store root: %s", escaped)
+	}
+}
+
+// A version YAML would not read back as written is refused, so a later List
+// over its name still works.
+func TestSave_RefusesARecordThatWouldNotReadBackAsWritten(t *testing.T) {
+	for _, pre := range []string{"rc\t1", "a\rb", ".nan", "a\xffb", "rc  \n"} {
+		s := newStore(t)
+		in := sampleSchema()
+		in.Prerelease = pre
+		if err := s.Save(in); err == nil {
+			t.Errorf("prerelease %q: Save: want error", pre)
+		}
+		if got, err := s.List(in.Name, true, true); err != nil || len(got) != 0 {
+			t.Errorf("prerelease %q: List after the refusal = %v, %v; want none, nil", pre, got, err)
+		}
+	}
+}
+
+// The body is written as one base64 string, in about 4/3 of its size, and read
+// back byte for byte.
+func TestSave_WritesTheBodyAsOneBase64String(t *testing.T) {
+	dir := t.TempDir()
+	s := yamlstore.New(dir)
+	in := sampleSchema()
+	in.SchemaBody = bytes.Repeat([]byte(`{"a":1}`), 1<<13) // 56 KiB
+	if err := s.Save(in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, in.Name, in.Version+".yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "schemaBody: " + base64.StdEncoding.EncodeToString(in.SchemaBody) + "\n"; !bytes.Contains(raw, []byte(want)) {
+		t.Errorf("body not written as one base64 string:\n%.200s", raw)
+	}
+	if len(raw) > len(in.SchemaBody)*4/3+512 {
+		t.Errorf("record is %d bytes for a %d-byte body", len(raw), len(in.SchemaBody))
+	}
+	got, err := s.Get(in.Name, in.Version)
+	if err != nil || !bytes.Equal(got.SchemaBody, in.SchemaBody) {
+		t.Errorf("Get = %v; body equal = %v", err, err == nil && bytes.Equal(got.SchemaBody, in.SchemaBody))
+	}
+}
+
+// A record an earlier version wrote, its body a sequence of byte values, still
+// reads.
+func TestGet_ReadsABodyWrittenAsASequenceOfBytes(t *testing.T) {
+	dir := t.TempDir()
+	in := sampleSchema()
+	legacy, err := yaml.Marshal(struct {
+		Name         string `yaml:"name"`
+		Version      string `yaml:"version"`
+		Prerelease   string `yaml:"prerelease"`
+		SchemaFormat string `yaml:"schemaFormat"`
+		SchemaBody   []byte `yaml:"schemaBody"`
+		Deprecated   bool   `yaml:"deprecated"`
+	}{in.Name, in.Version, in.Prerelease, in.SchemaFormat, in.SchemaBody, in.Deprecated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(legacy, []byte("- 123")) {
+		t.Fatalf("precondition: the legacy encoding is a sequence:\n%s", legacy)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, in.Name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, in.Name, in.Version+".yaml"), legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := yamlstore.New(dir).Get(in.Name, in.Version)
+	if err != nil || !bytes.Equal(got.SchemaBody, in.SchemaBody) {
+		t.Fatalf("Get = %v, %v", got, err)
 	}
 }

@@ -79,6 +79,8 @@ func (d PayloadDelivery) String() string {
 // definitive miss from a transient error (both stop the event); a resolver
 // implementation MAY surface its own sentinel for observability (e.g. the
 // network client's ErrNotFound).
+//
+// Its errors keep the rule for a part's errors in the package doc.
 type PayloadResolver interface {
 	ResolvePayload(ctx context.Context, upstreamEndpoint, contentHash string) ([]byte, error)
 }

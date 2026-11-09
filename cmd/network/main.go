@@ -108,9 +108,10 @@ func main() {
 	// guard above enforces zero loops here, so
 	// that predicate is always false — yet the resolver still runs, draining
 	// whatever a peer's StoreVC/RegisterConsumed call registers over the wire.
-	// Its peer fetches present this bearer against L1-protected peers
+	// Its fetches from L1-protected peers present this bearer (to
+	// the configured destinations' origins and credential-origins only)
 	// regardless of local loops, so an empty bearer would silently starve
-	// every fetch at runtime. Fail closed at boot instead, before any
+	// every such fetch at runtime. Fail closed at boot instead, before any
 	// evidence-store side effects below.
 	if pipeCfg.VCStoreBearer == "" {
 		log.Fatalf("network: config %s is required — this binary's batch resolver always runs a peer-fetching client against L1-protected peers", pipelineconfig.VCStoreBearerKey)

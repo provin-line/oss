@@ -21,13 +21,21 @@
 //
 // Usage:
 //   node did-token.mjs --key <owner.jwk> --did <owner-did> \
-//       --provider http://localhost:3000 [--client quickstart]
+//       --provider http://localhost:3000 [--client quickstart] [--audience <aud>]
+//
+// The audience defaults to $OAUTH_JWT_AUDIENCE, then to the quickstart's
+// https://quickstart.provin.invalid. It is signed into the message: the
+// provider only accepts audiences on its oauth.grants.did.allowedAudiences
+// list, and the policy-verifier only accepts tokens whose aud is its own.
 
 import { readFileSync } from "node:fs";
 import { createPrivateKey, randomBytes, sign as edSign } from "node:crypto";
 
 function parseArgs(argv) {
-	const out = { client: "quickstart" };
+	const out = {
+		client: "quickstart",
+		audience: process.env.OAUTH_JWT_AUDIENCE || "https://quickstart.provin.invalid",
+	};
 	for (let i = 0; i < argv.length; i += 2) {
 		const flag = argv[i];
 		const val = argv[i + 1];
@@ -53,10 +61,11 @@ async function main() {
 
 	// The provider verifies this challenge against the owner DID's registered
 	// verification key. Shape mirrors the auth.provider DID-grant contract:
-	// a JSON message {did, timestamp, nonce} signed raw with Ed25519, the
-	// signature base64 (standard, not url).
+	// a JSON message {did, audience, timestamp, nonce} signed raw with Ed25519,
+	// the signature base64 (standard, not url).
 	const message = JSON.stringify({
 		did: args.did,
+		audience: args.audience,
 		timestamp: new Date().toISOString(),
 		nonce: randomBytes(16).toString("hex"),
 	});
