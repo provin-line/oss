@@ -179,6 +179,47 @@ func TestStrictDecoder_ReturnsAShortTypedDecodeErrorAsItIs(t *testing.T) {
 	}
 }
 
+// nilDecodeError is the error type of nilErrorField's decoding.
+type nilDecodeError struct{ reason string }
+
+func (e *nilDecodeError) Error() string { return e.reason }
+
+// nilErrorField's own decoding fails with a nil *nilDecodeError, an error
+// whose Error method panics.
+type nilErrorField struct{}
+
+func (*nilErrorField) UnmarshalJSON([]byte) error {
+	var err *nilDecodeError
+	return err
+}
+
+// An error a type's own decoding returns that is a nil pointer is returned
+// wrapped, with the text fmt writes for it: neither Decode nor the Error
+// method of what it returns panics, and errors.As still finds it.
+func TestStrictDecoder_ATypedDecodeErrorThatIsANilPointer(t *testing.T) {
+	var v struct {
+		F nilErrorField `json:"f"`
+	}
+	var err error
+	var text string
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("panicked: %v", r)
+			}
+		}()
+		err = canon.NewStrictDecoder([]byte(`{"f":1}`)).Decode(&v)
+		text = err.Error()
+	}()
+	var target *nilDecodeError
+	if !errors.As(err, &target) {
+		t.Fatalf("Decode = %T, want an error that is a *nilDecodeError", err)
+	}
+	if text != "<nil>" {
+		t.Errorf("text = %q, want %q", text, "<nil>")
+	}
+}
+
 // canon.Float64 names a refused literal within quotedLimit bytes.
 func TestFloat64_BoundsTheLiteralItNames(t *testing.T) {
 	for _, lit := range []string{"1" + long("0", 10000), "x" + long("é", 5000)} {

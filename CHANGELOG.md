@@ -1137,9 +1137,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (encoding/json's, or a type's own decoding's, which write a number's
   literal or a time's text) is returned wrapped, its text cut. `errors.Is`
   and `errors.As` find the error it wraps; a type assertion or `==` does
-  not. `canon.Float64` names its literal, quoted, within 128 bytes the same
-  way; it named the first 80 bytes, which could end inside a character, and
-  not the length.
+  not. An error whose `Error` method panics, as a nil pointer's may (a
+  type's own decoding may return one), is returned wrapped too, its text
+  what `fmt` writes for it, or a fixed text naming its type where `fmt`
+  panics as well, so calling `Error` on what `Decode` returns does not
+  panic. `canon.Float64` names its literal, quoted, within 128 bytes the
+  same way; it named the first 80 bytes, which could end inside a
+  character, and not the length.
 - The text of an error the network node answers a caller with does not grow
   with the request. Every service the node serves, over the Connect, gRPC and
   gRPC-Web protocols, answers within 1024 bytes of UTF-8 an error from its
