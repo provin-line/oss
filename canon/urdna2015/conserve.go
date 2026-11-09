@@ -1,7 +1,5 @@
 package urdna2015
 
-import "fmt"
-
 // What Canonicalize signs must hold every value of the document (see the
 // package doc). Rather than rest on a list of the forms JSON-LD processing
 // loses a value in, Canonicalize counts the document's values through its
@@ -27,8 +25,9 @@ import "fmt"
 // not signed.
 
 // dataValues counts the document's values JSON-LD carries into the expanded
-// form one for one (see the comment at the top of this file), refusing @index
-// and @direction anywhere, and @language outside a value object.
+// form one for one (see the comment at the top of this file). It refuses
+// nothing: the forms a count could not hold are refused before it
+// (rejectUncountedForms).
 func (r *contextRules) dataValues(v any, path *jsonPath) (int64, error) {
 	switch t := v.(type) {
 	case string, bool:
@@ -47,42 +46,10 @@ func (r *contextRules) dataValues(v any, path *jsonPath) (int64, error) {
 		return n, nil
 	case map[string]any:
 		keys := sortedKeys(t)
-		value, language := false, false
+		value := false
 		for _, k := range keys {
-			switch r.keyword(k) {
-			case "@value":
+			if r.keyword(k) == "@value" {
 				value = true
-			case "@language":
-				language = true
-			case "@index":
-				return 0, fmt.Errorf("urdna2015: @index at %s: RDF does not carry it, so it would ride the document unsigned", path.quoted())
-			case "@direction":
-				return 0, fmt.Errorf("urdna2015: @direction at %s: json-gold does not write base direction, so it would ride the document unsigned", path.quoted())
-			case "@set":
-				return 0, fmt.Errorf("urdna2015: @set at %s: json-gold drops what it cannot expand under @set without an error, so it would ride the document unsigned; write the set's values without @set", path.quoted())
-			case "@default", "@explicit", "@embed", "@requireAll", "@omitDefault":
-				return 0, fmt.Errorf("urdna2015: %s at %s: a framing keyword, which a document does not use; json-gold drops what it cannot expand under it without an error, so it would ride the document unsigned", r.keyword(k), path.quoted())
-			}
-		}
-		if language && !value {
-			return 0, fmt.Errorf("urdna2015: @language at %s outside a value object: JSON-LD drops it, so it would ride the document unsigned", path.quoted())
-		}
-		if value {
-			for _, k := range keys {
-				x := t[k]
-				switch k {
-				case "@value":
-				case "@language":
-					if err := asciiLanguage(x); err != nil {
-						return 0, err
-					}
-				case "@type":
-					if x == "@json" {
-						return 0, fmt.Errorf("urdna2015: @json at %s: the RDFC path does not accept JSON literals", path.quoted())
-					}
-				default:
-					return 0, fmt.Errorf("urdna2015: a value object at %s holds %s: the RDFC path reads a value object's keys only as the keywords written out (@value, @type, @language)", path.quoted(), bounded(k))
-				}
 			}
 		}
 		var n int64

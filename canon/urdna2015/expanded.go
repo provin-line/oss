@@ -67,8 +67,8 @@ var besideListOrSet = []struct{ keyword, makes string }{
 // @list, and an expanded object holding @set beside another key
 // (besideListOrSet). Expanded, a set object is otherwise replaced by its
 // values; @set written in a document is refused before expansion
-// (dataValues), so this is reached through an alias the context rules do
-// not read.
+// (rejectUncountedForms), so this is reached through an alias the context
+// rules do not read.
 func rejectListBeside(obj map[string]any) error {
 	for _, b := range besideListOrSet {
 		if _, ok := obj[b.keyword]; !ok || len(obj) == 1 {
@@ -86,6 +86,15 @@ func rejectListBeside(obj map[string]any) error {
 // collectionWrittenOut is the refusal of the RDF collection vocabulary
 // written out (see rejectDroppableNodes).
 const collectionWrittenOut = "urdna2015: rdf:first or rdf:rest as a property, or rdf:nil as an IRI: it would be signed as the list @list makes, which a JSON reader does not see; write a list with @list"
+
+// expandedKeywords are the keywords the expanded form of a document holds
+// besides those rejectDroppableNodes reads itself (@id, @type, @index,
+// @direction, @language): the members of a value, list, graph, reverse or
+// included object. Any other keyword in the expanded form holds what toRDF
+// writes no quad of.
+var expandedKeywords = map[string]bool{
+	"@value": true, "@list": true, "@graph": true, "@reverse": true, "@included": true,
+}
 
 // rejectDroppableNodes walks an EXPANDED JSON-LD document and fails on the
 // shapes toRDF discards without error even in safe mode: an @id, a @type or a
@@ -179,6 +188,9 @@ func rejectDroppableNodes(v any) error {
 				}
 				if strings.HasPrefix(k, "_:") {
 					return fmt.Errorf("urdna2015: blank-node predicate %s — toRDF would silently drop it from the signing scope", bounded(k))
+				}
+				if ld.IsKeyword(k) && !expandedKeywords[k] {
+					return fmt.Errorf("urdna2015: %s in the expanded form: toRDF writes no quad of it, so what it holds would ride the document unsigned", k)
 				}
 				if !ld.IsKeyword(k) && !validEmittedIRI(k) {
 					return fmt.Errorf("urdna2015: predicate %s fails quad validation — toRDF would silently drop its quads from the signing scope", bounded(k))

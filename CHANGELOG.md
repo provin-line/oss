@@ -612,6 +612,29 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, refuse a value
+  object where JSON-LD keeps none (an item of the document's array, of
+  `@graph` or of `@included`), and a JSON literal however its `@type` is
+  written (`"@json"`, alone or in an array). A JSON literal at such a place
+  whose value added nothing to the count of the document's values was
+  signed as if it were not there, on `eddsa-rdfc-2022`'s path too, and a
+  string written inside it as a value object's type was not signed. A value
+  object there holding a value was refused before, as a value JSON-LD
+  drops; it is now refused for where it is. On the direct path, where a
+  document may write its own context, a context term aliasing `@context` is
+  refused in whatever scope, as JSON-LD 1.1 makes it an invalid keyword
+  alias; json-gold refused one only in a scope it processes. A context term
+  aliasing `@json` is refused too, in whatever scope, as the RDFC path
+  accepts no JSON literal. Newly refused with it is a document whose term
+  aliases `@json` only in a scope not in use and names a datatype where it
+  is used, which was signed. On the same path, a term a context scope not in
+  use makes `@graph` or `@included` is read as that keyword, so a value
+  object under it is read as at a node and refused, though json-gold signs
+  it as the term's value where the term is a property; an empty object or a
+  list under such a term was refused before. `vc`'s `eddsa-rdfc-2022`, whose
+  contexts alias neither `@context` nor `@json`, nor `@graph` or
+  `@included`, newly refuses only the value objects where JSON-LD keeps
+  none.
 - `canon/urdna2015`'s doc states that, called directly, with a context
   written in the document, `Canonicalize`'s work can grow as the square of
   the document's size (of the shapes measured, the costliest takes about

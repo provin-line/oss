@@ -152,19 +152,30 @@ func asciiLanguage(language any) error {
 }
 
 // alias records that term stands for keyword. An alias of @value written in
-// a context is refused; and a term two definitions alias to different
-// keywords is refused, so each term reads as one keyword in whatever order
-// the definitions are read. An alias is read one step: a term naming an
-// alias of a keyword is refused (rejectAliasChains). The aliases read here may
-// be more than json-gold's, as one may be in a scope not in use. They are
-// used to refuse (@index, @direction, or @language outside a value object) by
-// name, and to read a member's position (forms.go): no value is left
-// uncounted by an alias, since dataValues knows a value object by @value
-// written out and reads its keys only as the keywords written out, so an
-// alias read wrong can only refuse.
+// a context is refused; an alias of @context too, in whatever scope, as
+// JSON-LD 1.1 makes it an invalid keyword alias (json-gold refuses one only in
+// a scope it processes, and reads the term as a property in one it does not);
+// an alias of @json too, in whatever scope, as the RDFC path accepts no JSON
+// literal, so such an alias has no use it signs; and a term two definitions
+// alias to different keywords is refused, so each term reads as one keyword
+// in whatever order the definitions are read. An alias is read one step: a
+// term naming an alias of a keyword is refused (rejectAliasChains). The
+// aliases read here may be more than json-gold's, as one may be in a scope
+// not in use. They are used to refuse (@index,
+// @direction, or @language outside a value object) by name, and to read a
+// member's position (forms.go): no value is left uncounted by an alias, since
+// the walk of forms reads a value object's keys and its @type only as written,
+// and dataValues counts every key not written as a keyword, so an alias read
+// wrong can only refuse.
 func (r *contextRules) alias(term, keyword string) error {
 	if keyword == "@value" {
 		return fmt.Errorf("urdna2015: context term %s is an alias of @value: the RDFC path knows a value object by @value alone", bounded(term))
+	}
+	if keyword == "@context" {
+		return fmt.Errorf("urdna2015: context term %s is an alias of @context, which JSON-LD 1.1 does not allow", bounded(term))
+	}
+	if keyword == "@json" {
+		return fmt.Errorf("urdna2015: context term %s is an alias of @json: the RDFC path accepts no JSON literal", bounded(term))
 	}
 	if was, ok := r.aliases[term]; ok && was != keyword {
 		return fmt.Errorf("urdna2015: context term %s aliases both %s and %s: the RDFC path reads each term as one keyword", bounded(term), bounded(was), bounded(keyword))

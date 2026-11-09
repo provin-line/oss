@@ -198,6 +198,15 @@ func DifferentValues() map[string]func(m string) any {
 			value := map[string]string{"a": `{"a":true}`, "b": `{ "a":true}`}[m]
 			return map[string]any{"@id": "https://e.x/s", "https://e.x/p": map[string]any{"@value": value, "@type": "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON"}}
 		},
+		"a string in a JSON literal typed in an array, in a graph": func(m string) any {
+			literal := map[string]any{"@type": []any{"@json"}, "@value": map[string]any{"@value": []any{}, "@type": "urn:" + m}}
+			return servedSubjectWith(map[string]any{"urn:p": "v", "urn:g": map[string]any{
+				"@id": "urn:g", "urn:q": "w", "@graph": []any{map[string]any{"@id": "urn:n", "urn:r": "x"}, literal},
+			}})
+		},
+		"a string in a JSON literal typed in an array, in @included": func(m string) any {
+			return included(map[string]any{"@type": []any{"@json"}, "@value": map[string]any{"@value": []any{}, "@type": "urn:" + m}})
+		},
 		"a boolean or a string of one datatype": func(m string) any {
 			value := map[string]any{"a": true, "b": "true"}[m]
 			return map[string]any{"@id": "https://e.x/s", "https://e.x/p": map[string]any{"@value": value, "@type": "http://www.w3.org/2001/XMLSchema#string"}}
@@ -340,6 +349,14 @@ func beside(item any) []any {
 	return []any{servedSubject("v"), item}
 }
 
+// included is a credential of the W3C VC v2 context alone, with what is
+// given in the @included of its top object.
+func included(item any) map[string]any {
+	doc := servedSubject("v")
+	doc["@included"] = []any{item}
+	return doc
+}
+
 // Refusals are documents refused for the form they use, one for each reason
 // a value could leave the dataset.
 func Refusals() map[string]any {
@@ -398,6 +415,12 @@ func Refusals() map[string]any {
 		"a list in a graph":                                  emptyAt("urn:g", map[string]any{"@id": "urn:g", "@graph": []any{map[string]any{"@id": "urn:m", "urn:r": "x"}, map[string]any{"@list": []any{}}}}),
 		"a keyword JSON-LD does not read in a document":      emptyAt("@none", map[string]any{"urn:q": []any{}}),
 		"an empty list twice":                                emptyAt("urn:q", []any{map[string]any{"@list": []any{}}, map[string]any{"@list": []any{}}}),
+		"a type an alias overwrites":                         servedSubjectWith(map[string]any{"@type": "urn:A", "type": []any{"urn:B"}}),
+		"a value object beside the document":                 beside(map[string]any{"@value": "y"}),
+		"a JSON literal typed in an array":                   servedSubject(map[string]any{"@type": []any{"@json"}, "@value": map[string]any{}}),
+		"an alias of @context in a scope not in use":         map[string]any{"@context": map[string]any{"Unused": map[string]any{"@id": "urn:Unused", "@context": map[string]any{"urn:c": "@context"}}}, "@id": "urn:s", "urn:c": map[string]any{"@set": []any{"a"}}},
+		"a JSON literal in @included":                        included(map[string]any{"@type": []any{"@json"}, "@value": map[string]any{"k": []any{}}}),
+		"an alias of @json in a scope not in use":            OwnContext(map[string]any{"J": "https://e.x/J", "Unused": map[string]any{"@id": "https://e.x/Unused", "@context": map[string]any{"J": "@json"}}}, map[string]any{"q": map[string]any{"@value": "x", "@type": "J"}}),
 		"a list of lists through a list container":           OwnContext(map[string]any{"t": map[string]any{"@id": "urn:t", "@container": "@list"}}, map[string]any{"t": []any{[]any{"a"}}}),
 		"an alias of an alias of @nest":                      OwnContext(map[string]any{"n": "@nest", "m": "n"}, map[string]any{"q": "v", "m": map[string]any{}}),
 		"an alias of an alias of @reverse":                   OwnContext(map[string]any{"r": "@reverse", "rr": map[string]any{"@id": "r"}}, map[string]any{"q": "v", "rr": map[string]any{}}),

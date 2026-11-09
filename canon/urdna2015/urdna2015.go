@@ -77,8 +77,8 @@ func (c *Canonicalizer) Name() string { return Name }
 // it, Canonicalize refuses every form whose value or shape the dataset would
 // not hold; the package doc lists them, each with the check that refuses it.
 // The stages run in this order: the input's grammar (input.go); the context
-// rules, the count of the document's values and its forms (contexts.go,
-// conserve.go, forms.go); expansion (jsongold.go); the expanded form
+// rules (contexts.go); the document's forms (forms.go); the count of its
+// values (conserve.go); expansion (jsongold.go); the expanded form
 // (expanded.go) and its count of values; the node map (nodemap.go); the
 // dataset, its quads, its size and its spelling (jsongold.go, nodemap.go,
 // size.go, dataset.go); and the labelling of its blank nodes (label.go).
@@ -154,8 +154,8 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 }
 
 // dataValues reads the contexts the document can use, the served ones and its
-// own (contexts.go), counts the document's values (conserve.go), and refuses
-// a shape of the document the dataset would not hold (forms.go).
+// own (contexts.go), refuses a form of the document the dataset would not
+// hold (forms.go), and counts the document's values (conserve.go).
 func (c *Canonicalizer) dataValues(v any) (int64, error) {
 	served := c.served
 	if served == nil {
@@ -175,11 +175,11 @@ func (c *Canonicalizer) dataValues(v any) (int64, error) {
 	if err := rules.rejectAliasChains(); err != nil {
 		return 0, err
 	}
-	n, err := rules.dataValues(v, new(jsonPath))
-	if err != nil {
+	if err := rules.rejectUnsignedForms(v, atNode, new(jsonPath)); err != nil {
 		return 0, err
 	}
-	if err := rules.rejectUnsignedShapes(v, atNode, new(jsonPath)); err != nil {
+	n, err := rules.dataValues(v, new(jsonPath))
+	if err != nil {
 		return 0, err
 	}
 	return n, nil

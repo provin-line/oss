@@ -82,21 +82,23 @@
 //	    with @, making keys keywords             contextRules.read
 //	  a language tag, in a context or a value object, lowercased with
 //	    Unicode case mapping                     asciiLanguage
-//	  an alias of @value; a term aliasing two keywords; a term naming
+//	  an alias of @value; an alias of @context, read as a property in a
+//	    scope it does not process; an alias of @json in any scope (a JSON
+//	    literal is refused); a term aliasing two keywords; a term naming
 //	    an alias of a keyword                    contextRules.alias,
 //	                                             contextRules.rejectAliasChains
-//	The document's forms (conserve.go, forms.go):
+//	The document's forms (forms.go):
 //	  @index and @direction, which RDF does not carry
-//	                                             contextRules.dataValues
+//	                                             rejectUncountedForms
 //	  @set and the framing keywords, under which it drops what it
-//	    cannot expand without an error           contextRules.dataValues
-//	  @language outside a value object, dropped  contextRules.dataValues
-//	  a value object's other keys; a JSON literal (@json) written,
-//	    rewritten                                contextRules.dataValues
+//	    cannot expand without an error           rejectUncountedForms
+//	  @language outside a value object, dropped  rejectUncountedForms
+//	  a value object's other keys; a JSON literal, its @type @json alone
+//	    or in an array, rewritten                rejectUncountedForms
 //	  an empty object or array where it keeps nothing; an array in an
-//	    array, flattened, in a list too; a list where it keeps none;
-//	    a keyword it does not read in a document
-//	                                             rejectUnsignedShapes
+//	    array, flattened, in a list too; a list or a value object where
+//	    it keeps none; a keyword it does not read in a document
+//	                                             rejectUnsignedForms
 //	The count of values (conserve.go):
 //	  any value it leaves out, in whatever form  contextRules.dataValues
 //	                                             against expandedValues
@@ -110,7 +112,9 @@
 //	                                             rejectDroppableNodes
 //	  a blank node label, relabelled             rejectDroppableNodes
 //	  @index and @direction, which toRDF does not write (behind
-//	    contextRules.dataValues)                 rejectDroppableNodes
+//	    rejectUncountedForms)                    rejectDroppableNodes
+//	  any other keyword than an expanded node, value or list object
+//	    holds, of which toRDF writes no quad     rejectDroppableNodes
 //	  a language tag failing its grammar, dropping the literal
 //	                                             rejectDroppableNodes
 //	  the RDF collection vocabulary written out, signed as a list
