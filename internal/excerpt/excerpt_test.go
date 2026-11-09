@@ -50,16 +50,27 @@ func TestQuoted(t *testing.T) {
 	}
 }
 
-// Text that is not UTF-8 is written with each run of such bytes replaced by
-// U+FFFD, so nothing written ends in a part of a character; N stays the
+// Text that is not UTF-8 is written as UTF-8 either way, so nothing written
+// ends in a part of a character: Of replaces each run of such bytes with
+// U+FFFD, and Quoted writes each such byte as \xNN, as strconv.Quote does, so
+// the byte stays named; a U+FFFD the text holds stays U+FFFD. N stays the
 // length of the text given, even where the replacements make the written
 // text the longer one.
 func TestTextThatIsNotUTF8(t *testing.T) {
 	if got, cut := excerpt.Of("a\xffb", 40); got != "a�b" || cut {
 		t.Errorf("Of = %q, %v", got, cut)
 	}
-	if got := excerpt.Quoted("a\xffb", 40); got != `"a`+"�"+`b"` {
-		t.Errorf("Quoted = %q", got)
+	if got := excerpt.Quoted("a\xffb", 40); got != `"a\xffb"` {
+		t.Errorf("Quoted = %s", got)
+	}
+	if got := excerpt.Quoted("a\uFFFDb", 40); got != `"a`+"\uFFFD"+`b"` {
+		t.Errorf("Quoted of a U+FFFD = %s", got)
+	}
+	if got := excerpt.Quoted(strings.Repeat("\xff", 100), 40); got != `"`+strings.Repeat(`\xff`, 5)+`"… (100 bytes)` {
+		t.Errorf("Quoted, cut = %s", got)
+	}
+	if got := excerpt.Quoted("é\xc3", 40); got != `"é\xc3"` {
+		t.Errorf("Quoted of a lead byte without its continuation = %s", got)
 	}
 	runs := strings.Repeat("\xffa", 20) // 40 bytes, 80 once replaced
 	got, cut := excerpt.Of(runs, 40)
@@ -73,7 +84,8 @@ func TestTextThatIsNotUTF8(t *testing.T) {
 }
 
 // Whatever the text and the limit (from MinLimit), what is written fits it, in
-// valid UTF-8; a cut text is a head of the text given (once made valid) and
+// valid UTF-8; a cut text is a head of the text given (for Of, once made
+// valid; for Quoted, as it unquotes, bytes that are not UTF-8 included) and
 // ends with the length of the text given.
 func FuzzOfAndQuoted(f *testing.F) {
 	for _, s := range []string{"", "a", strings.Repeat("é", 300), strings.Repeat("\xf0\x9f\x98\x80", 40), "\xff\xfe\xfd", strings.Repeat("\x01\"\\", 50), "a\xc3"} {
@@ -97,7 +109,11 @@ func FuzzOfAndQuoted(f *testing.F) {
 		last := strings.LastIndex(q, `"`) // the tail holds no quote
 		head, err := strconv.Unquote(q[:last+1])
 		rest := q[last+1:]
-		if !strings.HasPrefix(q, `"`) || err != nil || !strings.HasPrefix(valid, head) || (rest == "") != (head == valid) || rest != "" && rest != fmt.Sprintf("… (%d bytes)", len(s)) {
+		whole := strconv.Quote(s)
+		if !strings.HasPrefix(q, `"`) || err != nil || !strings.HasPrefix(s, head) || (rest == "") != (head == s) || rest != "" && rest != fmt.Sprintf("… (%d bytes)", len(s)) {
+			t.Fatalf("Quoted(%q, %d) = %q", s, max, q)
+		}
+		if rest == "" && q != whole || rest != "" && !strings.HasPrefix(whole, q[:last]) {
 			t.Fatalf("Quoted(%q, %d) = %q", s, max, q)
 		}
 	})

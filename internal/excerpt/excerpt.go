@@ -10,13 +10,15 @@
 // The promises of the functions that take a limit, for every text and every
 // limit from MinLimit:
 //   - what it writes is at most limit bytes, the length it adds included;
-//   - it is valid UTF-8: each run of bytes that is not is replaced by one
-//     U+FFFD before anything else, so nothing it writes ends in part of a
-//     character, whether the text given was UTF-8 or not;
+//   - it is valid UTF-8, whether the text given was or not, so nothing it
+//     writes ends in part of a character: Of replaces each run of bytes that
+//     is not UTF-8 by one U+FFFD before anything else (a text written as it
+//     is has no escape to name a byte with), and Quoted writes each such
+//     byte as \xNN, as strconv.Quote does, so the byte stays named;
 //   - a head is cut where a character starts;
 //   - N is the length in bytes of the text given, not of what is written,
-//     so a text whose replacements make it too long is cut and says the
-//     length it had.
+//     so a text whose replacements or escapes make it too long is cut and
+//     says the length it had.
 //
 // A limit under MinLimit is its caller's error, and every function that takes
 // a limit panics on it, whatever the text: MinLimit is what the longest length
@@ -54,25 +56,27 @@ func Of(s string, limit int) (string, bool) {
 // Quoted is s as a quoted Go string (strconv.Quote) within limit bytes, for
 // naming what is quoted: whole when its quoted form fits, or else its head
 // quoted and its length after the quotes, "head"… (N bytes), escapes
-// counted in the limit.
+// counted in the limit. A byte that is not UTF-8 is written as \xNN, as
+// strconv.Quote writes it, and the head unquotes to the first bytes of s.
 func Quoted(s string, limit int) string {
 	check(limit)
-	t := strings.ToValidUTF8(s, "\uFFFD")
-	if len(t)+2 <= limit {
-		if q := strconv.Quote(t); len(q) <= limit {
+	if len(s)+2 <= limit {
+		if q := strconv.Quote(s); len(q) <= limit {
 			return q
 		}
 	}
 	tail := length(s)
 	room := limit - len(tail) - 2
 	b := []byte{'"'}
-	for _, r := range t {
-		q := strconv.Quote(string(r))
+	for i := 0; i < len(s); {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		q := strconv.Quote(s[i : i+size])
 		q = q[1 : len(q)-1]
 		if len(b)-1+len(q) > room {
 			break
 		}
 		b = append(b, q...)
+		i += size
 	}
 	return string(append(b, '"')) + tail
 }

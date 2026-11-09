@@ -220,8 +220,12 @@ func TestStrictDecoder_ATypedDecodeErrorThatIsANilPointer(t *testing.T) {
 	}
 }
 
-// canon.Float64 names a refused literal within quotedLimit bytes.
+// canon.Float64 names a refused literal quoted within quotedLimit bytes, a
+// byte that is not UTF-8 written as \xNN.
 func TestFloat64_BoundsTheLiteralItNames(t *testing.T) {
+	if _, err := canon.Float64(json.Number("1\xff")); err == nil || !strings.Contains(err.Error(), `"1\xff"`) {
+		t.Errorf("Float64 of a literal that is not UTF-8: %v", err)
+	}
 	for _, lit := range []string{"1" + long("0", 10000), "x" + long("é", 5000)} {
 		_, err := canon.Float64(json.Number(lit))
 		if err == nil {
@@ -234,10 +238,12 @@ func TestFloat64_BoundsTheLiteralItNames(t *testing.T) {
 
 // Whatever the literal, the path, the reason and the keys, the errors' text
 // is valid UTF-8 within its bound (the reason, its maker's, is written whole),
-// and holds each value whole (made UTF-8) when it fits.
+// and holds each value whole when it fits: a key quoted, a byte that is not
+// UTF-8 as \xNN; the literal and the path made UTF-8.
 func FuzzErrorTextIsBounded(f *testing.F) {
 	f.Add("1e30", "a.b[1]", "r", "k", "K")
 	f.Add(long("9", 300), long("é", 200), "r\xfd", "\xff", long("\x01", 100))
+	f.Add("1", "a\xffb", "r", "k\xfe", "K\xff")
 	f.Fuzz(func(t *testing.T, lit, path, reason, key, other string) {
 		u := &canon.UnsafeNumberError{Path: path, Literal: lit, Reason: reason}
 		r := strings.ToValidUTF8(reason, "\uFFFD")
@@ -263,7 +269,7 @@ func FuzzErrorTextIsBounded(f *testing.F) {
 		if len(got) > bound || !utf8.ValidString(got) {
 			t.Fatalf("DuplicateKeyError.Error() = %q: %d bytes", got, len(got))
 		}
-		k, o := strconv.Quote(strings.ToValidUTF8(key, "\uFFFD")), strconv.Quote(strings.ToValidUTF8(other, "\uFFFD"))
+		k, o := strconv.Quote(key), strconv.Quote(other)
 		p := strings.ToValidUTF8(fmt.Sprint(d.Path), "\uFFFD")
 		if len(k) <= quotedLimit && len(o) <= quotedLimit && len(p) <= quotedLimit {
 			want := fmt.Sprintf("JSON key %s at %s differs from %s only in case, as encoding/json folds names", k, p, o)

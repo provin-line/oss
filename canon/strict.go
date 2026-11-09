@@ -25,8 +25,9 @@ import (
 // signs), or the struct field Key matches only that way: encoding/json would
 // read both keys into one struct field, or Key into a field another reader does
 // not see. The fields hold the keys and the path verbatim; Error writes each
-// key, and the path, within 128 bytes: whole when it fits, or else its head
-// and its length, "… (N bytes)", with what is not UTF-8 written as U+FFFD.
+// key quoted, and the path, within 128 bytes: whole when it fits, or else its
+// head and its length, "… (N bytes)". A byte of a key that is not UTF-8 is
+// written as \xNN; what of the path is not UTF-8 is written as U+FFFD.
 type DuplicateKeyError struct {
 	Key   string
 	Other string

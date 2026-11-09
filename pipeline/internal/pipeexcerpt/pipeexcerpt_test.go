@@ -38,7 +38,7 @@ func TestText(t *testing.T) {
 // Value is a value quoted within ValueLimit bytes, as one line.
 func TestValue(t *testing.T) {
 	got := pipeexcerpt.Value(long)
-	if len(got) > pipeexcerpt.ValueLimit || strings.ContainsAny(got, "\n\r") || !utf8.ValidString(got) || !strings.HasPrefix(got, `"`) {
+	if len(got) > pipeexcerpt.ValueLimit || strings.ContainsAny(got, "\n\r") || !utf8.ValidString(got) || !strings.HasPrefix(got, `"`) || !strings.Contains(got, `\xff`) {
 		t.Errorf("Value: %d bytes: %.60q", len(got), got)
 	}
 	if got := pipeexcerpt.Value("sha256:ab"); got != `"sha256:ab"` {

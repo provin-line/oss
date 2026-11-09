@@ -74,8 +74,9 @@ func spellableNode(n ld.Node) error {
 	return nil
 }
 
-// notUTF8At is the byte at which s stops being valid UTF-8, which the quote
-// of s, written as valid UTF-8, cannot show; len(s) when s is valid.
+// notUTF8At is the byte at which s stops being valid UTF-8, which a quote of
+// s cut before it does not show, and which escapes in a quote do not count
+// in bytes of s; len(s) when s is valid.
 func notUTF8At(s string) int {
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])

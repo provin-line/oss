@@ -618,10 +618,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   its first 32 bytes, cut maybe within a character, escapes not counted (up
   to about 130 bytes), and no length. So a key or value of 33 to 62 bytes
   with nothing escaped is now quoted whole, while one of 32 bytes or fewer
-  whose escapes make its quoted form longer than 64 bytes is now cut, and a
-  byte that is not UTF-8 is written as U+FFFD, not as `\xNN`. The refusal of
-  a literal or an IRI that is not valid UTF-8 now names the byte where it
-  stops being UTF-8.
+  whose escapes make its quoted form longer than 64 bytes is now cut. The
+  refusal of a literal or an IRI that is not valid UTF-8 now names the byte
+  where it stops being UTF-8.
 - `canon/urdna2015`'s refusals quote the path of what they refuse within
   256 bytes: whole when it fits, or else its head and its length (the
   refusal of a scalar in `@graph` now quotes its path too). A json-gold
@@ -1193,11 +1192,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - The text of `canon`'s errors does not grow with the document it was given.
   `canon.UnsafeNumberError` and `canon.DuplicateKeyError` write each literal,
   key and path they name within 128 bytes: whole when it fits, or else its
-  head and its length, `… (N bytes)`, cut where a character starts, with
-  what is not UTF-8 written as U+FFFD. Their fields still hold the values
-  verbatim. `canon.StrictDecoder` names a trailing token and the path to a
-  decode target that holds itself the same way, and returns every error
-  within 1024 bytes: one whose text would be longer or not UTF-8
+  head and its length, `… (N bytes)`, cut where a character starts. What of
+  a literal or a path is not UTF-8 is written as U+FFFD; a key is quoted, a
+  byte of it that is not UTF-8 written as `\xNN`. Their fields still hold
+  the values verbatim. `canon.StrictDecoder` names a trailing token and the
+  path to a decode target that holds itself the same way, and returns every
+  error within 1024 bytes: one whose text would be longer or not UTF-8
   (encoding/json's, or a type's own decoding's, which write a number's
   literal or a time's text) is returned wrapped, its text cut. `errors.Is`
   and `errors.As` find the error it wraps; a type assertion or `==` does
@@ -1205,8 +1205,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   type's own decoding may return one), is returned wrapped too, its text
   what `fmt` writes for it, or a fixed text naming its type where `fmt`
   panics as well, so calling `Error` on what `Decode` returns does not
-  panic. `canon.Float64` names its literal, quoted, within 128 bytes the
-  same way; it named the first 80 bytes, which could end inside a
+  panic. `canon.Float64` names its literal quoted, as a key is, within 128
+  bytes the same way; it named the first 80 bytes, which could end inside a
   character, and not the length.
 - The text of an error the network node answers a caller with does not grow
   with the request. Every service the node serves, over the Connect, gRPC and

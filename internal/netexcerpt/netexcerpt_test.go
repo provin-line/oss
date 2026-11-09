@@ -38,7 +38,7 @@ func TestValueTextAndErrorText(t *testing.T) {
 		if len(c.got) > c.limit || strings.ContainsAny(c.got, "\n\r") || !utf8.ValidString(c.got) {
 			t.Errorf("%s: %d bytes (limit %d): %.60q", c.name, len(c.got), c.limit, c.got)
 		}
-		if !strings.HasPrefix(c.got, `"`) || !strings.HasSuffix(c.got, " bytes)") {
+		if !strings.HasPrefix(c.got, `"`) || !strings.HasSuffix(c.got, " bytes)") || !strings.Contains(c.got, `\xff`) {
 			t.Errorf("%s: %.60q is not a quoted head with its length", c.name, c.got)
 		}
 	}

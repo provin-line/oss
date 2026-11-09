@@ -187,12 +187,13 @@ func TestCanonicalize_QuotesAKeyWithinTheLimit(t *testing.T) {
 }
 
 // A literal or an IRI that is not valid UTF-8 is refused with the byte where
-// it stops being UTF-8, which the quote, written as valid UTF-8, cannot show.
+// it stops being UTF-8, which a quote cut before it would not show, and with
+// the value quoted, the byte written as \xNN.
 func TestSpellable_NamesTheFirstByteThatIsNotUTF8(t *testing.T) {
-	if err := spellableNode(ld.NewLiteral("a\xffb", "", "")); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 1") {
+	if err := spellableNode(ld.NewLiteral("a\xffb", "", "")); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 1") || !strings.Contains(err.Error(), `"a\xffb"`) {
 		t.Errorf("literal: %v", err)
 	}
-	if err := spellableIRI("urn:a\xffb"); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 5") {
+	if err := spellableIRI("urn:a\xffb"); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8 at byte 5") || !strings.Contains(err.Error(), `"urn:a\xffb"`) {
 		t.Errorf("IRI: %v", err)
 	}
 }
