@@ -1193,13 +1193,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   their length, `… (N bytes)`. A value such a text names (a declared output
   hash, an issuer) is quoted within 128 bytes, so a long one does not push
   the rest out. Every log line of the pipeline names an error within 1024
-  bytes, as `%v` writes it, also the `Result.Error` of a processor or an
-  observer this module does not hold. An `IssuerDID` longer than 1024 bytes
-  is its head and its length, not a DID; `CredentialHash` still names the
-  credential whole. A reject record never carries the refused payload; its
-  `Detail` may quote an excerpt of it, an error naming a token it could not
-  read, within those 1024 bytes. The type's doc said the record carried no
-  payload bytes.
+  bytes, also the `Result.Error` of a processor or an observer this module
+  does not hold: an error by its `Error` text, or, when `Error` panics, by
+  what `fmt` writes for it or a fixed text, with no panic of the log call. An
+  `IssuerDID` longer than 1024 bytes is its head and its length, not a DID;
+  `CredentialHash` still names the credential whole. A reject record never
+  carries the refused payload; its `Detail` may quote an excerpt of it, an
+  error naming a token it could not read, within those 1024 bytes. The type's
+  doc said the record carried no payload bytes.
 
 ## [0.3.0] - 2026-08-05
 

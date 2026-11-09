@@ -54,6 +54,17 @@ type nilPointerError struct{ text string }
 
 func (e *nilPointerError) Error() string { return e.text }
 
+// selfPanickingError panics with itself, a value fmt cannot write either.
+type selfPanickingError struct{}
+
+func (e selfPanickingError) Error() string { panic(e) }
+
+// formattingError writes under %v another text than its Error text.
+type formattingError struct{}
+
+func (formattingError) Error() string                 { return "plain" }
+func (formattingError) Format(s fmt.State, verb rune) { _, _ = s.Write([]byte("formatted")) }
+
 // verboseError writes far more under %+v than its Error text.
 type verboseError struct{}
 
@@ -67,9 +78,10 @@ func (verboseError) Format(s fmt.State, verb rune) {
 	_, _ = s.Write([]byte("short"))
 }
 
-// ErrorText is the text %v writes for an error, within TextLimit bytes of
-// UTF-8: also for an error that is a nil pointer, whose Error method panics,
-// or which writes more under %+v; nil is "<nil>".
+// ErrorText is the text excerpt.ErrorText takes for an error, within
+// TextLimit bytes of UTF-8: its Error text first, whatever fmt writes for it;
+// what fmt writes when Error panics (such as "<nil>" for a nil pointer); a
+// fixed text when fmt panics too; "<nil>" for nil.
 func TestErrorText(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -80,12 +92,14 @@ func TestErrorText(t *testing.T) {
 		{"nil pointer", (*nilPointerError)(nil), "<nil>"},
 		{"panicking Error method", panickingError{}, fmt.Sprint(panickingError{})},
 		{"verbose under %+v", verboseError{}, "short"},
+		{"formats itself", formattingError{}, "plain"},
+		{"panics with a value fmt cannot write", selfPanickingError{}, "%!v(PANIC=Error method of pipeexcerpt_test.selfPanickingError)"},
 		{"short", errors.New("no such head"), "no such head"},
 	} {
 		got := func() (s string) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("%s: ErrorText panicked: %v", c.name, r)
+					t.Errorf("%s: ErrorText panicked: %T", c.name, r)
 				}
 			}()
 			return pipeexcerpt.ErrorText(c.err)

@@ -17,11 +17,7 @@
 // of the same kinds; each side owns its own.
 package pipeexcerpt
 
-import (
-	"fmt"
-
-	"github.com/provin-line/oss/internal/excerpt"
-)
+import "github.com/provin-line/oss/internal/excerpt"
 
 const (
 	// ValueLimit is the most bytes a value the pipeline names takes, its
@@ -46,11 +42,12 @@ func Value(s string) string {
 	return excerpt.Quoted(s, ValueLimit)
 }
 
-// ErrorText is err as a log line of the pipeline names it: the text %v writes
-// for it (its Error text, or what fmt writes when Error panics or err is a nil
-// pointer; "<nil>" for nil), held as Text holds a text. It is a string, so the
-// log's handler writes it as it is and not under a verb an error may format
-// itself for.
+// ErrorText is err as a log line of the pipeline names it: the text
+// excerpt.ErrorText takes for it (its Error text, a nil pointer's too; what
+// fmt writes when Error panics, such as "<nil>" for a nil pointer; a fixed
+// text when fmt panics too; "<nil>" for nil), held as Text holds a text. It
+// is a string, so the log's handler writes it as it is and not under a verb
+// an error may format itself for.
 func ErrorText(err error) string {
-	return Text(fmt.Sprint(err))
+	return Text(excerpt.ErrorText(err))
 }
