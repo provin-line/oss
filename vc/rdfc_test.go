@@ -1,12 +1,15 @@
 package vc_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/canon"
 	"github.com/provin-line/oss/canon/urdna2015"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
@@ -305,6 +308,37 @@ func TestRDFC_RefusesAContextWrittenInTheDocument(t *testing.T) {
 		}
 		if err := vc.VerifyProofUnderContract(ed25519.Verifier{}, pub, &proof, doc, vc.ContractW3CEdDSARDFC2022); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: VerifyProofUnderContract: %v, want the context refused", name, err)
+		}
+	}
+}
+
+// A credential holding a member named "", received as bytes, is refused
+// through the public API on both sides, before JSON-LD processing runs.
+func TestRDFC_RefusesAMemberNamedEmpty_BothSides(t *testing.T) {
+	signer, pub, _ := fixture(t)
+	doc := provinDocument(t)
+	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSARDFC2022)
+	if err != nil {
+		t.Fatalf("CreateProof: %v", err)
+	}
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = bytes.Replace(body, []byte(`"credentialSubject":{`), []byte(`"credentialSubject":{"":"v",`), 1)
+	var received map[string]any
+	if err := canon.NewStrictDecoder(body).Decode(&received); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for name, call := range map[string]func() error{
+		"CreateProof": func() error {
+			_, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, received, vc.CryptosuiteEdDSARDFC2022)
+			return err
+		},
+		"VerifyProof": func() error { return vc.VerifyProof(ed25519.Verifier{}, pub, proof, received) },
+	} {
+		if err := call(); err == nil || !strings.Contains(err.Error(), `a member named ""`) {
+			t.Errorf("%s: %v, want the member named \"\" refused", name, err)
 		}
 	}
 }

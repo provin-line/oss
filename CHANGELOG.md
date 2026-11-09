@@ -602,6 +602,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Security
 
+- `canon/urdna2015`, and with it `vc`'s `eddsa-rdfc-2022`, return an error
+  where json-gold panics on a document: a panic of its expansion or of its
+  building of the dataset is returned as an error, its text within 128 bytes,
+  so a document no longer ends the program of a caller that canonicalizes,
+  signs or verifies it. json-gold keeps no state between calls, so nothing is
+  left behind.
+- `canon/urdna2015` refuses a member named `""` outside a context before
+  JSON-LD processing runs: JSON-LD gives the empty name no meaning. Newly
+  refused with it are a document whose own context gives the empty name a
+  meaning, a term `""` or a `@vocab`, and uses it (JSON-LD 1.1 does not allow
+  an empty term: Processing Algorithms, Create Term Definition, step 2), and
+  a member named `""` inside a structure JSON-LD drops whole, holding no
+  value. `vc`'s `eddsa-rdfc-2022`, whose contexts give `""` no meaning, newly
+  refuses only the second. A context that defines the term `""` and leaves it
+  unused is accepted as before.
 - More walks of a caller's value refuse one that would nest past 10,000
   objects and arrays, before recursing past it, or no longer recurse:
   - `wireauth.Sign` and `(*wireauth.Verifier).Verify` refuse `fields` nested

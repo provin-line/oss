@@ -146,8 +146,9 @@ func (c *Canonicalizer) Name() string { return Name }
 //  7. Above all, the document's values are counted through each stage
 //     (conserve.go), so a value JSON-LD processing would leave out is refused
 //     whatever the form that loses it. The document must use only forms where
-//     a value stays one value: no @index, @direction, JSON literal or blank
-//     node label; no @set or framing keyword written in the document;
+//     a value stays one value: no member named "" outside a context; no
+//     @index, @direction, JSON literal or blank node label; no @set or
+//     framing keyword written in the document;
 //     @language only in a value object, and a language tag, there or in a
 //     context, of ASCII letters, digits and hyphens; a value object's keys
 //     written as @value, @type and @language; at most one datatype, and on a
@@ -187,6 +188,10 @@ func (c *Canonicalizer) Name() string { return Name }
 // and json-gold's, recurses at least once per level, and a goroutine stack
 // exhausted is a fatal error.
 //
+// json-gold asserts the types of values it has not checked, and recovers
+// nothing: where it panics on a document, in expansion or in building the
+// dataset, Canonicalize returns an error instead (see jsongold.go).
+//
 // Building the dataset is bounded too (see nodemap.go): json-gold compares
 // each value a node's property gathers with those before it, so before it
 // runs, a document whose node map would compare more pairs of values than a
@@ -219,7 +224,7 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 	if !jsondepth.Within(v) {
 		return nil, fmt.Errorf("%w: nesting: more than %d objects and arrays deep", ErrTooComplex, jsondepth.Max)
 	}
-	if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
+	if err := rejectSilentDrops(v, new(jsonPath), false); err != nil {
 		return nil, err
 	}
 	in := documentBytes(v)
@@ -230,8 +235,11 @@ func (c *Canonicalizer) Canonicalize(v any) ([]byte, error) {
 
 	proc := ld.NewJsonLdProcessor()
 	opts := c.options()
-	expanded, err := proc.Expand(v, opts)
-	if err != nil {
+	var expanded []any
+	if err := fromJSONGold(func() (err error) {
+		expanded, err = proc.Expand(v, opts)
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("urdna2015: expand: %w", err)
 	}
 	if err := rejectDroppableNodes(expanded); err != nil {
@@ -301,8 +309,11 @@ func datasetOf(proc *ld.JsonLdProcessor, expanded any, opts *ld.JsonLdOptions) (
 	toRDF.ProcessingMode = opts.ProcessingMode
 	toRDF.Format = ""
 	toRDF.DocumentLoader = opts.DocumentLoader
-	rdf, err := proc.ToRDF(expanded, toRDF)
-	if err != nil {
+	var rdf any
+	if err := fromJSONGold(func() (err error) {
+		rdf, err = proc.ToRDF(expanded, toRDF)
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("urdna2015: normalize: %w", err)
 	}
 	dataset, ok := rdf.(*ld.RDFDataset)
@@ -385,11 +396,16 @@ func (p *jsonPath) String() string {
 
 // rejectSilentDrops walks the raw input and fails on every value expansion
 // would discard or mutate without an error: numerics (Canonicalize step 2),
-// nulls (step 3), and non-object @graph entries (step 1). path is the
-// JSON-pointer-ish location of v, for the error.
-func rejectSilentDrops(v any, path *jsonPath) error {
+// nulls (step 3), non-object @graph entries (step 1), and a member named ""
+// outside a context (step 7). path is the JSON-pointer-ish location of v, for
+// the error; inContext is whether v is in a context (a member named @context
+// is always one, as JSON-LD gives @context no alias).
+func rejectSilentDrops(v any, path *jsonPath, inContext bool) error {
 	switch t := v.(type) {
 	case map[string]any:
+		if _, ok := t[""]; ok && !inContext {
+			return fmt.Errorf("urdna2015: a member named \"\" at %q: JSON-LD gives the empty name no meaning, so the RDFC path does not read it", path.String())
+		}
 		for _, k := range sortedKeys(t) {
 			e := t[k]
 			*path = append(*path, pathSegment{key: k, index: -1})
@@ -400,7 +416,7 @@ func rejectSilentDrops(v any, path *jsonPath) error {
 					}
 				}
 			}
-			if err := rejectSilentDrops(e, path); err != nil {
+			if err := rejectSilentDrops(e, path, inContext || k == "@context"); err != nil {
 				return err
 			}
 			*path = (*path)[:len(*path)-1]
@@ -408,7 +424,7 @@ func rejectSilentDrops(v any, path *jsonPath) error {
 	case []any:
 		for i, e := range t {
 			*path = append(*path, pathSegment{index: i})
-			if err := rejectSilentDrops(e, path); err != nil {
+			if err := rejectSilentDrops(e, path, inContext); err != nil {
 				return err
 			}
 			*path = (*path)[:len(*path)-1]

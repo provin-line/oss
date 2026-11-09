@@ -28,7 +28,7 @@ func TestRejectSilentDrops_SpellsThePathOnlyOnError(t *testing.T) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	if err := rejectSilentDrops(ok, new(jsonPath)); err != nil {
+	if err := rejectSilentDrops(ok, new(jsonPath), false); err != nil {
 		t.Fatalf("valid document: %v", err)
 	}
 	runtime.ReadMemStats(&after)
@@ -40,7 +40,7 @@ func TestRejectSilentDrops_SpellsThePathOnlyOnError(t *testing.T) {
 	for range depth {
 		refused = map[string]any{"k": refused}
 	}
-	err := rejectSilentDrops(refused, new(jsonPath))
+	err := rejectSilentDrops(refused, new(jsonPath), false)
 	if err == nil {
 		t.Fatal("null 10000 deep: want error")
 	}
@@ -52,12 +52,12 @@ func TestRejectSilentDrops_SpellsThePathOnlyOnError(t *testing.T) {
 // The path is spelled as before: "/"-separated keys and indexes.
 func TestRejectSilentDrops_SpellsThePath(t *testing.T) {
 	doc := map[string]any{"a": []any{"x", map[string]any{"b": nil}}}
-	err := rejectSilentDrops(doc, new(jsonPath))
+	err := rejectSilentDrops(doc, new(jsonPath), false)
 	if err == nil || !strings.Contains(err.Error(), `"/a/1/b"`) {
 		t.Errorf("err = %v, want the path \"/a/1/b\"", err)
 	}
 	graph := map[string]any{"@graph": []any{map[string]any{}, "rider"}}
-	err = rejectSilentDrops(graph, new(jsonPath))
+	err = rejectSilentDrops(graph, new(jsonPath), false)
 	if err == nil || !strings.Contains(err.Error(), "element 1 of /@graph") {
 		t.Errorf("err = %v, want element 1 of /@graph", err)
 	}
@@ -78,7 +78,7 @@ func TestRejectSilentDrops_CostsTheSameAtEveryDepth(t *testing.T) {
 		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
-		if err := rejectSilentDrops(v, new(jsonPath)); err != nil {
+		if err := rejectSilentDrops(v, new(jsonPath), false); err != nil {
 			t.Fatal(err)
 		}
 		runtime.ReadMemStats(&after)

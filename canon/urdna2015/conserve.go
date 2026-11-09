@@ -36,25 +36,26 @@ import (
 //
 // A count holds only where a value stays one value at every stage, so the
 // document and every context it can use are first held to the forms where it
-// does: no @index or @direction in the document (RDF does not carry them), no
-// @set or framing keyword (@default, @explicit, @embed, @requireAll,
+// does: no member named "" outside a context (JSON-LD gives the empty name no
+// meaning), no @index or @direction in the document (RDF does not carry them),
+// no @set or framing keyword (@default, @explicit, @embed, @requireAll,
 // @omitDefault) written in it (json-gold drops without an error what it cannot
-// expand under them), @language only in a value object, a language tag of
-// ASCII letters, digits and hyphens in a value object or a context (json-gold
+// expand under them), @language only in a value object, a language tag of ASCII
+// letters, digits and hyphens in a value object or a context (json-gold
 // lowercases a tag with Unicode case mapping, so "\u0130t" would be "it"), a
 // value object's keys written as the keywords @value, @type and @language, no
 // term with a map container (@id, @type, @index or @language), whose keys
 // become values, and no @base in a context: the RDFC path resolves no relative
 // IRI against a base, so one stays relative and is refused, and two spellings
 // of one IRI cannot be signed as one. dataValues leaves out only what is
-// written as a keyword (@context, and a value object's @type and @language),
-// so its count rests on no alias: a key JSON-LD reads as a keyword, through an
-// alias or a vocabulary, is counted as a value unless it is written as one,
-// and can only make the counts disagree. The aliases contexts write are read
-// only to refuse by name, with no alias of @value, no term aliasing two
-// keywords (contextRules.alias), and no @vocab beginning with @, which would
-// make keys keywords. A JSON literal (@json) is refused too: written in the
-// document, before it is expanded; by a term's @type, once expanded
+// written as a keyword (@context, and a value object's @type and @language), so
+// its count rests on no alias: a key JSON-LD reads as a keyword, through an
+// alias or a vocabulary, is counted as a value unless it is written as one, and
+// can only make the counts disagree. The aliases contexts write are read only
+// to refuse by name, with no alias of @value, no term aliasing two keywords
+// (contextRules.alias), and no @vocab beginning with @, which would make keys
+// keywords. A JSON literal (@json) is refused too: written in the document,
+// before it is expanded; by a term's @type, once expanded
 // (rejectDroppableNodes), before ToRDF, whose canonical JSON takes time in the
 // square of the literal's members. Once expanded, a value object must have at
 // most one datatype, not rdf:JSON, and a boolean none but xsd:boolean
