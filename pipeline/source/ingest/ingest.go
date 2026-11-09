@@ -74,6 +74,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/canon"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/internal/pipeexcerpt"
 	"github.com/provin-line/oss/vc"
@@ -97,6 +98,8 @@ type firstDropSigner interface {
 // stores nothing, and transforms nothing.
 type Config struct {
 	// Signer issues the FirstDrop output credential. Required.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Signer firstDropSigner
 
 	// Observers are notified after every outcome (passed/errored).
@@ -161,7 +164,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// must never be laundered into a signed FirstDrop.
 	var strictIn interface{}
 	if err := canon.NewStrictDecoder(input).Decode(&strictIn); err != nil {
-		return p.errored(ctx, fmt.Sprintf("strict decode of ingest input: %v", err), "", ""), nil
+		return p.errored(ctx, fmt.Sprintf("strict decode of ingest input: %s", excerpt.ErrorText(err)), "", ""), nil
 	}
 
 	// Stage 3 — Hash. Verbatim ingestion: output == input, so inputHash and
@@ -175,7 +178,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 		if isCtxErr(err) {
 			return nil, err
 		}
-		return p.errored(ctx, fmt.Sprintf("sign: %v", err), hash, hash), nil
+		return p.errored(ctx, fmt.Sprintf("sign: %s", excerpt.ErrorText(err)), hash, hash), nil
 	}
 
 	// Stage 5 — Assemble Result. Confidence stays nil: VerificationNone, no

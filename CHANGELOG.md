@@ -599,6 +599,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   double nearest its value. `scripts/check-number-hygiene.sh` (in
   `make lint`), a line-based textual check, flags any other `Float64` method
   or `ParseFloat` outside `canon.Float64`.
+- The pipeline's interfaces, configs and constructors through which a part is
+  plugged in now state, by pointing to one rule in `pipeline/contract`'s doc,
+  that the methods of the part's errors that `fmt` calls to write them
+  (`Error`, and `Format` if they have one) and that `errors.Is` and
+  `errors.As` call (`Unwrap`, `Is`, `As`) return without a panic, also for a
+  nil pointer they may be. A part that already does so is unaffected. The
+  pipeline still wraps a part's error with `fmt.Errorf`'s `%w` and asks
+  `errors.Is` of it, which can panic or not return on an error that breaks the
+  rule in a way `fmt` does not recover (a panic whose value it cannot write, a
+  panic of `Unwrap`, `Is` or `As`, or a method that does not return).
 
 ### Security
 
@@ -1211,11 +1221,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   bytes, also the `Result.Error` of a processor or an observer this module
   does not hold: an error by its `Error` text, or, when `Error` panics, by
   what `fmt` writes for it or a fixed text, with no panic of the log call. An
-  `IssuerDID` longer than 1024 bytes is its head and its length, not a DID;
-  `CredentialHash` still names the credential whole. A reject record never
-  carries the refused payload; its `Detail` may quote an excerpt of it, an
-  error naming a token it could not read, within those 1024 bytes. The type's
-  doc said the record carried no payload bytes.
+  error a plugged-in part returns (a writer, a store, a codec, a converter, a
+  signer) whose `Error` method panics, or which is a nil pointer, no longer
+  makes a step panic where it writes the error into its result, a reject
+  record or a decision's reason: the text is what `fmt` writes for it, or a
+  fixed text naming its type. For an error with a `Format` method, those texts
+  now carry its `Error` text, not what `Format` writes. An `IssuerDID` longer
+  than 1024 bytes is its head and its length, not a DID; `CredentialHash`
+  still names the credential whole. A reject record never carries the refused
+  payload; its `Detail` may quote an excerpt of it, an error naming a token it
+  could not read, within those 1024 bytes. The type's doc said the record
+  carried no payload bytes.
 
 ## [0.3.0] - 2026-08-05
 

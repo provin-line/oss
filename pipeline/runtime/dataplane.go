@@ -47,14 +47,19 @@ import (
 // and an optional sink Writer override. They are zero for a source-only node — a
 // source loop uses neither.
 type Deps struct {
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Resolver resolver.Resolver
 	// ChainResolver resolves predecessor credentials by content address for a
 	// synchronous exact-view appraisal. Required only by an agent-access sink.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	ChainResolver chainwalk.CredentialResolver
 	// ChainResolverFor optionally returns a resolver scoped to one sink's
 	// declared upstream endpoint. It takes precedence over ChainResolver and
 	// lets a separated deployment synchronously resolve evidence that has not
 	// yet replicated into its local registry.
+	//
+	// The errors of the resolvers it returns keep the rule for a part's errors in package contract's doc.
 	ChainResolverFor func(upstreamEndpoint string) chainwalk.CredentialResolver
 	// AppraisalMaxDepth bounds synchronous chain assembly. Zero selects
 	// chainwalk.DefaultMaxDepth.
@@ -79,6 +84,8 @@ type Deps struct {
 	// SchemaResolver refines the consuming loops' data-integrity axis with schema
 	// content-hash resolution (credential.schema-ref). Nil leaves schema references
 	// shape-checked only. main wires the local registry bridge.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	SchemaResolver vc.SchemaResolver
 	// SchemaGetter resolves a producing loop's config schema-ref against the
 	// registry at boot (fail-closed). Nil is a boot error for any loop that
@@ -106,6 +113,8 @@ type Deps struct {
 // PayloadRetainStore retains a producing loop's payload bytes keyed by their
 // content address, recording ownerDID (the producing pipeline) for serving
 // authorization. *payloadresolver.Service satisfies it.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type PayloadRetainStore interface {
 	Store(ctx context.Context, payload []byte, ownerDID string) (string, error)
 }
@@ -338,6 +347,8 @@ func (r *readySubscriber) Ready() <-chan struct{} { return r.ready }
 // credentials through deps.Resolver and delivers consumed events to its
 // config-selected output surface (sink.output; deps.SinkWriter overrides for
 // tests).
+//
+// keyStore's errors keep the rule for a part's errors in package contract's doc.
 func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps Deps) (rt *Runtime, err error) {
 	if len(cfg.Loops) == 0 {
 		return &Runtime{}, nil

@@ -11,7 +11,10 @@
 // (an output hash, an issuer) is written with Value, quoted within
 // ValueLimit bytes, so a long one does not push the rest of the sentence out.
 // An error in a log line is written with ErrorText and passed as a string:
-// the log's handler quotes it.
+// the log's handler quotes it. A sentence the pipeline builds around an
+// error (a result's error, a reject's detail, a decision's reason) takes the
+// error's text with excerpt.ErrorText, and the whole is held to TextLimit
+// where it is written.
 //
 // The values are the network's (internal/netexcerpt) because the texts are
 // of the same kinds; each side owns its own.

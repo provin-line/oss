@@ -29,6 +29,8 @@ type Result struct {
 
 // Filter is the FilterFlow step contract. Implementations are stateless:
 // no cross-event state is permitted. Apply must be safe to call concurrently.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Filter interface {
 	Apply(ctx context.Context, data []byte) (*Result, error)
 }

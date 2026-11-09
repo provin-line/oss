@@ -20,6 +20,8 @@ import (
 // processor layer); a Converter never filters.
 //
 // Convert must be safe to call concurrently.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Converter interface {
 	Convert(ctx context.Context, data []byte) ([]byte, error)
 }

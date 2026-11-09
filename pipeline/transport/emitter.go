@@ -109,6 +109,8 @@ type Emitter struct {
 // It is wired per producing loop (bound to that loop's owner pipeline DID at the
 // composition root), so its method needs no owner argument. A loop with no
 // retainer is an ordinary inline-only producer.
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type PayloadRetainer interface {
 	Retain(ctx context.Context, payload []byte) (contentHash string, err error)
 }
@@ -238,6 +240,8 @@ type intentLog interface {
 // construction (the open-time damage doctrine extended to the seed). memlog
 // provides no intent capability, so its recovery is exactly the tail-based
 // behavior (in-memory, no restart). A nil logger defaults to slog.Default().
+//
+// emission's errors keep the rule for a part's errors in package contract's doc.
 func NewEmitter(ctx context.Context, pub Publisher, codec contract.EnvelopeCodec, emission tlog.Log, logger *slog.Logger, opts ...EmitterOption) (*Emitter, error) {
 	if logger == nil {
 		logger = slog.Default()

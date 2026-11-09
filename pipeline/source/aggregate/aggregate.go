@@ -84,6 +84,8 @@ type PooledInput struct {
 // the aggregator's business logic. The source COMMITMENT is computed over the
 // inputs' credentials by the signer; Fold produces the data the aggregate emits.
 // The output must be canonical JSON (it is strict-gated before signing).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type Fold interface {
 	Fold(ctx context.Context, inputs []PooledInput) ([]byte, error)
 }
@@ -107,6 +109,8 @@ type aggregateFirstDropSigner interface {
 // broadcast without a local audit trail. Optional: nil leaves the runtime broadcast-only
 // (the pre-17o behavior). Consumer-defined here (pointing inward) — the concrete impl lives
 // in the composition root, honoring the network/↔pipeline/ layer rule (D-17o-8).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type EmissionRegistrar interface {
 	RegisterEmission(ctx context.Context, cred *vc.PipelinePassCredential, consumedHashes []string) error
 }
@@ -129,15 +133,17 @@ type Ingress struct {
 
 // Config constructs a Process.
 type Config struct {
-	Ingress   []Ingress
-	Window    time.Duration
+	Ingress []Ingress
+	Window  time.Duration
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Signer    aggregateFirstDropSigner
 	Verifier  provenance.Verifier
 	Store     contract.IngressVCStore
 	Publisher transport.Publisher
 	Codec     contract.EnvelopeCodec
-	Emission  tlog.Log
-	Fold      Fold
+	// Its errors keep the rule for a part's errors in package contract's doc.
+	Emission tlog.Log
+	Fold     Fold
 	// SelfAudit registers each emitted aggregate head for consumed-set self-audit before it
 	// is broadcast (slice-17o). Optional: nil leaves the runtime broadcast-only.
 	SelfAudit EmissionRegistrar

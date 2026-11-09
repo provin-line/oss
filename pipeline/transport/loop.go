@@ -50,6 +50,8 @@ type LoopConfig struct {
 	Codec contract.EnvelopeCodec
 	// Emission is the transparency log for recording each published event
 	// (credential hash + sequence number). Required for producing behaviors.
+	//
+	// Its errors keep the rule for a part's errors in package contract's doc.
 	Emission tlog.Log
 	// PayloadRetainer, when non-nil, durably retains each produced payload before
 	// publishing so a by-reference subscriber can later dereference it (see

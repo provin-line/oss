@@ -36,6 +36,8 @@ type Writer struct {
 }
 
 // New returns a Writer emitting NDJSON to w.
+//
+// w's errors keep the rule for a part's errors in package contract's doc.
 func New(w io.Writer) *Writer {
 	return &Writer{w: w}
 }

@@ -38,6 +38,8 @@ type StoredCredential struct {
 // adapts a *vcresolverclient.Resolver to this interface (the exact method
 // this package's earlier, unexported credentialPublisher named — exported as
 // part of the boundary severance since it is now Deps' field type).
+//
+// Its errors keep the rule for a part's errors in package contract's doc.
 type CredentialPublisher interface {
 	StoreCredential(ctx context.Context, cred *vc.PipelinePassCredential, upstreamEndpoint string) (StoredCredential, error)
 }
