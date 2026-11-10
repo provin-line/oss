@@ -538,6 +538,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		Resolver: evResolver{subscriber: authDoc(subscriber, kp.PublicKey)},
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: e2eAudience,
 		Clock:    func() time.Time { return signedAt.Add(time.Second) },
 		Epoch:    signedAt.Add(-time.Hour),
 	})
@@ -551,7 +552,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		"publisher_did":    publisher,
 		"payload_delivery": "inline",
 	}
-	proof, err := wireauth.Sign(signer, subscriber, "RegisterSubscription", fields, "n-closed-loop", signedAt)
+	proof, err := wireauth.Sign(signer, subscriber, e2eAudience, "RegisterSubscription", fields, "n-closed-loop", signedAt)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -566,7 +567,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 
 	h := handler.NewPeerWithEvidence(&fakePeer{sub: &store.Subscription{ID: "s1"}}, verifier, evLog)
 	if _, err := h.RegisterSubscription(ctx, connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
-		AuthProof:     &chainpb.AuthProof{SignerDid: subscriber, Nonce: proof.Nonce, IssuedAt: proof.IssuedAt.UTC().Format(time.RFC3339), Signature: proof.Signature},
+		AuthProof:     &chainpb.AuthProof{SignerDid: subscriber, Audience: proof.Audience, Nonce: proof.Nonce, IssuedAt: proof.IssuedAt.UTC().Format(time.RFC3339), Signature: proof.Signature},
 		SubscriberDid: subscriber, PublisherDid: publisher, PayloadDelivery: "inline",
 	})); err != nil {
 		t.Fatalf("RegisterSubscription: %v (code %v)", err, connect.CodeOf(err))
@@ -586,10 +587,15 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		t.Fatalf("Get (restart): %v", err)
 	}
 
+	if rec.Audience != e2eAudience || rec.ViewVersion != 2 {
+		t.Errorf("record audience %q, view version %d; want %q, 2", rec.Audience, rec.ViewVersion, e2eAudience)
+	}
+
 	// Reconstruct the JCS signed view from the retained record ALONE and
 	// re-verify the counterparty signature against the snapshotted key.
 	view, err := jcs.Canonicalize(map[string]any{
 		"signerDID": rec.SignerDID,
+		"aud":       rec.Audience,
 		"op":        rec.Op,
 		"v":         rec.ViewVersion,
 		"nonce":     rec.Nonce,

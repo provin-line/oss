@@ -143,7 +143,11 @@ type harness struct {
 	log    tlog.Log
 	client *client.Client
 	url    string
+	signer crypto.Signer
 }
+
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
 
 func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 	t.Helper()
@@ -173,6 +177,7 @@ func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous
 		// window keep the proof inside the acceptance boundary (mirrors
 		// auditor/client_test.go's own real-clock harness).
@@ -214,10 +219,11 @@ func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 
 	return &harness{
 		log: log,
-		client: client.New(client.Config{
+		client: client.New(client.Config{Audience: nodeAudience,
 			Signer: ks, SignerDID: clientProcessA1, BaseURL: srv.URL, HTTPClient: srv.Client(),
 		}),
-		url: srv.URL,
+		url:    srv.URL,
+		signer: ks,
 	}
 }
 
@@ -347,7 +353,7 @@ func TestMirrorLogSegment_WrongSigner_Unauthenticated(t *testing.T) {
 	if err := unknownSigner.SaveKeyPair(clientProcessA1, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	bad := client.New(client.Config{Signer: unknownSigner, SignerDID: clientProcessA1, BaseURL: h.url, HTTPClient: http.DefaultClient})
+	bad := client.New(client.Config{Audience: nodeAudience, Signer: unknownSigner, SignerDID: clientProcessA1, BaseURL: h.url, HTTPClient: http.DefaultClient})
 	_, err = bad.MirrorLogSegment(ctx, clientPipeline, 0, seg, cp)
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("wrong signer key: code = %v, want Unauthenticated (err=%v)", connect.CodeOf(err), err)

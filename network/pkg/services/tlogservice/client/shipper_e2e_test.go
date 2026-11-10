@@ -37,7 +37,7 @@ func (noopSigner) Sign(string, string, []byte) ([]byte, error) { return []byte("
 // (same signer identity) but pointed at a port nothing listens on, for
 // proving a shipper never blocks when the registry is unreachable.
 func newDownClient(_ *testing.T, _ *harness) *client.Client {
-	return client.New(client.Config{
+	return client.New(client.Config{Audience: nodeAudience,
 		Signer: noopSigner{}, SignerDID: clientProcessA1,
 		BaseURL: "http://127.0.0.1:1", HTTPClient: http.DefaultClient,
 	})

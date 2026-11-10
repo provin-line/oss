@@ -179,7 +179,11 @@ func main() {
 		log.Fatalf("pipeline: %v", err)
 	}
 
-	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID)
+	upstream, err := upstreamAudiences(pipeCfg.Loops)
+	if err != nil {
+		log.Fatalf("pipeline: %v", err)
+	}
+	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID, upstream)
 
 	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, deps)
 	if err != nil {
@@ -202,7 +206,7 @@ func main() {
 
 	// Mirror shippers (D-T6): one per durable custody log, signed as that
 	// log's own checkpoint-signer identity.
-	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
+	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
 	if err != nil {
 		log.Fatalf("pipeline: %v", err)
@@ -215,7 +219,7 @@ func main() {
 	// health (P1 fix, branch review — every report used to hardcode
 	// healthy=true regardless of the producer's actual state; see
 	// emitHealthReporterSpecsFor's doc).
-	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
+	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
 	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 

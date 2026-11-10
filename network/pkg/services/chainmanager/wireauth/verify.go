@@ -35,6 +35,11 @@ func isTransientResolverErr(err error) bool {
 // above NewNonce's 22-char output and any reasonable peer nonce.
 const maxNonceLen = 256
 
+// maxAudienceLen caps an audience's length: the longest DNS name, which is
+// the longest audience a deployment that names its verifiers by domain needs.
+// A longer audience is refused before it is compared or quoted in an error.
+const maxAudienceLen = 253
+
 // DIDResolver resolves a peer DID to its DID Document — the source of the
 // signer's #auth key. Implementations may do network I/O (cross-registry
 // resolution), so Resolve takes a context.
@@ -75,8 +80,10 @@ func DefaultAcceptanceWindow() AcceptanceWindow {
 	return AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 5 * time.Second}
 }
 
-// VerifierConfig configures a Verifier. Resolver, Crypto, and Nonces are
-// required (NewVerifier errors if any is nil). Clock defaults to time.Now and
+// VerifierConfig configures a Verifier. Resolver, Crypto, Nonces, and Audience
+// are required (NewVerifier errors if any is nil or empty). Audience is this
+// verifier's own audience: it accepts only a proof signed for exactly this
+// string (D-w12), and it is at most 253 bytes. Clock defaults to time.Now and
 // Epoch to the first whole second at or after boot+MaxFuture — the restart
 // replay barrier (see NewVerifier). Window defaults to {60s past, 5s future}
 // ONLY when wholly unset (the zero AcceptanceWindow); a partially-set window is
@@ -88,6 +95,7 @@ type VerifierConfig struct {
 	Resolver DIDResolver
 	Crypto   crypto.Verifier
 	Nonces   NonceStore
+	Audience string
 	Clock    func() time.Time
 	Epoch    time.Time
 	Window   AcceptanceWindow
@@ -98,6 +106,7 @@ type Verifier struct {
 	resolver DIDResolver
 	crypto   crypto.Verifier
 	nonces   NonceStore
+	audience string
 	clock    func() time.Time
 	epoch    time.Time
 	window   AcceptanceWindow
@@ -114,6 +123,12 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	}
 	if cfg.Nonces == nil {
 		return nil, fmt.Errorf("wireauth: VerifierConfig.Nonces is required")
+	}
+	if cfg.Audience == "" {
+		return nil, fmt.Errorf("wireauth: VerifierConfig.Audience is required")
+	}
+	if len(cfg.Audience) > maxAudienceLen {
+		return nil, fmt.Errorf("wireauth: VerifierConfig.Audience exceeds %d bytes", maxAudienceLen)
 	}
 	clock := cfg.Clock
 	if clock == nil {
@@ -143,14 +158,16 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	}
 	return &Verifier{
 		resolver: cfg.Resolver, crypto: cfg.Crypto, nonces: cfg.Nonces,
-		clock: clock, epoch: epoch, window: window,
+		audience: cfg.Audience, clock: clock, epoch: epoch, window: window,
 	}, nil
 }
 
 // Verify runs the ordered pipeline for one ChainPeerService RPC: cheap
-// structural checks, then time bounds, then key resolution, signature
-// verification, authorization, and — strictly last and only on success — the
-// nonce record. A failed forgery never reaches the nonce step, so it cannot
+// structural checks (among them, that the proof is for this verifier's
+// audience), then time bounds, then key resolution, signature verification
+// over the view rebuilt with this verifier's audience, authorization, and —
+// strictly last and only on success — the nonce record. A failed forgery, and
+// a proof for another audience, never reach the nonce step, so neither can
 // burn a legitimate signer's nonce.
 //
 // op is the RPC's view discriminator and fields its business object, both of
@@ -169,6 +186,15 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 	}
 	if len(proof.Nonce) > maxNonceLen {
 		return fmt.Errorf("%w: nonce exceeds %d bytes", ErrMalformedProof, maxNonceLen)
+	}
+	if len(proof.Audience) > maxAudienceLen {
+		return fmt.Errorf("%w: audience exceeds %d bytes", ErrMalformedProof, maxAudienceLen)
+	}
+	if proof.Audience == "" {
+		return fmt.Errorf("%w: the proof names no audience; this verifier's is %q", ErrWrongAudience, v.audience)
+	}
+	if proof.Audience != v.audience {
+		return fmt.Errorf("%w: the proof is for %q; this verifier's is %q", ErrWrongAudience, proof.Audience, v.audience)
 	}
 	if proof.IssuedAt.Truncate(time.Second) != proof.IssuedAt {
 		return fmt.Errorf("%w: issuedAt is not second-precision", ErrMalformedProof)
@@ -208,8 +234,9 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 		return fmt.Errorf("%w: %v", ErrKeyResolution, err)
 	}
 
-	// 5. Rebuild the canonical bytes through the same helper Sign used.
-	msg, err := viewBytes(proof.SignerDID, op, proof.Nonce, proof.IssuedAt, fields)
+	// 5. Rebuild the canonical bytes through the same helper Sign used, with
+	// this verifier's own audience.
+	msg, err := viewBytes(proof.SignerDID, v.audience, op, proof.Nonce, proof.IssuedAt, fields)
 	if err != nil {
 		return err
 	}

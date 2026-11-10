@@ -345,11 +345,14 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	)
 
 	// The peer surface verifies each RPC in-band via L2 wireauth (signer #auth key
-	// resolved through the same resolver); it carries NO L1 interceptor.
+	// resolved through the same resolver); it carries NO L1 interceptor. The
+	// verifier's audience is this node's registry ID: every surface that checks
+	// an L2 proof accepts only a proof made for this node (D-w12).
 	peerVerifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: didResolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: regCfg.ID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("netcompose: chain peer verifier: %w", err)

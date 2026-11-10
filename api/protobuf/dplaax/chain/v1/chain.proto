@@ -35,6 +35,10 @@ message AuthProof {
   string issued_at = 3;
   // signature is the raw Ed25519 signature over the canonical signed view.
   bytes signature = 4;
+  // audience is the party the proof was signed for: the registry ID of the
+  // node the request is sent to. The signed view binds it, and a node accepts
+  // only a proof for its own audience.
+  string audience = 5;
 }
 
 // Subscription is one established pipeline chain connection (mirrors store.Subscription).

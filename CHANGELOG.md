@@ -12,18 +12,52 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+### Security
+
+- **An L2 wire proof is accepted only by the node it was made for**
+  (GHSA: to be assigned; affects 0.1.0 to 0.4.0). The signed
+  view binds the audience, the registry ID of the receiving node, and a
+  node's verifier refuses a proof for another before it resolves the signer
+  or records the nonce. Upgrading needs every node and pipeline that talk
+  to each other to move together: read **Breaking changes**.
+
 ### Added
 
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
   that runs them on pull requests that change them (`formal.yml`).
+- Optional pipeline config keys `vc-store-registry` and, beside a loop's
+  `upstream-endpoint`, `upstream-registry`: the registry ID of the node at
+  that endpoint, where it is not the one derived from the configuration's
+  DIDs (`docs/architecture/deployment.md`, "Wire proof audience").
+
+### Breaking changes
+
+- **Wire:** the L2 signed view is version 2,
+  `{signerDID, aud, op, v, nonce, issuedAt, fields}`, and `AuthProof` gains
+  field 5, `audience`. A node accepts no version 1 proof, and a node not yet
+  upgraded refuses a version 2 proof: upgrade every network node and pipeline
+  that talk to each other in one window (`docs/architecture/deployment.md`,
+  "Upgrading to view version 2"). One network process serves a registry's L2
+  surfaces.
+- **Go API:** `wireauth.Sign` takes the audience after the signer DID;
+  `wireauth.Proof` has `Audience`; `wireauth.VerifierConfig.Audience` is
+  required; the new sentinel `wireauth.ErrWrongAudience` maps to
+  `Unauthenticated`. The report, audit, mirror and payload-store clients'
+  `Config` take `Audience` (`StoreAudience` for the payload store), the
+  payload client's `ResolvePayload` takes the upstream's audience, and
+  `chainmanager.PeerClient`'s methods take the audience after the endpoint.
+  `evidence.Record` has `Audience`.
 
 ### Documentation
 
 - `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
-  view binds the signer DID), D-w10 (nonces per signer) and D-w11 (the fields'
-  value grammar), which the code cites by name.
+  view binds the signer DID), D-w10 (nonces per signer), D-w11 (the fields'
+  value grammar) and D-w12 (the view binds the audience), which the code
+  cites by name.
+- `docs/architecture/deployment.md` describes the wire proof's audience, the
+  optional keys, the one-process-per-registry constraint and the upgrade.
 
 ## [0.4.0] - 2026-11-09
 

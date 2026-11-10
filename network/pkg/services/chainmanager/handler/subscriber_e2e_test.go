@@ -23,6 +23,10 @@ import (
 
 // pubEndpointDoc is the publisher's DID document as the SUBSCRIBER resolves it:
 // it advertises the #chain-manager endpoint (the httptest peer server).
+// e2ePubRegistry is e2ePub's registry segment: the audience of the
+// publisher node, whose DID document publishes the #chain-manager endpoint.
+const e2ePubRegistry = "poc.dplaax.dev"
+
 func pubEndpointDoc(pub, endpoint string) *did.DIDDocument {
 	return did.New(did.DocumentFields{
 		ID: pub,
@@ -55,7 +59,7 @@ func subscriberE2E(t *testing.T, rules []store.AllowRule) (*chainmanager.Service
 // signer (whose #auth key the verifier can resolve), and the publisher's store.
 func publisherPeerServer(t *testing.T, rules []store.AllowRule) (string, crypto.Signer, store.SubscriptionStore) {
 	t.Helper()
-	return publisherPeerServerOpts(t, rules, false)
+	return publisherPeerServerOpts(t, rules, false, e2ePubRegistry)
 }
 
 // publisherPeerServerServing is publisherPeerServer with payload serving
@@ -63,15 +67,15 @@ func publisherPeerServer(t *testing.T, rules []store.AllowRule) (string, crypto.
 // structurally, so a serving publisher advertises by-reference too.
 func publisherPeerServerServing(t *testing.T, rules []store.AllowRule) (string, crypto.Signer, store.SubscriptionStore) {
 	t.Helper()
-	return publisherPeerServerOpts(t, rules, true)
+	return publisherPeerServerOpts(t, rules, true, e2ePubRegistry)
 }
 
-func publisherPeerServerOpts(t *testing.T, rules []store.AllowRule, serving bool) (string, crypto.Signer, store.SubscriptionStore) {
+func publisherPeerServerOpts(t *testing.T, rules []store.AllowRule, serving bool, audience string) (string, crypto.Signer, store.SubscriptionStore) {
 	t.Helper()
 	subSigner, subPub := e2eSigner(t, e2eSub)
 	pubResolver := e2eResolver{e2eSub: e2eAuthDoc(e2eSub, subPub)}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: pubResolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: pubResolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: audience,
 		Epoch: time.Now().Add(-time.Hour), // real clock; client signs at time.Now()
 	})
 	if err != nil {
@@ -178,7 +182,7 @@ func TestSubscriberE2E_ServingPublisher_AdvertisesByReference(t *testing.T) {
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	pc := peerclient.New(subSigner, e2eSub, guard.HTTPClient())
 
-	_, modes, err := pc.GetPublisherInfo(ctx, srvURL, e2eSub, e2ePub)
+	_, modes, err := pc.GetPublisherInfo(ctx, srvURL, e2ePubRegistry, e2eSub, e2ePub)
 	if err != nil {
 		t.Fatalf("GetPublisherInfo: %v", err)
 	}

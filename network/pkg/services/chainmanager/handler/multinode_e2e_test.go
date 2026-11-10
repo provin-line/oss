@@ -106,7 +106,7 @@ func TestMultiNodeDelivery(t *testing.T) {
 	subSigner, subAuthPub := e2eSigner(t, e2eSub)
 	pubResolver := e2eResolver{e2eSub: e2eAuthDoc(e2eSub, subAuthPub)}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: pubResolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: pubResolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: e2ePubRegistry,
 		Epoch: time.Now().Add(-time.Hour),
 	})
 	if err != nil {

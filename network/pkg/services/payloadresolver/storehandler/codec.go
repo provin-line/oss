@@ -28,6 +28,7 @@ func decodeProof(ap *chainpb.AuthProof) (wireauth.Proof, error) {
 	}
 	return wireauth.Proof{
 		SignerDID: ap.GetSignerDid(),
+		Audience:  ap.GetAudience(),
 		Nonce:     ap.GetNonce(),
 		IssuedAt:  issuedAt,
 		Signature: ap.GetSignature(),

@@ -52,6 +52,11 @@ type Config struct {
 	SignerDID string
 	// BaseURL is the registry's ConnectRPC endpoint.
 	BaseURL string
+	// Audience is the registry ID of the node at BaseURL. Every proof this
+	// client signs names it, and that node accepts only a proof for its own
+	// audience. A call with no Audience fails before anything is sent
+	// (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint.
 	HTTPClient connect.HTTPClient
@@ -71,6 +76,7 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       tlogpbconnect.TlogServiceClient
 }
 
@@ -79,6 +85,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
+		audience:  cfg.Audience,
 		svc: tlogpbconnect.NewTlogServiceClient(cfg.HTTPClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
@@ -166,12 +173,13 @@ func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, er
 	if err != nil {
 		return nil, fmt.Errorf("tlogservice/client: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, op, fields, nonce, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("tlogservice/client: sign %s: %w", op, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,

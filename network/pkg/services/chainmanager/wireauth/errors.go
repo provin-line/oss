@@ -53,4 +53,8 @@ var (
 	ErrSignatureInvalid = errors.New("wireauth: signature does not verify")
 	// ErrReplay is a nonce this signer has already spent.
 	ErrReplay = errors.New("wireauth: nonce replay")
+	// ErrWrongAudience is a proof that is not for this verifier: it names
+	// another audience, or none (D-w12). It is checked with the structural
+	// checks, before the signer is resolved, so such a proof spends no nonce.
+	ErrWrongAudience = errors.New("wireauth: proof is for another audience")
 )

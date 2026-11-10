@@ -21,7 +21,7 @@ import (
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestMirrorClientFactory_CachesPerDID(t *testing.T) {
-	f := newMirrorClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newMirrorClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
 	if a1 != a2 {

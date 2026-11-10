@@ -17,11 +17,15 @@ import (
 
 // Record is one retained relationship-evidence entry: a counterparty-signed
 // control-plane request plus the key material used to verify it, enough for a
-// third party to re-derive the signed view and re-check the signature.
+// third party to re-derive the signed view and re-check the signature. The
+// view is the one docs/protocol/auth.md § L2 composes for ViewVersion: from
+// version 2 it includes Audience under key "aud"; a version 1 record has no
+// audience.
 type Record struct {
 	Op          string         `json:"op"`          // the wireauth view discriminator ("RegisterSubscription" / "Disconnect")
-	ViewVersion int            `json:"viewVersion"` // echoes wireauth.ViewVersion — the "v" in the signed view; a reconstructor places it under key "v" when rebuilding the JCS view
+	ViewVersion int            `json:"viewVersion"` // the wireauth view version the proof was verified under — the "v" in the signed view; a reconstructor places it under key "v" when rebuilding the JCS view
 	SignerDID   string         `json:"signerDID"`
+	Audience    string         `json:"audience,omitempty"` // the audience the proof was signed for and verified against; key "aud" in a version 2 view
 	Nonce       string         `json:"nonce"`
 	IssuedAt    string         `json:"issuedAt"` // RFC3339, second-precision (as it was signed)
 	Signature   []byte         `json:"signature"`

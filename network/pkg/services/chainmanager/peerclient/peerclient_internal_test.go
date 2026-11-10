@@ -55,14 +55,14 @@ func TestClient_EveryCallEndsWithinTheCallTimeout(t *testing.T) {
 
 	for name, call := range map[string]func() error{
 		"GetPublisherInfo": func() error {
-			_, _, err := cli.GetPublisherInfo(ctx, srv.URL, "did:dplaax:reg:org:sub", "did:dplaax:reg:org:pub")
+			_, _, err := cli.GetPublisherInfo(ctx, srv.URL, "pub.example", "did:dplaax:reg:org:sub", "did:dplaax:reg:org:pub")
 			return err
 		},
 		"RegisterSubscription": func() error {
-			_, _, _, _, err := cli.RegisterSubscription(ctx, srv.URL, "did:dplaax:reg:org:sub", "did:dplaax:reg:org:pub", "")
+			_, _, _, _, err := cli.RegisterSubscription(ctx, srv.URL, "pub.example", "did:dplaax:reg:org:sub", "did:dplaax:reg:org:pub", "")
 			return err
 		},
-		"Disconnect": func() error { return cli.Disconnect(ctx, srv.URL, "remote-1") },
+		"Disconnect": func() error { return cli.Disconnect(ctx, srv.URL, "pub.example", "remote-1") },
 	} {
 		done := make(chan error, 1)
 		go func() { done <- call() }()

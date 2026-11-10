@@ -144,6 +144,60 @@ drops the ungranted subject. Nothing errors; the negative capstone tests pin
 exactly this behavior as the *security* posture, which is why the
 operational side needs this note.
 
+## Wire proof audience
+
+Every L2 wire proof names its **audience**: the registry ID of the node it
+is sent to ([auth.md § L2](../protocol/auth.md#l2--peer-wire-proof-wireauth),
+D-w12). A node accepts only proofs for its own
+`provin.network.registry.id`, compared exactly. A node needs no other
+setting for this.
+
+A pipeline takes each destination's audience from DIDs its configuration
+already holds:
+
+| destination | audience | override (optional) |
+| --- | --- | --- |
+| its own node (`vc-store-endpoint`) | the registry segment of the DID the proof is signed as | `provin.network.pipeline.vc-store-registry` |
+| a by-reference upstream (a loop's `upstream-endpoint`) | the registry segment of the loop's `ingress-subject`, or of an aggregate ingress's `subject` | `upstream-registry`, beside that `upstream-endpoint` |
+| a publisher's `#chain-manager` | the registry segment of the publisher DID | — |
+
+Set an override only when the node at that endpoint belongs to another
+registry. A wrong audience fails closed: the node refuses the call as
+`Unauthenticated`, naming the audience it expected. One `upstream-endpoint`
+named for two registries is a boot error.
+
+The pairing of an endpoint with its audience is the configuration's: a wire
+proof does not show that the node at an endpoint is the one its audience
+names. When the two disagree, the node at the endpoint refuses the call, but
+it has received a proof that the named node accepts while the proof is fresh
+(the acceptance window, 60 s by default). So a `vc-store-endpoint` that points
+at another registry's node, with no `vc-store-registry`, hands that node's
+operator proofs valid at your own node; an `upstream-endpoint` that is not
+the upstream's node does the same for the upstream. Point each endpoint at
+the node of the registry it is paired with, or set the override.
+
+Two constraints follow:
+
+- **A registry's `#chain-manager` endpoint is served by that registry's
+  node.** A registry's DID documents point their `#chain-manager` service at
+  the node whose `provin.network.registry.id` is that registry.
+- **One network process serves a registry's L2 surfaces.** The nonce store
+  is per process, so two processes with one registry ID would each accept a
+  proof once. Do not run active-active replicas of a network node.
+
+### Upgrading to view version 2
+
+The audience changed the signed view (`v` = 2), and a node accepts no
+other version. Upgrade every network node and every pipeline that talk to
+each other in one window. During the window, calls between upgraded and
+not-yet-upgraded processes are refused: an upgraded node answers a proof
+with no audience as `Unauthenticated` ("names no audience"), and a node not
+yet upgraded refuses a version 2 proof's signature. Subscriptions do not
+establish in the window, and a by-reference fetch that fails rejects,
+errors or drops its event as any fetch failure does, so stop by-reference
+consumption before the window or accept those events' loss. Relationship
+evidence written before the upgrade (view version 1) stays readable.
+
 ## Health endpoints
 
 - `GET /healthz` — **liveness**, static. Failing means "restart me".

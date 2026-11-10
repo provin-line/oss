@@ -8,7 +8,7 @@ production code は持たず、root の module の外にある: root の `go tes
 
 | model | 道具 | 対象 |
 | --- | --- | --- |
-| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0（Maude 3.5.1） | L2 の peer wire 証明（[auth.ja.md § L2](../docs/protocol/auth.ja.md)）: 署名した view、一度きりの nonce、署名が通った後にだけ記録される nonce |
+| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0（Maude 3.5.1） | L2 の peer wire 証明（[auth.ja.md § L2](../docs/protocol/auth.ja.md)）: 署名した view とその audience、一度きりの nonce、署名が通った後にだけ記録される nonce |
 | [`tamarin/bearerorigins.spthy`](tamarin/bearerorigins.spthy) | Tamarin 1.12.0（Maude 3.5.1） | node が L1 の bearer（`vc-store-bearer`）を誰に見せるか |
 
 dPLaaX protocol そのものの性質（来歴の連鎖、委任）は仕様の repository
@@ -28,8 +28,7 @@ model は、それを読む前提の分しか意味を持たない。model の h
   検証者に直接届く）、署名（鍵なしに偽造できない）。
 - **侵害を許す部品。** どの署名鍵も（rule `Compromise`。`Compromised(k)` を記録）。
 - **nonce。** 正直な署名者は proof ごとに新しい nonce を引く（`wireauth.NewNonce`。
-  `wireauth.Sign` の呼び手はすべてこれを使う）。`no_burn` と
-  `handled_only_by_recipient` はこれに拠る。
+  `wireauth.Sign` の呼び手はすべてこれを使う）。`no_burn` はこれに拠る。
 - **永続と時間。** 無し。`issuedAt` は view の中の不透明な項。受理の窓、再起動の
   epoch、nonce の掃除、再起動は model の外で、ここの nonce store は忘れない。
   窓を過ぎた後に忘れて安全なことは時間の性質で、まだ書いていない TLA+ の model
@@ -37,14 +36,17 @@ model は、それを読む前提の分しか意味を持たない。model の h
 - **store。** network process ごとに検証者が 1 つ、nonce store が 1 つ
   （`internal/netcompose/server.go`）。L2 の proof を検証するすべての面が共有する。
   store の `Use` は原子的な check-and-set（restriction `NonceStore`）。
+- **audience。** 検証者はそれぞれ audience を 1 つ持つ。それはその node の registry
+  ID（D-w12）。view は audience を束ね、検証者は別の audience を名指す proof を断り、
+  自分の audience で view を組み直す。1 つの audience を複数の検証者が持ちうる
+  （replica。それぞれ自分の store を持つ）。配備は audience ごとに検証者を 1 つに
+  する。これが `replay_across_replicas` を閉じる（[auth.ja.md § L2](../docs/protocol/auth.ja.md)）。
 - **要求。** 要求はその op と fields のこと: handler は `Verifier.Verify` に渡した
-  fields にだけ基づいて動き、検証者を共有する面の間で op の値は重ならない。
-- **宛先。** model では、要求の fields が宛先を名指し、`Verifier.Verify` が返った
-  後に handler は、その宛先を持つ検証者でだけ要求を効かせる。これは前提:
-  `handled_only_by_recipient` は、この照合をする handler の性質。
-- **事象。** `Accepted(V, S, op, n, t, f)`: 検証者 `V` が proof を受理した
-  （`Verify` が nil を返し nonce を記録した）。`ReplayRejected(...)`: 署名は
-  通ったが nonce が記録済み（`ErrReplay`）。`Handled(...)`: 要求が `V` で効いた。
+  fields にだけ基づいて動き、検証者を共有する面の間で op の値は重ならない。正直な
+  署名者は、渡された audience・op・issuedAt・fields のどれにでも署名する。
+- **事象。** `Accepted(V, R, S, op, n, t, f)`: audience が `R` の検証者 `V` が
+  proof を受理した（`Verify` が nil を返し nonce を記録した）。
+  `ReplayRejected(...)`: 署名は通ったが nonce が記録済み（`ErrReplay`）。
 - **含めないもの。** fields の値の文法と JCS の bytes（D-w11。test vector と
   fuzz の義務）、認可（拒否は store を元のままにする。発火しない rule と同じ）、
   DID の綴り（view と store の鍵は同じ文字列を使う）、鍵の rotation。
@@ -76,12 +78,12 @@ model は、それを読む前提の分しか意味を持たない。model の h
 | `executable_alias` | exists-trace | 1 つの鍵を持つ 2 つの正直な DID が、それぞれ proof を受理される | — |
 | `forgery_after_compromise` | exists-trace | 鍵を乗っ取られた正直な DID は、署名していない proof を受理される: `view_binding` の例外は生きている | — |
 | `view_binding` | all-traces | 乗っ取られていない正直な鍵の下で DID に受理された proof は、その DID が、その op・nonce・issuedAt・fields で署名したもの: 同じ鍵を名乗る別の DID にも、別の op にも使い回せない | `viewBytes`（D-w1）、`Verifier.Verify` の 4〜6 |
+| `accepted_only_for_audience` | all-traces | 乗っ取られていない正直な鍵の下で検証者に受理された proof は、その検証者の audience に向けて署名されたもの: ある node 向けの proof は別の node では通らない | `viewBytes` と `Verifier.Verify` の 1 の audience の照合（D-w12） |
 | `executable_replay_rejected` | exists-trace | 受理された proof を同じ検証者にもう一度出すと断られる | — |
 | `once_per_store` | all-traces | 検証者は署名者の nonce を 1 度だけ受理する。store の check-and-set を言い直したもの | 原子的な check-and-set としての `NonceStore.Use`（前提） |
 | `nonce_per_signer` | exists-trace | 1 つの検証者が 1 つの nonce を 2 人の署名者について受理する: store の範囲は署名者ごと | `(signerDID, nonce)` を鍵にした `NonceStore`（D-w10） |
 | `no_burn` | all-traces | 正直な proof が replay として断られるのは、その proof が先に受理された時か、署名者の鍵が乗っ取られた時だけ: 偽の証明は正しい署名者の nonce を消費しない | `Verifier.Verify` の 8（最後に、成功の時だけ）、署名者ごとの `NonceStore` |
-| `handled_only_by_recipient` | all-traces | 宛先を照合する handler の下で、要求はそれが名指す宛先を持つ node でしか効かない | `Verifier.Verify` の後の handler の宛先の照合（前提） |
-| `replay_across_replicas` | exists-trace | それでも残るもの: 同じ宛先を持ち、それぞれ自分の store を持つ 2 つの検証者で 1 つの要求が効く | — |
+| `replay_across_replicas` | exists-trace | audience が残すもの: 同じ audience を持ち、それぞれ自分の store を持つ 2 つの検証者で 1 つの proof が受理される | —（配備は audience ごとに検証者を 1 つにする） |
 
 `bearerorigins.spthy`:
 
@@ -116,11 +118,12 @@ lemma は `tamarin/MODEL.expected.tsv` にある。
 | model | build | 変えるもの | 反証される lemma |
 | --- | --- | --- | --- |
 | wireauth | `ViewOmitsSigner` | view が署名者の DID を覆わない（D-w1） | `view_binding`（正直な鍵を名乗る攻撃者の DID） |
+| wireauth | `ViewOmitsAudience` | view が audience を覆わない（D-w12） | `accepted_only_for_audience`（ある検証者向けの proof が別の検証者で受理される） |
 | wireauth | `ViewOmitsOp` | view が op を覆わない | `view_binding`、`no_burn`（別の op で先に受理される proof） |
+| wireauth | `AudienceFromWire` | 検証者が proof の名指す audience で view を組み直し、自分の audience と比べない | `accepted_only_for_audience` |
 | wireauth | `NoNonceStore` | store の check-and-set が無い: replay の受理を何も止めない | `once_per_store` |
 | wireauth | `RecordBeforeSignature` | 署名の検査の前に nonce を記録する経路 | `no_burn` |
 | wireauth | `StoreKeyedByNonce` | store の鍵が nonce だけで、署名者ごとでない（D-w10） | `no_burn`、`nonce_per_signer` |
-| wireauth | `SkipRecipientCheck` | model の handler が宛先を照合しない | `handled_only_by_recipient` |
 | bearerorigins | `PresentToAnyEndpoint` | 名指しの origin の照合が無い | `delivered_only_to_named`、`bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` が無い: redirect を追う | `delivered_only_to_named`、`bearer_secrecy` |
 
@@ -135,7 +138,7 @@ CI を赤にする。
 | model | build | 状態 |
 | --- | --- | --- |
 | wireauth | 既定 | 10 すべて証明 |
-| wireauth | 6 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
+| wireauth | 7 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | bearerorigins | 既定 | 5 つすべて証明 |
 | bearerorigins | 2 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | `NonceEpoch`（TLA+: 受理の窓、再起動の epoch、掃除） | — | 未着手 |
@@ -175,7 +178,7 @@ SHA-256 で 2 つのずれが分かる。
 
 CI は `verification/tamarin/` か workflow が変わった時に model を回す。model か、
 model の契約が述べる code（`network/pkg/services/chainmanager/wireauth`、
-`wireauth.Sign` の呼び手、L2 の proof を検証する handler、`pipelineconfig.Config.PresentsCredentialTo`、
+`wireauth.Sign` の呼び手と、その audience の出所（`cmd/pipeline/audience.go`、chain manager の subscriber）、node の検証者（`internal/netcompose`）、L2 の proof を検証する handler、`pipelineconfig.Config.PresentsCredentialTo`、
 `internal/origin`、`vc-store-bearer` を付ける client）を変える pull request は、
 上の契約が code でまだ成り立つかを review する。
 

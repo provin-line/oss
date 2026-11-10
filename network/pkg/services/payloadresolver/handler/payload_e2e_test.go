@@ -24,6 +24,9 @@ import (
 )
 
 const (
+	// nodeAudience is the audience of the serving node's verifier.
+	nodeAudience = "node.example"
+
 	nodeDID  = "did:dplaax:poc.dplaax.dev:org:consumer"
 	ownerPBA = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pa"
 )
@@ -94,6 +97,7 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -127,7 +131,7 @@ func TestPayloadService_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	got, err := h.client.ResolvePayload(context.Background(), h.url, hash)
+	got, err := h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
 	if err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
 	}
@@ -150,7 +154,7 @@ func TestPayloadService_NotAdmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	_, err = h.client.ResolvePayload(context.Background(), h.url, hash)
+	_, err = h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
 	// The client re-maps a wire NotFound to client.ErrNotFound — the SAME error
 	// it returns for a well-formed miss (TestPayloadService_NotFound). Identical
 	// error ⇒ the caller cannot distinguish "present but forbidden" from "absent".
@@ -163,7 +167,7 @@ func TestPayloadService_NotAdmitted(t *testing.T) {
 func TestPayloadService_NotFound(t *testing.T) {
 	h := newHarness(t, 0)
 	missing := "sha256:" + "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-	_, err := h.client.ResolvePayload(context.Background(), h.url, missing)
+	_, err := h.client.ResolvePayload(context.Background(), h.url, nodeAudience, missing)
 	if !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("err = %v, want client.ErrNotFound", err)
 	}
@@ -180,7 +184,7 @@ func TestPayloadService_MaxBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	_, err = h.client.ResolvePayload(context.Background(), h.url, hash)
+	_, err = h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
 	if err == nil {
 		t.Fatal("ResolvePayload over cap: want error, got nil")
 	}

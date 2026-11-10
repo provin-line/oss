@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	// peerAudience is the registry ID of the publisher node the tests call.
+	peerAudience = "pub.example"
+
 	subDID = "did:dplaax:reg:org:sub"
 	pubDID = "did:dplaax:reg:org:acme:pipeline:p1"
 )
@@ -83,6 +86,9 @@ func assertProof(t *testing.T, ap *chainpb.AuthProof) {
 	if ap.GetSignerDid() != subDID {
 		t.Errorf("signer_did = %q, want %q", ap.GetSignerDid(), subDID)
 	}
+	if ap.GetAudience() != peerAudience {
+		t.Errorf("audience = %q, want %q", ap.GetAudience(), peerAudience)
+	}
 	if ap.GetNonce() == "" {
 		t.Error("empty nonce")
 	}
@@ -100,7 +106,7 @@ func assertProof(t *testing.T, ap *chainpb.AuthProof) {
 
 func TestClient_GetPublisherInfo(t *testing.T) {
 	cli, cap, url := setup(t)
-	pt, modes, err := cli.GetPublisherInfo(context.Background(), url, subDID, pubDID)
+	pt, modes, err := cli.GetPublisherInfo(context.Background(), url, peerAudience, subDID, pubDID)
 	if err != nil {
 		t.Fatalf("GetPublisherInfo: %v", err)
 	}
@@ -115,7 +121,7 @@ func TestClient_GetPublisherInfo(t *testing.T) {
 
 func TestClient_RegisterSubscription(t *testing.T) {
 	cli, cap, url := setup(t)
-	remoteID, connInfo, pt, agreed, err := cli.RegisterSubscription(context.Background(), url, subDID, pubDID, "inline")
+	remoteID, connInfo, pt, agreed, err := cli.RegisterSubscription(context.Background(), url, peerAudience, subDID, pubDID, "inline")
 	if err != nil {
 		t.Fatalf("RegisterSubscription: %v", err)
 	}
@@ -133,7 +139,7 @@ func TestClient_RegisterSubscription(t *testing.T) {
 // signed bytes from the request.
 func TestClient_RegisterSubscription_EmptyModeVerbatim(t *testing.T) {
 	cli, cap, url := setup(t)
-	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), url, subDID, pubDID, ""); err != nil {
+	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), url, peerAudience, subDID, pubDID, ""); err != nil {
 		t.Fatalf("RegisterSubscription: %v", err)
 	}
 	if cap.rs.GetPayloadDelivery() != "" {
@@ -143,7 +149,7 @@ func TestClient_RegisterSubscription_EmptyModeVerbatim(t *testing.T) {
 
 func TestClient_Disconnect(t *testing.T) {
 	cli, cap, url := setup(t)
-	if err := cli.Disconnect(context.Background(), url, "remote-9"); err != nil {
+	if err := cli.Disconnect(context.Background(), url, peerAudience, "remote-9"); err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
 	if cap.dc.GetSubscriptionId() != "remote-9" {
@@ -157,7 +163,7 @@ func TestClient_Disconnect(t *testing.T) {
 func TestClient_Disconnect_RemoteNotFound(t *testing.T) {
 	cli, cap, url := setup(t)
 	cap.disconnectCode = connect.CodeNotFound
-	err := cli.Disconnect(context.Background(), url, "gone")
+	err := cli.Disconnect(context.Background(), url, peerAudience, "gone")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("err = %v, want store.ErrNotFound", err)
 	}
@@ -188,10 +194,10 @@ func TestClient_RefusesAnOversizedResponse(t *testing.T) {
 	t.Cleanup(srv.Close)
 	cli := peerclient.New(fakeSigner{}, subDID, core.NewURLGuard(core.WithAllowLoopback(true)).HTTPClient())
 
-	if _, _, err := cli.GetPublisherInfo(context.Background(), srv.URL, subDID, pubDID); connect.CodeOf(err) != connect.CodeResourceExhausted {
+	if _, _, err := cli.GetPublisherInfo(context.Background(), srv.URL, peerAudience, subDID, pubDID); connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Errorf("GetPublisherInfo: err = %v, want resource_exhausted", err)
 	}
-	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), srv.URL, subDID, pubDID, ""); connect.CodeOf(err) != connect.CodeResourceExhausted {
+	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), srv.URL, peerAudience, subDID, pubDID, ""); connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Errorf("RegisterSubscription: err = %v, want resource_exhausted", err)
 	}
 }

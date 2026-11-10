@@ -37,18 +37,21 @@ type fakePeer struct {
 	disconnErr       error
 	registered       int
 	disconnected     []string
+	targets          []string           // "op endpoint audience" of each call, in order
 	cancelOnRegister context.CancelFunc // if set, cancels the caller ctx mid-flight
 	onRegister       func()             // if set, runs after the remote side-effect commits (races a concurrent winner)
 }
 
-func (f *fakePeer) GetPublisherInfo(context.Context, string, string, string) (string, []string, error) {
+func (f *fakePeer) GetPublisherInfo(_ context.Context, endpoint, audience, _, _ string) (string, []string, error) {
+	f.targets = append(f.targets, "GetPublisherInfo "+endpoint+" "+audience)
 	if f.getErr != nil {
 		return "", nil, f.getErr
 	}
 	return f.publishType, f.modes, nil
 }
 
-func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMode string) (string, map[string]string, string, string, error) {
+func (f *fakePeer) RegisterSubscription(_ context.Context, endpoint, audience, _, _, requestedMode string) (string, map[string]string, string, string, error) {
+	f.targets = append(f.targets, "RegisterSubscription "+endpoint+" "+audience)
 	if f.registerErr != nil {
 		return "", nil, "", "", f.registerErr
 	}
@@ -83,7 +86,8 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 	return f.remoteID, connInfo, f.publishType, agreed, nil
 }
 
-func (f *fakePeer) Disconnect(ctx context.Context, _, remoteID string) error {
+func (f *fakePeer) Disconnect(ctx context.Context, endpoint, audience, remoteID string) error {
+	f.targets = append(f.targets, "Disconnect "+endpoint+" "+audience)
 	if err := ctx.Err(); err != nil {
 		return err // a real client respects ctx; compensation must use a fresh one
 	}

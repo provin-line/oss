@@ -50,7 +50,11 @@ type AuthProof struct {
 	// (next-B), rejecting any non-canonical form before verification.
 	IssuedAt string `protobuf:"bytes,3,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
 	// signature is the raw Ed25519 signature over the canonical signed view.
-	Signature     []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	Signature []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	// audience is the party the proof was signed for: the registry ID of the
+	// node the request is sent to. The signed view binds it, and a node accepts
+	// only a proof for its own audience.
+	Audience      string `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,6 +115,13 @@ func (x *AuthProof) GetSignature() []byte {
 		return x.Signature
 	}
 	return nil
+}
+
+func (x *AuthProof) GetAudience() string {
+	if x != nil {
+		return x.Audience
+	}
+	return ""
 }
 
 // Subscription is one established pipeline chain connection (mirrors store.Subscription).
@@ -1161,13 +1172,14 @@ var File_dplaax_chain_v1_chain_proto protoreflect.FileDescriptor
 
 const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\n" +
-	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"{\n" +
+	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"\x97\x01\n" +
 	"\tAuthProof\x12\x1d\n" +
 	"\n" +
 	"signer_did\x18\x01 \x01(\tR\tsignerDid\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x1b\n" +
 	"\tissued_at\x18\x03 \x01(\tR\bissuedAt\x12\x1c\n" +
-	"\tsignature\x18\x04 \x01(\fR\tsignature\"\xf1\x02\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x1a\n" +
+	"\baudience\x18\x05 \x01(\tR\baudience\"\xf1\x02\n" +
 	"\fSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0esubscriber_did\x18\x02 \x01(\tR\rsubscriberDid\x12#\n" +

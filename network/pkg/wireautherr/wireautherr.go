@@ -32,7 +32,8 @@ import (
 //     its restart-epoch boot window): CodeUnavailable, retryable. Neither is
 //     an identity verdict.
 //   - ErrExpired, ErrFromFuture, ErrKeyResolution, ErrSignatureInvalid,
-//     ErrReplay (a definitive identity rejection): CodeUnauthenticated.
+//     ErrReplay, ErrWrongAudience (a definitive rejection of the proof):
+//     CodeUnauthenticated.
 func Code(err error) (connect.Code, bool) {
 	switch {
 	case errors.Is(err, wireauth.ErrMissingProof),
@@ -46,7 +47,8 @@ func Code(err error) (connect.Code, bool) {
 		errors.Is(err, wireauth.ErrFromFuture),
 		errors.Is(err, wireauth.ErrKeyResolution),
 		errors.Is(err, wireauth.ErrSignatureInvalid),
-		errors.Is(err, wireauth.ErrReplay):
+		errors.Is(err, wireauth.ErrReplay),
+		errors.Is(err, wireauth.ErrWrongAudience):
 		return connect.CodeUnauthenticated, true
 	default:
 		return 0, false

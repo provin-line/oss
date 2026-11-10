@@ -30,6 +30,7 @@ import (
 type mirrorClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
+	registry   string
 	bearer     string
 	httpClient connect.HTTPClient
 
@@ -37,8 +38,8 @@ type mirrorClientFactory struct {
 	clients map[string]*tlogserviceclient.Client
 }
 
-func newMirrorClientFactory(signer crypto.Signer, baseURL, bearer string, httpClient connect.HTTPClient) *mirrorClientFactory {
-	return &mirrorClientFactory{signer: signer, baseURL: baseURL, bearer: bearer, httpClient: httpClient, clients: map[string]*tlogserviceclient.Client{}}
+func newMirrorClientFactory(signer crypto.Signer, baseURL, registry, bearer string, httpClient connect.HTTPClient) *mirrorClientFactory {
+	return &mirrorClientFactory{signer: signer, baseURL: baseURL, registry: registry, bearer: bearer, httpClient: httpClient, clients: map[string]*tlogserviceclient.Client{}}
 }
 
 // For returns the cached client signing as signerDID, building and caching
@@ -53,6 +54,7 @@ func (f *mirrorClientFactory) For(signerDID string) *tlogserviceclient.Client {
 		Signer:     f.signer,
 		SignerDID:  signerDID,
 		BaseURL:    f.baseURL,
+		Audience:   ownNodeAudience(f.registry, signerDID),
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})

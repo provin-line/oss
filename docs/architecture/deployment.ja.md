@@ -45,6 +45,31 @@ NATS operator mode は account の接続時（または JWT 失効時）に acco
 
 push が無い時の症状: `chain subscribe` は成功する（コントロールプレーンの record は書かれる）のにイベントが流れない — broker は grant されていない subject を黙って落とす。何もエラーにならない。負系 capstone テストがまさにこの挙動を**セキュリティ**姿勢として pin しているからこそ、運用側にはこの注意書きが要る。
 
+## wire 証明の audience
+
+L2 の wire 証明はどれも **audience**（送り先の node の registry ID）を名指す（[auth.ja.md § L2](../protocol/auth.ja.md)、D-w12）。node は、自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。node にこのための設定は他に要らない。
+
+pipeline は、各宛先の audience を設定に既にある DID から得る:
+
+| 宛先 | audience | 上書き（任意） |
+| --- | --- | --- |
+| 自 node（`vc-store-endpoint`） | proof の署名に使う DID の registry segment | `provin.network.pipeline.vc-store-registry` |
+| by-reference の上流（loop の `upstream-endpoint`） | loop の `ingress-subject`、または aggregate の ingress の `subject` の registry segment | その `upstream-endpoint` の隣の `upstream-registry` |
+| publisher の `#chain-manager` | publisher の DID の registry segment | — |
+
+上書きは、その endpoint の node が別の registry のものであるときだけ置く。audience が違うと fail closed になる: node はその呼び出しを `Unauthenticated` で断り、期待した audience を文に含める。1 つの `upstream-endpoint` に 2 つの registry が出ると boot error。
+
+endpoint とその audience の組は設定が決める: wire 証明は、endpoint の node が audience の名指す node であることを示さない。2 つが食い違うと、endpoint の node はその呼び出しを断るが、名指された node が proof の新しいうち（受理の窓、既定 60 秒）は受理する proof を受け取っている。そのため、別の registry の node を指す `vc-store-endpoint` を `vc-store-registry` なしで置くと、その node の運用者に自分の node で通る proof を渡すことになる。上流の node ではない `upstream-endpoint` も、上流について同じことをする。各 endpoint は組にした registry の node に向けるか、上書きを置く。
+
+ここから 2 つの制約が出る:
+
+- **registry の `#chain-manager` endpoint は、その registry の node が受ける。** registry の DID document は、`#chain-manager` の service を `provin.network.registry.id` がその registry である node に向ける。
+- **1 つの registry の L2 の面は、1 つの network process が受ける。** nonce store は process ごとなので、同じ registry ID の 2 つの process はそれぞれ proof を 1 回ずつ受理しうる。network node の active-active の replica は動かさない。
+
+### view version 2 への更新
+
+audience で署名する view が変わり（`v` = 2）、node は他の version を受理しない。互いに話す全ての network node と pipeline を、1 つの窓で更新する。窓の間、更新済みと未更新の process の間の呼び出しは断られる: 更新済みの node は audience の無い proof を `Unauthenticated`（"names no audience"）で断り、未更新の node は version 2 の proof を署名で断る。窓の間は subscription が確立せず、by-reference の取得に失敗した event は、取得の失敗と同じく rejected / errored / dropped になる。そのため、窓の前に by-reference の消費を止めるか、それらの event を失うことを受け入れる。更新前に書かれた relationship evidence（view version 1）は読めるまま。
+
 ## Health エンドポイント
 
 - `GET /healthz` — **liveness**、static。失敗 = 「再起動せよ」。

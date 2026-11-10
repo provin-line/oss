@@ -27,21 +27,30 @@ L2 の問い: *この名前の peer が本当にこの要求を送ったか？* 
 
 各 RPC は、それが認証する要求への proof を運ぶ:
 
-- 正確に `{signerDID, op, v, nonce, issuedAt, fields}` の canonical（JCS）view への **Ed25519 署名** — `v` は凍結された view version（現在 `1`。他の version は拒否）、`issuedAt` は秒精度の RFC 3339、`op` は RPC の view 判別子、`fields` はその business object。`op` と `fields` は verifier が**提供中の要求から**再構成する（proof からは決して読まない）。`signerDID` を署名 bytes に bind するので、鍵を共有する DID の alias が他 DID の署名を再利用することはできない。
+- 正確に `{signerDID, aud, op, v, nonce, issuedAt, fields}` の canonical（JCS）view への **Ed25519 署名** — `v` は凍結された view version（現在 `2`。他の version は拒否）、`aud` は **audience**（要求の送り先の node の registry ID）、`issuedAt` は秒精度の RFC 3339、`op` は RPC の view 判別子、`fields` はその business object。`op` と `fields` は verifier が**提供中の要求から**再構成する（proof からは決して読まない）。`signerDID` を署名 bytes に bind するので、鍵を共有する DID の alias が他 DID の署名を再利用することはできない。`aud` を bind するので、ある node 向けの proof は別の node では検証に通らない。
+- **audience を最初に確かめる**: node の verifier は、audience が自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。この照合は構造チェックと一緒に、署名者を解決する前に行い、view は自分の registry ID で組み直す。そのため別の node 向けの proof はそこで nonce を消費せず、書き換えた audience は署名で落ちる。照合は要求の URL も `Host` も使わないので、proxy の後ろや別名の node でも同じに確かめる。
 - 署名者の鍵は **署名者の DID document 経由**で解決（`#auth` verification method）— cross-registry、事前共有鍵なし。
 - **replay 防御**: acceptance window 内の single-use nonce（clock-skew 許容は非対称 — 過去向きが未来向きより大きい）+ **restart epoch barrier**（in-memory nonce store のリセットが restart 前の proof を再受理させない）。boot window 中はこの barrier が正当な fresh proof も拒否するが、handler は permanent な `Unauthenticated` ではなく **retryable な `Unavailable`** を返し、conforming peer は bounded な再署名 retry で回復する。retry budget 枯渇時（または budget を超える clock skew の peer）は racing call が drop される — post-v0 の durable nonce store で閉じる、PoC posture の許容された残存 loss。
-- 順序付き検証: 構造チェック → 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造が正規署名者の nonce を焼くことはできない。
+- 順序付き検証: 構造チェック（audience を含む）→ 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造も別の node 向けの proof も、正規署名者の nonce を焼くことはできない。
 - 任意の per-op **authorizer**（signer-to-actor policy）は署名検証の後にのみ走る — 未認証入力を見ることがない。
 
-proof の形は 3 つの設計判断で決まっている。code とその試験はこの名前で参照する:
+proof の形は 4 つの設計判断で決まっている。code とその試験はこの名前で参照する:
 
 - **D-w1 — view は署名者の DID を覆う。** 2 つの DID が同じ `#auth` 鍵を載せることがある（alias、または他者の鍵を載せた DID document）。`signerDID` が署名 bytes に入るので、一方として署名した proof は他方としては検証に通らない（unknown-key-share への防御）。
 - **D-w10 — nonce は署名者ごとに記録する。** nonce store の鍵は `(signerDID, nonce)`。nonce は署名者に対してだけ意味を持つ。同じ nonce を使う 2 人の署名者はぶつからず、ある署名者が他の署名者の nonce を先に使って消費することもできない。
 - **D-w11 — fields の値は string、boolean、`null` と、それらの object と array だけ。** 数は decimal の string で運ぶ。同じ値の Go の `int` と `float64` は別の bytes に canonical 化され、JCS の数の直列化は凍結された組織間の wire で相互運用の危険になる。数を持たない fields の bytes の形は 1 つに決まる。
+- **D-w12 — view は audience を覆う。** proof は、それが向かう node をその registry ID で名指し、view がそれを束ねる。ある node が受け取った proof は、別の registry の node では検証に通らない。送り手は endpoint と同じ出所から audience を得る:
+  - pipeline の自 node（`vc-store-endpoint`）: proof の署名に使う DID の registry segment（pipeline は自分の registry の node に publish する）。
+  - by-reference の上流（loop の `upstream-endpoint`）: loop の上流の pipeline DID（`ingress-subject`、または aggregate の ingress の `subject`）の registry segment（その node がその pipeline の payload を持つ）。
+  - publisher の `#chain-manager` endpoint: publisher の DID の registry segment（その registry が DID document にその endpoint を載せる）。registry の `#chain-manager` endpoint は、その registry の node が受ける。
 
-D-w1、D-w10 と、nonce は署名が通った後にだけ記録されることは、Dolev-Yao の攻撃者に対して Tamarin の model `verification/tamarin/wireauth.spthy` で確かめている（[verification/README.ja.md](../../verification/README.ja.md)）。
+  その endpoint の node が別の registry のものなら、`vc-store-registry` と `upstream-registry` で registry を名指す。endpoint と audience を組にするのは送り手で、wire 証明はその組を認証しない。endpoint を誤った node に向けると、その node に、組の相手の node が新しいうちは受理する proof を渡すことになる（[deployment.ja.md](../architecture/deployment.ja.md)）。
 
-検証済みの relationship 変更（subscription 登録・切断）は加えて **relationship evidence** を残す: counterparty 署名済み要求と検証鍵素材を durable に保全し、relationship の存在を peer を信頼せずに後から証明できる（[audit-obligations.ja.md](../concepts/audit-obligations.ja.md)。rotation は [deployment.ja.md](../architecture/deployment.ja.md)）。
+D-w1、D-w10、D-w12 と、nonce は署名が通った後にだけ記録されることは、Dolev-Yao の攻撃者に対して Tamarin の model `verification/tamarin/wireauth.spthy` で確かめている（[verification/README.ja.md](../../verification/README.ja.md)）。
+
+nonce の一度きりは **verifier ごと**。1 つの audience を持ち、それぞれ自分の nonce store を持つ 2 つの verifier は、同じ proof をそれぞれ 1 回ずつ受理しうる。そのため、1 つの registry の L2 の面は **1 つの network process** が受ける（[deployment.ja.md](../architecture/deployment.ja.md)）。
+
+検証済みの relationship 変更（subscription 登録・切断）は加えて **relationship evidence** を残す: counterparty 署名済み要求、その audience、検証した view version と検証鍵素材を durable に保全し、relationship の存在を peer を信頼せずに後から証明できる（[audit-obligations.ja.md](../concepts/audit-obligations.ja.md)。rotation は [deployment.ja.md](../architecture/deployment.ja.md)）。view version `1` の記録（view が audience を束ねる前に書かれたもの）は audience を持たず、version 1 の view `{signerDID, op, v, nonce, issuedAt, fields}` で再検証する。
 
 ## L3 との関係
 

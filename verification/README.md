@@ -8,7 +8,7 @@ security properties of the implementation:
 
 | model | tool | subject |
 | --- | --- | --- |
-| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0 (with Maude 3.5.1) | the L2 peer wire proof ([auth.md § L2](../docs/protocol/auth.md#l2--peer-wire-proof-wireauth)): the signed view, single-use nonces, the nonce recorded only after the signature verifies |
+| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0 (with Maude 3.5.1) | the L2 peer wire proof ([auth.md § L2](../docs/protocol/auth.md#l2--peer-wire-proof-wireauth)): the signed view and its audience, single-use nonces, the nonce recorded only after the signature verifies |
 | [`tamarin/bearerorigins.spthy`](tamarin/bearerorigins.spthy) | Tamarin 1.12.0 (with Maude 3.5.1) | where a node shows its L1 bearer (`vc-store-bearer`) |
 
 The properties of the dPLaaX protocol itself (provenance chains, delegation)
@@ -32,7 +32,7 @@ header comment says the same.
   which records `Compromised(k)`.
 - **Nonces.** An honest signer draws a fresh nonce for each proof
   (`wireauth.NewNonce`, which every caller of `wireauth.Sign` uses).
-  `no_burn` and `handled_only_by_recipient` rest on this.
+  `no_burn` rests on this.
 - **Persistence and time.** None. `issuedAt` is an opaque term of the view.
   The acceptance window, the restart epoch, the eviction of nonces and
   restarts are outside the model; the nonce store here never forgets. That
@@ -42,18 +42,20 @@ header comment says the same.
   (`internal/netcompose/server.go`), shared by every surface that verifies an
   L2 proof. The store's `Use` is an atomic check-and-set (the restriction
   `NonceStore`).
+- **Audience.** Each verifier has one audience, its node's registry ID
+  (D-w12). The view binds the audience; the verifier refuses a proof that
+  names another, and rebuilds the view with its own. Several verifiers may
+  have one audience (replicas, each with a store of its own); a deployment
+  runs one verifier per audience, which closes `replay_across_replicas`
+  ([auth.md § L2](../docs/protocol/auth.md#l2--peer-wire-proof-wireauth)).
 - **Requests.** A request is its op and its fields: a handler acts only on the
   fields it passes to `Verifier.Verify`, and the op values are distinct across
-  the surfaces that share the verifier.
-- **Recipient.** In the model, a request's fields name its recipient, and
-  after `Verifier.Verify` returns, the handler lets the request take effect
-  only at a verifier that serves that recipient. This is a premise:
-  `handled_only_by_recipient` is a property of a handler that makes the
-  check.
-- **Events.** `Accepted(V, S, op, n, t, f)`: verifier `V` accepted the proof
-  (`Verify` returned nil and recorded the nonce). `ReplayRejected(...)`: the
-  signature verified and the nonce was already recorded (`ErrReplay`).
-  `Handled(...)`: the request took effect at `V`.
+  the surfaces that share the verifier. An honest signer signs for whatever
+  audience, op, issuedAt and fields it is handed.
+- **Events.** `Accepted(V, R, S, op, n, t, f)`: verifier `V`, whose audience
+  is `R`, accepted the proof (`Verify` returned nil and recorded the nonce).
+  `ReplayRejected(...)`: the signature verified and the nonce was already
+  recorded (`ErrReplay`).
 - **Not modelled.** The fields' value grammar and the JCS bytes (D-w11; for
   test vectors and fuzzing), authorization (a refusal leaves the store as it
   was, which is what a rule that does not fire does), DID spelling (the view
@@ -87,12 +89,12 @@ header comment says the same.
 | `executable_alias` | exists-trace | two honest DIDs on one key each have a proof accepted | — |
 | `forgery_after_compromise` | exists-trace | with its key taken over, an honest DID has a proof accepted that it never signed: the exception in `view_binding` is live | — |
 | `view_binding` | all-traces | a proof accepted for a DID under an honest key not taken over was signed by that DID, for that op, nonce, issuedAt and fields: no reuse for another DID naming the same key, nor for another op | `viewBytes` (D-w1); `Verifier.Verify` steps 4–6 |
+| `accepted_only_for_audience` | all-traces | a proof accepted at a verifier under an honest key not taken over was signed for that verifier's audience: a proof made for one node does not go through at another | `viewBytes` and the audience check in `Verifier.Verify` step 1 (D-w12) |
 | `executable_replay_rejected` | exists-trace | an accepted proof presented again to the same verifier is turned away | — |
 | `once_per_store` | all-traces | a verifier accepts a signer's nonce once; this restates the store's check-and-set | `NonceStore.Use` as an atomic check-and-set (a premise) |
 | `nonce_per_signer` | exists-trace | one verifier accepts one nonce for two signers: the store's scope is per signer | `NonceStore` keyed by `(signerDID, nonce)` (D-w10) |
 | `no_burn` | all-traces | an honest proof is turned away as a replay only when that proof was accepted before, or its signer's key was taken over: a forgery spends no legitimate signer's nonce | `Verifier.Verify` step 8, last and only on success; `NonceStore` keyed per signer |
-| `handled_only_by_recipient` | all-traces | under a handler that checks the recipient, a request takes effect only at a node that serves the recipient it names | a handler's recipient check after `Verifier.Verify` (a premise) |
-| `replay_across_replicas` | exists-trace | what that leaves: one request taking effect at two verifiers that serve the same recipient, each with a store of its own | — |
+| `replay_across_replicas` | exists-trace | what the audience leaves: one proof accepted at two verifiers that have the same audience, each with a store of its own | — (a deployment runs one verifier per audience) |
 
 `bearerorigins.spthy`:
 
@@ -131,11 +133,12 @@ it, and the lemmas it is expected to falsify are in
 | model | build | changes | falsifies |
 | --- | --- | --- | --- |
 | wireauth | `ViewOmitsSigner` | the view no longer covers the signer DID (D-w1) | `view_binding` (an attacker's DID that names an honest key) |
+| wireauth | `ViewOmitsAudience` | the view no longer covers the audience (D-w12) | `accepted_only_for_audience` (a proof made for one verifier accepted at another) |
 | wireauth | `ViewOmitsOp` | the view no longer covers the op | `view_binding`, `no_burn` (the proof accepted under another op first) |
+| wireauth | `AudienceFromWire` | the verifier rebuilds the view with the audience the proof names, and does not compare it with its own | `accepted_only_for_audience` |
 | wireauth | `NoNonceStore` | the store's check-and-set is gone: nothing stops a replay from being accepted | `once_per_store` |
 | wireauth | `RecordBeforeSignature` | a path records the nonce before the signature is checked | `no_burn` |
 | wireauth | `StoreKeyedByNonce` | the store is keyed by the nonce alone, not per signer (D-w10) | `no_burn`, `nonce_per_signer` |
-| wireauth | `SkipRecipientCheck` | the model's handler no longer checks the recipient | `handled_only_by_recipient` |
 | bearerorigins | `PresentToAnyEndpoint` | the named-origin check is gone | `delivered_only_to_named`, `bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` is gone: a redirect is followed | `delivered_only_to_named`, `bearer_secrecy` |
 
@@ -151,7 +154,7 @@ refutation that is not expected fails CI.
 | model | build | state |
 | --- | --- | --- |
 | wireauth | default | all ten proved |
-| wireauth | each of the six controls | the lemmas in the table above refuted as expected; the others proved |
+| wireauth | each of the seven controls | the lemmas in the table above refuted as expected; the others proved |
 | bearerorigins | default | all five proved |
 | bearerorigins | each of the two controls | the lemmas in the table above refuted as expected; the others proved |
 | `NonceEpoch` (TLA+: the acceptance window, the restart epoch, eviction) | — | not started |
@@ -194,8 +197,10 @@ Tools: Tamarin 1.12.0 and Maude 3.5.1, the versions CI pins by SHA-256
 
 CI runs the models when `verification/tamarin/` or the workflow changes. A
 pull request that changes a model, or the code a model's contract describes
-(`network/pkg/services/chainmanager/wireauth`, the callers of `wireauth.Sign`,
-the handlers that verify an L2 proof,
+(`network/pkg/services/chainmanager/wireauth`, the callers of `wireauth.Sign`
+and where their audience comes from (`cmd/pipeline/audience.go`, the chain
+manager's subscriber), the node's verifier (`internal/netcompose`), the
+handlers that verify an L2 proof,
 `pipelineconfig.Config.PresentsCredentialTo`, `internal/origin`, the clients
 that carry `vc-store-bearer`), is reviewed for whether the contract above
 still holds of the code.

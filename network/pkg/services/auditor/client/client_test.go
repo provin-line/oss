@@ -34,6 +34,9 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
+
 const nodeDID = "did:dplaax:poc.dplaax.dev:org:pipeline"
 
 func addr(hexDigit string) string { return "sha256:" + strings.Repeat(hexDigit, 64) }
@@ -129,6 +132,7 @@ func newHarness(t *testing.T) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -173,7 +177,7 @@ func newHarness(t *testing.T) *harness {
 		receiptDir: receiptDir,
 		queue:      queue,
 		vcSvc:      vcSvc,
-		client:     auditclient.New(auditclient.Config{Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
+		client:     auditclient.New(auditclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
 		url:        srv.URL,
 		httpc:      httpc,
 		signer:     sgn,
@@ -297,7 +301,7 @@ func TestRegisterEvidence_UnknownVariant_FailedPrecondition(t *testing.T) {
 func TestRegisterEvidence_MismatchedKey_Unauthenticated(t *testing.T) {
 	h := newHarness(t)
 	wrongSigner, _ := signer(t, nodeDID) // a DIFFERENT keypair than the one bound to nodeDID above
-	bad := auditclient.New(auditclient.Config{Signer: wrongSigner, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc})
+	bad := auditclient.New(auditclient.Config{Audience: nodeAudience, Signer: wrongSigner, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc})
 
 	head := variantAddr("d")
 	err := bad.RegisterEvidence(context.Background(), head, []string{addr("e")})
@@ -355,6 +359,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -396,7 +401,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 // so this fails unless the client actually sets the Authorization header.
 func TestRegisterEvidence_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc, Bearer: "test-l1-token",
 	})
 	if err := client.RegisterEvidence(context.Background(), variantAddr("a"), []string{addr("b")}); err != nil {
@@ -411,7 +416,7 @@ func TestRegisterEvidence_BearerPresented_L1Passes(t *testing.T) {
 // as any other Connect error from this client does.
 func TestRegisterEvidence_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc,
 	})
 	err := client.RegisterEvidence(context.Background(), variantAddr("a"), []string{addr("b")})
@@ -474,7 +479,7 @@ func TestRegisterAuditHead_UnknownVariant_FailedPrecondition(t *testing.T) {
 // per Client (New), not per call.
 func TestRegisterAuditHead_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc, Bearer: "test-l1-token",
 	})
 	if err := client.RegisterAuditHead(context.Background(), variantAddr("a")); err != nil {
@@ -488,7 +493,7 @@ func TestRegisterAuditHead_BearerPresented_L1Passes(t *testing.T) {
 // unmangled.
 func TestRegisterAuditHead_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc,
 	})
 	err := client.RegisterAuditHead(context.Background(), variantAddr("a"))

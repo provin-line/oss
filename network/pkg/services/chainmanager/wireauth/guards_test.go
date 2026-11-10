@@ -16,7 +16,7 @@ import (
 func verifierWith(t *testing.T, resolver wireauth.DIDResolver, clock func() time.Time, epoch time.Time) *wireauth.Verifier {
 	t.Helper()
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 		Clock: clock, Epoch: epoch,
 	})
 	if err != nil {
@@ -28,7 +28,7 @@ func verifierWith(t *testing.T, resolver wireauth.DIDResolver, clock func() time
 func TestVerify_MissingAndMalformed(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-	good, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	good, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 
 	t.Run("empty signerDID", func(t *testing.T) {
 		p := good
@@ -65,7 +65,7 @@ func TestVerify_MissingAndMalformed(t *testing.T) {
 
 func TestVerify_EpochBarrier(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	// Epoch is one hour AFTER the proof's issuedAt → rejected before any crypto.
 	v := verifierWith(t, mapResolver{subDID: authDoc(subDID, pub)},
 		func() time.Time { return at().Add(time.Hour + time.Second) }, at().Add(time.Hour))
@@ -77,12 +77,12 @@ func TestVerify_EpochBarrier(t *testing.T) {
 // closing same-second pre-restart replay against the in-memory nonce store.
 func TestVerify_SameSecondRestartRejected(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at()) // issuedAt 12:00:00
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at()) // issuedAt 12:00:00
 	// Construct at 12:00:00.5 with the DEFAULT epoch → ceil(12:00:00.5 + 5s) = 12:00:06.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
-		Nonces: wireauth.NewMemoryNonceStore(),
-		Clock:  func() time.Time { return at().Add(500 * time.Millisecond) },
+		Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
+		Clock: func() time.Time { return at().Add(500 * time.Millisecond) },
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -98,13 +98,13 @@ func TestVerify_SameSecondRestartRejected(t *testing.T) {
 func TestVerify_FutureDatedRestartReplayRejected(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	// Proof 4s in the future — inside the default 5s MaxFuture window.
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at().Add(4*time.Second))
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at().Add(4*time.Second))
 	// Boot AND now both at() (clock is consulted once for the epoch, again in
 	// Verify for the window). Default window → epoch = ceil(at()+5s) = 12:00:05.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
-		Nonces: wireauth.NewMemoryNonceStore(),
-		Clock:  func() time.Time { return at() },
+		Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
+		Clock: func() time.Time { return at() },
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -124,7 +124,7 @@ func TestNewVerifier_DefaultEpochUsesConfiguredMaxFuture(t *testing.T) {
 	newV := func(t *testing.T) *wireauth.Verifier {
 		t.Helper()
 		v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 			Clock:  func() time.Time { return at() },
 			Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 10 * time.Second},
 		})
@@ -134,11 +134,11 @@ func TestNewVerifier_DefaultEpochUsesConfiguredMaxFuture(t *testing.T) {
 		return v
 	}
 	t.Run("below epoch rejected (proves MaxFuture read, not hardcoded 5s)", func(t *testing.T) {
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n9", at().Add(9*time.Second))
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n9", at().Add(9*time.Second))
 		assertErrIs(t, newV(t).Verify(context.Background(), "Op", okFields(), proof, nil), wireauth.ErrBeforeEpoch)
 	})
 	t.Run("at epoch boundary accepted", func(t *testing.T) {
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n10", at().Add(10*time.Second))
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n10", at().Add(10*time.Second))
 		if err := newV(t).Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
 			t.Errorf("boundary proof at epoch: want accept, got %v", err)
 		}
@@ -150,10 +150,10 @@ func TestNewVerifier_DefaultEpochUsesConfiguredMaxFuture(t *testing.T) {
 // immediately. A hardcoded 5s epoch would reject it.
 func TestNewVerifier_ZeroMaxFutureNoStartupDelay(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: mapResolver{subDID: authDoc(subDID, pub)}, Crypto: ed25519.Verifier{},
-		Nonces: wireauth.NewMemoryNonceStore(),
+		Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 		Clock:  func() time.Time { return at() },
 		Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 0},
 	})
@@ -182,7 +182,7 @@ func TestVerify_RestartReplaySequence(t *testing.T) {
 	// explicit early epoch isolates the acceptance WINDOW as the recording gate.
 	// With the default 5s future window it can record proofs up to 12:00:04.
 	oldV, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 		Clock: func() time.Time { return at().Add(-time.Second) },
 		Epoch: at().Add(-time.Hour),
 	})
@@ -192,20 +192,20 @@ func TestVerify_RestartReplaySequence(t *testing.T) {
 
 	// The MAX future-dated proof the old process can record (12:00:04) — accepted
 	// and its nonce recorded on the old (soon-discarded) store.
-	maxRecordable, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "max", at().Add(4*time.Second))
+	maxRecordable, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "max", at().Add(4*time.Second))
 	if err := oldV.Verify(context.Background(), "Op", okFields(), maxRecordable, nil); err != nil {
 		t.Fatalf("old process must record its max future-dated proof (12:00:04): %v", err)
 	}
 	// The boundary proof at exactly t_boot+MaxFuture (12:00:05) is NOT recordable
 	// pre-restart: the old process's future window rejects it. Empirical refutation
 	// of the "boundary replays" concern — there is nothing to replay.
-	boundary, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "boundary", at().Add(5*time.Second))
+	boundary, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "boundary", at().Add(5*time.Second))
 	assertErrIs(t, oldV.Verify(context.Background(), "Op", okFields(), boundary, nil), wireauth.ErrFromFuture)
 
 	// New process: boot 12:00:00, fresh empty nonce store, default window → epoch
 	// = ceil(12:00:00 + 5s) = 12:00:05.
 	newV, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 		Clock: func() time.Time { return at() },
 	})
 	if err != nil {
@@ -234,14 +234,14 @@ func TestVerify_DefaultEpochRecoversAfterMaxFuture(t *testing.T) {
 		return at().Add(6 * time.Second)
 	}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 		Clock: clock,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	booted = true
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "recovered", at().Add(6*time.Second))
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "recovered", at().Add(6*time.Second))
 	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
 		t.Errorf("post-startup proof (now past epoch): want accept, got %v", err)
 	}
@@ -249,7 +249,7 @@ func TestVerify_DefaultEpochRecoversAfterMaxFuture(t *testing.T) {
 
 func TestVerify_AcceptanceWindow(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	resolver := mapResolver{subDID: authDoc(subDID, pub)}
 	earlyEpoch := at().Add(-1000 * time.Hour)
 
@@ -278,13 +278,13 @@ func TestVerify_AcceptanceWindow(t *testing.T) {
 func TestNewVerifier_WindowSemantics(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := mapResolver{subDID: authDoc(subDID, pub)}
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 
 	t.Run("explicit MaxFuture:0 rejects a future proof", func(t *testing.T) {
 		// now is 1s before issuedAt; an explicit zero future tolerance must reject
 		// it rather than fall back to the default 5s.
 		v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+			Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 			Clock:  func() time.Time { return at().Add(-time.Second) },
 			Epoch:  at().Add(-time.Hour),
 			Window: wireauth.AcceptanceWindow{MaxPast: 60 * time.Second, MaxFuture: 0},
@@ -296,7 +296,7 @@ func TestNewVerifier_WindowSemantics(t *testing.T) {
 	})
 
 	t.Run("negative window durations rejected", func(t *testing.T) {
-		base := wireauth.VerifierConfig{Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore()}
+		base := wireauth.VerifierConfig{Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience}
 		for _, w := range []wireauth.AcceptanceWindow{{MaxPast: -time.Second}, {MaxFuture: -time.Second}} {
 			c := base
 			c.Window = w
@@ -310,7 +310,7 @@ func TestNewVerifier_WindowSemantics(t *testing.T) {
 func TestVerify_SignatureGuards(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := mapResolver{subDID: authDoc(subDID, pub)}
-	proof, _ := wireauth.Sign(signer, subDID, "RegisterSubscription", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "RegisterSubscription", okFields(), "n1", at())
 
 	t.Run("tampered fields", func(t *testing.T) {
 		v := testVerifier(t, resolver)
@@ -336,14 +336,14 @@ func TestVerify_Authorization(t *testing.T) {
 
 	t.Run("rejecting authorizer propagates", func(t *testing.T) {
 		v := testVerifier(t, resolver)
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 		deny := func(string, *did.DIDDocument, map[string]any) error { return errPolicy }
 		assertErrIs(t, v.Verify(context.Background(), "Op", okFields(), proof, deny), errPolicy)
 	})
 
 	t.Run("authorizer not consulted on bad signature", func(t *testing.T) {
 		v := testVerifier(t, resolver)
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 		called := false
 		spy := func(string, *did.DIDDocument, map[string]any) error { called = true; return errPolicy }
 		// Tampered op → signature fails before authz.
@@ -356,7 +356,7 @@ func TestVerify_Authorization(t *testing.T) {
 
 	t.Run("authorizer mutation cannot affect outcome or caller fields", func(t *testing.T) {
 		v := testVerifier(t, resolver)
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 		callerFields := okFields()
 		mutate := func(_ string, _ *did.DIDDocument, f map[string]any) error {
 			f["actor"] = "did:dplaax:poc.dplaax.dev:org:evil"
@@ -376,7 +376,7 @@ func TestVerify_ReplayAndNoBurn(t *testing.T) {
 	t.Run("replay rejected", func(t *testing.T) {
 		signer, pub := signerFor(t, subDID)
 		v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-		proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+		proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 		if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
 			t.Fatalf("first verify: %v", err)
 		}
@@ -386,7 +386,7 @@ func TestVerify_ReplayAndNoBurn(t *testing.T) {
 	t.Run("forgery does not burn a legitimate nonce", func(t *testing.T) {
 		signer, pub := signerFor(t, subDID)
 		v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-		genuine, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "shared-nonce", at())
+		genuine, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "shared-nonce", at())
 		// Forgery: same nonce, corrupted signature.
 		forgery := genuine
 		forgery.Signature = append([]byte(nil), genuine.Signature...)
@@ -410,8 +410,8 @@ func TestVerify_PerSignerNonceIsolation(t *testing.T) {
 		subDID:   authDoc(subDID, pubA),
 		otherDID: authDoc(otherDID, pubB),
 	})
-	pa, _ := wireauth.Sign(signerA, subDID, "Op", okFields(), "same-nonce", at())
-	pb, _ := wireauth.Sign(signerB, otherDID, "Op", okFields(), "same-nonce", at())
+	pa, _ := wireauth.Sign(signerA, subDID, testAudience, "Op", okFields(), "same-nonce", at())
+	pb, _ := wireauth.Sign(signerB, otherDID, testAudience, "Op", okFields(), "same-nonce", at())
 	if err := v.Verify(context.Background(), "Op", okFields(), pa, nil); err != nil {
 		t.Fatalf("signer A: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -85,7 +86,7 @@ func TestByReference_DataPath_SinkFetchesAndDelivers(t *testing.T) {
 		Writer:           w,
 		UpstreamEndpoint: h.url,
 		PayloadDelivery:  contract.DeliveryByReference,
-		PayloadResolver:  h.client,
+		PayloadResolver:  audienceBound{client: h.client, audience: nodeAudience},
 	})
 	if err != nil {
 		t.Fatalf("sink.New: %v", err)
@@ -129,7 +130,7 @@ func TestByReference_DataPath_MissingPayload_Rejected(t *testing.T) {
 		Writer:           w,
 		UpstreamEndpoint: h.url,
 		PayloadDelivery:  contract.DeliveryByReference,
-		PayloadResolver:  h.client,
+		PayloadResolver:  audienceBound{client: h.client, audience: nodeAudience},
 	})
 	if err != nil {
 		t.Fatalf("sink.New: %v", err)
@@ -147,4 +148,15 @@ func TestByReference_DataPath_MissingPayload_Rejected(t *testing.T) {
 	if len(w.records) != 0 {
 		t.Error("delivered a record despite an unresolvable payload")
 	}
+}
+
+// audienceBound is the client as the runtime sees it: a PayloadResolver whose
+// calls name the serving node's audience.
+type audienceBound struct {
+	client   *client.Resolver
+	audience string
+}
+
+func (a audienceBound) ResolvePayload(ctx context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
+	return a.client.ResolvePayload(ctx, upstreamEndpoint, a.audience, contentHash)
 }

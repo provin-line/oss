@@ -24,6 +24,9 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
+
 const publisherDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
 const ttl = 90 * time.Second
@@ -91,6 +94,7 @@ func newHarness(t *testing.T) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -110,7 +114,8 @@ func newHarness(t *testing.T) *harness {
 
 	return &harness{
 		store:  store,
-		client: reportclient.New(reportclient.Config{Signer: sgn, SignerDID: publisherDID, BaseURL: srv.URL, HTTPClient: srv.Client()}),
+		signer: sgn,
+		client: reportclient.New(reportclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: publisherDID, BaseURL: srv.URL, HTTPClient: srv.Client()}),
 		url:    srv.URL,
 	}
 }
@@ -171,7 +176,7 @@ func TestReportEmitHealth_PublisherMismatch_PermissionDenied(t *testing.T) {
 func TestReportEmitHealth_MismatchedKey_Unauthenticated(t *testing.T) {
 	h := newHarness(t)
 	wrongSigner, _ := signer(t, publisherDID) // a DIFFERENT keypair than the one bound to publisherDID above
-	bad := reportclient.New(reportclient.Config{Signer: wrongSigner, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient})
+	bad := reportclient.New(reportclient.Config{Audience: nodeAudience, Signer: wrongSigner, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient})
 
 	_, err := bad.ReportEmitHealth(context.Background(), publisherDID, true)
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
@@ -203,6 +208,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -234,7 +240,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 // header.
 func TestReportEmitHealth_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
-	client := reportclient.New(reportclient.Config{
+	client := reportclient.New(reportclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient, Bearer: "test-l1-token",
 	})
 	if _, err := client.ReportEmitHealth(context.Background(), publisherDID, true); err != nil {
@@ -247,7 +253,7 @@ func TestReportEmitHealth_BearerPresented_L1Passes(t *testing.T) {
 // rejection code (Unauthenticated) passes through unmangled.
 func TestReportEmitHealth_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
-	client := reportclient.New(reportclient.Config{
+	client := reportclient.New(reportclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient,
 	})
 	_, err := client.ReportEmitHealth(context.Background(), publisherDID, true)

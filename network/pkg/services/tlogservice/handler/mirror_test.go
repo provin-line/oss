@@ -213,6 +213,7 @@ func newMirrorFixture(t *testing.T, maxRecords, maxBytes int) *mirrorFixture {
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: mirrorAudience,
 		Clock:    mirrorFixedClock,
 		// An explicit, far-past epoch so the restart-replay barrier never
 		// rejects the fixture's fixed-clock issuedAt values (NewVerifier's
@@ -316,14 +317,14 @@ func (f *mirrorFixture) buildRequest(t *testing.T, p mirrorReqParams) *tlogpb.Mi
 	if err != nil {
 		t.Fatalf("NewNonce: %v", err)
 	}
-	proof, err := wireauth.Sign(f.ks, p.ProofSignerDID, tlogservice.OpMirrorLogSegment, fields, nonce, p.Timestamp)
+	proof, err := wireauth.Sign(f.ks, p.ProofSignerDID, mirrorAudience, tlogservice.OpMirrorLogSegment, fields, nonce, p.Timestamp)
 	if err != nil {
 		t.Fatalf("wireauth.Sign: %v", err)
 	}
 	return &tlogpb.MirrorLogSegmentRequest{
 		LogId: p.LogID, FromIndex: p.FromIndex, RecordPayloadsFramed: tlogservice.FrameRecordPayloads(p.Payloads), Checkpoint: wireCP,
 		AuthProof: &chainpb.AuthProof{
-			SignerDid: proof.SignerDID, Nonce: proof.Nonce,
+			SignerDid: proof.SignerDID, Audience: proof.Audience, Nonce: proof.Nonce,
 			IssuedAt: proof.IssuedAt.Format(time.RFC3339), Signature: proof.Signature,
 		},
 	}
@@ -1086,3 +1087,6 @@ func TestMirrorLogSegment_OverRecordCapRejectedPreAuth(t *testing.T) {
 		t.Fatalf("over-cap framed blob with no proof: code = %v, want ResourceExhausted pre-auth (err=%v)", connect.CodeOf(err), err)
 	}
 }
+
+// mirrorAudience is the audience of the mirror's verifier.
+const mirrorAudience = "registry.example"

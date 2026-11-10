@@ -32,6 +32,9 @@ import (
 
 // nodeDID signs every proof in this suite AND is the common-case owner_did
 // (a producing process retains its own emitted payload).
+// nodeAudience is the audience of the store node's verifier.
+const nodeAudience = "node.example"
+
 const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe-a"
 
 func jwk(pub []byte) map[string]any {
@@ -129,6 +132,7 @@ func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOpti
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -150,7 +154,7 @@ func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOpti
 	return &harness{
 		store:  st,
 		signer: sgn,
-		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL}),
+		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, StoreAudience: nodeAudience}),
 		url:    srv.URL,
 		httpc:  httpc,
 	}
@@ -165,12 +169,13 @@ func mustProof(t *testing.T, sgn crypto.Signer, signerDID, ownerDID string, size
 	if err != nil {
 		t.Fatalf("NewNonce: %v", err)
 	}
-	p, err := wireauth.Sign(sgn, signerDID, payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size), nonce, time.Now())
+	p, err := wireauth.Sign(sgn, signerDID, nodeAudience, payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size), nonce, time.Now())
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,
@@ -210,7 +215,7 @@ func TestRetainPayload_RoundTrip_HappyPath(t *testing.T) {
 func TestRetainPayload_MultiChunkAssembly(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	small := client.New(client.Config{
-		Signer: h.signer, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url,
+		Signer: h.signer, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url, StoreAudience: nodeAudience,
 		RetainChunkSize: 16, // forces many frames for a payload well over 16 bytes
 	})
 	payload := bytes.Repeat([]byte("0123456789"), 20) // 200 bytes, 16-byte chunks
@@ -248,7 +253,7 @@ func TestRetainPayload_OwnerMismatch_PermissionDenied(t *testing.T) {
 func TestRetainPayload_WireauthFail_Unauthenticated(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	wrongSigner, _ := signer(t, nodeDID) // a DIFFERENT keypair than the one the verifier's resolver bound to nodeDID
-	bad := client.New(client.Config{Signer: wrongSigner, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url})
+	bad := client.New(client.Config{Signer: wrongSigner, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url, StoreAudience: nodeAudience})
 
 	payload := []byte("bytes signed with the wrong key")
 	_, err := bad.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
@@ -423,6 +428,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *har
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -444,7 +450,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *har
 		store:  st,
 		signer: sgn,
 		client: client.New(client.Config{
-			Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, Bearer: bearer,
+			Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, StoreAudience: nodeAudience, Bearer: bearer,
 		}),
 		url:   srv.URL,
 		httpc: httpc,

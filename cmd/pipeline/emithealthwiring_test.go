@@ -18,7 +18,7 @@ import (
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestReportClientFactory_CachesPerDID(t *testing.T) {
-	f := newReportClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newReportClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a")
 	if a1 != a2 {

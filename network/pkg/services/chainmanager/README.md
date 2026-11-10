@@ -118,22 +118,28 @@ is the Hub swap point for the pub-sub backend. Implementations:
 
 Every ChainPeerService RPC carries an `AuthProof` (the proto message; the Go
 library type is `wireauth.Proof`): Ed25519 signature over a
-JCS-canonicalized per-RPC view (**signerDID** + op discriminator + view version +
-nonce + issuedAt + business fields). Binding `signerDID` into the signed bytes
-closes unknown-key-share: a DID alias that shares another DID's `#auth` key cannot
-reuse its signature. Verification is an ordered pipeline — cheap fail-fast checks
+JCS-canonicalized per-RPC view (**signerDID** + **aud** + op discriminator + view
+version + nonce + issuedAt + business fields). Binding `signerDID` into the signed
+bytes closes unknown-key-share: a DID alias that shares another DID's `#auth` key
+cannot reuse its signature. Binding `aud`, the audience (the receiving node's
+registry ID), means a proof made for one node does not verify at another (D-w12,
+[auth.md § L2](../../../../docs/protocol/auth.md#l2--peer-wire-proof-wireauth)).
+Verification is an ordered pipeline — cheap fail-fast checks
 first, signature verification late, **authorization after the signature** (so
 policy never runs on an unauthenticated caller — no allow-list oracle), nonce
 recorded **only after** signature success (a failed forgery must not burn a
 legitimate signer's nonce):
 
 1. structural / malformed fail-fast (missing proof; empty op; oversized nonce;
+   oversized audience; an audience other than this verifier's, or none, is
+   `ErrWrongAudience` — before anything is resolved or recorded;
    non-second-precision issuedAt rejected, not truncated — sub-second precision
    would let the window check be shifted without changing the signed bytes;
    fields value-grammar) → 2. restart epoch barrier (ceiled to the next whole
    second) → 3. acceptance window (asymmetric past/skew) → 4. key resolution via
    DID Document (`#auth`, authentication relationship + controller match) →
-   5. canonical-bytes rebuild → 6. Ed25519 verify → 7. signer-to-actor
+   5. canonical-bytes rebuild, with the verifier's own audience → 6. Ed25519
+   verify → 7. signer-to-actor
    authorization (over an immutable snapshot of the resolved doc + fields) →
    8. nonce record.
 
@@ -171,8 +177,10 @@ evidence AFTER the domain call succeeds — so a rejected/failed relationship
 change (unknown publisher, ownership failure) is never retained as an
 established relationship; a record failure then surfaces as `Internal`
 (fail-closed) after the domain mutation. The retained record carries the
-signed-view version (`wireauth.ViewVersion`, the `"v"` member of the JCS view),
-the exact signed fields, and the key material — extracted from the resolved DID
+signed-view version the proof was verified under (`wireauth.ViewVersion`, the
+`"v"` member of the JCS view), the audience it was signed for (the `"aud"`
+member, from view version 2), the exact signed fields, and the key material —
+extracted from the resolved DID
 document exactly as the verifier resolved it (`did.ExtractPublicKey` under the
 `#auth` `RelationshipAuthentication` relationship) — so a third party can
 reconstruct the signed view and re-verify the counterparty signature from the

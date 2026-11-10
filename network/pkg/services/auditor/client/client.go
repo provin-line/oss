@@ -52,6 +52,11 @@ type Config struct {
 	// client always registers evidence with ONE node's own AuditService, so
 	// the endpoint is fixed at construction rather than passed per call.
 	BaseURL string
+	// Audience is the registry ID of the node at BaseURL. Every proof this
+	// client signs names it, and that node accepts only a proof for its own
+	// audience. A call with no Audience fails before anything is sent
+	// (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client, e.g.
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
 	HTTPClient connect.HTTPClient
@@ -76,6 +81,7 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       auditpbconnect.AuditServiceClient
 }
 
@@ -84,6 +90,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
+		audience:  cfg.Audience,
 		svc: auditpbconnect.NewAuditServiceClient(cfg.HTTPClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
@@ -181,12 +188,13 @@ func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, er
 	if err != nil {
 		return nil, fmt.Errorf("auditor/client: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, op, fields, nonce, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("auditor/client: sign %s: %w", op, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,

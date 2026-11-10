@@ -112,6 +112,11 @@ type Config struct {
 	// construction (mirrors auditor/client.Config.BaseURL). Required for
 	// Retain; unused by ResolvePayload.
 	StoreEndpoint string
+	// StoreAudience is the registry ID of the node at StoreEndpoint. Every
+	// Retain proof names it, and that node accepts only a proof for its own
+	// audience. A Retain with no StoreAudience fails before anything is sent
+	// (wireauth.ErrMalformedProof). ResolvePayload takes its audience per call.
+	StoreAudience string
 	// RetainChunkSize bounds one outbound Retain frame (<=0 →
 	// DefaultRetainChunkSize). Keep it at or under the server's configured
 	// max-retain-chunk-size, or every frame trips the server's per-chunk read
@@ -146,6 +151,7 @@ type Resolver struct {
 	fetchTimeout    time.Duration
 	idleTimeout     time.Duration
 	storeEndpoint   string
+	storeAudience   string
 	retainChunkSize int
 	// retainClient is Retain's OWN ConnectRPC client, built once in New and
 	// bound to storeEndpoint with the L1 bearer interceptor attached — NEVER
@@ -202,6 +208,7 @@ func New(cfg Config) *Resolver {
 		fetchTimeout:    fetchTimeout,
 		idleTimeout:     idleTimeout,
 		storeEndpoint:   cfg.StoreEndpoint,
+		storeAudience:   cfg.StoreAudience,
 		retainChunkSize: retainChunkSize,
 		retainClient:    retainClient,
 	}
@@ -255,7 +262,10 @@ func (i retainBearerInterceptor) WrapStreamingHandler(next connect.StreamingHand
 }
 
 // ResolvePayload fetches and assembles the payload bytes held at contentHash on
-// the serving boundary at upstreamEndpoint. It streams the response and aborts
+// the serving boundary at upstreamEndpoint, whose node's registry ID is
+// upstreamAudience: the proof names it, and that node accepts only a proof
+// for its own audience. With no upstreamAudience it fails before anything is
+// sent (wireauth.ErrMalformedProof). It streams the response and aborts
 // if the assembled size exceeds the configured cap (before the overflowing
 // chunk is retained). A remote NotFound becomes ErrNotFound; any
 // other transport failure is returned as-is (a liveness failure the runtime
@@ -265,8 +275,8 @@ func (i retainBearerInterceptor) WrapStreamingHandler(next connect.StreamingHand
 // The returned bytes carry NO trust — the caller's binding gate (sha256(payload)
 // == the credential's outputHash) is the sole integrity check, so this client
 // does not itself re-hash.
-func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
-	ap, err := r.proof(opResolvePayload, map[string]any{"content_hash": contentHash})
+func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, upstreamAudience, contentHash string) ([]byte, error) {
+	ap, err := r.proof(upstreamAudience, opResolvePayload, map[string]any{"content_hash": contentHash})
 	if err != nil {
 		return nil, err
 	}
@@ -383,18 +393,19 @@ func (r *Resolver) mapFetchErr(ctx context.Context, err error) error {
 // wireauth.Proof to the wire AuthProof (issued_at as canonical second-precision
 // UTC RFC 3339 — the exact form the publisher's strict codec accepts). Shared
 // by ResolvePayload (op = opResolvePayload) and Retain (op =
-// wirecontract.OpRetainPayload).
-func (r *Resolver) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
+// wirecontract.OpRetainPayload), each for the audience of the node it calls.
+func (r *Resolver) proof(audience, op string, fields map[string]any) (*chainpb.AuthProof, error) {
 	nonce, err := wireauth.NewNonce()
 	if err != nil {
 		return nil, fmt.Errorf("payloadresolver/client: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(r.signer, r.signerDID, op, fields, nonce, time.Now())
+	p, err := wireauth.Sign(r.signer, r.signerDID, audience, op, fields, nonce, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("payloadresolver/client: sign %s: %w", op, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,
@@ -421,7 +432,7 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	if r.storeEndpoint == "" {
 		return "", fmt.Errorf("payloadresolver/client: Retain requires Config.StoreEndpoint")
 	}
-	ap, err := r.proof(wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size))
+	ap, err := r.proof(r.storeAudience, wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size))
 	if err != nil {
 		return "", err
 	}

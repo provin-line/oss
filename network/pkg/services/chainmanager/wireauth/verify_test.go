@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	// testAudience is the audience the tests sign for and their verifiers accept.
+	testAudience = "verifier.example"
+
 	subDID = "did:dplaax:poc.dplaax.dev:org:sub"
 	pubDID = "did:dplaax:poc.dplaax.dev:org:acme"
 )
@@ -75,9 +78,9 @@ func testVerifier(t *testing.T, resolver wireauth.DIDResolver) *wireauth.Verifie
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
-		Nonces:   wireauth.NewMemoryNonceStore(),
-		Clock:    func() time.Time { return at().Add(time.Second) },
-		Epoch:    at().Add(-time.Hour),
+		Nonces:   wireauth.NewMemoryNonceStore(), Audience: testAudience,
+		Clock: func() time.Time { return at().Add(time.Second) },
+		Epoch: at().Add(-time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -90,7 +93,7 @@ func okFields() map[string]any { return map[string]any{"actor": pubDID, "mode": 
 func TestVerify_RoundTrip(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-	proof, err := wireauth.Sign(signer, subDID, "RegisterSubscription", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, subDID, testAudience, "RegisterSubscription", okFields(), "n1", at())
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -109,7 +112,7 @@ func TestVerify_RoundTrip(t *testing.T) {
 func TestVerify_NilAuthorizerSkipsAuthz(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
 		t.Fatalf("Verify with nil authorizer: %v", err)
 	}
@@ -117,7 +120,7 @@ func TestVerify_NilAuthorizerSkipsAuthz(t *testing.T) {
 
 func TestVerify_KeyResolutionFailures(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 
 	otherPub := make([]byte, len(pub))
 
@@ -165,7 +168,7 @@ func TestVerify_SharedKeyAliasingRejected(t *testing.T) {
 		subDID: authDoc(subDID, pub),
 		alias:  authDoc(alias, pub),
 	})
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	// Attacker re-labels the proof as the alias DID (whose doc shares the key).
 	proof.SignerDID = alias
 	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); !errors.Is(err, wireauth.ErrSignatureInvalid) {
@@ -175,7 +178,7 @@ func TestVerify_SharedKeyAliasingRejected(t *testing.T) {
 
 func TestNewVerifier_RequiresDeps(t *testing.T) {
 	base := wireauth.VerifierConfig{
-		Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
 	}
 	if _, err := wireauth.NewVerifier(base); err != nil {
 		t.Fatalf("complete config: %v", err)
@@ -212,7 +215,7 @@ func (e errResolver) Resolve(context.Context, string) (*did.DIDDocument, error) 
 // authenticity is reported "could not be evaluated, retry", never "rejected".
 func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.T) {
 	signer, _ := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 
 	for name, resErr := range map[string]error{
 		"timeout":      context.DeadlineExceeded,
@@ -239,7 +242,7 @@ func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.
 // ErrKeyResolution → Unauthenticated.
 func TestVerify_DefinitiveResolverError_IsKeyResolution(t *testing.T) {
 	signer, _ := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
 	v := testVerifier(t, errResolver{err: errors.New("registry: no such DID")})
 	err := v.Verify(context.Background(), "Op", okFields(), proof, nil)
 	if !errors.Is(err, wireauth.ErrKeyResolution) {

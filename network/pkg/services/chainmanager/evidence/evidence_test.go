@@ -12,8 +12,9 @@ import (
 func fullRecord() evidence.Record {
 	return evidence.Record{
 		Op:          "RegisterSubscription",
-		ViewVersion: 1, // wireauth.ViewVersion — this package is a generic codec, so the value is inlined rather than importing wireauth
+		ViewVersion: 2, // wireauth.ViewVersion — this package is a generic codec, so the value is inlined rather than importing wireauth
 		SignerDID:   "did:dplaax:poc.dplaax.dev:org:sub",
+		Audience:    "node.example",
 		Nonce:       "n1",
 		IssuedAt:    "2026-07-11T12:00:00Z",
 		Signature:   []byte{0xde, 0xad, 0xbe, 0xef},
@@ -103,5 +104,28 @@ func TestLog_Get_OutOfRange(t *testing.T) {
 	log := evidence.New(fl)
 	if _, err := log.Get(ctx, 0); err == nil {
 		t.Error("Get on an empty log: want an error")
+	}
+}
+
+// A record written before the view named its audience (view version 1, no
+// audience member) still decodes, so it can still be re-verified against the
+// version 1 view.
+func TestEvidenceV1RecordStillDecodes(t *testing.T) {
+	ctx := context.Background()
+	fl, err := filelog.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("filelog.New: %v", err)
+	}
+	t.Cleanup(func() { _ = fl.Close() })
+	v1 := `{"op":"RegisterSubscription","viewVersion":1,"signerDID":"did:dplaax:poc.dplaax.dev:org:sub","nonce":"n1","issuedAt":"2026-07-11T12:00:00Z","signature":"3q2+7w==","fields":{"payload_delivery":"inline"},"keyMaterial":{"method":"did:dplaax:poc.dplaax.dev:org:sub#auth","publicKey":"AQIDBAU=","type":"authentication"}}`
+	if _, err := fl.Append(ctx, []byte(v1)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	rec, err := evidence.New(fl).Get(ctx, 0)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.ViewVersion != 1 || rec.Audience != "" || rec.Nonce != "n1" {
+		t.Errorf("v1 record = %+v, want view version 1, no audience, nonce n1", rec)
 	}
 }

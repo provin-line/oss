@@ -192,6 +192,7 @@ func (h *PeerHandler) recordEvidence(ctx context.Context, op string, proof wirea
 		Op:          op,
 		ViewVersion: wireauth.ViewVersion,
 		SignerDID:   proof.SignerDID,
+		Audience:    proof.Audience,
 		Nonce:       proof.Nonce,
 		IssuedAt:    proof.IssuedAt.UTC().Format(time.RFC3339),
 		Signature:   proof.Signature,
@@ -220,6 +221,7 @@ func decodeProof(ap *chainpb.AuthProof) (wireauth.Proof, error) {
 	}
 	return wireauth.Proof{
 		SignerDID: ap.GetSignerDid(),
+		Audience:  ap.GetAudience(),
 		Nonce:     ap.GetNonce(),
 		IssuedAt:  issuedAt,
 		Signature: ap.GetSignature(),

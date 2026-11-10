@@ -59,10 +59,12 @@ type DIDResolver interface {
 // with wireauth and dials through an SSRF-guarded HTTP client (the domain holds
 // no crypto material). Disconnect returns store.ErrNotFound when the remote has
 // no such subscription, so teardown can treat it as already-done (idempotent).
+// audience is the registry ID of the node at endpoint, which the call's proof
+// names: the registry whose DID document publishes the endpoint.
 type PeerClient interface {
-	GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, publisherDID string) (publishType string, modes []string, err error)
-	RegisterSubscription(ctx context.Context, endpoint, subscriberDID, publisherDID, requestedMode string) (remoteID string, connInfo map[string]string, publishType, agreedMode string, err error)
-	Disconnect(ctx context.Context, endpoint, remoteSubscriptionID string) error
+	GetPublisherInfo(ctx context.Context, endpoint, audience, subscriberDID, publisherDID string) (publishType string, modes []string, err error)
+	RegisterSubscription(ctx context.Context, endpoint, audience, subscriberDID, publisherDID, requestedMode string) (remoteID string, connInfo map[string]string, publishType, agreedMode string, err error)
+	Disconnect(ctx context.Context, endpoint, audience, remoteSubscriptionID string) error
 }
 
 // WithDIDResolver supplies the resolver the subscriber flow uses to find a
@@ -126,7 +128,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		return "", err
 	}
 
-	endpoint, err := s.resolveEndpoint(ctx, publisherDID)
+	endpoint, audience, err := s.resolveTarget(ctx, publisherDID)
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +138,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// normalizes to by-reference (the wire negotiation default), so it succeeds
 	// here exactly when the publisher serves payloads (offeredPayloadModes);
 	// otherwise it is rejected and the subscriber must request "inline".
-	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, subscriberDID, publisherDID)
+	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, audience, subscriberDID, publisherDID)
 	if err != nil {
 		return "", fmt.Errorf("%w: get publisher info: %w", ErrRemotePeer, err)
 	}
@@ -149,7 +151,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		return "", err
 	}
 
-	remoteID, connInfo, publishType, agreedMode, err := s.peer.RegisterSubscription(ctx, endpoint, subscriberDID, publisherDID, requestedMode)
+	remoteID, connInfo, publishType, agreedMode, err := s.peer.RegisterSubscription(ctx, endpoint, audience, subscriberDID, publisherDID, requestedMode)
 	if err != nil {
 		return "", fmt.Errorf("%w: register subscription: %w", ErrRemotePeer, err)
 	}
@@ -164,14 +166,14 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// state D-4 forbids. The loser compensates its already-committed remote
 	// registration (multi-agent-review convergent finding, 2026-07-12).
 	if err := s.rejectDuplicateSubscription(publisherDID); err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", err
 	}
 
 	// The connection info is another organization's: it is held to the keys
 	// and characters this side uses before anything is wired or stored.
 	if err := checkConnectionInfo(connInfo); err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", fmt.Errorf("%w: %v", ErrRemotePeer, err)
 	}
 	remoteSubject, remoteAccountKey := importTargets(connInfo)
@@ -182,11 +184,11 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// consumed as if it were the publisher's output).
 	wantSubject, err := subjectForMode(publisherDID, agreedMode)
 	if err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", err
 	}
 	if remoteSubject != wantSubject {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", fmt.Errorf("%w: publisher returned import subject %q, want %q for mode %q", ErrRemotePeer, remoteSubject, wantSubject, agreedMode)
 	}
 	// Ref-count the shared import by remote subject (mirror the publisher export
@@ -194,7 +196,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// only the first should compensate by removing it.
 	first, err := s.isFirstImportForSubject(remoteSubject)
 	if err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", err
 	}
 	// localSubject = publisherDID (D-4 rename), NOT remoteSubject: inline's
@@ -206,7 +208,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// config-side absorption; no new wire concept.
 	if err := s.infra.AddImport(remoteSubject, remoteAccountKey, publisherDID); err != nil {
 		// the remote already registered → undo it (best-effort, fresh context).
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, audience, remoteID)
 		return "", fmt.Errorf("chainmanager: add import: %w", err)
 	}
 
@@ -230,7 +232,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		if first {
 			_ = s.infra.RemoveImport(remoteSubject, remoteAccountKey)
 		}
-		_ = s.peer.Disconnect(cctx, endpoint, remoteID)
+		_ = s.peer.Disconnect(cctx, endpoint, audience, remoteID)
 		return "", fmt.Errorf("chainmanager: persist subscription: %w", err)
 	}
 	return id, nil
@@ -263,11 +265,11 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 		return store.ErrNotFound
 	}
 
-	endpoint, err := s.resolveEndpoint(ctx, sub.PublisherDID)
+	endpoint, audience, err := s.resolveTarget(ctx, sub.PublisherDID)
 	if err != nil {
 		return err
 	}
-	if err := s.peer.Disconnect(ctx, endpoint, sub.RemoteID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.peer.Disconnect(ctx, endpoint, audience, sub.RemoteID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("%w: remote disconnect: %w", ErrRemotePeer, err)
 	}
 	remoteSubject, remoteAccountKey := importTargets(sub.ConnectionInfo)
@@ -321,21 +323,28 @@ func (s *Service) countImportsForSubject(remoteSubject string) (int, error) {
 	return n, nil
 }
 
-// resolveEndpoint resolves publisherDID to its #chain-manager endpoint and runs
-// the SSRF preflight.
-func (s *Service) resolveEndpoint(ctx context.Context, publisherDID string) (string, error) {
+// resolveTarget resolves publisherDID to its #chain-manager endpoint, runs the
+// SSRF preflight, and returns the endpoint with its audience: the registry
+// segment of publisherDID. That registry answers for publisherDID's document,
+// so the endpoint and the audience come from the same source, and the
+// registry's node is the one serving its #chain-manager endpoint.
+func (s *Service) resolveTarget(ctx context.Context, publisherDID string) (endpoint, audience string, err error) {
+	d, err := dplaax.Parse(publisherDID)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: publisher DID %q: %v", ErrRemotePeer, publisherDID, err)
+	}
 	doc, err := s.resolver.Resolve(ctx, publisherDID)
 	if err != nil {
-		return "", fmt.Errorf("%w: resolve publisher DID: %v", ErrRemotePeer, err)
+		return "", "", fmt.Errorf("%w: resolve publisher DID: %v", ErrRemotePeer, err)
 	}
-	endpoint, err := resolveChainManagerEndpoint(doc, publisherDID)
+	endpoint, err = resolveChainManagerEndpoint(doc, publisherDID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := checkEndpointAllowed(ctx, s.endpointGuard(), endpoint); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return endpoint, nil
+	return endpoint, d.Registry, nil
 }
 
 // assertModeOffered rejects a requested mode the publisher does not list. An

@@ -17,25 +17,28 @@ import (
 // any other version fails signature verification (ErrSignatureInvalid) — a
 // clean, detectable break rather than a silent canonicalization divergence
 // across peers.
-const ViewVersion = 1
+const ViewVersion = 2
 
 // viewBytes builds the canonical signing scope of one ChainPeerService RPC and
 // returns its JCS bytes. Sign and Verify both go through this single helper so
 // the signed and reconstructed bytes are identical by construction.
 //
-// The composition is {signerDID, op, v, nonce, issuedAt, fields}: signerDID is
-// bound into the signed bytes (a shared-key DID alias therefore cannot reuse
-// another DID's signature), and issuedAt is rendered at second precision (the
-// caller passes a second-truncated instant; the verifier rejects sub-second
-// input before calling here). fields is validated against the value grammar
+// The composition is {signerDID, aud, op, v, nonce, issuedAt, fields}:
+// signerDID is bound into the signed bytes (a shared-key DID alias therefore
+// cannot reuse another DID's signature, D-w1), aud names the party the proof
+// is for (a proof made for one verifier does not verify at another, D-w12),
+// and issuedAt is rendered at second precision (the caller passes a
+// second-truncated instant; the verifier rejects sub-second input before
+// calling here). fields is validated against the value grammar
 // (ErrInvalidView) so no canonical bytes are ever produced over a payload a peer
 // implementation might canonicalize differently.
-func viewBytes(signerDID, op, nonce string, issuedAt time.Time, fields map[string]any) ([]byte, error) {
+func viewBytes(signerDID, audience, op, nonce string, issuedAt time.Time, fields map[string]any) ([]byte, error) {
 	if err := validateFields(fields); err != nil {
 		return nil, err
 	}
 	view := map[string]any{
 		"signerDID": signerDID,
+		"aud":       audience,
 		"op":        op,
 		"v":         ViewVersion,
 		"nonce":     nonce,

@@ -63,10 +63,12 @@ func (c *Client) peer(endpoint string) chainpbconnect.ChainPeerServiceClient {
 }
 
 // GetPublisherInfo discovers a publisher's transport + offered payload modes.
-func (c *Client) GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, publisherDID string) (string, []string, error) {
+// Each call's audience is the registry ID of the node at endpoint (see
+// chainmanager.PeerClient).
+func (c *Client) GetPublisherInfo(ctx context.Context, endpoint, audience, subscriberDID, publisherDID string) (string, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
 	defer cancel()
-	ap, err := c.proof(opGetPublisherInfo, map[string]any{"publisher_did": publisherDID})
+	ap, err := c.proof(audience, opGetPublisherInfo, map[string]any{"publisher_did": publisherDID})
 	if err != nil {
 		return "", nil, err
 	}
@@ -83,10 +85,10 @@ func (c *Client) GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, 
 // RegisterSubscription registers this subscriber against the publisher. The
 // requested mode rides verbatim (empty stays empty); the publisher normalizes
 // and returns the agreed mode.
-func (c *Client) RegisterSubscription(ctx context.Context, endpoint, subscriberDID, publisherDID, requestedMode string) (string, map[string]string, string, string, error) {
+func (c *Client) RegisterSubscription(ctx context.Context, endpoint, audience, subscriberDID, publisherDID, requestedMode string) (string, map[string]string, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
 	defer cancel()
-	ap, err := c.proof(opRegisterSubscription, map[string]any{
+	ap, err := c.proof(audience, opRegisterSubscription, map[string]any{
 		"subscriber_did":   subscriberDID,
 		"publisher_did":    publisherDID,
 		"payload_delivery": requestedMode,
@@ -109,10 +111,10 @@ func (c *Client) RegisterSubscription(ctx context.Context, endpoint, subscriberD
 // Disconnect tears down a remote subscription by its publisher-side id. A remote
 // NotFound is surfaced as store.ErrNotFound so the domain can treat teardown as
 // idempotent.
-func (c *Client) Disconnect(ctx context.Context, endpoint, remoteSubscriptionID string) error {
+func (c *Client) Disconnect(ctx context.Context, endpoint, audience, remoteSubscriptionID string) error {
 	ctx, cancel := context.WithTimeout(ctx, c.callTimeout)
 	defer cancel()
-	ap, err := c.proof(opDisconnect, map[string]any{"subscription_id": remoteSubscriptionID})
+	ap, err := c.proof(audience, opDisconnect, map[string]any{"subscription_id": remoteSubscriptionID})
 	if err != nil {
 		return err
 	}
@@ -126,20 +128,22 @@ func (c *Client) Disconnect(ctx context.Context, endpoint, remoteSubscriptionID 
 	return nil
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical second-precision
-// UTC RFC3339 — the exact form the publisher's strict codec accepts).
-func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
+// proof signs op over fields as the configured identity, for audience (the
+// registry ID of the publisher node called), and converts the wireauth.Proof
+// to the wire AuthProof (issued_at as canonical second-precision UTC RFC3339
+// — the exact form the publisher's strict codec accepts).
+func (c *Client) proof(audience, op string, fields map[string]any) (*chainpb.AuthProof, error) {
 	nonce, err := wireauth.NewNonce()
 	if err != nil {
 		return nil, fmt.Errorf("peerclient: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, audience, op, fields, nonce, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("peerclient: sign %s: %w", op, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,
@@ -159,7 +163,7 @@ func mapRemoteErr(err error) error {
 // interface is declared in chainmanager; we assert structurally without importing
 // it to avoid an import cycle (chainmanager → peerclient at wiring time).
 var _ interface {
-	GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, publisherDID string) (string, []string, error)
-	RegisterSubscription(ctx context.Context, endpoint, subscriberDID, publisherDID, requestedMode string) (string, map[string]string, string, string, error)
-	Disconnect(ctx context.Context, endpoint, remoteSubscriptionID string) error
+	GetPublisherInfo(ctx context.Context, endpoint, audience, subscriberDID, publisherDID string) (string, []string, error)
+	RegisterSubscription(ctx context.Context, endpoint, audience, subscriberDID, publisherDID, requestedMode string) (string, map[string]string, string, string, error)
+	Disconnect(ctx context.Context, endpoint, audience, remoteSubscriptionID string) error
 } = (*Client)(nil)

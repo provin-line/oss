@@ -42,6 +42,11 @@ type Config struct {
 	// BaseURL is the ChainService operator endpoint (L1-authorized — distinct
 	// from the L2 ChainPeerService endpoint peerclient dials).
 	BaseURL string
+	// Audience is the registry ID of the node at BaseURL. Every proof this
+	// client signs names it, and that node accepts only a proof for its own
+	// audience. A call with no Audience fails before anything is sent
+	// (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint, e.g. core.URLGuard.HTTPClient().
 	HTTPClient connect.HTTPClient
@@ -63,6 +68,7 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       chainpbconnect.ChainServiceClient
 }
 
@@ -71,6 +77,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
+		audience:  cfg.Audience,
 		svc: chainpbconnect.NewChainServiceClient(cfg.HTTPClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
@@ -126,12 +133,13 @@ func (c *Client) proof(fields map[string]any) (*chainpb.AuthProof, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reportclient: nonce: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, wirecontract.OpReportEmitHealth, fields, nonce, time.Now())
+	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, wirecontract.OpReportEmitHealth, fields, nonce, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("reportclient: sign %s: %w", wirecontract.OpReportEmitHealth, err)
 	}
 	return &chainpb.AuthProof{
 		SignerDid: p.SignerDID,
+		Audience:  p.Audience,
 		Nonce:     p.Nonce,
 		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
 		Signature: p.Signature,

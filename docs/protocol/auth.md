@@ -74,13 +74,22 @@ in the request itself. **There is no auth-off mode for L2.**
 Each RPC carries a proof over the request it authenticates:
 
 - an Ed25519 **signature over a canonical (JCS) view** of exactly
-  `{signerDID, op, v, nonce, issuedAt, fields}` — `v` is the frozen view
-  version (currently `1`; any other version is rejected), `issuedAt` is
-  RFC 3339 at second precision, `op` is the RPC's view discriminator and
-  `fields` its business object, both reconstructed by the verifier
-  **from the request being served, never from the proof**. Binding
+  `{signerDID, aud, op, v, nonce, issuedAt, fields}` — `v` is the frozen view
+  version (currently `2`; any other version is rejected), `aud` is the
+  **audience**, the registry ID of the node the request is sent to,
+  `issuedAt` is RFC 3339 at second precision, `op` is the RPC's view
+  discriminator and `fields` its business object, both reconstructed by the
+  verifier **from the request being served, never from the proof**. Binding
   `signerDID` into the signed bytes means a shared-key DID alias cannot
-  reuse another DID's signature;
+  reuse another DID's signature; binding `aud` means a proof made for one
+  node does not verify at another;
+- **the audience is checked first**: a node's verifier accepts only a proof
+  whose audience is exactly its own `provin.network.registry.id`. It checks
+  this with the structural checks, before it resolves the signer, and
+  rebuilds the view with its own registry ID, so a proof for another node
+  spends no nonce there and a rewritten audience fails the signature. The
+  check uses nothing of the request's URL or `Host`, so a node behind a
+  proxy or under another name checks the same way;
 - the signer's key is resolved **through the signer's DID document**
   (`#auth` verification method) — cross-registry, no pre-shared keys;
 - **replay defense**: single-use nonces within an acceptance window
@@ -96,13 +105,14 @@ Each RPC carries a proof over the request it authenticates:
   exhaustion — or a peer whose clock skew exceeds the budget — the racing
   call is dropped: an accepted PoC-posture residual loss, closed post-v0
   alongside a durable nonce store;
-- ordered verification: structural checks → time bounds → key resolution
-  → signature → authorization → nonce record **last**, so a forgery can
-  never burn a legitimate signer's nonce;
+- ordered verification: structural checks (the audience among them) → time
+  bounds → key resolution → signature → authorization → nonce record
+  **last**, so neither a forgery nor a proof for another node can burn a
+  legitimate signer's nonce;
 - an optional per-op **authorizer** (signer-to-actor policy) runs only
   after signature verification — it never sees unauthenticated input.
 
-Three design decisions shape the proof; the code and its tests cite them by
+Four design decisions shape the proof; the code and its tests cite them by
 these names:
 
 - **D-w1 — the view binds the signer DID.** Two DIDs may list the same
@@ -118,18 +128,49 @@ these names:
   `float64` of the same value canonicalize to different bytes, and JCS
   number serialization is an interoperability hazard on a frozen
   cross-organization wire; fields without numbers have one byte form.
+- **D-w12 — the view binds the audience.** A proof names the node it is
+  for, by that node's registry ID, and the view binds it: a proof a node
+  received does not verify at a node of another registry. A sender takes the
+  audience from the same source as the endpoint:
+  - a pipeline's own node (`vc-store-endpoint`): the registry segment of the
+    DID the proof is signed as, as a pipeline publishes to its own
+    registry's node;
+  - a by-reference upstream (a loop's `upstream-endpoint`): the registry
+    segment of the loop's upstream pipeline DID (`ingress-subject`, or an
+    aggregate ingress's `subject`), whose node holds that pipeline's
+    payloads;
+  - a publisher's `#chain-manager` endpoint: the registry segment of the
+    publisher DID, whose registry publishes that endpoint in the DID
+    document. A registry's `#chain-manager` endpoint is served by that
+    registry's node.
 
-D-w1, D-w10, and that the nonce is recorded only after the signature
+  `vc-store-registry` and `upstream-registry` name the registry where the
+  node at that endpoint is another registry's. The sender pairs an endpoint
+  with its audience; a wire proof does not authenticate that pairing, so an
+  endpoint pointed at the wrong node hands that node a proof its paired node
+  accepts while it is fresh
+  ([deployment.md](../architecture/deployment.md#wire-proof-audience)).
+
+D-w1, D-w10, D-w12, and that the nonce is recorded only after the signature
 verifies, are checked against a Dolev-Yao attacker in the Tamarin model
 `verification/tamarin/wireauth.spthy` (see
 [verification/README.md](../../verification/README.md)).
 
+A nonce is single-use **per verifier**. Two verifiers that share one
+audience, each with a nonce store of its own, would each accept the same
+proof once; so the L2 surfaces of one registry are served by **one network
+process** ([deployment.md](../architecture/deployment.md#wire-proof-audience)).
+
 Verified relationship mutations (subscription registration, disconnect)
 additionally leave **relationship evidence**: the counterparty-signed
-request and the verifying key material are retained durably, so the
-relationship's existence is provable later without trusting the peer
+request, its audience, the view version it was verified under, and the
+verifying key material are retained durably, so the relationship's
+existence is provable later without trusting the peer
 ([audit-obligations](../concepts/audit-obligations.md); rotation:
-[deployment.md](../architecture/deployment.md#evidence-log-rotation)).
+[deployment.md](../architecture/deployment.md#evidence-log-rotation)). A
+record of view version `1`, written before the view bound the audience, has
+no audience and is re-verified against the version 1 view
+`{signerDID, op, v, nonce, issuedAt, fields}`.
 
 ## How L3 relates
 

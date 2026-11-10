@@ -61,6 +61,7 @@ const (
 	pipelineKey        = "provin.network.pipeline"
 	loopsKey           = pipelineKey + ".loops"
 	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
+	vcStoreRegistryKey = pipelineKey + ".vc-store-registry"
 	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
 	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
 	// requirement — cmd/network boot-validates it unconditionally (Task 9),
@@ -122,6 +123,11 @@ type Config struct {
 	// (Full-chain coverage is the async audit runner's job — slice-17h — which resolves
 	// over the local store, not this endpoint; slice-17j retired real-time "full".)
 	VCStoreEndpoint string
+	// VCStoreRegistry is the registry ID of the node at VCStoreEndpoint, which the
+	// node's wire proofs to it name as their audience. Optional: empty means
+	// each proof names the registry of the DID it is signed as (the node a
+	// pipeline publishes to is its own registry's node).
+	VCStoreRegistry string
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
 	// and whenever any consuming loop runs (the async batch resolver presents the same
@@ -326,6 +332,10 @@ type SinkConfig struct {
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
 	UpstreamEndpoint string
+	// UpstreamRegistry is the registry ID of the node at UpstreamEndpoint, which
+	// a by-reference fetch's proof names as its audience. Optional: empty means
+	// the registry of the upstream pipeline DID (IngressSubject).
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
 	// "inline" (default) or "by-reference". A by-reference sink dereferences a
 	// nil envelope payload from UpstreamEndpoint at consume time.
@@ -412,6 +422,9 @@ type ChainedConfig struct {
 	// Consuming side (mirrors SinkConfig minus Kind).
 	VerificationStrategy string
 	UpstreamEndpoint     string
+	// UpstreamRegistry is as SinkConfig.UpstreamRegistry, for this loop's
+	// IngressSubject.
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of the ingress:
 	// "inline" (default) or "by-reference".
 	PayloadDelivery string
@@ -428,6 +441,10 @@ type ChainedConfig struct {
 type AggregateIngress struct {
 	Subject          string
 	UpstreamEndpoint string
+	// UpstreamRegistry is the registry ID of the node at UpstreamEndpoint, which
+	// a by-reference fetch's proof names as its audience. Optional: empty means
+	// the registry of Subject.
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
 	// "inline" (default) or "by-reference".
 	PayloadDelivery string
@@ -486,6 +503,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		return nil, err
 	}
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
+		return nil, err
+	}
+	if out.VCStoreRegistry, err = loadRegistry(cfg, vcStoreRegistryKey); err != nil {
 		return nil, err
 	}
 	if cfg.Has(VCStoreBearerKey) {
@@ -1056,6 +1076,9 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
 		return sc, err
 	}
+	if sc.UpstreamRegistry, err = loadRegistry(cfg, base+".sink.upstream-registry"); err != nil {
+		return sc, err
+	}
 
 	if sc.PayloadDelivery, err = loadPayloadDelivery(cfg, base+".sink.payload-delivery", name); err != nil {
 		return sc, err
@@ -1292,6 +1315,9 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 	if cc.UpstreamEndpoint, err = requireString(cfg, cbase+".upstream-endpoint"); err != nil {
 		return cc, err
 	}
+	if cc.UpstreamRegistry, err = loadRegistry(cfg, cbase+".upstream-registry"); err != nil {
+		return cc, err
+	}
 	if cc.PayloadDelivery, err = loadPayloadDelivery(cfg, cbase+".payload-delivery", name); err != nil {
 		return cc, err
 	}
@@ -1384,6 +1410,9 @@ func loadAggregateConfig(cfg *hoconconfig.Config, base, name string) (AggregateC
 		if ing.UpstreamEndpoint, err = requireString(cfg, ibase+".upstream-endpoint"); err != nil {
 			return ac, err
 		}
+		if ing.UpstreamRegistry, err = loadRegistry(cfg, ibase+".upstream-registry"); err != nil {
+			return ac, err
+		}
 		if ing.PayloadDelivery, err = loadPayloadDelivery(cfg, ibase+".payload-delivery", name); err != nil {
 			return ac, err
 		}
@@ -1430,4 +1459,20 @@ func requireProcessDID(didStr, loop, field string) error {
 		return fmt.Errorf("pipeline: loop %q: %s %q is not a process DID", loop, field, didStr)
 	}
 	return nil
+}
+
+// loadRegistry reads an optional registry ID: the {registry} segment of a
+// did:dplaax DID, by the same grammar dplaax.Parse applies. Absent is "".
+func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
+	if !cfg.Has(key) {
+		return "", nil
+	}
+	v, err := cfg.String(key)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
+	}
+	if !dplaax.IsSafeSegment(v) {
+		return "", fmt.Errorf("pipeline: config %s: %q is not a registry ID ([A-Za-z0-9._-], not all dots)", key, v)
+	}
+	return v, nil
 }
