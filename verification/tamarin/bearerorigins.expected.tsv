@@ -1,0 +1,5 @@
+# build	lemma	result   (build = default or a -D flag; result = verified | falsified | unresolved; a lemma absent here is expected verified)
+PresentToAnyEndpoint	delivered_only_to_named	falsified
+PresentToAnyEndpoint	bearer_secrecy	falsified
+FollowRedirects	delivered_only_to_named	falsified
+FollowRedirects	bearer_secrecy	falsified

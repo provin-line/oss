@@ -1,0 +1,55 @@
+# The formal models (verification/tamarin/), on pull requests that change
+# them or this workflow. Every lemma of each model is checked against the
+# model's verification/tamarin/<model>.expected.tsv in every build the file
+# names: the default build and each negative control. The builds are read
+# from the expectations, not listed here.
+name: formal
+
+on:
+  pull_request:
+    paths:
+      - "verification/tamarin/**"
+      - ".github/workflows/formal.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tamarin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAMARIN_VERSION: 1.12.0
+      TAMARIN_SHA256: 201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6
+      MAUDE_VERSION: 3.5.1
+      MAUDE_SHA256: 72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c
+      # Per lemma, so that a lemma that does not finish is reported by check.sh
+      # as unresolved before the job's own timeout ends the run.
+      TIMEOUT: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Tamarin and Maude
+        run: |
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools/maude"
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o tamarin.tar.gz "https://github.com/tamarin-prover/tamarin-prover/releases/download/${TAMARIN_VERSION}/tamarin-prover-${TAMARIN_VERSION}-linux64-ubuntu.tar.gz"
+          curl -sSfL -o maude.zip "https://github.com/maude-lang/Maude/releases/download/Maude${MAUDE_VERSION}/Maude-${MAUDE_VERSION}-linux-x86_64.zip"
+          sha256sum -c <<EOF
+          ${TAMARIN_SHA256}  tamarin.tar.gz
+          ${MAUDE_SHA256}  maude.zip
+          EOF
+          tar -xzf tamarin.tar.gz -C "$tools" tamarin-prover
+          unzip -q maude.zip -d "$tools/maude"
+          chmod +x "$tools/tamarin-prover" "$tools/maude/maude"
+          echo "$tools" >> "$GITHUB_PATH"
+          echo "$tools/maude" >> "$GITHUB_PATH"
+      - name: Every build of every model
+        run: verification/tamarin/check.sh --all-builds

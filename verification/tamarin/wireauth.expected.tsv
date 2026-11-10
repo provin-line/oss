@@ -1,0 +1,9 @@
+# build	lemma	result   (build = default or a -D flag; result = verified | falsified | unresolved; a lemma absent here is expected verified)
+ViewOmitsSigner	view_binding	falsified
+ViewOmitsOp	view_binding	falsified
+ViewOmitsOp	no_burn	falsified
+NoNonceStore	once_per_store	falsified
+RecordBeforeSignature	no_burn	falsified
+StoreKeyedByNonce	no_burn	falsified
+SkipRecipientCheck	handled_only_by_recipient	falsified
+StoreKeyedByNonce	nonce_per_signer	falsified

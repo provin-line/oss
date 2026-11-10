@@ -33,6 +33,14 @@ L2 の問い: *この名前の peer が本当にこの要求を送ったか？* 
 - 順序付き検証: 構造チェック → 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造が正規署名者の nonce を焼くことはできない。
 - 任意の per-op **authorizer**（signer-to-actor policy）は署名検証の後にのみ走る — 未認証入力を見ることがない。
 
+proof の形は 3 つの設計判断で決まっている。code とその試験はこの名前で参照する:
+
+- **D-w1 — view は署名者の DID を覆う。** 2 つの DID が同じ `#auth` 鍵を載せることがある（alias、または他者の鍵を載せた DID document）。`signerDID` が署名 bytes に入るので、一方として署名した proof は他方としては検証に通らない（unknown-key-share への防御）。
+- **D-w10 — nonce は署名者ごとに記録する。** nonce store の鍵は `(signerDID, nonce)`。nonce は署名者に対してだけ意味を持つ。同じ nonce を使う 2 人の署名者はぶつからず、ある署名者が他の署名者の nonce を先に使って消費することもできない。
+- **D-w11 — fields の値は string、boolean、`null` と、それらの object と array だけ。** 数は decimal の string で運ぶ。同じ値の Go の `int` と `float64` は別の bytes に canonical 化され、JCS の数の直列化は凍結された組織間の wire で相互運用の危険になる。数を持たない fields の bytes の形は 1 つに決まる。
+
+D-w1、D-w10 と、nonce は署名が通った後にだけ記録されることは、Dolev-Yao の攻撃者に対して Tamarin の model `verification/tamarin/wireauth.spthy` で確かめている（[verification/README.ja.md](../../verification/README.ja.md)）。
+
 検証済みの relationship 変更（subscription 登録・切断）は加えて **relationship evidence** を残す: counterparty 署名済み要求と検証鍵素材を durable に保全し、relationship の存在を peer を信頼せずに後から証明できる（[audit-obligations.ja.md](../concepts/audit-obligations.ja.md)。rotation は [deployment.ja.md](../architecture/deployment.ja.md)）。
 
 ## L3 との関係

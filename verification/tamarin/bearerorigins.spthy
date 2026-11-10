@@ -1,0 +1,141 @@
+/*
+ * Where a node shows its L1 bearer (pipeline vc-store-bearer), as a Tamarin
+ * model: pipelineconfig.Config.PresentsCredentialTo, origin.Confine and the
+ * clients that carry the bearer (internal/netcompose/batchresolver.go and the
+ * pipeline's VC-store clients).
+ *
+ * A node holds one bearer. Its operator names origins: the destinations it
+ * configured (vc-store-endpoint, each loop's upstream endpoint) and
+ * credential-origins, which the model does not tell apart. The node fetches
+ * from endpoints <o, path> that the attacker chooses (a StoreVC caller's
+ * hint, an issuer's DID document), and shows the bearer only to an endpoint
+ * whose origin is named. Any server may answer with a redirect to a place the
+ * attacker chooses; a client that carries the bearer follows none.
+ *
+ * Contract (verification/README.md says the same):
+ *   - the network is the attacker's (Dolev-Yao): it chooses every endpoint
+ *     and every redirect's target, and runs servers of its own (servers it
+ *     takes over);
+ *   - trusted: the node; the path to a named origin's server, which the
+ *     attacker neither reads nor redirects (TLS; an http origin is outside
+ *     this assumption);
+ *   - any server can be taken over (CompromiseServer), which hands the
+ *     attacker every bearer it has received, before or after;
+ *   - not modelled: URL parsing and the spelling of origins, transport
+ *     enforcement, the CLI's --token;
+ *   - the events are Received(o, tok), the server of origin o received the
+ *     bearer, and K(tok), the attacker knows it.
+ *
+ * Builds: the default build is the implementation. Each negative control
+ * removes one of its checks, and the lemmas it is expected to falsify are in
+ * bearerorigins.expected.tsv:
+ *   -D=PresentToAnyEndpoint  the bearer goes to whatever endpoint the node
+ *                       fetches from, named or not;
+ *   -D=FollowRedirects  a client that carries the bearer follows a redirect.
+ */
+theory BearerOrigins
+begin
+
+/* ---------- Nodes, servers and named origins ---------- */
+
+rule Node:
+    [ Fr(~N), Fr(~tok) ]
+  --[ Bearer(~N, ~tok) ]->
+    [ !NodeBearer(~N, ~tok), Out(~N) ]
+
+// The server of an origin. Origins are public.
+rule Server:
+    [ Fr(~o) ]
+  --[ ServerUp(~o) ]->
+    [ !Server(~o), Out(~o) ]
+
+// The operator names an origin the node may show its bearer to.
+rule NameOrigin:
+    [ !NodeBearer(N, tok), !Server(o) ]
+  --[ Named(N, o) ]->
+    [ !NamedOrigin(N, o) ]
+
+rule CompromiseServer:
+    [ !Server(o) ]
+  --[ ServerCompromised(o) ]->
+    [ !Compromised(o) ]
+
+/* ---------- Fetching with the bearer ---------- */
+
+// PresentsCredentialTo: the bearer goes with a fetch only when the
+// endpoint's origin is named.
+#ifdef PresentToAnyEndpoint
+rule Present:
+    [ !NodeBearer(N, tok), !Server(o), In(<o, path>) ]
+  --[ Presented(N, o) ]->
+    [ Request(N, o, path, tok) ]
+#else
+rule Present:
+    [ !NodeBearer(N, tok), !NamedOrigin(N, o), In(<o, path>) ]
+  --[ Presented(N, o) ]->
+    [ Request(N, o, path, tok) ]
+#endif
+
+rule Serve:
+    [ Request(N, o, path, tok), !Server(o) ]
+  --[ Received(o, tok) ]->
+    [ !Seen(o, tok), Out(<'response', o, path>) ]
+
+// Any server may answer with a redirect to a place the attacker chooses.
+rule Redirect:
+    [ Request(N, o, path, tok), !Server(o), In(loc) ]
+  --[ Received(o, tok), Redirect(N, o, loc) ]->
+    [ !Seen(o, tok), Redirected(N, loc, tok) ]
+
+#ifdef FollowRedirects
+// A client without origin.Confine sends the bearer on to the redirect's
+// target.
+rule Follow:
+    [ Redirected(N, <o2, path2>, tok) ]
+  --[ Presented(N, o2) ]->
+    [ Request(N, o2, path2, tok) ]
+#endif
+
+// A server taken over hands over every bearer it has received.
+rule Leak:
+    [ !Seen(o, tok), !Compromised(o) ]
+  --[ Leaked(o, tok) ]->
+    [ Out(tok) ]
+
+/* ---------- Lemmas ---------- */
+
+// A named origin's server receives the bearer with no server taken over
+// (reachability).
+lemma executable_presentation:
+  exists-trace
+  "Ex N tok o #i #j. Bearer(N, tok) @ #i & Received(o, tok) @ #j
+     & not (Ex o2 #r. ServerCompromised(o2) @ #r)"
+
+// A server answers a fetch that carries the bearer with a redirect: that the
+// client follows none is not vacuous.
+lemma redirect_reachable:
+  exists-trace
+  "Ex N o loc #i. Redirect(N, o, loc) @ #i
+     & not (Ex o2 #r. ServerCompromised(o2) @ #r)"
+
+// (2) Once a named recipient is taken over, the attacker can have the bearer:
+// the model does not keep it secret past that.
+lemma leak_after_named_compromise:
+  exists-trace
+  "Ex N tok o #i #j #k #r. Bearer(N, tok) @ #i & K(tok) @ #j
+     & Named(N, o) @ #k & ServerCompromised(o) @ #r"
+
+// (1) The bearer reaches the server of a named origin only, a redirect's
+// target included.
+lemma delivered_only_to_named:
+  "All N tok o #i #j. Bearer(N, tok) @ #i & Received(o, tok) @ #j
+     ==> Ex #k. Named(N, o) @ #k & #k < #j"
+
+// (1)(2) The attacker learns the bearer only from a named recipient that
+// received it and was taken over before.
+lemma bearer_secrecy:
+  "All N tok #i #j. Bearer(N, tok) @ #i & K(tok) @ #j
+     ==> Ex o #k #x #r. Named(N, o) @ #k & Received(o, tok) @ #x
+           & ServerCompromised(o) @ #r & #r < #j"
+
+end

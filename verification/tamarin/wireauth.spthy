@@ -1,0 +1,280 @@
+/*
+ * The L2 peer wire proof (network/pkg/services/chainmanager/wireauth), as a
+ * Tamarin model.
+ *
+ * A request carries an op and its fields; its proof carries the signer DID, a
+ * nonce, issuedAt and a signature over the view <S, op, '1', n, t, f>, the
+ * terms of {signerDID, op, v, nonce, issuedAt, fields}. The verifier rebuilds
+ * the view from the request it serves and the proof, and checks the
+ * signature under the signer DID's #auth key.
+ *
+ * Contract (verification/README.md says the same):
+ *   - the network is the attacker's (Dolev-Yao); the attacker makes DIDs of
+ *     its own, and its DID document may list any key, an honest one included;
+ *   - trusted: the verifier (never taken over), DID resolution (a DID's #auth
+ *     key reaches the verifier as !AuthKey), signatures (no forgery without
+ *     the key);
+ *   - any key can be taken over (Compromise), and the model records it;
+ *   - an honest signer draws a fresh nonce for each proof (wireauth.NewNonce,
+ *     which every caller of wireauth.Sign uses); no_burn and
+ *     handled_only_by_recipient rest on it;
+ *   - one verifier, with one nonce store, per network process; the store's
+ *     Use is an atomic check-and-set (restriction NonceStore);
+ *   - a request is its op and its fields: a handler acts only on the fields it
+ *     passes to Verify, and the op values are distinct across the surfaces
+ *     that share the verifier;
+ *   - the model's handler lets a request take effect only at a verifier that
+ *     serves the recipient its fields name (rule Handle); this is a premise,
+ *     and handled_only_by_recipient is a property of a handler that makes the
+ *     check;
+ *   - no time: issuedAt is an opaque term of the view, and the store here
+ *     never forgets; the acceptance window, the restart epoch, the eviction of
+ *     nonces and restarts are left to a TLA+ model (NonceEpoch, not yet
+ *     written);
+ *   - not modelled: the fields' value grammar and the JCS bytes (vectors and
+ *     fuzzing), the checks before the signature and authorization after it (a
+ *     proof any of them refuses leaves the store as it was), key rotation;
+ *   - the events are Accepted(V, S, op, n, t, f), verifier V accepted the proof
+ *     (Verify returned nil and recorded the nonce); ReplayRejected(V, S, op, n,
+ *     t, f), the signature verified and the nonce was recorded already; and
+ *     Handled(V, S, op, n, t, f), the request took effect at V.
+ *
+ * Builds: the default build is the implementation under the premises above.
+ * Each negative control changes one thing in it, and the lemmas it is
+ * expected to falsify are in wireauth.expected.tsv:
+ *   -D=ViewOmitsSigner  the view does not cover the signer DID (D-w1);
+ *   -D=ViewOmitsOp      the view does not cover the op;
+ *   -D=NoNonceStore     no check-and-set: nothing stops a replay from being
+ *                       accepted;
+ *   -D=RecordBeforeSignature  a path that records the nonce before the
+ *                       signature is checked;
+ *   -D=StoreKeyedByNonce  the store is keyed by the nonce alone, not per
+ *                       signer (D-w10);
+ *   -D=SkipRecipientCheck  the model's handler does not compare the request's
+ *                       recipient with the ones its verifier serves.
+ */
+theory WireAuth
+begin
+
+builtins: signing
+
+// The signed view: Sign and Accept build it through this one macro, as Sign
+// and Verify build it through viewBytes. A negative control puts a constant
+// in place of the term the view no longer covers. (The preprocessor does not
+// nest #ifdef, hence one per term.)
+#ifdef ViewOmitsSigner
+macros: viewSigner(S) = 'omitted'
+#else
+macros: viewSigner(S) = S
+#endif
+#ifdef ViewOmitsOp
+macros: viewOp(op) = 'omitted'
+#else
+macros: viewOp(op) = op
+#endif
+macros: view(S, op, n, t, f) = <viewSigner(S), viewOp(op), '1', n, t, f>
+
+// The nonce store's key: per signer (D-w10), as NonceStore.Use(signerDID,
+// nonce).
+#ifdef StoreKeyedByNonce
+macros: slot(S, n) = n
+#else
+macros: slot(S, n) = <S, n>
+#endif
+
+restriction Equality:
+  "All x y #i. Eq(x, y) @ #i ==> x = y"
+
+// The store's check-and-set: a verifier records a key once. The store never
+// forgets here; that forgetting after the window is safe is NonceEpoch's.
+#ifdef NoNonceStore
+#else
+restriction NonceStore:
+  "All V x #i #j. NonceUse(V, x) @ #i & NonceUse(V, x) @ #j ==> #i = #j"
+#endif
+
+// A DID document names one #auth key (no rotation).
+restriction OneDocument:
+  "All S x y #i #j. Bind(S, x) @ #i & Bind(S, y) @ #j ==> #i = #j"
+
+/* ---------- Keys and DIDs ---------- */
+
+rule Key:
+    [ Fr(~k) ]
+  --[ HonestKey(~k) ]->
+    [ !Key(~k), Out(pk(~k)) ]
+
+// An honest DID whose #auth key is k. Several DIDs may share one key.
+rule HonestDID:
+    [ !Key(k) ]
+  --[ Bind($S, pk(k)), HonestDID($S, k) ]->
+    [ !AuthKey($S, pk(k)), !Holds($S, k) ]
+
+// A DID of the attacker's, whose document lists whatever key it likes.
+rule AttackerDID:
+    [ In(x) ]
+  --[ Bind($A, x) ]->
+    [ !AuthKey($A, x) ]
+
+rule Compromise:
+    [ !Key(k) ]
+  --[ Compromised(k) ]->
+    [ Out(k) ]
+
+/* ---------- Signing and verifying ---------- */
+
+// A verifier: one network process.
+rule Verifier:
+    [ Fr(~V) ]
+  --[ NewVerifier(~V) ]->
+    [ !Verifier(~V) ]
+
+// A verifier serves recipient R: the DID the model's handler compares a
+// request's recipient with. A verifier may serve several; several verifiers may serve
+// one (replicas).
+rule Serve:
+    [ !Verifier(V) ]
+  --[ Serves(V, $R) ]->
+    [ !Recipient(V, $R) ]
+
+// An honest signer signs whatever op, issuedAt and fields it is handed: the
+// weakest assumption about what the node asks it to sign. The fields name the
+// request's recipient R; g is the rest.
+rule Sign:
+    [ !Holds(S, k), Fr(~n), In(<op, t, R, g>) ]
+  --[ Signed(S, op, ~n, t, <R, g>) ]->
+    [ Out(<op, <R, g>, S, ~n, t, sign(view(S, op, ~n, t, <R, g>), k)>) ]
+
+// Verify's order: the signature is checked, and only then is the nonce
+// recorded, last. (Structure, time and authorization are not modelled; a
+// proof refused by any of them leaves the store as it was, which is what a
+// rule that does not fire does.)
+rule Accept:
+    [ In(<op, f, S, n, t, sig>), !AuthKey(S, pkS), !Verifier(V) ]
+  --[ Eq(verify(sig, view(S, op, n, t, f), pkS), true),
+      NonceUse(V, slot(S, n)),
+      Accepted(V, S, op, n, t, f) ]->
+    [ !Spent(V, slot(S, n)), Verified(V, S, op, n, t, f) ]
+
+// The model's handler, after Verify: the request takes effect only at a
+// verifier that serves its recipient. The check runs after the nonce is
+// recorded, as a handler's check runs after Verify returns.
+#ifdef SkipRecipientCheck
+rule Handle:
+    [ Verified(V, S, op, n, t, <R, g>) ]
+  --[ Handled(V, S, op, n, t, <R, g>) ]->
+    [ ]
+#else
+rule Handle:
+    [ Verified(V, S, op, n, t, <R, g>), !Recipient(V, R) ]
+  --[ Handled(V, S, op, n, t, <R, g>) ]->
+    [ ]
+#endif
+
+// A proof whose signature verifies but whose nonce the store already holds:
+// ErrReplay.
+rule RejectReplay:
+    [ In(<op, f, S, n, t, sig>), !AuthKey(S, pkS), !Verifier(V),
+      !Spent(V, slot(S, n)) ]
+  --[ Eq(verify(sig, view(S, op, n, t, f), pkS), true),
+      ReplayRejected(V, S, op, n, t, f) ]->
+    [ ]
+
+#ifdef RecordBeforeSignature
+// A verifier that records the nonce before it checks the signature: the
+// proof is then turned away for its signature, but its nonce is spent.
+rule RecordUnverified:
+    [ In(<op, f, S, n, t, sig>), !Verifier(V) ]
+  --[ NonceUse(V, slot(S, n)) ]->
+    [ !Spent(V, slot(S, n)) ]
+#endif
+
+/* ---------- Lemmas ---------- */
+
+// An honest DID's proof is accepted with no key compromised (reachability).
+lemma executable_accept:
+  exists-trace
+  "Ex V S k op n t f #b #i. HonestDID(S, k) @ #b
+     & Accepted(V, S, op, n, t, f) @ #i
+     & not (Ex k2 #r. Compromised(k2) @ #r)"
+
+// Two honest DIDs on one key each have a proof accepted: aliases are live,
+// so view_binding speaks about them.
+lemma executable_alias:
+  exists-trace
+  "Ex V S1 S2 k op1 n1 t1 f1 op2 n2 t2 f2 #b1 #b2 #i #j.
+     HonestDID(S1, k) @ #b1 & HonestDID(S2, k) @ #b2 & not (S1 = S2)
+     & Accepted(V, S1, op1, n1, t1, f1) @ #i
+     & Accepted(V, S2, op2, n2, t2, f2) @ #j
+     & not (Ex k2 #r. Compromised(k2) @ #r)"
+
+// With its key taken over, an honest DID has a proof accepted that it never
+// signed: the exception in view_binding is live.
+lemma forgery_after_compromise:
+  exists-trace
+  "Ex V S k op n t f #b #i. HonestDID(S, k) @ #b
+     & Accepted(V, S, op, n, t, f) @ #i
+     & not (Ex #j. Signed(S, op, n, t, f) @ #j)"
+
+// (1) A proof accepted for DID S under an honest key k that was not taken
+// over was signed by S, for this op, nonce, issuedAt and fields: a signature
+// is reused neither for another DID that names the same key (the attacker's
+// or an honest alias) nor for another op.
+lemma view_binding:
+  "All V S op n t f k #i #b #h. Accepted(V, S, op, n, t, f) @ #i
+     & Bind(S, pk(k)) @ #b & HonestKey(k) @ #h
+     & not (Ex #r. Compromised(k) @ #r & #r < #i)
+     ==> Ex #j. Signed(S, op, n, t, f) @ #j & #j < #i"
+
+// An honest proof presented again to the verifier that accepted it is turned
+// away as a replay: no_burn speaks about something that happens.
+lemma executable_replay_rejected:
+  exists-trace
+  "Ex V S k op n t f #b #i #j. HonestDID(S, k) @ #b
+     & Accepted(V, S, op, n, t, f) @ #i
+     & ReplayRejected(V, S, op, n, t, f) @ #j & #i < #j
+     & not (Ex k2 #r. Compromised(k2) @ #r)"
+
+// (2) A verifier accepts a signer's nonce once. This restates the store's
+// check-and-set (restriction NonceStore) for accepted proofs.
+lemma once_per_store:
+  "All V S op1 n t1 f1 op2 t2 f2 #i #j. Accepted(V, S, op1, n, t1, f1) @ #i
+     & Accepted(V, S, op2, n, t2, f2) @ #j ==> #i = #j"
+
+// (2) The store's scope is per signer (D-w10): one verifier accepts one nonce
+// for two signers.
+lemma nonce_per_signer:
+  exists-trace
+  "Ex V S1 S2 op1 op2 n t1 t2 f1 f2 #i #j. Accepted(V, S1, op1, n, t1, f1) @ #i
+     & Accepted(V, S2, op2, n, t2, f2) @ #j & not (S1 = S2)"
+
+// (3) An honest proof is turned away as a replay only when that very proof
+// was accepted before, or its signer's key was taken over: a forgery spends
+// no legitimate signer's nonce.
+lemma no_burn:
+  "All V S op n t f #i #s. ReplayRejected(V, S, op, n, t, f) @ #i
+     & Signed(S, op, n, t, f) @ #s
+     ==> (Ex #j. Accepted(V, S, op, n, t, f) @ #j & #j < #i)
+       | (Ex k #b #r. HonestDID(S, k) @ #b & Compromised(k) @ #r & #r < #i)"
+
+// A request an honest signer addressed to R takes effect only at a verifier
+// that serves R: with the recipient check, a proof replayed to another node
+// does nothing there.
+lemma handled_only_by_recipient:
+  "All V S k op n t R g f #s #i #b. Signed(S, op, n, t, <R, g>) @ #s
+     & Handled(V, S, op, n, t, f) @ #i & HonestDID(S, k) @ #b
+     & not (Ex #r. Compromised(k) @ #r & #r < #i)
+     ==> f = <R, g> & (Ex #a. Serves(V, R) @ #a & #a < #i)"
+
+// What the recipient check leaves: one request taking effect at two
+// verifiers that both serve its recipient (replicas with stores of their
+// own).
+lemma replay_across_replicas:
+  exists-trace
+  "Ex V1 V2 S k op n t R g #b #a1 #a2 #i #j. HonestDID(S, k) @ #b
+     & Serves(V1, R) @ #a1 & Serves(V2, R) @ #a2 & not (V1 = V2)
+     & Handled(V1, S, op, n, t, <R, g>) @ #i
+     & Handled(V2, S, op, n, t, <R, g>) @ #j
+     & not (Ex k2 #r. Compromised(k2) @ #r)"
+
+end

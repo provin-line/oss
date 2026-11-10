@@ -12,6 +12,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+### Added
+
+- `verification/`: a test-only Go module, outside the root module, with
+  Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
+  shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
+  that runs them on pull requests that change them (`formal.yml`).
+
+### Documentation
+
+- `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
+  view binds the signer DID), D-w10 (nonces per signer) and D-w11 (the fields'
+  value grammar), which the code cites by name.
+
 ## [0.4.0] - 2026-11-09
 
 This release fixes twelve security advisories and bounds what a node takes in

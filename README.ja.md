@@ -28,6 +28,7 @@ cmd/provin/     オペレーター CLI
 conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID
 scripts/        lint 衛生チェック（`make lint` から実行）
+verification/   実装の形式モデル（テスト専用の入れ子 module）
 ```
 
 上記以外のトップレベルディレクトリは **ライブラリパッケージ** — `network/`・`pipeline/`・`cmd/` が利用する純粋なドメインライブラリ群（→ [ライブラリパッケージ](#ライブラリパッケージ)）。

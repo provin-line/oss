@@ -102,6 +102,28 @@ Each RPC carries a proof over the request it authenticates:
 - an optional per-op **authorizer** (signer-to-actor policy) runs only
   after signature verification — it never sees unauthenticated input.
 
+Three design decisions shape the proof; the code and its tests cite them by
+these names:
+
+- **D-w1 — the view binds the signer DID.** Two DIDs may list the same
+  `#auth` key: an alias, or a DID document that names another party's key.
+  Because `signerDID` is part of the signed bytes, a proof signed as one of
+  them does not verify as the other (the unknown-key-share defense).
+- **D-w10 — nonces are recorded per signer.** The nonce store's key is
+  `(signerDID, nonce)`: a nonce means something only relative to its
+  signer. Two signers that use the same nonce do not collide, and one
+  signer cannot spend another's nonce by using it first.
+- **D-w11 — the fields hold strings, booleans, `null`, and objects and
+  arrays of those.** A number travels as a decimal string. A Go `int` and
+  `float64` of the same value canonicalize to different bytes, and JCS
+  number serialization is an interoperability hazard on a frozen
+  cross-organization wire; fields without numbers have one byte form.
+
+D-w1, D-w10, and that the nonce is recorded only after the signature
+verifies, are checked against a Dolev-Yao attacker in the Tamarin model
+`verification/tamarin/wireauth.spthy` (see
+[verification/README.md](../../verification/README.md)).
+
 Verified relationship mutations (subscription registration, disconnect)
 additionally leave **relationship evidence**: the counterparty-signed
 request and the verifying key material are retained durably, so the
