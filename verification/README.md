@@ -1,10 +1,11 @@
 # verification — formal models of provin OSS
 
 This directory is a test-only Go module (`github.com/provin-line/oss/verification`)
-that checks provin OSS against formal models, and later against standard test
-vectors. It has no production code and is outside the root module: `go test
-./...` at the root does not enter it. Today it holds Tamarin models of two
-security properties of the implementation:
+that checks provin OSS against formal models and against third-party standard
+test vectors. It has no production code and is outside the root module: `go
+test ./...` at the root does not enter it. It holds Tamarin models of two
+security properties of the implementation, and the standard vectors
+([below](#standard-vectors)) under [`vectors/`](vectors):
 
 | model | tool | subject |
 | --- | --- | --- |
@@ -142,6 +143,64 @@ it, and the lemmas it is expected to falsify are in
 | bearerorigins | `PresentToAnyEndpoint` | the named-origin check is gone | `delivered_only_to_named`, `bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` is gone: a redirect is followed | `delivered_only_to_named`, `bearer_secrecy` |
 
+## Standard vectors
+
+`vectors/` runs third-party test vectors through the product's own code, so
+that an implementation detail the project's tests share with the code cannot
+hide a departure from a standard.
+
+| suite | source (pinned commit) | through | checks |
+| --- | --- | --- | --- |
+| Wycheproof: Ed25519, ECDSA P-256 with SHA-256 (`r \|\| s`), RSA PKCS #1 v1.5 with SHA-256 at 2048, 3072 and 4096 bits | [C2SP/wycheproof](https://github.com/C2SP/wycheproof) `d17cc89` | `crypto/ed25519`, `crypto/es256`, `crypto/rs256`: each `Verifier` | 1,248 vectors |
+| RFC 8785: the reference implementation's input and output pairs, and Appendix B's number samples | [cyberphone/json-canonicalization](https://github.com/cyberphone/json-canonicalization) `32a4819`; the RFC | `canon/jcs` (`CanonicalizeRFC8785`), at the canonicalizer stage | 6 pairs, 26 numbers |
+| JSON-Schema-Test-Suite, draft 2020-12, the required tests | [json-schema-org/JSON-Schema-Test-Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) `245a45a` | `schema/local`: `Add` compiles the schema under the product's policy, `Validate` checks the data | 46 files, 385 cases, 1,300 tests |
+
+The files are in `vectors/testdata/`, unmodified, each source with its
+license and a README; `testdata/SOURCES.tsv` pins every file by SHA-256, and
+a test fails when one changes or is added without a row. The tests read the
+files and run nothing from them.
+
+**Expectations.** A vector's expected outcome is its own (valid or invalid).
+Where the product's contract gives another, the outcome is listed in
+`vectors/<suite>.expected.tsv` with its reason; those rows were written from
+the contracts before the vectors were run. A result that differs from the
+expectation, a row no vector uses and a row that repeats the vector's own
+outcome all fail.
+
+- **Wycheproof** (`wycheproof.expected.tsv`): every vector Wycheproof marks
+  `acceptable` has a row. Ed25519 public keys of small order are refused
+  (`ed25519.ValidatePublicKey`); signatures under a mixed-order key are
+  accepted as the standard library's equation accepts them; an RSA signature
+  whose DigestInfo lacks its NULL parameter is refused (strict PKCS #1 v1.5).
+  Every other vector has its own outcome.
+- **RFC 8785**: no exceptions. The canonicalizer gives every reference input
+  its output byte for byte, and every finite value of Appendix B its
+  serialization; NaN and Infinity are refused. The reference input
+  `structures` uses object names that differ only in case, which the
+  product's strict decoder refuses (`canon.DuplicateKeyError`), so that pair
+  is checked at the canonicalizer stage only; through the strict decoder the
+  other five give the same bytes. What admission refuses before
+  canonicalization (`canon.AdmitSafeNumbers`, such as RFC 8785's own `1e30`)
+  is not part of this stage. The W3C JCS test vectors are checked by `vc`'s
+  own tests (`vc/w3c_forkw_internal_test.go`, `vc/rdfc_internal_test.go`).
+- **JSON-Schema-Test-Suite** (`jsonschema.expected.tsv`): an outcome is
+  classed by what the product does with it (an assertion that holds or
+  fails, or which refusal), and an error no class names fails. Two classes
+  are the profile's exclusions:
+  - `refused-external-ref`: a schema that refers to a document outside
+    itself (the suite's remote schemas at `http://localhost:1234`) is
+    refused, as the product loads no external `$ref` (22 cases, listed
+    before the run);
+  - `refused-pattern-dialect`: a pattern that names a Unicode general
+    category by its long name (`\p{Letter}`) is refused, as the product's
+    pattern dialect takes the short names only (`L`, `Lu`, `Nd` …; 2 cases,
+    found in the run and added after review).
+
+  Each row also names the error it expects, so a refusal for another reason
+  fails. The classes for bounds and budgets, for a schema its metaschema
+  refuses, and for a payload the decoder refuses were declared empty before
+  the run, and stay empty.
+
 ## Results
 
 A lemma is in one of five states: **proved**; **refuted as expected** (a
@@ -161,6 +220,12 @@ refutation that is not expected fails CI.
 
 Unresolved: none.
 
+| standard vectors | state |
+| --- | --- |
+| Wycheproof (1,248 vectors) | every vector has its expected outcome; 32 rows in the table, all for `acceptable` vectors |
+| RFC 8785 (6 pairs, 26 numbers) | every result as expected |
+| JSON-Schema-Test-Suite (1,300 tests) | every test has its expected outcome; 24 cases in the table |
+
 ## Running the checks
 
 ```sh
@@ -169,6 +234,7 @@ verification/tamarin/check.sh                           # every model, default b
 verification/tamarin/check.sh wireauth                  # one model
 verification/tamarin/check.sh wireauth ViewOmitsSigner  # one negative control
 TIMEOUT=120 verification/tamarin/check.sh --all-builds  # seconds per lemma (600 by default)
+(cd verification && go test ./...)                      # the standard vectors (what CI's vectors job runs)
 ```
 
 `check.sh` runs `tamarin-prover` on each lemma in a process of its own, reads

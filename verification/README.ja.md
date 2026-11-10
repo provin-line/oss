@@ -2,9 +2,10 @@
 > 日本語版 — English: [README.md](README.md)
 
 この directory は test 専用の Go module（`github.com/provin-line/oss/verification`）で、
-provin OSS を形式モデルに照らして確かめる（後から標準の test vector も入る）。
+provin OSS を形式モデルと第三者の標準の test vector に照らして確かめる。
 production code は持たず、root の module の外にある: root の `go test ./...` は
-ここに入らない。いまは実装の security の性質 2 つの Tamarin model を持つ:
+ここに入らない。実装の security の性質 2 つの Tamarin model と、[`vectors/`](vectors)
+の標準 vector（[下](#標準-vector)）を持つ:
 
 | model | 道具 | 対象 |
 | --- | --- | --- |
@@ -127,6 +128,28 @@ lemma は `tamarin/MODEL.expected.tsv` にある。
 | bearerorigins | `PresentToAnyEndpoint` | 名指しの origin の照合が無い | `delivered_only_to_named`、`bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` が無い: redirect を追う | `delivered_only_to_named`、`bearer_secrecy` |
 
+## 標準 vector
+
+`vectors/` は第三者の test vector を製品自身の code に通す。プロジェクトの試験と code が同じ実装の細部を共有していても、標準からのずれが隠れないようにするため。
+
+| suite | 出所（pin の commit） | 通す口 | 数 |
+| --- | --- | --- | --- |
+| Wycheproof: Ed25519、ECDSA P-256 SHA-256（`r \|\| s`）、RSA PKCS #1 v1.5 SHA-256（2048・3072・4096 bit） | [C2SP/wycheproof](https://github.com/C2SP/wycheproof) `d17cc89` | `crypto/ed25519`、`crypto/es256`、`crypto/rs256` の `Verifier` | 1,248 vector |
+| RFC 8785: 参照実装の input と output の組、Appendix B の数の例 | [cyberphone/json-canonicalization](https://github.com/cyberphone/json-canonicalization) `32a4819`、RFC | `canon/jcs`（`CanonicalizeRFC8785`）、canonicalizer の段 | 6 組、26 個の数 |
+| JSON-Schema-Test-Suite、draft 2020-12、必須の試験 | [json-schema-org/JSON-Schema-Test-Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) `245a45a` | `schema/local`: `Add` が製品の方針で schema を compile し、`Validate` が data を確かめる | 46 file、385 case、1,300 test |
+
+file は `vectors/testdata/` に手を加えずに置き、出所ごとに license と README を添える。`testdata/SOURCES.tsv` が全 file を SHA-256 で固定し、file が変わるか行なしで足されると試験が落ちる。試験は file を読むだけで、何も実行しない。
+
+**期待。** vector の期待の結果は、その vector 自身のもの（valid か invalid）。製品の契約が別の結果を与えるところだけ、理由と一緒に `vectors/<suite>.expected.tsv` に書く。表の行は vector を回す前に契約から書いた。期待と違う結果、どの vector も使わない行、vector 自身の結果を繰り返す行は、どれも失敗にする。
+
+- **Wycheproof**（`wycheproof.expected.tsv`）: Wycheproof が `acceptable` とする vector は全部行を持つ。小さい位数の Ed25519 の公開鍵は断る（`ed25519.ValidatePublicKey`）。混合位数の鍵の下の署名は、標準ライブラリの式が受けるとおりに受ける。DigestInfo に NULL の無い RSA の署名は断る（strict な PKCS #1 v1.5）。ほかの vector はすべて自身の結果。
+- **RFC 8785**: 例外は無い。canonicalizer は参照実装の全 input に output を byte で一致して与え、Appendix B の有限の値すべてにその直列化を与える。NaN と Infinity は断る。参照実装の input `structures` は大文字小文字だけ違う object の名前を使い、製品の strict な decode はそれを断る（`canon.DuplicateKeyError`）。そのためこの 1 組は canonicalizer の段だけで照合する。strict な decode を通すと、ほかの 5 組は同じ bytes になる。canonicalize の前に admission が断るもの（`canon.AdmitSafeNumbers`。RFC 8785 自身の `1e30` など）は、この段に含まない。W3C の JCS の test vector は `vc` 自身の試験が照合している（`vc/w3c_forkw_internal_test.go`、`vc/rdfc_internal_test.go`）。
+- **JSON-Schema-Test-Suite**（`jsonschema.expected.tsv`）: 結果は、製品がそれをどう扱ったか（assertion が成り立つか、落ちるか、どの拒否か）で分ける。どの class にも当たらない error は失敗にする。2 つの class が profile の除外:
+  - `refused-external-ref`: 自分の外の document を指す schema（suite の `http://localhost:1234` の remote schema）は断る。製品は外部の `$ref` を読まない（22 case、run の前に列挙）。
+  - `refused-pattern-dialect`: Unicode の general category を長い名前（`\p{Letter}`）で書く pattern は断る。製品の pattern の方言は短い名前（`L`、`Lu`、`Nd` …）だけを受ける（2 case、run の中で見つけ、review を経て足した）。
+
+  各行は期待する error も名指すので、別の理由の拒否は失敗になる。上限と予算、metaschema が断る schema、decode が断る payload の class は、run の前に 0 件と宣言し、0 件のまま。
+
 ## 結果
 
 lemma の状態は 5 つ: **証明**、**反証（期待どおり）**（負の対照）、
@@ -143,6 +166,12 @@ CI を赤にする。
 | bearerorigins | 2 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | `NonceEpoch`（TLA+: 受理の窓、再起動の epoch、掃除） | — | 未着手 |
 
+| 標準 vector | 状態 |
+| --- | --- |
+| Wycheproof（1,248 vector） | すべて期待どおり。表の行は 32 で、すべて `acceptable` の vector |
+| RFC 8785（6 組、26 個の数） | すべて期待どおり |
+| JSON-Schema-Test-Suite（1,300 test） | すべて期待どおり。表の case は 24 |
+
 未解決: 無し。
 
 ## 回し方
@@ -153,6 +182,7 @@ verification/tamarin/check.sh                           # 全 model、既定の 
 verification/tamarin/check.sh wireauth                  # 1 つの model
 verification/tamarin/check.sh wireauth ViewOmitsSigner  # 1 つの負の対照
 TIMEOUT=120 verification/tamarin/check.sh --all-builds  # lemma ごとの秒数（既定 600）
+(cd verification && go test ./...)                      # 標準 vector（CI の job vectors が回すもの）
 ```
 
 `check.sh` は lemma ごとに別の process で `tamarin-prover` を回し、prover の

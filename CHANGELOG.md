@@ -31,6 +31,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `upstream-endpoint`, `upstream-registry`: the registry ID of the node at
   that endpoint, where it is not the one derived from the configuration's
   DIDs (`docs/architecture/deployment.md`, "Wire proof audience").
+- `verification/vectors`: third-party standard vectors through the product's
+  own code — Wycheproof (Ed25519, ECDSA P-256, RSA PKCS #1 v1.5) through
+  `crypto/{ed25519,es256,rs256}`, RFC 8785 through `canon/jcs`, and the
+  JSON-Schema-Test-Suite (draft 2020-12) through `schema/local` — pinned by
+  SHA-256, with the outcomes that differ from a vector's own listed with
+  their reasons, and the CI job `vectors`, which runs them on every change.
 
 ### Breaking changes
 

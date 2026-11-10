@@ -49,3 +49,22 @@ jobs:
           cache: true
       - name: conformance harness
         run: go test ./conformance/ -v
+
+  # Third-party standard vectors (verification/vectors: Wycheproof, RFC 8785,
+  # JSON-Schema-Test-Suite) through the product's verifiers, canonicalizer and
+  # schema validator. They check production code, so they run on every change,
+  # like the jobs above; the verification module is nested, so its tests run
+  # from its own directory against this checkout (replace ../). The formal
+  # models are a separate workflow (formal.yml).
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: verification/go.mod
+          cache: true
+          cache-dependency-path: verification/go.sum
+      - name: standard vectors
+        working-directory: verification
+        run: go test ./... -count=1
