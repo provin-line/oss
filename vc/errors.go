@@ -55,6 +55,11 @@ const ErrSignatureInvalid Error = "vc: proof does not verify under the issuer's 
 // chain does not hold.
 const ErrChainLinkBroken Error = "vc: chain link broken"
 
+// ErrChainOrder is what a *ChainOrderError is (errors.Is): the proofs'
+// created times of a chain decrease along it, or a pair of them cannot be
+// read and compared.
+const ErrChainOrder Error = "vc: proof created times decrease along the chain"
+
 // ErrChainMalformed is what the error is (errors.Is) with which
 // ValidateChainLinks and ValidateChainFrom refuse a chain with nothing to
 // link: an empty chain, or a nil credential in it. VerifyChain's and

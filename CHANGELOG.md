@@ -63,6 +63,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   matches it under `errors.Is`) and `vc.ErrChainMalformed` for an empty chain
   or a nil credential; the errors' texts are unchanged. `VerifyChain` is
   unchanged: a broken link is a failed data-integrity verdict, not an error.
+- `vc`: `Verifier.VerifyChainSigners` verifies a chain by its keys alone, for
+  a consumer whose stage issuers are not Process DIDs under an Owner. It
+  takes an `IssuerKeys`, the key half of `IssuerVerifier` (which now embeds
+  it, with the same methods), and returns a `ChainSignersResult`: the links
+  (as `ValidateChainLinks` checks them), the order of the proofs' created
+  times (`vc.ErrChainOrder`, a `*ChainOrderError` naming the later credential
+  of the first pair out of order) and each credential's signer verdict, its
+  suite contract included. It establishes no Owner; its documentation lists
+  what a caller still checks. `VerifyChain` is unchanged.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI

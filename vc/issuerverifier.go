@@ -43,14 +43,29 @@ type IssuerKey struct {
 // Errors: one wrapping ErrIssuerNotFound is an established negative (failed);
 // any other is transient (indeterminate).
 type IssuerVerifier interface {
+	IssuerKeys
+	// Owner returns the Owner DID responsible for issuer, a Process DID.
+	Owner(ctx context.Context, issuer string) (string, error)
+}
+
+// IssuerKeys establishes the key a credential's proof must verify under, with
+// no Owner: the IssuerKey half of IssuerVerifier. VerifyChainSigners takes
+// one; an IssuerVerifier is one.
+//
+// The Verifier keeps the rest of signer authenticity to itself, as it does
+// with an IssuerVerifier: the proof policy runs before IssuerKey is asked, the
+// key is used only when its ID is the proof's verificationMethod, and the
+// proof is verified against it under the exact suite contract.
+//
+// Errors: one wrapping ErrIssuerNotFound is an established negative (failed);
+// any other is transient (indeterminate).
+type IssuerKeys interface {
 	// IssuerKey returns the key that cred's proof verificationMethod names,
 	// one the issuer authorizes for assertion at the proof's created time, with
 	// ID set to that verificationMethod. A verificationMethod the issuer has no
 	// such key for is ErrIssuerNotFound. cred has not been verified when this
 	// is asked: it is the credential as received.
 	IssuerKey(ctx context.Context, cred *Credential) (IssuerKey, error)
-	// Owner returns the Owner DID responsible for issuer, a Process DID.
-	Owner(ctx context.Context, issuer string) (string, error)
 }
 
 // WithIssuerVerifier sets how the Verifier establishes issuers. nil keeps the

@@ -57,7 +57,8 @@ type Verifier struct {
 	schemaResolver SchemaResolver
 }
 
-// VerifierOption configures a Verifier.
+// VerifierOption configures a Verifier. NewVerifier applies the options; a
+// Verifier is not reconfigured once it is in use.
 type VerifierOption func(*Verifier)
 
 // NewVerifier returns a Verifier verifying signatures through sigVerifier and
@@ -172,7 +173,8 @@ type SignerAuthenticityResult struct {
 	//   - a proofValue that does not decode, or, with a LifecycleRegistry, a
 	//     phase it returns without error for the cryptosuite at proof.created
 	//     that is neither Active nor Deprecated: failed, ErrProofPolicy;
-	//   - the IssuerVerifier's IssuerKey returns an error wrapping
+	//   - the key source's IssuerKey (the Verifier's IssuerVerifier; for
+	//     VerifyChainSigners, its keys) returns an error wrapping
 	//     ErrIssuerNotFound: failed, wrapping that error;
 	//   - IssuerKey returns any other error, the context's included:
 	//     indeterminate, wrapping that error;
@@ -196,7 +198,9 @@ type SignerAuthenticityResult struct {
 // credential of any type: the proof policy, the issuer's key from the
 // IssuerVerifier (by default the assertionMethod key of the issuer's DID
 // document), the proof, and the cryptosuite lifecycle — the same evaluation,
-// through the same implementation, as Verify's axis.
+// through the same implementation, as Verify's axis, except that Verify reads
+// a PipelinePassCredential's issuer as a string only (an issuer written as an
+// object names none there) where this reads the id of an issuer object too.
 //
 // Verified establishes that Issuer signed, with VerificationMethod, a document
 // equivalent to this body under SuiteContract. Equivalent is not always
@@ -231,7 +235,7 @@ func (v *Verifier) VerifySignerAuthenticity(ctx context.Context, cred *Credentia
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	res := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	res := v.signerAuthenticity(ctx, v.issuers, cred.Issuer(), cred.proof, cred.body)
 	return &res, nil
 }
 
@@ -319,26 +323,26 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // PipelinePassCredential through signerAuthenticity, the one implementation the
 // type-agnostic VerifySignerAuthenticity shares.
 func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string, outContract *SuiteContract) ConfidenceState {
-	r := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	r := v.signerAuthenticity(ctx, v.issuers, cred.Issuer(), cred.proof, cred.body)
 	*notations = append(*notations, r.Notations...)
 	*outContract = r.SuiteContract
 	return r.State
 }
 
 // signerAuthenticity evaluates the signer-authenticity axis of a credential,
-// given its issuer, its raw wire proof (nil when unsigned) and its body: the typed
-// proof field policy, the FCoT obligations (extra-member rejection and
-// verificationMethod-names-the-issuer), the issuer's key from the
-// IssuerVerifier (which must be the key the verificationMethod names), the
+// given the key source, its issuer, its raw wire proof (nil when unsigned) and
+// its body: the typed proof field policy, the FCoT obligations (extra-member
+// rejection and verificationMethod-names-the-issuer), the issuer's key from
+// keys (which must be the key the verificationMethod names), the
 // proof under the exact suite contract, and the cryptosuite lifecycle phase at
-// proof.created. An IssuerVerifier error wrapping ErrIssuerNotFound is an
+// proof.created. A keys error wrapping ErrIssuerNotFound is an
 // established negative (failed); any other is transient (indeterminate — may
 // resolve later). The default's taxonomy: see NewDIDDocumentIssuers. Each
 // return sets Err as SignerAuthenticityResult.Err lists.
 //
 // It reads nothing of the credential's type or content, so it applies to a
 // credential of any type.
-func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawProof, body map[string]any) SignerAuthenticityResult {
+func (v *Verifier) signerAuthenticity(ctx context.Context, keys IssuerKeys, issuer string, rawProof, body map[string]any) SignerAuthenticityResult {
 	failed := func(err error) SignerAuthenticityResult {
 		return SignerAuthenticityResult{State: ConfidenceFailed, Err: err}
 	}
@@ -410,7 +414,7 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 				ErrProofPolicy, errQuote(proof.Cryptosuite), created.UTC().Format(time.RFC3339)))
 		}
 	}
-	key, err := v.issuers.IssuerKey(ctx, &Credential{body: body, proof: rawProof})
+	key, err := keys.IssuerKey(ctx, &Credential{body: body, proof: rawProof})
 	switch {
 	case errors.Is(err, ErrIssuerNotFound):
 		// established: no such issuer, or no usable key under the verificationMethod
@@ -561,10 +565,8 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	if firstBrokenLink(chain) != nil {
 		di = ConfidenceFailed // the links: no predecessor at origin, linkage, data flow, all-consumed
 	}
-	for n := 1; n < len(chain); n++ {
-		if !createdMonotonic(chain[n-1], chain[n]) {
-			cc = ConfidenceFailed // ordering
-		}
+	if firstOrderBreak(chain) != nil {
+		cc = ConfidenceFailed // ordering
 	}
 	acc = glbAxes(acc, AxisResult{
 		DataIntegrity:      di,
@@ -593,23 +595,6 @@ func minState(x, y ConfidenceState) ConfidenceState {
 		return x
 	}
 	return y
-}
-
-// createdMonotonic reports whether cur's proof.created is at or after prev's. A
-// missing or unparseable proof on either side is treated as non-monotonic
-// (the signer-authenticity axis surfaces the unsigned/malformed proof
-// separately).
-func createdMonotonic(prev, cur *PipelinePassCredential) bool {
-	pp, cp := prev.Proof(), cur.Proof()
-	if pp == nil || cp == nil {
-		return false
-	}
-	pt, err1 := time.Parse(time.RFC3339, pp.Created)
-	ct, err2 := time.Parse(time.RFC3339, cp.Created)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return !ct.Before(pt)
 }
 
 func containsString(s []string, want string) bool {

@@ -116,6 +116,15 @@ credential's identity. `eddsa-jcs-2022` credentials are not affected.
   linked, so they do not detect a missing tail. A broken link is
   `ErrChainLinkBroken` (a `*ChainLinkError` with the credential's index), and
   a chain with nothing to link `ErrChainMalformed`.
+- A chain by its keys alone: `Verifier.VerifyChainSigners` takes an
+  `IssuerKeys` (the key half of `IssuerVerifier`; any `IssuerVerifier` is
+  one) and returns the chain's links, the order of its proofs' created times
+  (`ErrChainOrder`, a `*ChainOrderError` with the later credential's index)
+  and each credential's signer verdict, contract included. It establishes no
+  Owner, so it fits stages whose issuers are not Process DIDs; the caller
+  accepts only the contract and the issuers and keys it requires of each
+  stage, and checks what the method's documentation lists as not
+  established.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'
