@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // ChainClass categorizes a verified credential chain by its signature-chain
@@ -47,7 +49,7 @@ func (v *Verifier) ClassifyChain(ctx context.Context, chain []*PipelinePassCrede
 	for _, cred := range chain {
 		owner, err := v.ownerOf(ctx, cred.Issuer())
 		if err != nil {
-			return ChainClassUnknown, fmt.Errorf("vc: classify chain: resolving owner of %q: %w", cred.Issuer(), err)
+			return ChainClassUnknown, fmt.Errorf("vc: classify chain: resolving owner of %s: %w", excerpt.Quoted(cred.Issuer(), 128), err)
 		}
 		owners[owner] = true
 	}

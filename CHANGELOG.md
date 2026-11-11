@@ -86,6 +86,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   such a DID (the registry's DID service among them) answers
   `InvalidArgument`, where it answered `PermissionDenied` for a registry
   that is not its own.
+- `did/dplaax`: `Parse`'s error quotes at most 128 bytes of what it refuses,
+  with the length of a longer input. The pipeline's own-node audience and
+  the `vc` Verifier's issuer check now carry that error as the reason a DID
+  does not parse.
+- An error that refuses a DID for its form (it does not parse, or is not the
+  Owner, Pipeline or Process it must be, or `did/dplaax.ValidateDID` refuses
+  its account type or resource path) quotes at most 128 bytes of that DID,
+  with the length of a longer one, in the CLI, the pipeline and network
+  configuration, the network services, `bundle`, `delegation` and `vc`.
 - `didregistry`: issuing a Pipeline or Process checks its delegation through
   `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
   (Connect `PermissionDenied`); the refusal's text, which clients see in that
@@ -94,6 +103,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   vendored dPLaaX vectors are that tag's 235, byte for byte, and the README's
   "Specification conformance" names the pair. `keybinding-001`..`keybinding-054`
   run through `keybinding.Verifier` and `StatusListContentHash`.
+- Conformance: `did-001`..`did-031` run. Whether `did/dplaax.Parse` accepts
+  each DID (dplaax `did.dplaax.syntax`), and, for one it accepts, the level
+  `IsOwner`, `IsPipeline` and `IsProcess` give it, its `OwnerDID`, and a
+  Process's `PipelineDID` (`did.dplaax.hierarchy`). `PipelineDID`'s doc says
+  that only for a Process is it the Pipeline the DID belongs to.
 
 ### Breaking changes
 

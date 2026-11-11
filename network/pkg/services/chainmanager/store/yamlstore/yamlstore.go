@@ -29,6 +29,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/internal/yamlrecord"
 
 	"github.com/provin-line/oss/did/dplaax"
@@ -158,7 +159,7 @@ func (s *AllowListStore) path(pipelineDID string) (string, error) {
 		return "", fmt.Errorf("yamlstore: %w", err)
 	}
 	if !d.IsPipeline() {
-		return "", fmt.Errorf("yamlstore: %q is not a pipeline DID", pipelineDID)
+		return "", fmt.Errorf("yamlstore: %s is not a pipeline DID", netexcerpt.ValueText(pipelineDID))
 	}
 	segs := append([]string{d.Registry, d.AccountType, d.AccountID}, d.ResourcePath...)
 	for _, seg := range segs {
@@ -278,7 +279,7 @@ func fromAllowRecord(r allowRecord) []store.AllowRule {
 // component (the traversal guard lives here, not in callers).
 func safeSegment(s string) error {
 	if s == "" || s == "." || s == ".." || s != filepath.Base(s) || strings.ContainsAny(s, `/\`+"\x00") {
-		return fmt.Errorf("yamlstore: invalid path segment %q", s)
+		return fmt.Errorf("yamlstore: invalid path segment %s", netexcerpt.ValueText(s))
 	}
 	return nil
 }

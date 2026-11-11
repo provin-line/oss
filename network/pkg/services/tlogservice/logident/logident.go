@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 )
 
 // LogKind is one of the three log identity shapes D-T3 defines.
@@ -90,13 +91,13 @@ func classify(logID string) (LogKind, string, error) {
 	}
 	if suffix, ok := strings.CutPrefix(logID, sinkReceiptPrefix); ok {
 		if _, err := parseProcessDID(suffix); err != nil {
-			return "", "", fmt.Errorf("%w: sink-receipt suffix %q: %v", ErrInvalidLogID, suffix, err)
+			return "", "", fmt.Errorf("%w: sink-receipt suffix %s: %v", ErrInvalidLogID, netexcerpt.ValueText(suffix), err)
 		}
 		return KindSinkReceipt, suffix, nil
 	}
 	if suffix, ok := strings.CutPrefix(logID, sinkRejectPrefix); ok {
 		if _, err := parseProcessDID(suffix); err != nil {
-			return "", "", fmt.Errorf("%w: sink-reject suffix %q: %v", ErrInvalidLogID, suffix, err)
+			return "", "", fmt.Errorf("%w: sink-reject suffix %s: %v", ErrInvalidLogID, netexcerpt.ValueText(suffix), err)
 		}
 		return KindSinkReject, suffix, nil
 	}
@@ -114,7 +115,7 @@ func parsePipelineDID(s string) (*dplaax.DID, error) {
 		return nil, err
 	}
 	if !d.IsPipeline() {
-		return nil, fmt.Errorf("%q is not a pipeline DID", s)
+		return nil, fmt.Errorf("%s is not a pipeline DID", netexcerpt.ValueText(s))
 	}
 	return d, nil
 }
@@ -127,7 +128,7 @@ func parseProcessDID(s string) (*dplaax.DID, error) {
 		return nil, err
 	}
 	if !d.IsProcess() {
-		return nil, fmt.Errorf("%q is not a process DID", s)
+		return nil, fmt.Errorf("%s is not a process DID", netexcerpt.ValueText(s))
 	}
 	return d, nil
 }

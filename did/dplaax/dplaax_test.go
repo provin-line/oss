@@ -1,6 +1,7 @@
 package dplaax_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -200,5 +201,65 @@ func TestParse_BoundsTheRegistry(t *testing.T) {
 	}
 	if _, err := dplaax.Parse("did:dplaax:" + strings.Repeat("a", 254) + ":org:acme"); err == nil {
 		t.Error("a registry of 254 octets was taken")
+	}
+}
+
+// Parse quotes what it refuses within a bound, however long the input: the
+// head and the length of a long one, all of a short one.
+func TestParse_QuotesWhatItRefusesWithinABound(t *testing.T) {
+	long := strings.Repeat("a", 200<<10)
+	for name, c := range map[string]struct{ input, named string }{
+		"no method prefix":  {long, long},
+		"an unsafe segment": {"did:dplaax:poc.dplaax.dev:org:" + long + "!", long + "!"},
+	} {
+		_, err := dplaax.Parse(c.input)
+		if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+			t.Errorf("%s: %.200v (%d bytes), want a refusal naming the head and the length %d", name, err, len(fmt.Sprint(err)), len(c.named))
+		}
+	}
+	if _, err := dplaax.Parse("nope"); err == nil || !strings.Contains(err.Error(), `"nope"`) {
+		t.Errorf("a short input: %v, want it quoted whole", err)
+	}
+	if _, err := dplaax.Parse("did:dplaax:poc.dplaax.dev:org:ac/me"); err == nil || !strings.Contains(err.Error(), `"ac/me"`) {
+		t.Errorf("a short unsafe segment: %v, want it quoted whole", err)
+	}
+}
+
+// The semantic gates name what they refuse within a bound, however long the
+// DID: the account type, the resource path, the DID that is not an Owner.
+func TestValidation_NamesWhatItRefusesWithinABound(t *testing.T) {
+	long := strings.Repeat("a", 200<<10)
+	parse := func(s string) *dplaax.DID {
+		t.Helper()
+		d, err := dplaax.Parse(s)
+		if err != nil {
+			t.Fatalf("Parse: %.200v", err)
+		}
+		return d
+	}
+	nonOwner := "did:dplaax:poc.dplaax.dev:org:" + long + ":pipeline:p1"
+	for name, c := range map[string]struct {
+		err   error
+		named string
+	}{
+		"a long account type":  {dplaax.ValidateDID(parse("did:dplaax:poc.dplaax.dev:" + long + ":acme")), long},
+		"a long resource path": {dplaax.RequireKnownPattern(parse("did:dplaax:poc.dplaax.dev:org:acme:" + long)), long},
+		"a long non-Owner":     {dplaax.RequireOwner(parse(nonOwner)), nonOwner},
+	} {
+		if c.err == nil || len(c.err.Error()) > 300 || !strings.Contains(c.err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+			t.Errorf("%s: %.200v (%d bytes), want a refusal naming the head and the length %d", name, c.err, len(fmt.Sprint(c.err)), len(c.named))
+		}
+	}
+	for name, c := range map[string]struct {
+		err  error
+		want string
+	}{
+		"a short account type":  {dplaax.ValidateDID(parse("did:dplaax:poc.dplaax.dev:person:acme")), "person"},
+		"a short resource path": {dplaax.RequireKnownPattern(parse("did:dplaax:poc.dplaax.dev:org:acme:widget:w1")), "widget"},
+		"a short non-Owner":     {dplaax.RequireOwner(parse("did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1")), "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"},
+	} {
+		if c.err == nil || !strings.Contains(c.err.Error(), c.want) {
+			t.Errorf("%s: %v, want it named whole", name, c.err)
+		}
 	}
 }

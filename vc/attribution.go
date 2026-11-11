@@ -3,6 +3,8 @@ package vc
 import (
 	"context"
 	"fmt"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // AttributeOwner resolves an issuer Process DID to the Owner DID that bears
@@ -23,7 +25,7 @@ import (
 func (v *Verifier) AttributeOwner(ctx context.Context, issuer string) (string, error) {
 	owner, err := v.ownerOf(ctx, issuer)
 	if err != nil {
-		return "", fmt.Errorf("vc: attribute owner of %q: %w", issuer, err)
+		return "", fmt.Errorf("vc: attribute owner of %s: %w", excerpt.Quoted(issuer, 128), err)
 	}
 	return owner, nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/provin-line/oss/cmd/provin/internal/client"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/orgverify"
 	"github.com/provin-line/oss/resolver"
 )
@@ -225,7 +226,7 @@ func OrgGenerateTXT(ctx context.Context, env Env, cfg OrgGenerateTXTConfig) erro
 func orgOwnerDID(didStr string) (*dplaax.DID, error) {
 	parsed, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("parse %q: %w", didStr, err)
+		return nil, fmt.Errorf("parse %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	if err := dplaax.ValidateDID(parsed); err != nil {
 		return nil, err
@@ -275,7 +276,7 @@ type httpDoer interface {
 func (r *registryDocResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("resolve: parse %q: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: parse %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	segs := append([]string{d.AccountType, d.AccountID}, d.ResourcePath...)
 	url := strings.TrimRight(r.registry, "/") + "/did/" + strings.Join(segs, "/") + "/did.json"

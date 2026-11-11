@@ -3,6 +3,7 @@ package didresolver_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -317,5 +318,14 @@ func TestResolve_PreflightTimeout_PreservesContextError(t *testing.T) {
 	_, err := r.Resolve(context.Background(), testDID)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("preflight-timeout err = %v, want errors.Is(context.DeadlineExceeded)", err)
+	}
+}
+
+// A DID that does not parse is named within a bound, however long it is.
+func TestResolve_NamesALongUnparsableDIDWithinABound(t *testing.T) {
+	r := didresolver.New(loopbackGuard())
+	long := "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 5000) + "!"
+	if _, err := r.Resolve(context.Background(), long); err == nil || len(err.Error()) > 500 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+		t.Errorf("Resolve(a long unparsable DID): %.200v, want an error naming its head and length", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/resolver"
 )
 
@@ -122,11 +123,14 @@ func (d didDocumentIssuers) Owner(ctx context.Context, issuer string) (string, e
 // responsible Owner). It is the one place the three readers of the Owner —
 // the chain-consistency axis, AttributeOwner and ClassifyChain — get it from.
 // An issuer that is not a Process DID, and a foreign Owner, wrap
-// ErrIssuerNotFound.
+// ErrIssuerNotFound; one that does not parse wraps Parse's error too.
 func (v *Verifier) ownerOf(ctx context.Context, issuer string) (string, error) {
 	d, err := dplaax.Parse(issuer)
-	if err != nil || !d.IsProcess() {
-		return "", fmt.Errorf("vc: issuer %q is not a Process DID: %w", issuer, ErrIssuerNotFound)
+	if err != nil {
+		return "", fmt.Errorf("vc: issuer %s is not a Process DID: %w: %w", excerpt.Quoted(issuer, 128), ErrIssuerNotFound, err)
+	}
+	if !d.IsProcess() {
+		return "", fmt.Errorf("vc: issuer %s is not a Process DID: %w", excerpt.Quoted(issuer, 128), ErrIssuerNotFound)
 	}
 	owner, err := v.issuers.Owner(ctx, issuer)
 	if err != nil {

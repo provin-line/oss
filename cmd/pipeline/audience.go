@@ -27,7 +27,7 @@ func ownNodeAudience(override, signerDID string) (string, error) {
 	}
 	d, err := dplaax.Parse(signerDID)
 	if err != nil {
-		return "", fmt.Errorf("pipeline: signer %s does not parse as a did:dplaax DID, so the audience of its node is unknown", excerpt.Quoted(signerDID, 128))
+		return "", fmt.Errorf("pipeline: signer %s does not parse as a did:dplaax DID, so the audience of its node is unknown: %w", excerpt.Quoted(signerDID, 128), err)
 	}
 	return d.Registry, nil
 }
@@ -45,7 +45,7 @@ func upstreamAudiences(loops []pipelineconfig.LoopConfig) (map[string]string, er
 		if audience == "" {
 			d, err := dplaax.Parse(subject)
 			if err != nil {
-				return fmt.Errorf("upstream %q: the upstream pipeline DID %q: %w", endpoint, subject, err)
+				return fmt.Errorf("upstream %q: the upstream pipeline DID %s: %w", endpoint, excerpt.Quoted(subject, 128), err)
 			}
 			audience = d.Registry
 		}

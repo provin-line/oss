@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/internal/netexcerpt"
 )
 
 // ErrInvalidProcessDID is returned by AncestorPipeline when processDID does
@@ -70,7 +71,7 @@ func (a *DIDRegistryAncestry) AncestorPipeline(ctx context.Context, processDID s
 	}
 	controller := doc.Controller()
 	if _, err := parsePipelineDID(controller); err != nil {
-		return "", fmt.Errorf("%w: process %q controller %q: %v", ErrInvalidProcessDID, processDID, controller, err)
+		return "", fmt.Errorf("%w: process %s controller %s: %v", ErrInvalidProcessDID, netexcerpt.ValueText(processDID), netexcerpt.ValueText(controller), err)
 	}
 	return controller, nil
 }

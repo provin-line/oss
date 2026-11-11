@@ -61,6 +61,7 @@ import (
 	"strings"
 
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -226,7 +227,7 @@ func credentialPath(hash string) (string, error) {
 func documentPath(didStr string) (string, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return "", fmt.Errorf("bundle: document path for %q: %w", didStr, err)
+		return "", fmt.Errorf("bundle: document path for %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	segs := append([]string{didDocsDir, d.Registry, "did", d.AccountType, d.AccountID}, d.ResourcePath...)
 	return path.Join(append(segs, "did.json")...), nil

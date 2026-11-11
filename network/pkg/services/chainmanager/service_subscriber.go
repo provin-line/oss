@@ -119,7 +119,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// Fast local fail-closed on the subscriber DID before any signed round-trip
 	// (D-s7): a malformed DID would only burn a nonce and be rejected remotely.
 	if _, err := dplaax.Parse(subscriberDID); err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrInvalidSubscriberDID, subscriberDID, err)
+		return "", fmt.Errorf("%w: %s: %v", ErrInvalidSubscriberDID, netexcerpt.ValueText(subscriberDID), err)
 	}
 	// Mixed-mode invariant, subscriber side (D-4, authoritative): reject before
 	// any remote round-trip if a subscription to this publisher already exists,
@@ -331,7 +331,7 @@ func (s *Service) countImportsForSubject(remoteSubject string) (int, error) {
 func (s *Service) resolveTarget(ctx context.Context, publisherDID string) (endpoint, audience string, err error) {
 	d, err := dplaax.Parse(publisherDID)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: publisher DID %q: %v", ErrRemotePeer, publisherDID, err)
+		return "", "", fmt.Errorf("%w: publisher DID %s: %v", ErrRemotePeer, netexcerpt.ValueText(publisherDID), err)
 	}
 	doc, err := s.resolver.Resolve(ctx, publisherDID)
 	if err != nil {

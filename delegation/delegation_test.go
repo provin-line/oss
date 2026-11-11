@@ -446,3 +446,18 @@ func TestVerifyFor_ResolvesNothingForAnotherIdentity(t *testing.T) {
 		t.Error("for the identity it names, the issuer was not resolved")
 	}
 }
+
+// A subject that is neither a Pipeline nor a Process is named within a bound,
+// however long it is.
+func TestVerify_NamesASubjectOfTheWrongKindWithinABound(t *testing.T) {
+	signer, r := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	cred.CredentialSubject.ID = "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 64<<10)
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(cred.CredentialSubject.ID))) {
+		t.Errorf("Verify(an Owner as subject): %.200v (%d bytes), want an error naming the subject's head and length", err, len(fmt.Sprint(err)))
+	}
+}

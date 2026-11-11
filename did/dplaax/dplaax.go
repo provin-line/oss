@@ -18,10 +18,16 @@ package dplaax
 import (
 	"fmt"
 	"strings"
+
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // Method is the DID method name implemented by this package.
 const Method = "dplaax"
+
+// quoteLimit is the most bytes this package's errors take to quote what
+// they refuse (internal/excerpt).
+const quoteLimit = 128
 
 // MaxRegistryLen is the most octets a DID's registry segment holds (dplaax
 // did.dplaax.syntax): the registry is a DNS name, of at most 253 octets in its
@@ -49,7 +55,7 @@ type DID struct {
 func Parse(s string) (*DID, error) {
 	rest, ok := strings.CutPrefix(s, "did:"+Method+":")
 	if !ok {
-		return nil, fmt.Errorf("not a did:%s identifier: %q", Method, s)
+		return nil, fmt.Errorf("not a did:%s identifier: %s", Method, excerpt.Quoted(s, quoteLimit))
 	}
 	segs := strings.Split(rest, ":")
 	if len(segs) < 3 {
@@ -57,7 +63,7 @@ func Parse(s string) (*DID, error) {
 	}
 	for _, seg := range segs {
 		if !IsSafeSegment(seg) {
-			return nil, fmt.Errorf("did:%s segment %q violates the safe-segment rule", Method, seg)
+			return nil, fmt.Errorf("did:%s segment %s violates the safe-segment rule", Method, excerpt.Quoted(seg, quoteLimit))
 		}
 	}
 	if len(segs[0]) > MaxRegistryLen {
@@ -127,7 +133,10 @@ func (d *DID) OwnerDID() *DID {
 }
 
 // PipelineDID returns a copy of d truncated to pipeline level, or nil when d
-// carries no pipeline segment.
+// carries no pipeline segment. Only a Process has a Pipeline (dplaax
+// did.dplaax.hierarchy): for a Process this is its Pipeline; for another DID
+// whose resource path begins with pipeline it is that truncation, not a
+// Pipeline the DID belongs to.
 func (d *DID) PipelineDID() *DID {
 	if len(d.ResourcePath) < 2 || d.ResourcePath[0] != "pipeline" {
 		return nil

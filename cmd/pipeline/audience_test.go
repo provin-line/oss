@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,13 +44,17 @@ func TestOwnNodeAudienceDerivedFromSigner(t *testing.T) {
 }
 
 // A signer DID that does not parse has no node to derive an audience from;
-// the error names it, within a bound however long it is.
+// the error names it and the reason Parse gives, within a bound however long
+// it is.
 func TestOwnNodeAudienceOfAnUnparsableSignerIsAnError(t *testing.T) {
 	if got, err := ownNodeAudience("", "not a did"); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
 		t.Errorf("audience for an unparsable signer = %q, %v, want an error naming it", got, err)
 	}
+	if _, err := ownNodeAudience("", "did:dplaax:home.example:org:o/1:pipeline:p1"); err == nil || !strings.Contains(err.Error(), "violates the safe-segment rule") {
+		t.Errorf("an unsafe segment: %v, want the reason Parse gives", err)
+	}
 	long := "did:dplaax:" + strings.Repeat("x", 5000)
-	if _, err := ownNodeAudience("", long); err == nil || len(err.Error()) > 400 || !strings.Contains(err.Error(), "bytes)") {
+	if _, err := ownNodeAudience("", long); err == nil || len(err.Error()) > 400 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
 		t.Errorf("a long unparsable signer: %v, want an error naming its head and length", err)
 	}
 }
@@ -151,6 +156,18 @@ func TestUpstreamAudienceConflictFailsBoot(t *testing.T) {
 	}
 	if _, err := upstreamAudiences(loops); err == nil || !strings.Contains(err.Error(), "https://shared.example/p") {
 		t.Fatalf("one endpoint, two audiences: %v, want a boot error naming the endpoint", err)
+	}
+}
+
+// An upstream pipeline DID that does not parse is named within a bound,
+// however long it is.
+func TestUpstreamAudienceOfALongUnparsableSubjectIsBounded(t *testing.T) {
+	loops := []pipelineconfig.LoopConfig{{
+		Role: pipelineconfig.RoleSink, IngressSubject: "did:dplaax:a.example:org:" + strings.Repeat("x", 5000) + ":pipeline:p!",
+		Sink: pipelineconfig.SinkConfig{UpstreamEndpoint: "https://up.example/p", PayloadDelivery: "by-reference"},
+	}}
+	if _, err := upstreamAudiences(loops); err == nil || len(err.Error()) > 500 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(loops[0].IngressSubject))) {
+		t.Errorf("a long unparsable upstream subject: %.200v (%d bytes), want an error naming its head and length", err, len(fmt.Sprint(err)))
 	}
 }
 

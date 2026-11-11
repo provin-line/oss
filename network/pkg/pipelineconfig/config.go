@@ -829,15 +829,16 @@ func validateProducingIdentities(loops []LoopConfig) error {
 		d, err := dplaax.Parse(issuer)
 		if err != nil {
 			// loadIssuer already validated the shape; defensive.
-			return fmt.Errorf("pipeline: loop %q: issuer %q: %w", lc.Name, issuer, err)
+			return fmt.Errorf("pipeline: loop %q: issuer %s: %w", lc.Name, excerpt.Quoted(issuer, 128), err)
 		}
-		pipelineDID := d.PipelineDID()
-		if pipelineDID == nil {
-			// loadIssuer requires a process DID, which always has a pipeline
-			// ancestor; defensive against a future load-path change.
-			return fmt.Errorf("pipeline: loop %q: issuer %q has no pipeline ancestor", lc.Name, issuer)
+		if !d.IsProcess() {
+			// loadIssuer requires a process DID; defensive against a future
+			// load-path change. Only a Process has a Pipeline (dplaax
+			// did.dplaax.hierarchy), so PipelineDID is the issuer's Pipeline
+			// only for a Process.
+			return fmt.Errorf("pipeline: loop %q: issuer %s is not a Process DID", lc.Name, excerpt.Quoted(issuer, 128))
 		}
-		if pipelineDID.String() != subject {
+		if pipelineDID := d.PipelineDID(); pipelineDID.String() != subject {
 			return fmt.Errorf("pipeline: loop %q: issuer %q does not belong to output-subject %q — the issuer's pipeline DID must equal the output subject (a tlog checkpoint's signed_by must be verifiable against its log id)", lc.Name, issuer, subject)
 		}
 	}
@@ -1154,7 +1155,7 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		// the receipt subject's pipeline/process ids are those segments.
 		d, perr := dplaax.Parse(issuer.DID)
 		if perr != nil || !d.IsProcess() {
-			return sc, fmt.Errorf("pipeline: loop %q: sink.receipt.issuer.did %q must be a process DID", name, issuer.DID)
+			return sc, fmt.Errorf("pipeline: loop %q: sink.receipt.issuer.did %s must be a process DID", name, excerpt.Quoted(issuer.DID, 128))
 		}
 		sc.Receipt = SinkReceiptConfig{
 			Issue:      true,
@@ -1443,10 +1444,10 @@ func requireString(cfg *hoconconfig.Config, key string) (string, error) {
 func requirePipelineDID(didStr, loop, field string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("pipeline: loop %q: %s %q: %w", loop, field, didStr, err)
+		return fmt.Errorf("pipeline: loop %q: %s %s: %w", loop, field, excerpt.Quoted(didStr, 128), err)
 	}
 	if !d.IsPipeline() {
-		return fmt.Errorf("pipeline: loop %q: %s %q is not a pipeline DID", loop, field, didStr)
+		return fmt.Errorf("pipeline: loop %q: %s %s is not a pipeline DID", loop, field, excerpt.Quoted(didStr, 128))
 	}
 	return nil
 }
@@ -1454,10 +1455,10 @@ func requirePipelineDID(didStr, loop, field string) error {
 func requireProcessDID(didStr, loop, field string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("pipeline: loop %q: %s %q: %w", loop, field, didStr, err)
+		return fmt.Errorf("pipeline: loop %q: %s %s: %w", loop, field, excerpt.Quoted(didStr, 128), err)
 	}
 	if !d.IsProcess() {
-		return fmt.Errorf("pipeline: loop %q: %s %q is not a process DID", loop, field, didStr)
+		return fmt.Errorf("pipeline: loop %q: %s %s is not a process DID", loop, field, excerpt.Quoted(didStr, 128))
 	}
 	return nil
 }

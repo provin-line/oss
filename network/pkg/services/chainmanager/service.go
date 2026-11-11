@@ -8,6 +8,7 @@ import (
 
 	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
@@ -171,10 +172,10 @@ func New(subs store.SubscriptionStore, allows store.AllowListStore, opts ...Opti
 func requirePipelineDID(didStr string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("%w: %q: %v", ErrInvalidPipelineDID, didStr, err)
+		return fmt.Errorf("%w: %s: %v", ErrInvalidPipelineDID, netexcerpt.ValueText(didStr), err)
 	}
 	if !d.IsPipeline() {
-		return fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidPipelineDID, didStr)
+		return fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidPipelineDID, netexcerpt.ValueText(didStr))
 	}
 	return nil
 }

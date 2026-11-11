@@ -2,9 +2,11 @@ package yamlstore
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,5 +306,19 @@ func TestAllowListStore_RefusesARuleThatWouldNotReadBackAsWritten(t *testing.T) 
 	s := NewAllowListStore(t.TempDir())
 	if err := s.Save("did:dplaax:reg:org:acme:pipeline:p1", []store.AllowRule{{Pattern: "a\tb"}}); err == nil {
 		t.Error("pattern with a tab: want error")
+	}
+}
+
+// A key that is not a pipeline DID is named within a bound, however long it is.
+func TestAllowListPathNamesANonPipelineKeyWithinABound(t *testing.T) {
+	long := "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 64<<10)
+	_, err := NewAllowListStore(t.TempDir()).Get(long)
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+		t.Errorf("Get(a long owner DID): %.200v, want an error naming its head and length", err)
+	}
+	// The store's own check of a path segment names it within the same bound.
+	segment := strings.Repeat("x", 64<<10) + "/"
+	if err := safeSegment(segment); err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(segment))) {
+		t.Errorf("safeSegment(a long unsafe segment): %.200v, want an error naming its head and length", err)
 	}
 }

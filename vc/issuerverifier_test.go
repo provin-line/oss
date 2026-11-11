@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/did"
@@ -292,6 +293,16 @@ func TestIssuerVerifier_OwnerOfANonProcessIssuerIsNotAsked(t *testing.T) {
 	}
 }
 
+// An issuer that does not parse is refused with the reason Parse gives.
+func TestIssuerVerifier_AnUnparsableIssuerNamesWhyItDoesNotParse(t *testing.T) {
+	_, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
+	_, err := v.AttributeOwner(context.Background(), "did:dplaax:home.example:org:o/1:pipeline:p1:process:s1")
+	if !errors.Is(err, vc.ErrIssuerNotFound) || !strings.Contains(err.Error(), "violates the safe-segment rule") {
+		t.Errorf("AttributeOwner(an unsafe segment) = %v, want ErrIssuerNotFound with the reason Parse gives", err)
+	}
+}
+
 // WithIssuerVerifier(nil) keeps the default.
 func TestWithIssuerVerifier_NilKeepsTheDefault(t *testing.T) {
 	origin, child, r := buildChainFixture(t, procAOrigin, procBSameOrg)
@@ -301,5 +312,29 @@ func TestWithIssuerVerifier_NilKeepsTheDefault(t *testing.T) {
 	}
 	if res.Overall != vc.ConfidenceVerified {
 		t.Errorf("Overall = %v, want Verified", res.Overall)
+	}
+}
+
+// An issuer refused for its form is named within a bound, however long it is,
+// by the Owner's readers: AttributeOwner and ClassifyChain.
+func TestIssuerRefusedForItsFormIsNamedWithinABound(t *testing.T) {
+	pipeline := "did:dplaax:home.example:org:" + strings.Repeat("x", 64<<10) + ":pipeline:p1"
+	_, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
+	_, unparsableErr := v.AttributeOwner(context.Background(), pipeline+"!")
+	_, notProcessErr := v.AttributeOwner(context.Background(), pipeline)
+	longOrigin, longChild, _ := buildChainFixture(t, pipeline, pipeline+"x")
+	_, classifyErr := v.ClassifyChain(context.Background(), []*vc.PipelinePassCredential{longOrigin, longChild})
+	for name, c := range map[string]struct {
+		err   error
+		named string
+	}{
+		"AttributeOwner of an unparsable issuer": {unparsableErr, pipeline + "!"},
+		"AttributeOwner of a Pipeline":           {notProcessErr, pipeline},
+		"ClassifyChain of a Pipeline's chain":    {classifyErr, pipeline},
+	} {
+		if !errors.Is(c.err, vc.ErrIssuerNotFound) || len(c.err.Error()) > 500 || !strings.Contains(c.err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+			t.Errorf("%s: %.200v (%d bytes), want ErrIssuerNotFound naming the issuer's head and its length %d", name, c.err, len(fmt.Sprint(c.err)), len(c.named))
+		}
 	}
 }

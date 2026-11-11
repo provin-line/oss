@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -401,5 +402,47 @@ func TestAppendLifecycleEvent_RefusesWhatWouldNotReadBackAsWritten(t *testing.T)
 	})
 	if want := "outwardSnapshot: " + base64.StdEncoding.EncodeToString(good.OutwardSnapshot) + "\n"; !bytes.Contains(raw, []byte(want)) {
 		t.Errorf("outward snapshot not written as one base64 string:\n%.300s", raw)
+	}
+}
+
+// A DID of a shape the store does not hold, or of the wrong kind to list, is
+// named within a bound, however long it is.
+func TestWrongShapeOfDIDIsNamedWithinABound(t *testing.T) {
+	s := yamlstore.New(t.TempDir())
+	long := strings.Repeat("x", 64<<10)
+	parse := func(v string) *dplaax.DID {
+		t.Helper()
+		d, err := dplaax.Parse(v)
+		if err != nil {
+			t.Fatalf("Parse: %.200v", err)
+		}
+		return d
+	}
+	owner := parse("did:dplaax:poc.dplaax.dev:org:" + long)
+	pipeline := parse("did:dplaax:poc.dplaax.dev:org:" + long + ":pipeline:p1")
+	_, resolveErr := s.Resolve(parse("did:dplaax:poc.dplaax.dev:org:acme:widget:" + long))
+	_, pipelinesErr := s.ListPipelines(pipeline)
+	_, processesErr := s.ListProcesses(owner)
+	for name, c := range map[string]struct {
+		err   error
+		named string
+	}{
+		"Resolve of an unknown shape": {resolveErr, "did:dplaax:poc.dplaax.dev:org:acme:widget:" + long},
+		"ListPipelines of a Pipeline": {pipelinesErr, pipeline.String()},
+		"ListProcesses of an Owner":   {processesErr, owner.String()},
+		"SaveOwner of a Pipeline":     {s.SaveOwner(pipeline, nil), pipeline.String()},
+		"SavePipeline of an Owner":    {s.SavePipeline(owner, nil, nil), owner.String()},
+		"SaveProcess of an Owner":     {s.SaveProcess(owner, nil, nil), owner.String()},
+	} {
+		if c.err == nil || len(c.err.Error()) > 300 || !strings.Contains(c.err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+			t.Errorf("%s: %.200v, want an error naming the DID's head and its length %d", name, c.err, len(c.named))
+		}
+	}
+	// A DID built by hand, not parsed, reaches the store's own check of each
+	// path segment.
+	segment := long + "/"
+	_, err := s.Resolve(&dplaax.DID{Method: dplaax.Method, Registry: "poc.dplaax.dev", AccountType: "org", AccountID: segment})
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(segment))) {
+		t.Errorf("Resolve of an unsafe segment: %.200v, want an error naming the segment's head and length", err)
 	}
 }

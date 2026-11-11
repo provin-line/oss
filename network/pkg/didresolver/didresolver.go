@@ -17,6 +17,7 @@ import (
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/resolver"
 )
@@ -139,7 +140,7 @@ func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument
 func (r *Resolver) ResolveDocument(ctx context.Context, didStr string) (*did.DIDDocument, []byte, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("didresolver: parse %q: %w", didStr, err)
+		return nil, nil, fmt.Errorf("didresolver: parse %s: %w", netexcerpt.ValueText(didStr), err)
 	}
 	url, err := r.resolutionURL(d)
 	if err != nil {

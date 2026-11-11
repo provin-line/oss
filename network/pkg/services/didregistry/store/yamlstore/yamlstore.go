@@ -35,6 +35,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/internal/yamlrecord"
 
 	"github.com/provin-line/oss/delegation"
@@ -98,7 +99,7 @@ func (s *Store) nodeDir(d *dplaax.DID) (string, error) {
 	case d.IsProcess():
 		return filepath.Join(s.root, d.AccountType, d.AccountID, "pipelines", d.ResourcePath[1], "processes", d.ResourcePath[3]), nil
 	default:
-		return "", fmt.Errorf("yamlstore: unsupported DID shape %q", d.String())
+		return "", fmt.Errorf("yamlstore: unsupported DID shape %s", netexcerpt.ValueText(d.String()))
 	}
 }
 
@@ -106,28 +107,28 @@ func (s *Store) nodeDir(d *dplaax.DID) (string, error) {
 // component.
 func safeSegment(s string) error {
 	if s == "" || s == "." || s == ".." || s != filepath.Base(s) || strings.ContainsAny(s, `/\`+"\x00") {
-		return fmt.Errorf("yamlstore: invalid path segment %q", s)
+		return fmt.Errorf("yamlstore: invalid path segment %s", netexcerpt.ValueText(s))
 	}
 	return nil
 }
 
 func (s *Store) SaveOwner(d *dplaax.DID, doc *did.DIDDocument) error {
 	if !d.IsOwner() {
-		return fmt.Errorf("yamlstore: SaveOwner: %q is not an owner DID", d.String())
+		return fmt.Errorf("yamlstore: SaveOwner: %s is not an owner DID", netexcerpt.ValueText(d.String()))
 	}
 	return s.saveNode(d, doc, nil)
 }
 
 func (s *Store) SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
 	if !d.IsPipeline() {
-		return fmt.Errorf("yamlstore: SavePipeline: %q is not a pipeline DID", d.String())
+		return fmt.Errorf("yamlstore: SavePipeline: %s is not a pipeline DID", netexcerpt.ValueText(d.String()))
 	}
 	return s.saveNode(d, doc, dlg)
 }
 
 func (s *Store) SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
 	if !d.IsProcess() {
-		return fmt.Errorf("yamlstore: SaveProcess: %q is not a process DID", d.String())
+		return fmt.Errorf("yamlstore: SaveProcess: %s is not a process DID", netexcerpt.ValueText(d.String()))
 	}
 	return s.saveNode(d, doc, dlg)
 }
@@ -249,7 +250,7 @@ func (s *Store) GetStatus(d *dplaax.DID) (store.DIDStatus, error) {
 
 func (s *Store) ListPipelines(owner *dplaax.DID) ([]store.DIDSummary, error) {
 	if !owner.IsOwner() {
-		return nil, fmt.Errorf("yamlstore: ListPipelines: %q is not an owner DID", owner.String())
+		return nil, fmt.Errorf("yamlstore: ListPipelines: %s is not an owner DID", netexcerpt.ValueText(owner.String()))
 	}
 	dir, err := s.nodeDir(owner)
 	if err != nil {
@@ -264,7 +265,7 @@ func (s *Store) ListPipelines(owner *dplaax.DID) ([]store.DIDSummary, error) {
 
 func (s *Store) ListProcesses(pipeline *dplaax.DID) ([]store.DIDSummary, error) {
 	if !pipeline.IsPipeline() {
-		return nil, fmt.Errorf("yamlstore: ListProcesses: %q is not a pipeline DID", pipeline.String())
+		return nil, fmt.Errorf("yamlstore: ListProcesses: %s is not a pipeline DID", netexcerpt.ValueText(pipeline.String()))
 	}
 	dir, err := s.nodeDir(pipeline)
 	if err != nil {

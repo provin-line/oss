@@ -1220,3 +1220,23 @@ func TestRegisterOwner_AcceptsDocumentsWhoseKeysAllExtract(t *testing.T) {
 		t.Fatalf("RegisterOwner: %v", err)
 	}
 }
+
+// A target DID of the wrong kind is named within a bound, however long it is:
+// a pipeline or a process to issue, a pipeline to list the processes of.
+func TestWrongKindOfDIDIsNamedWithinABound(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	long := "did:dplaax:" + registry + ":org:" + strings.Repeat("x", 64<<10)
+	_, _, pipelineErr := svc.IssuePipeline(ctx, long, &delegation.DelegationCredential{}, nil)
+	_, _, processErr := svc.IssueProcess(ctx, long, &delegation.DelegationCredential{}, nil)
+	_, listErr := svc.ListProcesses(ctx, long)
+	for name, err := range map[string]error{
+		"IssuePipeline of an Owner": pipelineErr,
+		"IssueProcess of an Owner":  processErr,
+		"ListProcesses of an Owner": listErr,
+	} {
+		if !errors.Is(err, didregistry.ErrInvalidArgument) || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+			t.Errorf("%s: %.200v, want ErrInvalidArgument naming the DID's head and length", name, err)
+		}
+	}
+}

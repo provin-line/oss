@@ -34,6 +34,7 @@ import (
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
 	"github.com/provin-line/oss/resolver"
@@ -318,11 +319,11 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	switch kind {
 	case kindPipeline:
 		if !target.IsPipeline() {
-			return nil, nil, fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidArgument, targetDID)
+			return nil, nil, fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidArgument, netexcerpt.ValueText(targetDID))
 		}
 	case kindProcess:
 		if !target.IsProcess() {
-			return nil, nil, fmt.Errorf("%w: %q is not a process DID", ErrInvalidArgument, targetDID)
+			return nil, nil, fmt.Errorf("%w: %s is not a process DID", ErrInvalidArgument, netexcerpt.ValueText(targetDID))
 		}
 	}
 	if err := s.requireOwnRegistry(target); err != nil {
@@ -517,7 +518,7 @@ func (s *Service) ListProcesses(ctx context.Context, pipelineDID string) ([]stor
 		return nil, err
 	}
 	if !d.IsPipeline() {
-		return nil, fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidArgument, pipelineDID)
+		return nil, fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidArgument, netexcerpt.ValueText(pipelineDID))
 	}
 	return s.store.ListProcesses(d)
 }

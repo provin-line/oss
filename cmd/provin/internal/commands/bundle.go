@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/didresolver"
@@ -320,7 +321,7 @@ func bundleRegistryBase(bases map[string]string, closeUnmapped bool) func(regist
 func (s *wireConsumedSource) registryBase(issuerDID string) (string, error) {
 	d, err := dplaax.Parse(issuerDID)
 	if err != nil {
-		return "", fmt.Errorf("bundle export: issuer %q: %w", issuerDID, err)
+		return "", fmt.Errorf("bundle export: issuer %s: %w", excerpt.Quoted(issuerDID, 128), err)
 	}
 	return bundleRegistryBase(s.didBases, s.closeUnmapped)(d.Registry)
 }
@@ -339,7 +340,7 @@ func (s *wireConsumedSource) registryBase(issuerDID string) (string, error) {
 func (s *wireConsumedSource) auditEndpoint(ctx context.Context, issuerDID string) (string, error) {
 	d, err := dplaax.Parse(issuerDID)
 	if err != nil {
-		return "", fmt.Errorf("bundle export: issuer %q: %w", issuerDID, err)
+		return "", fmt.Errorf("bundle export: issuer %s: %w", excerpt.Quoted(issuerDID, 128), err)
 	}
 	if base, ok := s.auditBases[d.Registry]; ok {
 		return base, nil
@@ -449,7 +450,7 @@ func (s *wireConsumedSource) FetchSourceCredential(ctx context.Context, issuerDI
 func (s *wireConsumedSource) vcResolverEndpoint(ctx context.Context, issuerDID string) (string, error) {
 	d, err := dplaax.Parse(issuerDID)
 	if err != nil {
-		return "", fmt.Errorf("bundle export: issuer %q: %w", issuerDID, err)
+		return "", fmt.Errorf("bundle export: issuer %s: %w", excerpt.Quoted(issuerDID, 128), err)
 	}
 	if base, ok := s.vcResolver[d.Registry]; ok {
 		return base, nil

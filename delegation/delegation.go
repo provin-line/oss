@@ -196,7 +196,7 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 		return fmt.Errorf("delegation: subject id is not a did:dplaax identifier: %w", err)
 	}
 	if !subj.IsPipeline() && !subj.IsProcess() {
-		return fmt.Errorf("delegation: subject %q is neither a pipeline nor a process DID", cred.CredentialSubject.ID)
+		return fmt.Errorf("delegation: subject %s is neither a pipeline nor a process DID", excerpt.Quoted(cred.CredentialSubject.ID, 128))
 	}
 	if subj.OwnerDID().String() != cred.Issuer {
 		return fmt.Errorf("delegation: subject %q is not under the issuing owner %q", cred.CredentialSubject.ID, cred.Issuer)
