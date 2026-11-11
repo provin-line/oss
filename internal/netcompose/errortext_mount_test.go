@@ -232,11 +232,18 @@ func TestBuildHandler_BoundsTheTextOfAHandlersError(t *testing.T) {
 			t.Errorf("%s RegisterSubscription: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
 		}
 
+		// A segment the DID grammar refuses is quoted in the refusal, cut.
 		dids := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL, pr.opts...)
-		_, err = dids.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: "did:dplaax:" + longToken + ":org:x"})))
+		_, err = dids.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: "did:dplaax:poc.dplaax.dev:org:" + longToken + "!"})))
 		requireCutFrom(t, pr.name+" ResolveDID", err, len(longToken))
-		if code := requireBoundedText(t, pr.name+" ResolveDID", err); code != connect.CodePermissionDenied {
-			t.Errorf("%s ResolveDID: code %v, want %v", pr.name, code, connect.CodePermissionDenied)
+		if code := requireBoundedText(t, pr.name+" ResolveDID", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ResolveDID: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
+		}
+		// A registry past the longest DNS name is refused as malformed, its
+		// text bounded.
+		_, err = dids.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: "did:dplaax:" + longToken + ":org:x"})))
+		if code := requireBoundedText(t, pr.name+" ResolveDID of a long registry", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ResolveDID of a long registry: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
 		}
 
 		payloads := payloadpbconnect.NewPayloadServiceClient(srv.Client(), srv.URL, pr.opts...)

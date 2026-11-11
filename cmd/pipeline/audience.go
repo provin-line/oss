@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
 )
 
@@ -15,20 +16,20 @@ import (
 // ownNodeAudience is the audience of a proof the pipeline signs as signerDID
 // for its own node (vc-store-endpoint): override (vc-store-registry) when
 // set, else the registry segment of signerDID, as a pipeline publishes to its
-// own registry's node. A signerDID that does not parse yields "", so the call
-// fails before anything is sent. The pairing with vc-store-endpoint is the
-// configuration's: an endpoint at another registry's node, with no override,
-// sends that node proofs for this registry's node, which it refuses but holds
-// (docs/architecture/deployment.md, "Wire proof audience").
-func ownNodeAudience(override, signerDID string) string {
+// own registry's node. A signerDID that does not parse is an error naming it.
+// The pairing with vc-store-endpoint is the configuration's: an endpoint at
+// another registry's node, with no override, sends that node proofs for this
+// registry's node, which it refuses but holds (docs/architecture/deployment.md,
+// "Wire proof audience").
+func ownNodeAudience(override, signerDID string) (string, error) {
 	if override != "" {
-		return override
+		return override, nil
 	}
 	d, err := dplaax.Parse(signerDID)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("pipeline: signer %s does not parse as a did:dplaax DID, so the audience of its node is unknown", excerpt.Quoted(signerDID, 128))
 	}
-	return d.Registry
+	return d.Registry, nil
 }
 
 // upstreamAudiences maps each by-reference ingress's upstream-endpoint to the

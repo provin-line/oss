@@ -44,22 +44,26 @@ func newMirrorClientFactory(signer crypto.Signer, baseURL, registry, bearer stri
 
 // For returns the cached client signing as signerDID, building and caching
 // one on first use.
-func (f *mirrorClientFactory) For(signerDID string) *tlogserviceclient.Client {
+func (f *mirrorClientFactory) For(signerDID string) (*tlogserviceclient.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[signerDID]; ok {
-		return c
+		return c, nil
+	}
+	aud, err := ownNodeAudience(f.registry, signerDID)
+	if err != nil {
+		return nil, err
 	}
 	c := tlogserviceclient.New(tlogserviceclient.Config{
 		Signer:     f.signer,
 		SignerDID:  signerDID,
 		BaseURL:    f.baseURL,
-		Audience:   ownNodeAudience(f.registry, signerDID),
+		Audience:   aud,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
 	f.clients[signerDID] = c
-	return c
+	return c, nil
 }
 
 // forClient adapts For to buildShippers' mirrorClientFor seam
@@ -67,8 +71,12 @@ func (f *mirrorClientFactory) For(signerDID string) *tlogserviceclient.Client {
 // *tlogserviceclient.Client satisfies tlogship.MirrorClient structurally
 // (see that package's own doc for why the interface lives there rather than
 // being imported from network/).
-func (f *mirrorClientFactory) forClient(signerDID string) tlogship.MirrorClient {
-	return f.For(signerDID)
+func (f *mirrorClientFactory) forClient(signerDID string) (tlogship.MirrorClient, error) {
+	c, err := f.For(signerDID)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // buildShippers constructs one tlogship.Shipper per entry in custody
@@ -80,10 +88,14 @@ func (f *mirrorClientFactory) forClient(signerDID string) tlogship.MirrorClient 
 // so tests can supply a spy without a live wire round trip. An empty custody
 // (the memlog unit-test fallback, or a config with no durable logs
 // configured) yields zero shippers — nothing to mirror.
-func buildShippers(custody []pipelineruntime.CustodyLog, mirrorClientFor func(signerDID string) tlogship.MirrorClient, tm pipelineconfig.TlogMirrorConfig) ([]*tlogship.Shipper, error) {
+func buildShippers(custody []pipelineruntime.CustodyLog, mirrorClientFor func(signerDID string) (tlogship.MirrorClient, error), tm pipelineconfig.TlogMirrorConfig) ([]*tlogship.Shipper, error) {
 	shippers := make([]*tlogship.Shipper, 0, len(custody))
 	for _, c := range custody {
-		sh, err := tlogship.New(c.Log, c.LogID, mirrorClientFor(c.Signer.DID), tlogship.Config{
+		client, err := mirrorClientFor(c.Signer.DID)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline: mirror client for custody log %q: %w", c.LogID, err)
+		}
+		sh, err := tlogship.New(c.Log, c.LogID, client, tlogship.Config{
 			MaxBatchRecords: tm.MaxBatchRecords,
 			MaxBatchBytes:   tm.MaxBatchBytes,
 			FlushInterval:   tm.FlushInterval,

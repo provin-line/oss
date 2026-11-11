@@ -63,6 +63,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   0.4.x upgrades before it issues a binding valid from
   2027-01-01T00:00:00Z, which this release refuses without the branch
   context.
+- `did/dplaax`: `Parse` refuses a DID whose registry segment is longer than
+  `MaxRegistryLen` (253) octets, the longest DNS name (dplaax
+  `did.dplaax.syntax`). The registry server's `provin.network.registry.id`,
+  the pipeline's `vc-store-registry` and `upstream-registry`, and the chain's
+  `registry-base-urls` keys are refused at boot past that bound, and so is an
+  allowlist pattern's literal registry, so no node names or derives an
+  audience a verifier would refuse. A handler that receives
+  such a DID (the registry's DID service among them) answers
+  `InvalidArgument`, where it answered `PermissionDenied` for a registry
+  that is not its own.
 
 ### Breaking changes
 
@@ -73,6 +83,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   that talk to each other in one window (`docs/architecture/deployment.md`,
   "Upgrading to view version 2"). One network process serves a registry's L2
   surfaces.
+- **Configuration:** a pipeline whose configuration names one
+  `upstream-endpoint` for two registries (the loops at that endpoint derive,
+  or override with `upstream-registry`, different audiences) does not start:
+  one endpoint is one node (`docs/architecture/deployment.md`, "Wire proof
+  audience").
 - **Go API:** `wireauth.Sign` takes the audience after the signer DID;
   `wireauth.Proof` has `Audience`; `wireauth.VerifierConfig.Audience` is
   required; the new sentinel `wireauth.ErrWrongAudience` maps to

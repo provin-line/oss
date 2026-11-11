@@ -1,6 +1,7 @@
 package dplaax_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/did/dplaax"
@@ -186,5 +187,18 @@ func TestRequireOwner(t *testing.T) {
 	proc, _ := dplaax.Parse("did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1")
 	if err := dplaax.RequireOwner(proc); err == nil {
 		t.Error("RequireOwner(process): want error")
+	}
+}
+
+// A DID's registry is a DNS name, of at most MaxRegistryLen octets.
+func TestParse_BoundsTheRegistry(t *testing.T) {
+	if dplaax.MaxRegistryLen != 253 {
+		t.Fatalf("MaxRegistryLen = %d, want 253, the longest DNS name", dplaax.MaxRegistryLen)
+	}
+	if _, err := dplaax.Parse("did:dplaax:" + strings.Repeat("a", 253) + ":org:acme"); err != nil {
+		t.Errorf("a registry of 253 octets: %v", err)
+	}
+	if _, err := dplaax.Parse("did:dplaax:" + strings.Repeat("a", 254) + ":org:acme"); err == nil {
+		t.Error("a registry of 254 octets was taken")
 	}
 }

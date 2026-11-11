@@ -21,12 +21,12 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
-// pubEndpointDoc is the publisher's DID document as the SUBSCRIBER resolves it:
-// it advertises the #chain-manager endpoint (the httptest peer server).
 // e2ePubRegistry is e2ePub's registry segment: the audience of the
 // publisher node, whose DID document publishes the #chain-manager endpoint.
 const e2ePubRegistry = "poc.dplaax.dev"
 
+// pubEndpointDoc is the publisher's DID document as the SUBSCRIBER resolves it:
+// it advertises the #chain-manager endpoint (the httptest peer server).
 func pubEndpointDoc(pub, endpoint string) *did.DIDDocument {
 	return did.New(did.DocumentFields{
 		ID: pub,

@@ -23,6 +23,11 @@ import (
 // Method is the DID method name implemented by this package.
 const Method = "dplaax"
 
+// MaxRegistryLen is the most octets a DID's registry segment holds (dplaax
+// did.dplaax.syntax): the registry is a DNS name, of at most 253 octets in its
+// text form. Parse refuses a DID whose registry segment is longer.
+const MaxRegistryLen = 253
+
 // DID is a parsed did:dplaax identifier.
 //
 // Registry is a domain name (e.g. "poc.dplaax.dev"); resolution URLs derive
@@ -36,9 +41,10 @@ type DID struct {
 	ResourcePath []string
 }
 
-// Parse parses s as a did:dplaax identifier. Every segment is validated
-// against the safe-segment rule so parsed segments can participate in
-// storage paths without traversal risk. Parse performs no semantic
+// Parse parses s as a did:dplaax identifier, by the dplaax rule
+// did.dplaax.syntax. Every segment is validated against the safe-segment rule
+// so parsed segments can participate in storage paths without traversal risk,
+// and the registry against MaxRegistryLen. Parse performs no semantic
 // classification — see the Is* methods and validate.go.
 func Parse(s string) (*DID, error) {
 	rest, ok := strings.CutPrefix(s, "did:"+Method+":")
@@ -53,6 +59,9 @@ func Parse(s string) (*DID, error) {
 		if !IsSafeSegment(seg) {
 			return nil, fmt.Errorf("did:%s segment %q violates the safe-segment rule", Method, seg)
 		}
+	}
+	if len(segs[0]) > MaxRegistryLen {
+		return nil, fmt.Errorf("did:%s registry of %d octets, beyond %d", Method, len(segs[0]), MaxRegistryLen)
 	}
 	d := &DID{
 		Method:      Method,

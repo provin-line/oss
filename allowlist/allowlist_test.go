@@ -2,6 +2,7 @@ package allowlist
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -127,6 +128,7 @@ func TestValidatePattern_AgreesWithMatch(t *testing.T) {
 		"did:dplaax:reg:org:acme:pipeline",
 		"did:dplaax:reg:org:ac/me",
 		"did:dplaax:reg:org:..",
+		"did:dplaax:" + strings.Repeat("a", 254) + ":org:acme",
 	}
 	const candidate = "did:dplaax:reg:org:acme"
 	for _, p := range valid {

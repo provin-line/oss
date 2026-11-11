@@ -411,7 +411,10 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineRuntimeConfigFrom(producer): %v", err)
 	}
-	producerDeps := buildDeps(producerPipeCfg, producerKS, guard, nil, byrefProducerPipeline, mustUpstreamAudiences(t, producerPipeCfg))
+	producerDeps, err := buildDeps(producerPipeCfg, producerKS, guard, nil, byrefProducerPipeline, mustUpstreamAudiences(t, producerPipeCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
 	producerDP, err := pipelineruntime.Build(ctx, &producerRTCfg, producerKS, producerDeps)
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build(producer): %v", err)
@@ -462,7 +465,10 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipelineRuntimeConfigFrom(consumer): %v", err)
 	}
-	consumerDeps := buildDeps(consumerPipeCfg, consumerKS, guard, localResolver, byrefConsumerDID, mustUpstreamAudiences(t, consumerPipeCfg))
+	consumerDeps, err := buildDeps(consumerPipeCfg, consumerKS, guard, localResolver, byrefConsumerDID, mustUpstreamAudiences(t, consumerPipeCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
 	consumerDeps.SinkWriter = writer
 	consumerDP, err := pipelineruntime.Build(ctx, &consumerRTCfg, consumerKS, consumerDeps)
 	if err != nil {

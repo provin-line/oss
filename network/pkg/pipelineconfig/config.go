@@ -23,6 +23,7 @@ import (
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/vc"
 )
@@ -1462,7 +1463,8 @@ func requireProcessDID(didStr, loop, field string) error {
 }
 
 // loadRegistry reads an optional registry ID: the {registry} segment of a
-// did:dplaax DID, by the same grammar dplaax.Parse applies. Absent is "".
+// did:dplaax DID, by the same grammar and bound dplaax.Parse applies. Absent
+// is "".
 func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
 	if !cfg.Has(key) {
 		return "", nil
@@ -1471,8 +1473,8 @@ func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
 	}
-	if !dplaax.IsSafeSegment(v) {
-		return "", fmt.Errorf("pipeline: config %s: %q is not a registry ID ([A-Za-z0-9._-], not all dots)", key, v)
+	if !dplaax.IsSafeSegment(v) || len(v) > dplaax.MaxRegistryLen {
+		return "", fmt.Errorf("pipeline: config %s: %s is not a registry ID ([A-Za-z0-9._-], not all dots, at most %d octets)", key, excerpt.Quoted(v, 128), dplaax.MaxRegistryLen)
 	}
 	return v, nil
 }

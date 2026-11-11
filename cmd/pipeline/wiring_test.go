@@ -166,12 +166,12 @@ func TestPipelineRuntimeConfigFrom_MapsEnvelopeLimits(t *testing.T) {
 
 func TestAuditClientFactory_CachesPerDID(t *testing.T) {
 	f := newAuditClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
-	a1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
-	a2 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
+	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1"))(t)
+	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1"))(t)
 	if a1 != a2 {
 		t.Error("For(sameDID) returned two different clients, want the cached one")
 	}
-	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:b1")
+	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:b1"))(t)
 	if a1 == b1 {
 		t.Error("For(differentDID) returned the SAME client as another DID")
 	}
@@ -486,7 +486,7 @@ func TestWireAuditRegistrar_Add_RoundTrip(t *testing.T) {
 	}
 
 	factory := newAuditClientFactory(h.signer, h.url, "", "", h.httpc)
-	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
+	registrar := wireAuditRegistrar{client: must(factory.For(wireNodeDID))(t)}
 	if err := registrar.Add(head); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -580,12 +580,12 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 
 func TestPayloadClientFactory_CachesPerDID(t *testing.T) {
 	f := newPayloadClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient, 0)
-	a1 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
-	a2 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
+	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:src1"))(t)
+	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:src1"))(t)
 	if a1 != a2 {
 		t.Error("For(sameDID) returned two different clients, want the cached one")
 	}
-	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg")
+	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg"))(t)
 	if a1 == b1 {
 		t.Error("For(differentDID) returned the SAME client as another DID")
 	}
@@ -690,7 +690,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 
 	// The factory must have cached (and reused) a distinct client per owner —
 	// never one shared client the way the pre-fix wiring did.
-	if factory.For(payloadOwnerA) == factory.For(payloadOwnerB) {
+	if must(factory.For(payloadOwnerA))(t) == must(factory.For(payloadOwnerB))(t) {
 		t.Error("factory returned the SAME client for two different owners")
 	}
 }
@@ -1155,7 +1155,7 @@ func TestWireRetryingPayloadResolver_ResolvePayload_RetriesOnUnavailableAndResig
 	provisionAuthKey(t, ks, wireNodeDID)
 
 	factory := newPayloadClientFactory(ks, "", "", "", http.DefaultClient, 0)
-	resolver := wireRetryingPayloadResolver{client: factory.For(wireNodeDID), audiences: map[string]string{srv.URL: "poc.dplaax.dev"}}
+	resolver := wireRetryingPayloadResolver{client: must(factory.For(wireNodeDID))(t), audiences: map[string]string{srv.URL: "poc.dplaax.dev"}}
 
 	got, err := resolver.ResolvePayload(context.Background(), srv.URL, addr("d"))
 	if err != nil {
@@ -1226,7 +1226,7 @@ func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
 	provisionAuthKey(t, ks, wireNodeDID)
 
 	factory := newAuditClientFactory(ks, srv.URL, "", "", srv.Client())
-	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
+	registrar := wireAuditRegistrar{client: must(factory.For(wireNodeDID))(t)}
 
 	if err := registrar.Add(pipelineruntime.StoredHead{WireVariantID: "variant-1"}); err != nil {
 		t.Fatalf("Add: %v, want recovery via retry", err)
@@ -1333,7 +1333,10 @@ func TestBuildDeps_ShowsTheBearerToNoServerTheVCStoreRedirectsTo(t *testing.T) {
 	}))
 	t.Cleanup(store.Close)
 	pipeCfg := &pipelineconfig.Config{VCStoreEndpoint: store.URL, VCStoreBearer: "node-token", MaxCredentialSize: 1 << 20, MaxRetainChunkSize: 1 << 20}
-	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme", mustUpstreamAudiences(t, pipeCfg))
+	deps, err := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme", mustUpstreamAudiences(t, pipeCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := deps.ChainResolver.ResolveCredential(context.Background(), addr("a")); err == nil {
 		t.Error("a redirected fetch succeeded")
 	}

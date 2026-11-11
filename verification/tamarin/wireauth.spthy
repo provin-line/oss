@@ -17,7 +17,8 @@
  *     the key);
  *   - any key can be taken over (Compromise), and the model records it;
  *   - an honest signer draws a fresh nonce for each proof (wireauth.NewNonce,
- *     which every caller of wireauth.Sign uses); no_burn rests on it;
+ *     which every caller of wireauth.Sign uses); nonce_names_signing and
+ *     no_burn rest on it;
  *   - one verifier, with one nonce store and one audience (its node's registry
  *     ID), per network process; several verifiers may have one audience
  *     (replicas, each with a store of its own); the store's Use is an atomic
@@ -36,8 +37,9 @@
  *     proof any of them refuses leaves the store as it was), key rotation;
  *   - the events are Accepted(V, R, S, op, n, t, f), verifier V, whose
  *     audience is R, accepted the proof (Verify returned nil and recorded the
- *     nonce); and ReplayRejected(V, R, S, op, n, t, f), the signature verified
- *     and the nonce was recorded already.
+ *     nonce); ReplayRejected(V, R, S, op, n, t, f), the signature verified
+ *     and the nonce was recorded already; and Spend(V, S, n), verifier V
+ *     recorded signer S's nonce n.
  *
  * Builds: the default build is the implementation under the premises above.
  * Each negative control changes one thing in it, and the lemmas it is
@@ -52,7 +54,12 @@
  *   -D=RecordBeforeSignature  a path that records the nonce before the
  *                       signature is checked;
  *   -D=StoreKeyedByNonce  the store is keyed by the nonce alone, not per
- *                       signer (D-w10).
+ *                       signer (D-w10);
+ *   -D=SignerNonceFromWire  the signer takes its nonce from the network
+ *                       instead of drawing a fresh one;
+ *   -D=RecordBeforeAudience  a path checks the signature over the view with
+ *                       the audience the proof names, records the nonce, and
+ *                       only then refuses a proof for another audience.
  */
 theory WireAuth
 begin
@@ -138,10 +145,17 @@ rule Verifier:
 
 // An honest signer signs for whatever audience, op, issuedAt and fields it is
 // handed: the weakest assumption about what the node asks it to sign.
+#ifdef SignerNonceFromWire
+rule Sign:
+    [ !Holds(S, k), In(<R, op, t, f, n>) ]
+  --[ Signed(S, R, op, n, t, f) ]->
+    [ Out(<R, op, f, S, n, t, sign(view(S, R, op, n, t, f), k)>) ]
+#else
 rule Sign:
     [ !Holds(S, k), Fr(~n), In(<R, op, t, f>) ]
   --[ Signed(S, R, op, ~n, t, f) ]->
     [ Out(<R, op, f, S, ~n, t, sign(view(S, R, op, ~n, t, f), k)>) ]
+#endif
 
 // Verify's order: the proof's audience is compared with the verifier's own,
 // the signature is checked over the view rebuilt with that audience, and only
@@ -152,14 +166,14 @@ rule Sign:
 rule Accept:
     [ In(<Rw, op, f, S, n, t, sig>), !AuthKey(S, pkS), !Verifier(V, R) ]
   --[ Eq(verify(sig, view(S, Rw, op, n, t, f), pkS), true),
-      NonceUse(V, slot(S, n)),
+      NonceUse(V, slot(S, n)), Spend(V, S, n),
       Accepted(V, R, S, op, n, t, f) ]->
     [ !Spent(V, slot(S, n)) ]
 #else
 rule Accept:
     [ In(<R, op, f, S, n, t, sig>), !AuthKey(S, pkS), !Verifier(V, R) ]
   --[ Eq(verify(sig, view(S, R, op, n, t, f), pkS), true),
-      NonceUse(V, slot(S, n)),
+      NonceUse(V, slot(S, n)), Spend(V, S, n),
       Accepted(V, R, S, op, n, t, f) ]->
     [ !Spent(V, slot(S, n)) ]
 #endif
@@ -178,8 +192,22 @@ rule RejectReplay:
 // proof is then turned away for its signature, but its nonce is spent.
 rule RecordUnverified:
     [ In(<Rw, op, f, S, n, t, sig>), !Verifier(V, R) ]
-  --[ NonceUse(V, slot(S, n)) ]->
+  --[ NonceUse(V, slot(S, n)), Spend(V, S, n) ]->
     [ !Spent(V, slot(S, n)) ]
+#endif
+
+#ifdef RecordBeforeAudience
+// A verifier that checks the signature over the view with the audience the
+// proof names, records the nonce, and only then compares the audience: a
+// proof for another audience is refused, but its nonce is spent.
+rule RecordThenRefuseAudience:
+    [ In(<Rw, op, f, S, n, t, sig>), !AuthKey(S, pkS), !Verifier(V, R) ]
+  --[ Eq(verify(sig, view(S, Rw, op, n, t, f), pkS), true), Neq(Rw, R),
+      NonceUse(V, slot(S, n)), Spend(V, S, n) ]->
+    [ !Spent(V, slot(S, n)) ]
+
+restriction Inequality:
+  "All x #i. Neq(x, x) @ #i ==> F"
 #endif
 
 /* ---------- Lemmas ---------- */
@@ -223,12 +251,30 @@ lemma view_binding:
 // (D-w12) A proof accepted at a verifier whose audience is R, under an honest
 // key not taken over, was signed for R: a proof made for one node does not go
 // through at another. (Its signer, op, issuedAt and fields are view_binding's;
-// an honest nonce is fresh, so the nonce names the signing.)
+// the nonce names the signing, nonce_names_signing.)
 lemma accepted_only_for_audience:
   "All V R S op n t f k #i #b #h. Accepted(V, R, S, op, n, t, f) @ #i
      & Bind(S, pk(k)) @ #b & HonestKey(k) @ #h
      & not (Ex #r. Compromised(k) @ #r & #r < #i)
      ==> Ex S2 op2 t2 f2 #j. Signed(S2, R, op2, n, t2, f2) @ #j & #j < #i"
+
+// An honest signer's nonce names one signing: two signings with one nonce are
+// the same. So the signing accepted_only_for_audience finds for a nonce is the
+// one view_binding finds for its signer, op, issuedAt and fields.
+lemma nonce_names_signing:
+  "All S1 S2 R1 R2 op1 op2 n t1 t2 f1 f2 #i #j. Signed(S1, R1, op1, n, t1, f1) @ #i
+     & Signed(S2, R2, op2, n, t2, f2) @ #j ==> #i = #j"
+
+// A verifier whose audience is R records an honest key's nonce only for a
+// proof signed for R: a proof for another audience is refused before the
+// store, and spends no nonce. In the default build a record is an
+// acceptance, so this follows from accepted_only_for_audience; it also binds
+// a record that is not one (RecordBeforeAudience).
+lemma mismatch_spends_no_nonce:
+  "All V R S n k #i #v #b #h. Spend(V, S, n) @ #i & NewVerifier(V, R) @ #v
+     & Bind(S, pk(k)) @ #b & HonestKey(k) @ #h
+     & not (Ex #r. Compromised(k) @ #r & #r < #i)
+     ==> Ex S2 op t f #j. Signed(S2, R, op, n, t, f) @ #j & #j < #i"
 
 // An honest proof presented again to the verifier that accepted it is turned
 // away as a replay: no_burn speaks about something that happens.

@@ -315,6 +315,11 @@ provin.network.chain.nats.registry-base-urls { "" = "http://x:1" }`)); err == ni
 provin.network.chain.nats.registry-base-urls { "mfg.poc.dplaax.dev/" = "http://x:1" }`)); err == nil {
 		t.Error("non-segment registry key silently accepted")
 	}
+	// Nor can a registry longer than a DID's registry may be.
+	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
+provin.network.chain.nats.registry-base-urls { "`+strings.Repeat("a", 254)+`" = "http://x:1" }`)); err == nil {
+		t.Error("a registry key of 254 octets silently accepted")
+	}
 	if _, err := chainconfig.LoadChainConfig(loadWith(t, base+`
 provin.network.chain.nats.registry-base-urls { "mfg.poc.dplaax.dev" = "http://x:1?q=1" }`)); err == nil {
 		t.Error("registry-base-urls value with a query silently accepted")

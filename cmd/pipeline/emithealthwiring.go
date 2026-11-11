@@ -80,27 +80,35 @@ func newReportClientFactory(signer crypto.Signer, baseURL, registry, bearer stri
 
 // For returns the cached client signing/reporting as publisherDID, building
 // and caching one on first use.
-func (f *reportClientFactory) For(publisherDID string) *reportclient.Client {
+func (f *reportClientFactory) For(publisherDID string) (*reportclient.Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[publisherDID]; ok {
-		return c
+		return c, nil
+	}
+	aud, err := ownNodeAudience(f.registry, publisherDID)
+	if err != nil {
+		return nil, err
 	}
 	c := reportclient.New(reportclient.Config{
 		Signer:     f.signer,
 		SignerDID:  publisherDID,
 		BaseURL:    f.baseURL,
-		Audience:   ownNodeAudience(f.registry, publisherDID),
+		Audience:   aud,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
 	f.clients[publisherDID] = c
-	return c
+	return c, nil
 }
 
 // forClient adapts For to buildEmitHealthReporters' reportClientFor seam.
-func (f *reportClientFactory) forClient(publisherDID string) emitHealthReportClient {
-	return f.For(publisherDID)
+func (f *reportClientFactory) forClient(publisherDID string) (emitHealthReportClient, error) {
+	c, err := f.For(publisherDID)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // minEmitHealthCadence floors the reporting cadence: a TTL small enough to
@@ -344,15 +352,19 @@ func producingLoops(loops []pipelineconfig.LoopConfig) []producingLoopRef {
 // reporter thereafter from the registry's own returned TTL — see
 // emitHealthReporter.report's doc), sending spec.Healthy() on every tick
 // (P1 fix — see emitHealthReporterSpecsFor's doc).
-func buildEmitHealthReporters(specs []emitHealthReporterSpec, reportClientFor func(publisherDID string) emitHealthReportClient, cadence time.Duration) []*emitHealthReporter {
+func buildEmitHealthReporters(specs []emitHealthReporterSpec, reportClientFor func(publisherDID string) (emitHealthReportClient, error), cadence time.Duration) ([]*emitHealthReporter, error) {
 	reporters := make([]*emitHealthReporter, 0, len(specs))
 	for _, s := range specs {
+		client, err := reportClientFor(s.OutputSubject)
+		if err != nil {
+			return nil, err
+		}
 		reporters = append(reporters, &emitHealthReporter{
-			client:       reportClientFor(s.OutputSubject),
+			client:       client,
 			publisherDID: s.OutputSubject,
 			interval:     cadence,
 			healthy:      s.Healthy,
 		})
 	}
-	return reporters
+	return reporters, nil
 }

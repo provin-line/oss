@@ -183,7 +183,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("pipeline: %v", err)
 	}
-	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID, upstream)
+	deps, err := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID, upstream)
+	if err != nil {
+		log.Fatalf("pipeline: %v", err)
+	}
 
 	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, deps)
 	if err != nil {
@@ -209,6 +212,7 @@ func main() {
 	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
 	if err != nil {
+		_ = dp.Close()
 		log.Fatalf("pipeline: %v", err)
 	}
 
@@ -221,7 +225,11 @@ func main() {
 	// emitHealthReporterSpecsFor's doc).
 	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
-	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
+	reporters, err := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
+	if err != nil {
+		_ = dp.Close()
+		log.Fatalf("pipeline: %v", err)
+	}
 
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.PushBindings(), verifier)

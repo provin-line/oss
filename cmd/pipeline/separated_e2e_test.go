@@ -723,7 +723,10 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("pipelineRuntimeConfigFrom(%s): %v", dataDirName, rerr)
 		}
-		deps := buildDeps(pipeCfg, ks, guard, localResolver, nodeDID, mustUpstreamAudiences(t, pipeCfg))
+		deps, err := buildDeps(pipeCfg, ks, guard, localResolver, nodeDID, mustUpstreamAudiences(t, pipeCfg))
+		if err != nil {
+			t.Fatal(err)
+		}
 		dp, berr := pipelineruntime.Build(context.Background(), &rtCfg, ks, deps)
 		if berr != nil {
 			t.Fatalf("pipelineruntime.Build(%s): %v", dataDirName, berr)
@@ -1018,7 +1021,10 @@ func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	// No consuming loop in this pipeline, so no resolver is needed at all.
-	deps := buildDeps(pipeCfg, ks, guard, nil, sepShutSrcPipeline, mustUpstreamAudiences(t, pipeCfg))
+	deps, err := buildDeps(pipeCfg, ks, guard, nil, sepShutSrcPipeline, mustUpstreamAudiences(t, pipeCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
 	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, deps)
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)

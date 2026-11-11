@@ -26,6 +26,9 @@ header comment says the same.
 - **Attacker.** The network is the attacker's (Dolev-Yao): every message is
   read, replayed, altered and composed at will. The attacker makes DIDs of its
   own, and its DID documents may list any key, an honest signer's included.
+  A receiving node that is not honest is covered too: every proof an honest
+  signer makes goes to the network, so the attacker has whatever such a node
+  receives.
 - **Trusted.** The verifier, which is never taken over; DID resolution (a
   DID's `#auth` key reaches the verifier directly); signatures, which cannot
   be forged without the key.
@@ -33,7 +36,7 @@ header comment says the same.
   which records `Compromised(k)`.
 - **Nonces.** An honest signer draws a fresh nonce for each proof
   (`wireauth.NewNonce`, which every caller of `wireauth.Sign` uses).
-  `no_burn` rests on this.
+  `nonce_names_signing` and `no_burn` rest on this.
 - **Persistence and time.** None. `issuedAt` is an opaque term of the view.
   The acceptance window, the restart epoch, the eviction of nonces and
   restarts are outside the model; the nonce store here never forgets. That
@@ -56,7 +59,8 @@ header comment says the same.
 - **Events.** `Accepted(V, R, S, op, n, t, f)`: verifier `V`, whose audience
   is `R`, accepted the proof (`Verify` returned nil and recorded the nonce).
   `ReplayRejected(...)`: the signature verified and the nonce was already
-  recorded (`ErrReplay`).
+  recorded (`ErrReplay`). `Spend(V, S, n)`: verifier `V` recorded signer
+  `S`'s nonce `n`.
 - **Not modelled.** The fields' value grammar and the JCS bytes (D-w11; left
   to test vectors and fuzzing), authorization (a refusal leaves the store as it
   was, which is what a rule that does not fire does), DID spelling (the view
@@ -91,6 +95,8 @@ header comment says the same.
 | `forgery_after_compromise` | exists-trace | with its key taken over, an honest DID has a proof accepted that it never signed: the exception in `view_binding` is live | — |
 | `view_binding` | all-traces | a proof accepted for a DID under an honest key not taken over was signed by that DID, for that op, nonce, issuedAt and fields: no reuse for another DID naming the same key, nor for another op | `viewBytes` (D-w1); `Verifier.Verify` steps 4–6 |
 | `accepted_only_for_audience` | all-traces | a proof accepted at a verifier under an honest key not taken over was signed for that verifier's audience: a proof made for one node does not go through at another | `viewBytes` and the audience check in `Verifier.Verify` step 1 (D-w12) |
+| `nonce_names_signing` | all-traces | two honest signings with one nonce are the same signing: the signing `accepted_only_for_audience` finds for a nonce is the one `view_binding` finds for its signer, op, issuedAt and fields | `wireauth.NewNonce`, a fresh nonce for each proof, which every caller of `wireauth.Sign` uses |
+| `mismatch_spends_no_nonce` | all-traces | a verifier records an honest key's nonce only for a proof signed for its own audience: a proof for another audience is refused before the store, and spends no nonce | the audience check in `Verifier.Verify` step 1, before `NonceStore.Use`, which is last |
 | `executable_replay_rejected` | exists-trace | an accepted proof presented again to the same verifier is turned away | — |
 | `once_per_store` | all-traces | a verifier accepts a signer's nonce once; this restates the store's check-and-set | `NonceStore.Use` as an atomic check-and-set (a premise) |
 | `nonce_per_signer` | exists-trace | one verifier accepts one nonce for two signers: the store's scope is per signer | `NonceStore` keyed by `(signerDID, nonce)` (D-w10) |
@@ -134,12 +140,14 @@ it, and the lemmas it is expected to falsify are in
 | model | build | changes | falsifies |
 | --- | --- | --- | --- |
 | wireauth | `ViewOmitsSigner` | the view no longer covers the signer DID (D-w1) | `view_binding` (an attacker's DID that names an honest key) |
-| wireauth | `ViewOmitsAudience` | the view no longer covers the audience (D-w12) | `accepted_only_for_audience` (a proof made for one verifier accepted at another) |
+| wireauth | `ViewOmitsAudience` | the view no longer covers the audience (D-w12) | `accepted_only_for_audience` (a proof made for one verifier accepted at another), `mismatch_spends_no_nonce` |
 | wireauth | `ViewOmitsOp` | the view no longer covers the op | `view_binding`, `no_burn` (the proof accepted under another op first) |
-| wireauth | `AudienceFromWire` | the verifier rebuilds the view with the audience the proof names, and does not compare it with its own | `accepted_only_for_audience` |
+| wireauth | `AudienceFromWire` | the verifier rebuilds the view with the audience the proof names, and does not compare it with its own | `accepted_only_for_audience`, `mismatch_spends_no_nonce` |
 | wireauth | `NoNonceStore` | the store's check-and-set is gone: nothing stops a replay from being accepted | `once_per_store` |
-| wireauth | `RecordBeforeSignature` | a path records the nonce before the signature is checked | `no_burn` |
+| wireauth | `RecordBeforeSignature` | a path records the nonce before the signature is checked | `no_burn`, `mismatch_spends_no_nonce` |
 | wireauth | `StoreKeyedByNonce` | the store is keyed by the nonce alone, not per signer (D-w10) | `no_burn`, `nonce_per_signer` |
+| wireauth | `SignerNonceFromWire` | the signer takes its nonce from the network instead of drawing a fresh one | `nonce_names_signing`, `no_burn` (two proofs signed with one nonce: the first accepted spends the other's) |
+| wireauth | `RecordBeforeAudience` | a path checks the signature over the view with the audience the proof names, records the nonce, and only then refuses a proof for another audience | `mismatch_spends_no_nonce` alone (a nonce spent by a proof the verifier refuses) |
 | bearerorigins | `PresentToAnyEndpoint` | the named-origin check is gone | `delivered_only_to_named`, `bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` is gone: a redirect is followed | `delivered_only_to_named`, `bearer_secrecy` |
 
@@ -216,8 +224,8 @@ refutation that is not expected fails CI.
 
 | model | build | state |
 | --- | --- | --- |
-| wireauth | default | all ten proved |
-| wireauth | each of the seven controls | the lemmas in the table above refuted as expected; the others proved |
+| wireauth | default | all twelve proved |
+| wireauth | each of the nine controls | the lemmas in the table above refuted as expected; the others proved |
 | bearerorigins | default | all five proved |
 | bearerorigins | each of the two controls | the lemmas in the table above refuted as expected; the others proved |
 | `NonceEpoch` (TLA+: the acceptance window, the restart epoch, eviction) | — | not started |

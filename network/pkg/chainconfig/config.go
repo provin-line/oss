@@ -22,6 +22,7 @@ import (
 
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 //go:embed reference.conf
@@ -284,8 +285,8 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 			// A key that could never come out of dplaax.Parse would silently
 			// miss at resolve time and fall back to external resolution — the
 			// opposite of the operator's intent. Fail boot instead.
-			if !dplaax.IsSafeSegment(reg) {
-				return n, fmt.Errorf("chain: config %s: %q is not a valid registry segment", keyRegistryBaseURLs, reg)
+			if !dplaax.IsSafeSegment(reg) || len(reg) > dplaax.MaxRegistryLen {
+				return n, fmt.Errorf("chain: config %s: %s is not a valid registry segment ([A-Za-z0-9._-], not all dots, at most %d octets)", keyRegistryBaseURLs, excerpt.Quoted(reg, 128), dplaax.MaxRegistryLen)
 			}
 			u, err := url.Parse(raw)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

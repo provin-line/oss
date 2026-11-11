@@ -3,6 +3,7 @@ package registry_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/hoconconfig"
@@ -88,5 +89,16 @@ func TestLoad_RejectsBadInput(t *testing.T) {
 				t.Errorf("%s: want error, got nil", name)
 			}
 		})
+	}
+}
+
+// The registry ID is the registry segment of every DID the server mints, so
+// one longer than a DID's registry may be is a boot error.
+func TestLoad_BoundsTheRegistryID(t *testing.T) {
+	if _, err := registry.LoadRegistryConfig(loadWith(t, `provin.network.registry.id = "`+strings.Repeat("a", 253)+`"`)); err != nil {
+		t.Errorf("an id of 253 octets: %v", err)
+	}
+	if _, err := registry.LoadRegistryConfig(loadWith(t, `provin.network.registry.id = "`+strings.Repeat("a", 254)+`"`)); err == nil {
+		t.Error("an id of 254 octets loaded")
 	}
 }

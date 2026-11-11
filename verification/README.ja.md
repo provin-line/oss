@@ -24,12 +24,14 @@ model は、それを読む前提の分しか意味を持たない。model の h
 
 - **攻撃者。** network は攻撃者のもの（Dolev-Yao）: どの message も読み、再送し、
   書き換え、組み立てられる。攻撃者は自分の DID を作れ、その DID document には
-  正直な署名者の鍵を含め、どの鍵でも載せられる。
+  正直な署名者の鍵を含め、どの鍵でも載せられる。正直でない受け手の node も
+  これに含まれる: 正直な署名者が作る proof はすべて network に出るので、そうした
+  node が受け取るものは攻撃者も持つ。
 - **信頼する部品。** 検証者（乗っ取られない）、DID の解決（DID の `#auth` 鍵は
   検証者に直接届く）、署名（鍵なしに偽造できない）。
 - **侵害を許す部品。** どの署名鍵も（rule `Compromise`。`Compromised(k)` を記録）。
 - **nonce。** 正直な署名者は proof ごとに新しい nonce を引く（`wireauth.NewNonce`。
-  `wireauth.Sign` の呼び手はすべてこれを使う）。`no_burn` はこれに拠る。
+  `wireauth.Sign` の呼び手はすべてこれを使う）。`nonce_names_signing` と `no_burn` はこれに拠る。
 - **永続と時間。** 無し。`issuedAt` は view の中の不透明な項。受理の窓、再起動の
   epoch、nonce の掃除、再起動は model の外で、ここの nonce store は忘れない。
   窓を過ぎた後に忘れて安全なことは時間の性質で、まだ書いていない TLA+ の model
@@ -48,6 +50,7 @@ model は、それを読む前提の分しか意味を持たない。model の h
 - **事象。** `Accepted(V, R, S, op, n, t, f)`: audience が `R` の検証者 `V` が
   proof を受理した（`Verify` が nil を返し nonce を記録した）。
   `ReplayRejected(...)`: 署名は通ったが nonce が記録済み（`ErrReplay`）。
+  `Spend(V, S, n)`: 検証者 `V` が署名者 `S` の nonce `n` を記録した。
 - **含めないもの。** fields の値の文法と JCS の bytes（D-w11。test vector と
   fuzz に任せる）、認可（拒否は store を元のままにする。発火しない rule と同じ）、
   DID の綴り（view と store の鍵は同じ文字列を使う）、鍵の rotation。
@@ -80,6 +83,8 @@ model は、それを読む前提の分しか意味を持たない。model の h
 | `forgery_after_compromise` | exists-trace | 鍵を乗っ取られた正直な DID は、署名していない proof を受理される: `view_binding` の例外は生きている | — |
 | `view_binding` | all-traces | 乗っ取られていない正直な鍵の下で DID に受理された proof は、その DID が、その op・nonce・issuedAt・fields で署名したもの: 同じ鍵を名乗る別の DID にも、別の op にも使い回せない | `viewBytes`（D-w1）、`Verifier.Verify` の 4〜6 |
 | `accepted_only_for_audience` | all-traces | 乗っ取られていない正直な鍵の下で検証者に受理された proof は、その検証者の audience に向けて署名されたもの: ある node 向けの proof は別の node では通らない | `viewBytes` と `Verifier.Verify` の 1 の audience の照合（D-w12） |
+| `nonce_names_signing` | all-traces | 1 つの nonce の正直な署名は同じ 1 つの署名: `accepted_only_for_audience` が nonce から見つける署名は、`view_binding` が署名者・op・issuedAt・fields から見つける署名と同じ | `wireauth.NewNonce`（proof ごとに新しい nonce。`wireauth.Sign` を呼ぶすべてが使う） |
+| `mismatch_spends_no_nonce` | all-traces | 検証者が正直な鍵の nonce を記録するのは、自分の audience に向けて署名された proof だけ: 別の audience 向けの proof は store の前に断られ、nonce を使わない | `Verifier.Verify` の 1 の audience の照合。最後の `NonceStore.Use` より前 |
 | `executable_replay_rejected` | exists-trace | 受理された proof を同じ検証者にもう一度出すと断られる | — |
 | `once_per_store` | all-traces | 検証者は署名者の nonce を 1 度だけ受理する。store の check-and-set を言い直したもの | 原子的な check-and-set としての `NonceStore.Use`（前提） |
 | `nonce_per_signer` | exists-trace | 1 つの検証者が 1 つの nonce を 2 人の署名者について受理する: store の範囲は署名者ごと | `(signerDID, nonce)` を鍵にした `NonceStore`（D-w10） |
@@ -119,12 +124,14 @@ lemma は `tamarin/MODEL.expected.tsv` にある。
 | model | build | 変えるもの | 反証される lemma |
 | --- | --- | --- | --- |
 | wireauth | `ViewOmitsSigner` | view が署名者の DID を覆わない（D-w1） | `view_binding`（正直な鍵を名乗る攻撃者の DID） |
-| wireauth | `ViewOmitsAudience` | view が audience を覆わない（D-w12） | `accepted_only_for_audience`（ある検証者向けの proof が別の検証者で受理される） |
+| wireauth | `ViewOmitsAudience` | view が audience を覆わない（D-w12） | `accepted_only_for_audience`（ある検証者向けの proof が別の検証者で受理される）、`mismatch_spends_no_nonce` |
 | wireauth | `ViewOmitsOp` | view が op を覆わない | `view_binding`、`no_burn`（別の op で先に受理される proof） |
-| wireauth | `AudienceFromWire` | 検証者が proof の名指す audience で view を組み直し、自分の audience と比べない | `accepted_only_for_audience` |
+| wireauth | `AudienceFromWire` | 検証者が proof の名指す audience で view を組み直し、自分の audience と比べない | `accepted_only_for_audience`、`mismatch_spends_no_nonce` |
 | wireauth | `NoNonceStore` | store の check-and-set が無い: replay の受理を何も止めない | `once_per_store` |
-| wireauth | `RecordBeforeSignature` | 署名の検査の前に nonce を記録する経路 | `no_burn` |
+| wireauth | `RecordBeforeSignature` | 署名の検査の前に nonce を記録する経路 | `no_burn`、`mismatch_spends_no_nonce` |
 | wireauth | `StoreKeyedByNonce` | store の鍵が nonce だけで、署名者ごとでない（D-w10） | `no_burn`、`nonce_per_signer` |
+| wireauth | `SignerNonceFromWire` | 署名者が新しい nonce を引かず、network から受け取る | `nonce_names_signing`、`no_burn`（1 つの nonce で署名した 2 つの proof: 先に受理された方が、もう片方の nonce を使う） |
+| wireauth | `RecordBeforeAudience` | proof の名指す audience の view で署名を検査し、nonce を記録してから、別の audience 向けの proof を断る経路 | `mismatch_spends_no_nonce` だけ（検証者が断る proof が nonce を使う） |
 | bearerorigins | `PresentToAnyEndpoint` | 名指しの origin の照合が無い | `delivered_only_to_named`、`bearer_secrecy` |
 | bearerorigins | `FollowRedirects` | `origin.Confine` が無い: redirect を追う | `delivered_only_to_named`、`bearer_secrecy` |
 
@@ -158,8 +165,8 @@ CI を赤にする。
 
 | model | build | 状態 |
 | --- | --- | --- |
-| wireauth | 既定 | 10 すべて証明 |
-| wireauth | 7 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
+| wireauth | 既定 | 12 すべて証明 |
+| wireauth | 9 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | bearerorigins | 既定 | 5 つすべて証明 |
 | bearerorigins | 2 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | `NonceEpoch`（TLA+: 受理の窓、再起動の epoch、掃除） | — | 未着手 |

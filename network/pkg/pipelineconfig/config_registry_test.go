@@ -67,8 +67,8 @@ func TestRegistryOverridesAreRead(t *testing.T) {
 }
 
 func TestRegistryOverrideGrammar(t *testing.T) {
-	for _, bad := range []string{"a b", "*", ".."} {
-		t.Run(bad, func(t *testing.T) {
+	for _, bad := range []string{"a b", "*", "..", strings.Repeat("a", 254)} {
+		t.Run(bad[:min(len(bad), 8)], func(t *testing.T) {
 			node := "provin.network.pipeline.vc-store-registry = \"" + bad + "\"\n" + loopsConf(validSinkLoop)
 			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(node))); err == nil {
 				t.Errorf("vc-store-registry %q: want a boot error", bad)
@@ -86,5 +86,17 @@ func TestRegistryOverrideGrammar(t *testing.T) {
 				t.Errorf("aggregate upstream-registry %q: want a boot error", bad)
 			}
 		})
+	}
+}
+
+// A registry ID of 253 octets, the longest DNS name, is read.
+func TestRegistryOverrideAtTheBound(t *testing.T) {
+	long := strings.Repeat("a", 253)
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer("provin.network.pipeline.vc-store-registry = \""+long+"\"\n"+loopsConf(validSinkLoop))))
+	if err != nil {
+		t.Fatalf("vc-store-registry of 253 octets: %v", err)
+	}
+	if pc.VCStoreRegistry != long {
+		t.Errorf("vc-store-registry = %d octets, want 253", len(pc.VCStoreRegistry))
 	}
 }

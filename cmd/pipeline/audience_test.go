@@ -20,21 +20,73 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
+	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
+	"github.com/provin-line/oss/pipeline/transport/tlogship"
 	"github.com/provin-line/oss/tlog"
 )
 
-func TestOwnNodeAudienceDerivedFromSigner(t *testing.T) {
-	if got := ownNodeAudience("", "did:dplaax:home.example:org:o1:pipeline:p1:process:s1"); got != "home.example" {
-		t.Errorf("derived audience = %q, want home.example", got)
+// must is c, failing the test with err.
+func must[T any](c T, err error) func(testing.TB) T {
+	return func(t testing.TB) T {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	if got := ownNodeAudience("", "not a did"); got != "" {
-		t.Errorf("audience for an unparsable signer = %q, want empty (the call then fails before sending)", got)
+}
+
+func TestOwnNodeAudienceDerivedFromSigner(t *testing.T) {
+	if got, err := ownNodeAudience("", "did:dplaax:home.example:org:o1:pipeline:p1:process:s1"); err != nil || got != "home.example" {
+		t.Errorf("derived audience = %q, %v, want home.example", got, err)
+	}
+}
+
+// A signer DID that does not parse has no node to derive an audience from;
+// the error names it, within a bound however long it is.
+func TestOwnNodeAudienceOfAnUnparsableSignerIsAnError(t *testing.T) {
+	if got, err := ownNodeAudience("", "not a did"); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
+		t.Errorf("audience for an unparsable signer = %q, %v, want an error naming it", got, err)
+	}
+	long := "did:dplaax:" + strings.Repeat("x", 5000)
+	if _, err := ownNodeAudience("", long); err == nil || len(err.Error()) > 400 || !strings.Contains(err.Error(), "bytes)") {
+		t.Errorf("a long unparsable signer: %v, want an error naming its head and length", err)
+	}
+}
+
+// Each client factory refuses a signer DID that does not parse, rather than
+// building a client that fails at its first call for want of an audience.
+func TestClientFactoriesRefuseAnUnparsableSigner(t *testing.T) {
+	for name, forDID := range map[string]func(string) error{
+		"audit": func(d string) error {
+			_, err := newAuditClientFactory(nil, "http://node.example", "", "", nil).For(d)
+			return err
+		},
+		"mirror": func(d string) error {
+			_, err := newMirrorClientFactory(nil, "http://node.example", "", "", nil).For(d)
+			return err
+		},
+		"report": func(d string) error {
+			_, err := newReportClientFactory(nil, "http://node.example", "", "", nil).For(d)
+			return err
+		},
+		"payload": func(d string) error {
+			_, err := newPayloadClientFactory(nil, "http://node.example", "", "", nil, 0).For(d)
+			return err
+		},
+	} {
+		if err := forDID("not a did"); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
+			t.Errorf("%s: %v, want an error naming the signer", name, err)
+		}
+		if err := forDID("did:dplaax:home.example:org:o1:pipeline:p1"); err != nil {
+			t.Errorf("%s: a parsable signer: %v", name, err)
+		}
 	}
 }
 
 func TestOverrideWinsOverDerivedAudience(t *testing.T) {
-	if got := ownNodeAudience("node.example", "did:dplaax:home.example:org:o1:pipeline:p1"); got != "node.example" {
-		t.Errorf("own-node audience with an override = %q, want node.example", got)
+	if got, err := ownNodeAudience("node.example", "did:dplaax:home.example:org:o1:pipeline:p1"); err != nil || got != "node.example" {
+		t.Errorf("own-node audience with an override = %q, %v, want node.example", got, err)
 	}
 	loops := []pipelineconfig.LoopConfig{{
 		Role: pipelineconfig.RoleSink, IngressSubject: "did:dplaax:up.example:org:o2:pipeline:p2",
@@ -111,7 +163,7 @@ func TestResolvePayloadUnknownEndpointFailsClosed(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ks := newAuthKeyStore(t, wireNodeDID)
 	factory := newPayloadClientFactory(ks, "", "", "", srv.Client(), 0)
-	r := wireRetryingPayloadResolver{client: factory.For(wireNodeDID), audiences: map[string]string{"https://configured.example": "configured.example"}}
+	r := wireRetryingPayloadResolver{client: must(factory.For(wireNodeDID))(t), audiences: map[string]string{"https://configured.example": "configured.example"}}
 	if _, err := r.ResolvePayload(context.Background(), srv.URL, "sha256:00"); err == nil {
 		t.Fatal("an endpoint no by-reference ingress configures was fetched")
 	}
@@ -147,7 +199,7 @@ func TestFactoriesSignForTheOwnNodeAudience(t *testing.T) {
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
 			f := newReportClientFactory(newAuthKeyStore(t, publisher), srv.URL, c.override, "", srv.Client())
-			if _, err := f.For(publisher).ReportEmitHealth(context.Background(), publisher, true); err != nil && !errors.Is(err, context.Canceled) {
+			if _, err := must(f.For(publisher))(t).ReportEmitHealth(context.Background(), publisher, true); err != nil && !errors.Is(err, context.Canceled) {
 				t.Fatalf("ReportEmitHealth: %v", err)
 			}
 			if capture.audience != c.want {
@@ -214,7 +266,7 @@ func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
 			f := newAuditClientFactory(newAuthKeyStore(t, signer), srv.URL, c.override, "", srv.Client())
-			if err := f.For(signer).RegisterAuditHead(context.Background(), addr("a")); err != nil {
+			if err := must(f.For(signer))(t).RegisterAuditHead(context.Background(), addr("a")); err != nil {
 				t.Fatalf("RegisterAuditHead: %v", err)
 			}
 			if capture.audience != c.want {
@@ -230,7 +282,7 @@ func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
 			t.Cleanup(srv.Close)
 			f := newMirrorClientFactory(newAuthKeyStore(t, signer), srv.URL, c.override, "", srv.Client())
 			cp := &tlog.Checkpoint{Origin: "did:dplaax:home.example:org:o1:pipeline:p1", Size: 1, Head: addr("b"), Timestamp: time.Now()}
-			if _, err := f.For(signer).MirrorLogSegment(context.Background(), cp.Origin, 0, [][]byte{[]byte("r")}, cp); err != nil {
+			if _, err := must(f.For(signer))(t).MirrorLogSegment(context.Background(), cp.Origin, 0, [][]byte{[]byte("r")}, cp); err != nil {
 				t.Fatalf("MirrorLogSegment: %v", err)
 			}
 			if capture.audience != c.want {
@@ -274,5 +326,32 @@ func TestUpstreamOverrideForChainedAndAggregate(t *testing.T) {
 	}
 	if got["https://b.example/p"] != "node-b.example" || got["https://c.example/p"] != "node-c.example" {
 		t.Errorf("audiences with overrides = %v, want node-b.example and node-c.example", got)
+	}
+}
+
+// A factory caches no client for a signer DID it refused: asked again, it
+// refuses again.
+func TestClientFactoriesCacheNothingOnARefusal(t *testing.T) {
+	f := newAuditClientFactory(nil, "http://node.example", "", "", nil)
+	for range 2 {
+		if _, err := f.For("not a did"); err == nil {
+			t.Fatal("an unparsable signer was taken")
+		}
+	}
+	if len(f.clients) != 0 {
+		t.Errorf("%d clients cached after refusals", len(f.clients))
+	}
+}
+
+// A seam's refusal stops the builders that call it.
+func TestBuildersPassOnTheirSeamsRefusal(t *testing.T) {
+	refused := errors.New("seam refused")
+	custody := []pipelineruntime.CustodyLog{{LogID: "l1", Signer: pipelineruntime.IssuerConfig{DID: "did:dplaax:reg:org:acme:pipeline:a:process:p1"}}}
+	if _, err := buildShippers(custody, func(string) (tlogship.MirrorClient, error) { return nil, refused }, pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 1, MaxBatchBytes: 1 << 10, FlushInterval: time.Hour}); !errors.Is(err, refused) {
+		t.Errorf("buildShippers: %v, want the seam's refusal", err)
+	}
+	specs := []emitHealthReporterSpec{{OutputSubject: "did:dplaax:reg:org:acme:pipeline:a", Healthy: func() bool { return true }}}
+	if _, err := buildEmitHealthReporters(specs, func(string) (emitHealthReportClient, error) { return nil, refused }, time.Second); !errors.Is(err, refused) {
+		t.Errorf("buildEmitHealthReporters: %v, want the seam's refusal", err)
 	}
 }
