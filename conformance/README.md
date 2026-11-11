@@ -66,6 +66,7 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `confidence-001..006` | `vc.EvaluateConfidence` (synthesis) / real `Verify` with an entries-driven lifecycle registry, effectiveDates time-shifted so the proof.created order relations are preserved |
 | `delegation-001..005` | `delegation.Build` re-signing + `delegation.Verify` — structural defects (purpose, scope, foreign subject) are checked before the signature, so they survive the re-signing |
 | `delegation-006..008` | the same re-signing + `delegation.VerifyFor` with the vector's `target` — a delegation is authority only for the identity its subject names (`delegation.use.subject-bound`) |
+| `keybinding-001..054` | each credential re-signed as an eddsa-jcs-2022 proof for the verification method its proof names, adding only the proof-local `@context` and the `proofValue` and signing every other proof member as written, `created` among them (dplaax `vectors/README.md`, "Fixture proofs"), then `keybinding.Verifier`: `RestoreStatusList` (the list the verifier holds) then `VerifyBinding` for a binding, `RestoreStatusList` then `VerifyStatusList` for a list against the one held, `VerifyStatusList` for a list alone, and `StatusListContentHash` for a content hash; a reason (`status-list-rewound`, `status-list-revocation-cleared`) is checked with `errors.Is` |
 | `signer-001..003` | `vc.VerifyProof` mandatory-member / no-op gates; `vc.RegisterCryptosuite` registration gate |
 
 **Tranche 2** — behavior-fixture families driven against real seams

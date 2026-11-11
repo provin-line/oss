@@ -116,6 +116,29 @@ keybinding ──► vc, did, canon, crypto
   最初に凍結される API 面は、機能セットの完成と実デプロイでの soak を経た
   `1.0` で宣言する。
 
+## 仕様への適合
+
+**provin OSS 0.5.0** は **dPLaaX spec v0.2.0-alpha.1** を追う。vendor する
+dPLaaX の vector はその tag のものとバイト単位で同じで、まだ走らせていない
+vector は、理由を付けて skip する（`conformance/allvectors_test.go`）。
+**provin wire profile v0.1 (draft)** を実装する。適合の主張は、このような
+バージョンの組としてのみ意味を持つ。
+
+その主張の確かめ方（機械的）:
+
+- dPLaaX の vector 一式（`dplaax/spec` の `vectors/`、カタログ全体）を
+  `conformance/vectors/dplaax/` に**バイト単位で**vendor し、`MANIFEST.sha256`
+  で pin して、**CI のゲート**にする — `go test ./conformance/` はすべての
+  push と PR で走る。spec の変更を取り込むのは意図した行為で、
+  `scripts/sync-spec-vectors.sh` と、vendor した差分の commit で行う。
+- 定期の、ゲートにしない crosscheck（`.github/workflows/spec-crosscheck.yml`）が、
+  加えて harness を `dplaax/spec` の **HEAD** に対して毎日走らせる — 実装が
+  spec を追うのであって、逆ではない。そこが赤なら、ここで追いつく作業であり、
+  ゲートではない。
+- provin profile の vector（`provin-line/profile.spec` の `vectors/`）も同じく
+  `conformance/vectors/provin/` に vendor する（`scripts/sync-profile-vectors.sh`、
+  専用の `MANIFEST.sha256`）。
+
 ## ライセンス
 
 Apache License 2.0 — [LICENSE](LICENSE) を参照。

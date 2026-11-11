@@ -414,17 +414,29 @@ func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string,
 		!slices.Contains(a.IssuanceKeys, res.VerificationMethod):
 		return nil, "", fmt.Errorf("%w: %s (%v, %s, %s)", ErrSignature, cred.Issuer(), res.State, res.SuiteContract, res.VerificationMethod)
 	}
-	body := cred.Body()
-	if err := canon.AdmitSafeNumbers(body); err != nil {
-		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
-	}
-	if _, err := contextsOf(body, prefix); err != nil {
-		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
-	}
-	if types := cred.Types(); len(types) != 2 || types[0] != "VerifiableCredential" || types[1] != typ {
-		return nil, "", fmt.Errorf("%w: type is not [VerifiableCredential %s]", ErrMalformed, typ)
+	body, err := shapeOf(&cred, typ, prefix)
+	if err != nil {
+		return nil, "", err
 	}
 	return body, res.VerificationMethod, nil
+}
+
+// shapeOf returns cred's body when cred is a credential of type typ in this
+// package's shape: no unsafe number, an @context of absolute URIs that begin
+// with prefix, and type VerifiableCredential and typ. Its error is
+// ErrMalformed.
+func shapeOf(cred *vc.Credential, typ string, prefix []string) (map[string]any, error) {
+	body := cred.Body()
+	if err := canon.AdmitSafeNumbers(body); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if _, err := contextsOf(body, prefix); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if types := cred.Types(); len(types) != 2 || types[0] != "VerifiableCredential" || types[1] != typ {
+		return nil, fmt.Errorf("%w: type is not [VerifiableCredential %s]", ErrMalformed, typ)
+	}
+	return body, nil
 }
 
 // VerifyBinding checks raw against the anchor and the held status list at at:
@@ -798,6 +810,38 @@ func (v *Verifier) signedList(ctx context.Context, raw []byte, a Anchor) (*Statu
 	}
 	l.signer, l.hash = signer, hash
 	return l, nil
+}
+
+// StatusListContentHash is the content hash of the revocation list credential
+// raw, as the dplaax rule keybinding.status-list.content-hash defines it and
+// VerifyStatusList compares it: "sha256:" and the lowercase hex SHA-256 of the
+// RFC 8785 form of the list without its proof, with encodedList replaced by
+// the digest of the expanded bits, so the same list compressed otherwise has
+// the same hash. A raw that is not a revocation list credential in the shape
+// VerifyStatusList reads (no unsafe number; its @context and types; a
+// revocation BitstringStatusList subject; issuer, id and validity times; an
+// encodedList that expands within the size bounds) is ErrMalformed. It checks neither the list's signature, its
+// issuer, its id (a DID URL of the issuer), nor whether it is current: an
+// equal hash says that two lists have the same content, not that either is
+// the issuer's. Only VerifyStatusList and RestoreStatusList establish that.
+func StatusListContentHash(raw []byte) (string, error) {
+	var cred vc.Credential
+	if err := cred.UnmarshalJSON(raw); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	body, err := shapeOf(&cred, TypeStatusList, statusListContextPrefix)
+	if err != nil {
+		return "", err
+	}
+	l, err := readStatusList(body)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	hash, err := statusListHash(body, l.bits)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	return hash, nil
 }
 
 // statusListHash is a list's content hash: the SHA-256 of the RFC 8785 form of

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,5 +144,69 @@ func TestStatusList_ContentHashIsTheBodyWithTheDigestOfItsBits(t *testing.T) {
 	}
 	if got := keybinding.StatusListHash(l); got != want || got != knownHash {
 		t.Errorf("content hash %s, want %s (known %s)", got, want, knownHash)
+	}
+}
+
+// StatusListContentHash is the content hash VerifyStatusList compares, from
+// the list credential alone: the known value, the same for the same bits
+// however compressed, not dependent on the signature, and ErrMalformed for
+// what is not a revocation list.
+func TestStatusListContentHash(t *testing.T) {
+	f := newFixture(t)
+	at := t0.Add(time.Hour)
+	raw := f.list(t, issuerDID, "issuer", at.Add(-time.Minute), 3, 131071)
+	got, err := keybinding.StatusListContentHash(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := f.v.VerifyStatusList(context.Background(), raw, f.anchor, nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != knownHash || got != keybinding.StatusListHash(l) {
+		t.Errorf("StatusListContentHash = %s, want the known %s and VerifyStatusList's %s", got, knownHash, keybinding.StatusListHash(l))
+	}
+
+	from := at.Add(-30 * time.Minute)
+	var first string
+	for name, enc := range map[string]string{
+		"Go 1.26.8": go126, "Go 1.27.1": go127,
+		"best speed": encodeList(t, gzip.BestSpeed, listBits(3, 131071)), "no compression": encodeList(t, gzip.NoCompression, listBits(3, 131071)),
+	} {
+		raw, err := keybinding.IssueStatusListEncoded(f.signer, issuerDID, "issuer", listID, from, from.Add(time.Hour), enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := keybinding.StatusListContentHash(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if first == "" {
+			first = h
+		} else if h != first {
+			t.Errorf("%s: %s, another compression of the same bits gave %s", name, h, first)
+		}
+	}
+
+	forged := mutate(t, raw, func(m map[string]any) { m["proof"].(map[string]any)["proofValue"] = "z" + strings.Repeat("1", 86) })
+	if h, err := keybinding.StatusListContentHash(forged); err != nil || h != knownHash {
+		t.Errorf("a list whose signature is broken: %s, %v, want the same hash (the signature is not checked)", h, err)
+	}
+	for name, bad := range map[string][]byte{
+		"not JSON":       []byte("{"),
+		"no encodedList": mutate(t, raw, func(m map[string]any) { delete(m["credentialSubject"].(map[string]any), "encodedList") }),
+		"encodedList not gz": mutate(t, raw, func(m map[string]any) {
+			m["credentialSubject"].(map[string]any)["encodedList"] = "u" + b64([]byte("not gzip"))
+		}),
+		"not a status list": mutate(t, raw, func(m map[string]any) {
+			m["type"] = []any{"VerifiableCredential", "KeyBindingCredential"}
+		}),
+		"v2 not first": mutate(t, raw, func(m map[string]any) {
+			m["@context"] = []any{"https://www.w3.org/ns/credentials/undefined-terms/v2", "https://www.w3.org/ns/credentials/v2"}
+		}),
+	} {
+		if _, err := keybinding.StatusListContentHash(bad); !errors.Is(err, keybinding.ErrMalformed) {
+			t.Errorf("%s: %v, want ErrMalformed", name, err)
+		}
 	}
 }

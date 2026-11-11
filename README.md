@@ -150,10 +150,12 @@ stability promises:
 
 ## Specification conformance
 
-The current release line — **provin OSS v0.3.0** — implements **dPLaaX spec
-v0.1 (draft)** and the **provin wire profile v0.1 (draft)**. A conformance
-claim is only meaningful as a version pair; this is the pair the public E2E
-and the systems paper evaluate.
+**provin OSS 0.5.0** follows **dPLaaX spec v0.2.0-alpha.1**: the dPLaaX
+vectors it vendors are that tag's, byte for byte, and the vectors it does
+not drive yet are skipped, each with its reason
+(`conformance/allvectors_test.go`). It implements the **provin wire
+profile v0.1 (draft)**. A conformance claim is only meaningful as such a
+version pair.
 
 How that claim is checked, mechanically:
 

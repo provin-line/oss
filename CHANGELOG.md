@@ -31,6 +31,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `delegation.use.subject-bound`). The sentinel is a constant of the new type
   `delegation.Error`, as `did.Error` and `vc.Error` are, so no importer can
   reassign it.
+- `keybinding.StatusListContentHash` computes a revocation list's content
+  hash from its credential, as the dplaax rule
+  `keybinding.status-list.content-hash` defines it and `VerifyStatusList`
+  compares it. It checks the list's shape, not its signature: an equal hash
+  says two lists have the same content, not that either is the issuer's.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
@@ -85,6 +90,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
   (Connect `PermissionDenied`); the refusal's text, which clients see in that
   status, is VerifyFor's.
+- Conformance: this release follows dPLaaX spec `v0.2.0-alpha.1`. The
+  vendored dPLaaX vectors are that tag's 235, byte for byte, and the README's
+  "Specification conformance" names the pair. `keybinding-001`..`keybinding-054`
+  run through `keybinding.Verifier` and `StatusListContentHash`.
 
 ### Breaking changes
 
