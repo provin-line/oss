@@ -1,0 +1,9 @@
+{
+  "id": "did-011",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with a segment of dots only is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:.."
+  },
+  "expect": "reject"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "did-004",
+  "rule": "did.dplaax.syntax",
+  "description": "A segment may begin with a dot, being not only dots",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:.acme"
+  },
+  "expect": "accept"
+}

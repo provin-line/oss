@@ -13,7 +13,7 @@
         "receivedAt": "2026-07-14T23:59:00Z",
         "deliveryOccurrence": "qe-0001",
         "transport": "nats",
-        "sourcePrincipal": "did:dplaax:owner-b:process-7"
+        "sourcePrincipal": "did:dplaax:poc.dplaax.dev:org:owner-b:pipeline:p1:process:process-7"
       },
       "sinkProfileId": "external-effect-sink@1"
     }

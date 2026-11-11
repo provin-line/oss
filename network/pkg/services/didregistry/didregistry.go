@@ -328,14 +328,10 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	if err := s.requireOwnRegistry(target); err != nil {
 		return nil, nil, err
 	}
-	// The delegation must authorize exactly this target — delegation.Verify only
-	// proves the subject is under the owner, so bind it to targetDID here.
-	if dlg.CredentialSubject.ID != targetDID {
-		return nil, nil, fmt.Errorf("%w: delegation subject %q does not authorize target %q", ErrUnauthorized, dlg.CredentialSubject.ID, targetDID)
-	}
-	// Verify the owner-signed delegation: the owner's document is resolved from
-	// this store, so an unregistered owner fails here.
-	if err := delegation.Verify(ctx, s.verifier, storeResolver{s.store}, dlg); err != nil {
+	// The owner-signed delegation must authorize exactly this target: its
+	// subject is targetDID, and the owner's document, resolved from this store,
+	// verifies it (an unregistered owner fails here).
+	if err := delegation.VerifyFor(ctx, s.verifier, storeResolver{s.store}, dlg, targetDID); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 

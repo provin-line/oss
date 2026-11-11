@@ -65,6 +65,7 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `chain-006..008` | `vc.Verifier.VerifyChain` — data-flow continuity on the DataIntegrity axis (fixtures carry synthetic proofs; the resolver-dependent axes are out of scope here) |
 | `confidence-001..006` | `vc.EvaluateConfidence` (synthesis) / real `Verify` with an entries-driven lifecycle registry, effectiveDates time-shifted so the proof.created order relations are preserved |
 | `delegation-001..005` | `delegation.Build` re-signing + `delegation.Verify` — structural defects (purpose, scope, foreign subject) are checked before the signature, so they survive the re-signing |
+| `delegation-006..008` | the same re-signing + `delegation.VerifyFor` with the vector's `target` — a delegation is authority only for the identity its subject names (`delegation.use.subject-bound`) |
 | `signer-001..003` | `vc.VerifyProof` mandatory-member / no-op gates; `vc.RegisterCryptosuite` registration gate |
 
 **Tranche 2** — behavior-fixture families driven against real seams

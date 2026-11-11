@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
@@ -110,10 +111,40 @@ func Build(signer crypto.Signer, ownerDID string, subject DelegationSubject) (*D
 	return cred, nil
 }
 
+// Error is the type of this package's sentinel errors. The sentinels are
+// constants, so no importer can reassign them; errors.Is matches them as it
+// matches any comparable error.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
+// ErrNotForIdentity reports a delegation presented as authority for an
+// identity other than the one its credentialSubject.id names.
+const ErrNotForIdentity Error = "delegation: not for this identity"
+
+// VerifyFor checks cred as authority for identity, the DID of the identity a
+// consumer acts for: cred's credentialSubject.id is identity, byte for byte,
+// and Verify accepts cred. A delegation is authority for the one identity it
+// names, not for another under the same Owner nor for a Process under a
+// delegated Pipeline (dplaax delegation.use.subject-bound). The identity is
+// compared first, so a delegation presented for another identity resolves
+// nothing; that refusal is ErrNotForIdentity, and any other is Verify's.
+func VerifyFor(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, cred *DelegationCredential, identity string) error {
+	if cred == nil {
+		return errors.New("delegation: nil credential")
+	}
+	if cred.CredentialSubject.ID != identity {
+		return fmt.Errorf("%w: it names %s, not %s", ErrNotForIdentity, excerpt.Quoted(cred.CredentialSubject.ID, 128), excerpt.Quoted(identity, 128))
+	}
+	return Verify(ctx, verifier, r, cred)
+}
+
 // Verify checks the delegation: delegatedBy == issuer, the issuer is an Owner
 // DID, the proof's verificationMethod names the issuer, the issuer's DID
 // Document resolves (with the registry-substitution defense), and the proof
-// verifies under the owner's assertion key over the signed body.
+// verifies under the owner's assertion key over the signed body. It does not
+// say for which identity the delegation is authority: a consumer acting for an
+// identity calls VerifyFor.
 func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, cred *DelegationCredential) error {
 	if cred == nil {
 		return errors.New("delegation: nil credential")

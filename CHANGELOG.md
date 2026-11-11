@@ -23,6 +23,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `delegation.VerifyFor` checks a delegation as authority for one identity:
+  its `credentialSubject.id` is that identity's DID, byte for byte, and
+  `Verify` accepts it. A delegation presented for another identity (another
+  under the same Owner, or a Process under a delegated Pipeline) is
+  `delegation.ErrNotForIdentity`, refused before anything is resolved (dplaax
+  `delegation.use.subject-bound`). The sentinel is a constant of the new type
+  `delegation.Error`, as `did.Error` and `vc.Error` are, so no importer can
+  reassign it.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
@@ -73,6 +81,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   such a DID (the registry's DID service among them) answers
   `InvalidArgument`, where it answered `PermissionDenied` for a registry
   that is not its own.
+- `didregistry`: issuing a Pipeline or Process checks its delegation through
+  `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
+  (Connect `PermissionDenied`); the refusal's text, which clients see in that
+  status, is VerifyFor's.
 
 ### Breaking changes
 

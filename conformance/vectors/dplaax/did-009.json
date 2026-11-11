@@ -1,0 +1,9 @@
+{
+  "id": "did-009",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with an empty segment (a trailing colon) is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:"
+  },
+  "expect": "reject"
+}

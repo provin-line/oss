@@ -1,0 +1,9 @@
+{
+  "id": "did-020",
+  "rule": "did.dplaax.syntax",
+  "description": "A string whose scheme is in upper case is not a did:dplaax DID",
+  "input": {
+    "did": "DID:dplaax:poc.dplaax.dev:org:acme"
+  },
+  "expect": "reject"
+}

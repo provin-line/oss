@@ -1,0 +1,12 @@
+{
+  "id": "did-025",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID with resource path pipeline:<id>:<other>:<id> is none of the three and has no Pipeline",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:step:x"
+  },
+  "expect": {
+    "level": "none",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

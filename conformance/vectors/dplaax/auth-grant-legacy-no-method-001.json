@@ -1,0 +1,30 @@
+{
+  "id": "auth-grant-legacy-no-method-001",
+  "rule": "auth.grant.exact-method",
+  "description": "LEGACY_DID_LOGIN@1 request naming no verification method (a JWS with no protected kid and a payload with no verification_method) against a document with exactly one controller-matched method: that method is selected and the grant MUST be issued",
+  "input": {
+    "did": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-001",
+    "did_document": {
+      "id": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-001",
+      "verificationMethod": [
+        {
+          "id": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-001#key-1",
+          "type": "JsonWebKey2020",
+          "controller": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-001",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "x": "ZPeYKbQZ-7lAx2BpSgEAAbGRkolU7jI4r_cXIOi-IRg",
+            "kty": "OKP"
+          }
+        }
+      ]
+    },
+    "request": {
+      "did": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-001",
+      "jws": "eyJhbGciOiJFZERTQSJ9.eyJkaWQiOiJkaWQ6ZHBsYWF4OnJlZ2lzdHJ5LnRlc3QubG9jYWw6b3JnOmF1dGgtZ3JhbnQtbGVnYWN5LW5vLW1ldGhvZC0wMDEiLCJ0aW1lc3RhbXAiOiIyMDI2LTA3LTE3VDAwOjAwOjAwLjAwMFoiLCJub25jZSI6ImZpeGVkLW5vbmNlLWF1dGgtZ3JhbnQtbGVnYWN5LW5vLW1ldGhvZC0wMDEifQ.2iRcsZutsWnij8g3SrBFCJqytCKtxz5ZJtqk2nStT7TzHadxOIy8maonI60bK4D7wX5ojS1fLmXMCeCje_eRBQ"
+    }
+  },
+  "expect": {
+    "status": 200
+  }
+}

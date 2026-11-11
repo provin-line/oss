@@ -1,0 +1,9 @@
+{
+  "id": "did-017",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with a trailing newline is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme\n"
+  },
+  "expect": "reject"
+}

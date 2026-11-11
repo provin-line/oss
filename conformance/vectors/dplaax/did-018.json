@@ -1,0 +1,9 @@
+{
+  "id": "did-018",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with another method name (did:dplaaxx) is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaaxx:poc.dplaax.dev:org:acme"
+  },
+  "expect": "reject"
+}

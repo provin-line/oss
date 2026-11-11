@@ -44,7 +44,7 @@ func init() {
 	registerRunner(runChainContinuity, "chain", 6, 8)
 	registerRunner(runConfidenceSynthesis, "confidence", 1, 3)
 	registerRunner(runConfidenceLifecycle, "confidence", 4, 6)
-	registerRunner(runDelegation, "delegation", 1, 5)
+	registerRunner(runDelegation, "delegation", 1, 8)
 	registerRunner(runSignerProof, "signer", 1, 2)
 	dplaaxRunners["signer-003"] = runSignerRegister
 	dplaaxRunners["identity-001"] = runIdentityDerivation
@@ -112,6 +112,17 @@ func init() {
 	// and runs it in its conformance harness (integration/conformance); this
 	// entry converts to a driver if a JWS grant surface ever lands here.
 	dplaaxSkips["auth-grant-kid-mismatch-001"] = "subject is the L1 DID-grant JWS path (three-way kid match at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
+	// The two LEGACY_DID_LOGIN@1 vectors of auth.grant.exact-method (a request
+	// naming no verification method, against a document with one and with two
+	// controller-matched methods) bind the same /oauth/token grant path.
+	dplaaxSkips["auth-grant-legacy-no-method-001"] = "subject is the L1 DID-grant JWS path (LEGACY_DID_LOGIN@1 with no named method at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
+	dplaaxSkips["auth-grant-legacy-no-method-ambiguous-001"] = "subject is the L1 DID-grant JWS path (LEGACY_DID_LOGIN@1 with no named method and two candidate methods at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
+	// did-001..031 (dplaax did.dplaax.syntax, did.dplaax.hierarchy) are
+	// skipped until #95 adds their runner (dplaax.Parse and its classifiers),
+	// and keybinding-001..054 until #96 adds theirs (keybinding.Verifier,
+	// StatusListContentHash).
+	registerSkip("did", 1, 31, "pending: the did runner lands in #95 (dplaax.Parse follows did.dplaax.syntax), which replaces this skip")
+	registerSkip("keybinding", 1, 54, "pending: the keybinding runner lands in #96 (keybinding.Verifier, StatusListContentHash), which replaces this skip")
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
 
 	// Vectors of rules whose SUBJECT does not exist in this implementation

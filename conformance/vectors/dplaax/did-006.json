@@ -1,0 +1,9 @@
+{
+  "id": "did-006",
+  "rule": "did.dplaax.syntax",
+  "description": "A registry need not be a well-formed host name: an underscore is accepted",
+  "input": {
+    "did": "did:dplaax:poc_dplaax:org:acme"
+  },
+  "expect": "accept"
+}

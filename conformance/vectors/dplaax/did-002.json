@@ -1,0 +1,9 @@
+{
+  "id": "did-002",
+  "rule": "did.dplaax.syntax",
+  "description": "A Process DID, with four resource-path segments, is a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:x"
+  },
+  "expect": "accept"
+}

@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -467,10 +468,13 @@ func runConfidenceLifecycle(t *testing.T, v dplaaxVector) {
 // vector's credential through delegation.Build with a fixture owner key
 // (grafting the fields Build refuses to produce), and serves the issuer's
 // document from a fixture resolver. Structural defects checked before the
-// signature (purpose, scope, foreign subject) survive the re-signing.
+// signature (purpose, scope, foreign subject) survive the re-signing. A
+// vector that names a target (delegation.use.subject-bound) checks the
+// delegation as authority for that identity, through delegation.VerifyFor.
 func runDelegation(t *testing.T, v dplaaxVector) {
 	var input struct {
 		Credential json.RawMessage `json:"credential"`
+		Target     *string         `json:"target"`
 	}
 	mustParse(t, v.Input, &input)
 	var wire delegation.DelegationCredential
@@ -502,9 +506,20 @@ func runDelegation(t *testing.T, v dplaaxVector) {
 
 	r := local.New()
 	r.Add(ownerDoc(t, wire.Issuer, ks))
-	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, built)
+	call := "Verify"
+	if input.Target != nil {
+		call = "VerifyFor"
+		err = delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, built, *input.Target)
+	} else {
+		err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, built)
+	}
 	if (err == nil) != (want == "accept") {
-		t.Errorf("Verify err=%v, want %s", err, want)
+		t.Errorf("%s err=%v, want %s", call, err, want)
+	}
+	// A vector that names a target other than the subject is refused as not
+	// for it. One that names the subject is refused, if at all, by Verify.
+	if input.Target != nil && *input.Target != built.CredentialSubject.ID && want == "reject" && !errors.Is(err, delegation.ErrNotForIdentity) {
+		t.Errorf("VerifyFor err=%v, want ErrNotForIdentity", err)
 	}
 }
 

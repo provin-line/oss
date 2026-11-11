@@ -5,7 +5,7 @@
   "input": {
     "credential": {
       "authorizationId": "ra-0001",
-      "issuer": "did:dplaax:owner-a:auditor-1",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:owner-a:pipeline:release:process:auditor-1",
       "quarantineEntryId": "qe-0001",
       "payloadDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "bodyAddress": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
