@@ -32,9 +32,10 @@ type IssuerKey struct {
 // default, NewDIDDocumentIssuers, reads both from DID documents; a deployment
 // that registers its issuers elsewhere supplies its own.
 //
-// The Verifier keeps the rest of each axis to itself: the proof policy (proof
-// type and purpose, members, a verificationMethod naming the issuer, the
-// cryptosuite lifecycle) runs before IssuerKey is asked; the key is used only
+// The Verifier keeps the rest of each axis to itself: the proof policy (the
+// checks ErrProofPolicy lists: proof type and purpose, members, a
+// verificationMethod naming the issuer, the cryptosuite lifecycle, and the
+// rest) runs before IssuerKey is asked; the key is used only
 // when its ID is the proof's verificationMethod; the proof is verified against
 // it under the exact suite contract; and the Owner must be the Owner the
 // issuer's Process DID names. An IssuerVerifier cannot loosen any of these.

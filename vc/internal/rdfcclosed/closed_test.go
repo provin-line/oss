@@ -210,6 +210,9 @@ func TestRDFC_RefusedUntilRegistered(t *testing.T) {
 	if sa.State != vc.ConfidenceFailed || down.calls != 0 {
 		t.Errorf("vc.Verifier before registering, the resolver down: signer authenticity %v after %d lookups, want failed after none", sa.State, down.calls)
 	}
+	if !errors.Is(sa.Err, vc.ErrCryptosuiteNotRegistered) || !strings.Contains(sa.Err.Error(), "vc.RegisterEdDSARDFC2022") {
+		t.Errorf("vc.Verifier before registering: Err = %v, want vc.ErrCryptosuiteNotRegistered naming vc.RegisterEdDSARDFC2022", sa.Err)
+	}
 
 	// Registered from several goroutines while proofs are verified: one
 	// registration, and no race (go test -race).

@@ -48,6 +48,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `keybinding.status-list.content-hash` defines it and `VerifyStatusList`
   compares it. It checks the list's shape, not its signature: an equal hash
   says two lists have the same content, not that either is the issuer's.
+- `vc`: a signer-authenticity verdict that is not verified says why.
+  `SignerAuthenticityResult.Err` is nil exactly when `State` is verified;
+  otherwise `errors.Is` tells the cause: `vc.ErrUnsigned`,
+  `vc.ErrProofPolicy`, `vc.ErrCryptosuiteNotRegistered`,
+  `vc.ErrIssuerNotFound` or `vc.ErrSignatureInvalid` for a failed verdict,
+  and the issuer verifier's or the lifecycle registry's own error for an
+  indeterminate one. The field's documentation lists each condition and the
+  order they are decided in. `State` and the other fields are unchanged, and
+  so are `Verify`'s and `VerifyChain`'s verdicts.
+- `vc`: the chain-link checks tell their failures apart without reading
+  text. `ValidateChainLinks` and `ValidateChainFrom` return an error that is
+  `vc.ErrChainLinkBroken` for a broken link (a `*ChainLinkError`, which now
+  matches it under `errors.Is`) and `vc.ErrChainMalformed` for an empty chain
+  or a nil credential; the errors' texts are unchanged. `VerifyChain` is
+  unchanged: a broken link is a failed data-integrity verdict, not an error.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI

@@ -37,7 +37,7 @@ then every function that issues or verifies, and every `Verifier`, refuses a
 proof of the suite: the functions with an error that wraps
 `vc.ErrCryptosuiteNotRegistered` and names `vc.RegisterEdDSARDFC2022`, a
 `Verifier` by finding signer authenticity failed, before it looks up the
-issuer. Once it is called, an issuer uses the suite when it names it to
+issuer, with the same error in `SignerAuthenticityResult.Err`. Once it is called, an issuer uses the suite when it names it to
 `CreateProof` or `WithCryptosuite`. No package of this module calls it
 (`scripts/check-rdfc-registration.sh`). Its canonicalizer must pass an **IRI
 expansion probe** when it is registered — the process panics rather than serve
@@ -88,7 +88,11 @@ broken canonicalization.
   that canonicalizes, under the reported suite contract, as this body does; the
   caller checks its own type's rules (type, fields, validity period, which of
   the issuer's keys may sign) — see the method's documentation for the values
-  canonicalization does not tell apart.
+  canonicalization does not tell apart. A verdict that is not verified says
+  why in `Err`, which `errors.Is` tells apart: `ErrUnsigned`,
+  `ErrProofPolicy`, `ErrCryptosuiteNotRegistered`, `ErrIssuerNotFound`,
+  `ErrSignatureInvalid`, or, for an indeterminate verdict, the error of the
+  lookup that could not answer.
 - Chain classification (orthogonal to confidence): `ChainOrigin` /
   `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — who signed and how many
   trust boundaries were crossed, not how the data was produced.
@@ -101,7 +105,9 @@ broken canonicalization.
   between credentials (and that the origin claims no predecessor);
   `ValidateChainFrom` also binds the origin's `inputHash` to a given input. They
   run the same link checks as `VerifyChain`. A prefix of a linked chain is
-  linked, so they do not detect a missing tail.
+  linked, so they do not detect a missing tail. A broken link is
+  `ErrChainLinkBroken` (a `*ChainLinkError` with the credential's index), and
+  a chain with nothing to link `ErrChainMalformed`.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'
