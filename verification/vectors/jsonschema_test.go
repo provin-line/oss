@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,38 +65,96 @@ func loadSuite(t *testing.T) map[string][]suiteCase {
 }
 
 // outcomeClass names an error by the head of schemadoc's message, under
-// schema/local's wrapper, and by a phrase in the rest of it where one head
-// starts more than one class. Text from the schema or the payload comes only
-// after a head, so it cannot change the class.
-type outcomeClass struct{ class, head, phrase string }
+// schema/local's wrapper, and by a phrase where one head starts more than one
+// class: in the rest of the message (inRest), or at the start of the reason
+// of a pattern the metaschema check refuses (patternReason). A metaschema
+// refusal that is not a pattern's is notPattern. Text from the schema or the
+// payload comes only after a head, and a pattern refusal is read by position,
+// so neither can change the class.
+type outcomeClass struct {
+	class, head, phrase string
+	part                messagePart
+}
+
+// messagePart is where an outcomeClass's phrase is read.
+type messagePart int
+
+const (
+	inRest messagePart = iota
+	inPatternReason
+	notPattern
+)
+
+// metaschemaHead begins the message of a schema its metaschema check
+// refuses.
+const metaschemaHead = "schemadoc: compile: the schema does not conform to its metaschema: "
+
+// patternReason reads a metaschema refusal (the message after metaschemaHead)
+// by position: "at '<location>': '<pattern>' is not valid regex: <reason>",
+// where the location and the pattern write ' and \ as \' and \\. It reports
+// the reason, and whether the refusal is a pattern's.
+func patternReason(rest string) (string, bool) {
+	r, ok := strings.CutPrefix(rest, "at '")
+	if !ok {
+		return "", false
+	}
+	if i := quoteEnd(r); i < 0 {
+		return "", false
+	} else if r, ok = strings.CutPrefix(r[i+1:], ": '"); !ok {
+		return "", false
+	}
+	i := quoteEnd(r)
+	if i < 0 {
+		return "", false
+	}
+	return strings.CutPrefix(r[i+1:], " is not valid regex: ")
+}
+
+// quoteEnd is the index of the first ' in s that no backslash escapes, or -1.
+func quoteEnd(s string) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '\'':
+			return i
+		}
+	}
+	return -1
+}
 
 // The classes of an outcome. Add's refusals: schema-budget (the bounds and
-// budgets of compiling a schema), refused-pattern-dialect (a pattern outside
-// the product's regular-expression dialect, which the metaschema check
-// reports), schema-invalid (a schema its metaschema does not admit) and
-// refused-external-ref (a schema that refers outside itself). The metaschema
-// rows come before the external-ref row, whose head they share. Validate's
-// outcomes: valid, invalid, payload-budget, payload-nesting and
-// refused-payload (the payload's decode and its bounds).
+// budgets of compiling a schema, a pattern's among them), refused-pattern-
+// dialect (a pattern the product does not read: outside its regular-
+// expression dialect, or one Go's parser refuses), schema-invalid (a schema
+// its metaschema does not admit) and refused-external-ref (a schema that
+// refers outside itself). A pattern's bounds come before its dialect, which
+// takes any other reason, and the metaschema rows before the external-ref
+// row, whose head they share. Validate's outcomes: valid, invalid,
+// payload-budget, payload-nesting and refused-payload (the payload's decode
+// and its bounds).
 var (
 	addClasses = []outcomeClass{
-		{"schema-budget", "schemadoc: schema nested ", ""},
-		{"schema-budget", "schemadoc: the schema holds ", ""},
-		{"schema-budget", "schemadoc: the schema's JSON pointers and URLs ", ""},
-		{"schema-budget", "schemadoc: checking the schema against its metaschema nests schemas deeper than ", ""},
-		{"schema-budget", "schemadoc: checking the schema against its metaschema needs more than its work budget ", ""},
-		{"refused-pattern-dialect", "schemadoc: compile: the schema does not conform to its metaschema: ", "is not a general category this package accepts"},
-		{"schema-invalid", "schemadoc: compile: the schema does not conform to its metaschema: ", ""},
-		{"refused-external-ref", "schemadoc: compile: ", "schemadoc: external $ref is not allowed: "},
+		{"schema-budget", "schemadoc: schema nested ", "", inRest},
+		{"schema-budget", "schemadoc: the schema holds ", "", inRest},
+		{"schema-budget", "schemadoc: the schema's JSON pointers and URLs ", "", inRest},
+		{"schema-budget", "schemadoc: checking the schema against its metaschema nests schemas deeper than ", "", inRest},
+		{"schema-budget", "schemadoc: checking the schema against its metaschema needs more than its work budget ", "", inRest},
+		{"schema-budget", metaschemaHead, "regexp: its program has more than ", inPatternReason},
+		{"schema-budget", metaschemaHead, "regexp: the schema's regular expressions, together, have more instructions than it is allowed", inPatternReason},
+		{"schema-budget", metaschemaHead, "regexp: its Unicode classes hold more than ", inPatternReason},
+		{"refused-pattern-dialect", metaschemaHead, "", inPatternReason},
+		{"schema-invalid", metaschemaHead, "", notPattern},
+		{"refused-external-ref", "schemadoc: compile: ", "schemadoc: external $ref is not allowed: ", inRest},
 	}
 	validateClasses = []outcomeClass{
-		{"invalid", "schemadoc: does not conform: ", ""},
-		{"payload-budget", "schemadoc: validating the payload needs more than its work budget ", ""},
-		{"payload-nesting", "schemadoc: validating the payload nests schemas deeper than ", ""},
-		{"refused-payload", "schemadoc: not strict-decodable JSON: ", ""},
-		{"refused-payload", "schemadoc: payload nested ", ""},
-		{"refused-payload", "schemadoc: a number of ", ""},
-		{"refused-payload", "schemadoc: number ", ": exponent beyond ±"},
+		{"invalid", "schemadoc: does not conform: ", "", inRest},
+		{"payload-budget", "schemadoc: validating the payload needs more than its work budget ", "", inRest},
+		{"payload-nesting", "schemadoc: validating the payload nests schemas deeper than ", "", inRest},
+		{"refused-payload", "schemadoc: not strict-decodable JSON: ", "", inRest},
+		{"refused-payload", "schemadoc: payload nested ", "", inRest},
+		{"refused-payload", "schemadoc: a number of ", "", inRest},
+		{"refused-payload", "schemadoc: number ", ": exponent beyond ±", inRest},
 	}
 )
 
@@ -108,8 +168,20 @@ func classify(addErr, validateErr error) (string, bool) {
 		if !ok {
 			return "", false
 		}
+		// A metaschema refusal cut short ("…") may have lost what decides it.
+		if strings.HasPrefix(msg, metaschemaHead) && strings.HasSuffix(msg, "…") {
+			return "", false
+		}
 		for _, c := range classes {
-			if rest, ok := strings.CutPrefix(msg, c.head); ok && strings.Contains(rest, c.phrase) {
+			rest, ok := strings.CutPrefix(msg, c.head)
+			if !ok {
+				continue
+			}
+			reason, isPattern := patternReason(rest)
+			switch {
+			case c.part == inRest && strings.Contains(rest, c.phrase),
+				c.part == inPatternReason && isPattern && strings.HasPrefix(reason, c.phrase),
+				c.part == notPattern && !isPattern:
 				return c.class, true
 			}
 		}
@@ -122,6 +194,23 @@ func classify(addErr, validateErr error) (string, bool) {
 		return match(validateErr, validateHead, validateClasses)
 	default:
 		return "valid", true
+	}
+}
+
+// A pattern refusal whose message is cut before its reason names no class:
+// the reason decides it.
+func TestClassifyCutPatternRefusalFails(t *testing.T) {
+	for name, schema := range map[string]string{
+		"a long pattern outside the dialect": `{"pattern":"` + strings.Repeat("a", 1100) + `(?i)"}`,
+		"a long pattern over its program":    `{"pattern":"` + strings.Repeat(`a{1000}`, 9) + strings.Repeat("b", 1100) + `"}`,
+	} {
+		err := local.New().Add(suiteID, []byte(schema))
+		if err == nil || !strings.HasSuffix(err.Error(), "…") {
+			t.Fatalf("%s: %v, want a refusal cut before its reason", name, err)
+		}
+		if class, ok := classify(err, nil); ok {
+			t.Errorf("%s: classed %q", name, class)
+		}
 	}
 }
 
@@ -152,7 +241,17 @@ func TestClassifyProductRefusals(t *testing.T) {
 	}{
 		{"external ref", `{"$ref":"http://example.com/x"}`, "", "refused-external-ref"},
 		{"metaschema", `{"type":5}`, "", "schema-invalid"},
-		{"pattern dialect", `{"pattern":"\\p{Letter}"}`, "", "refused-pattern-dialect"},
+		{"pattern dialect", `{"pattern":"\\p{Foo}"}`, "", "refused-pattern-dialect"},
+		{"pattern inline flag", `{"pattern":"(?i)a"}`, "", "refused-pattern-dialect"},
+		{"pattern \\Q", `{"pattern":"\\Qa\\E"}`, "", "refused-pattern-dialect"},
+		{"pattern count with a leading zero", `{"pattern":"a{01}"}`, "", "refused-pattern-dialect"},
+		{"pattern Go's parser refuses", `{"pattern":"(?:a{1000}){1000}"}`, "", "refused-pattern-dialect"},
+		{"pattern program", `{"pattern":"` + strings.Repeat(`a{1000}`, 9) + `"}`, "", "schema-budget"},
+		{"pattern Unicode classes", `{"pattern":"` + strings.Repeat(`\\p{L}`, 30) + `"}`, "", "schema-budget"},
+		{"patterns together", `{"allOf":[` + strings.Repeat(`{"pattern":"a{900}"},`, 60) + `{}]}`, "", "schema-budget"},
+		{"a pattern quoting a bound's text", `{"pattern":"(?i)' is not valid regex: regexp: its program has more than "}`, "", "refused-pattern-dialect"},
+		{"a category name quoting a bound's text", `{"pattern":"\\p{' is not valid regex: regexp: its program has more than }"}`, "", "refused-pattern-dialect"},
+		{"a location quoting the regex text", `{"properties":{"' is not valid regex: ":{"type":5}}}`, "", "schema-invalid"},
 		{"schema depth", nested(`{"not":`, `{}`, `}`, 64), "", "schema-budget"},
 		{"schema objects", `{"allOf":[` + strings.Repeat(`{},`, 7000) + `{}]}`, "", "schema-budget"},
 		{"valid", `{"type":"string"}`, `"a"`, "valid"},
@@ -209,15 +308,45 @@ type suiteRow struct{ class, fragment string }
 
 func loadSuiteExpected(t *testing.T) map[[3]string]suiteRow {
 	t.Helper()
+	out, err := suiteExpected(readExpected(t, "jsonschema.expected.tsv", 6))
+	if err != nil {
+		t.Fatalf("jsonschema.expected.tsv: %v", err)
+	}
+	return out
+}
+
+// suiteExpected keys the table's rows by file, case and test. A row with no
+// error fragment, or a key listed twice, is an error.
+func suiteExpected(rows [][]string) (map[[3]string]suiteRow, error) {
 	out := map[[3]string]suiteRow{}
-	for _, r := range readExpected(t, "jsonschema.expected.tsv", 6) {
+	for _, r := range rows {
 		k := [3]string{r[0], r[1], r[2]}
 		if _, dup := out[k]; dup {
-			t.Fatalf("jsonschema.expected.tsv: %q listed twice", k)
+			return nil, fmt.Errorf("%q listed twice", k)
+		}
+		if r[4] == "" {
+			return nil, fmt.Errorf("%q names no error fragment", k)
 		}
 		out[k] = suiteRow{class: r[3], fragment: r[4]}
 	}
-	return out
+	return out, nil
+}
+
+// A row names the error it expects; one with no fragment would match any
+// error, and one listed twice is ambiguous: both are refused.
+func TestSuiteExpectedRefusesAmbiguousRows(t *testing.T) {
+	row := []string{"ref.json", "a case", "*", "refused-external-ref", "external $ref is not allowed", "why"}
+	if _, err := suiteExpected([][]string{row}); err != nil {
+		t.Fatalf("a well-formed row: %v", err)
+	}
+	empty := slices.Clone(row)
+	empty[4] = ""
+	if _, err := suiteExpected([][]string{empty}); err == nil {
+		t.Error("a row with no error fragment was taken")
+	}
+	if _, err := suiteExpected([][]string{row, row}); err == nil {
+		t.Error("a row listed twice was taken")
+	}
 }
 
 func TestJSONSchemaSuiteKeysAreUnique(t *testing.T) {

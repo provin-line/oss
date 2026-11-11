@@ -1,4 +1,4 @@
-# verification — provin OSS の形式モデル
+# verification — provin OSS の形式モデルと標準 vector
 > 日本語版 — English: [README.md](README.md)
 
 この directory は test 専用の Go module（`github.com/provin-line/oss/verification`）で、
@@ -9,7 +9,7 @@ production code は持たず、root の module の外にある: root の `go tes
 
 | model | 道具 | 対象 |
 | --- | --- | --- |
-| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0（Maude 3.5.1） | L2 の peer wire 証明（[auth.ja.md § L2](../docs/protocol/auth.ja.md)）: 署名した view とその audience、一度きりの nonce、署名が通った後にだけ記録される nonce |
+| [`tamarin/wireauth.spthy`](tamarin/wireauth.spthy) | Tamarin 1.12.0（Maude 3.5.1） | L2 の peer wire 証明（[auth.ja.md § L2](../docs/protocol/auth.ja.md#l2--peer-wire-証明wireauth)）: 署名した view とその audience、一度きりの nonce、署名が通った後にだけ記録される nonce |
 | [`tamarin/bearerorigins.spthy`](tamarin/bearerorigins.spthy) | Tamarin 1.12.0（Maude 3.5.1） | node が L1 の bearer（`vc-store-bearer`）を誰に見せるか |
 
 dPLaaX protocol そのものの性質（来歴の連鎖、委任）は仕様の repository
@@ -41,7 +41,7 @@ model は、それを読む前提の分しか意味を持たない。model の h
   ID（D-w12）。view は audience を束ね、検証者は別の audience を名指す proof を断り、
   自分の audience で view を組み直す。1 つの audience を複数の検証者が持ちうる
   （replica。それぞれ自分の store を持つ）。配備は audience ごとに検証者を 1 つに
-  する。これが `replay_across_replicas` を閉じる（[auth.ja.md § L2](../docs/protocol/auth.ja.md)）。
+  する。これが `replay_across_replicas` を閉じる（[auth.ja.md § L2](../docs/protocol/auth.ja.md#l2--peer-wire-証明wireauth)）。
 - **要求。** 要求はその op と fields のこと: handler は `Verifier.Verify` に渡した
   fields にだけ基づいて動き、検証者を共有する面の間で op の値は重ならない。正直な
   署名者は、渡された audience・op・issuedAt・fields のどれにでも署名する。
@@ -49,7 +49,7 @@ model は、それを読む前提の分しか意味を持たない。model の h
   proof を受理した（`Verify` が nil を返し nonce を記録した）。
   `ReplayRejected(...)`: 署名は通ったが nonce が記録済み（`ErrReplay`）。
 - **含めないもの。** fields の値の文法と JCS の bytes（D-w11。test vector と
-  fuzz の義務）、認可（拒否は store を元のままにする。発火しない rule と同じ）、
+  fuzz に任せる）、認可（拒否は store を元のままにする。発火しない rule と同じ）、
   DID の綴り（view と store の鍵は同じ文字列を使う）、鍵の rotation。
 
 ## `bearerorigins.spthy` の契約
@@ -142,13 +142,11 @@ file は `vectors/testdata/` に手を加えずに置き、出所ごとに licen
 
 **期待。** vector の期待の結果は、その vector 自身のもの（valid か invalid）。製品の契約が別の結果を与えるところだけ、理由と一緒に `vectors/<suite>.expected.tsv` に書く。表の行は vector を回す前に契約から書いた。期待と違う結果、どの vector も使わない行、vector 自身の結果を繰り返す行は、どれも失敗にする。
 
-- **Wycheproof**（`wycheproof.expected.tsv`）: Wycheproof が `acceptable` とする vector は全部行を持つ。小さい位数の Ed25519 の公開鍵は断る（`ed25519.ValidatePublicKey`）。混合位数の鍵の下の署名は、標準ライブラリの式が受けるとおりに受ける。DigestInfo に NULL の無い RSA の署名は断る（strict な PKCS #1 v1.5）。ほかの vector はすべて自身の結果。
+- **Wycheproof**（`wycheproof.expected.tsv`）: Wycheproof が `acceptable` とする vector は全部行を持ち、断る行は期待する error を名指す（package の error か、検証が false と答えるものは `-`）。小さい位数の Ed25519 の公開鍵は断り（`ed25519.ValidatePublicKey`）、R が小さい位数の点である署名も断る（どちらも `ed25519.ErrSmallOrder`）。混合位数の鍵の下のほかの署名は、標準ライブラリの式が受けるとおりに受ける。試験は、この 21 行を含む Ed25519 の vector すべての結果を、製品を使わずに導き直す: `crypto/ed25519.Verify` と、点が正規の形か・小さい位数かを決める曲線の演算から（標準ライブラリが受ける vector のうち 8 つは、曲線の演算だけが断る）。DigestInfo に NULL の無い RSA の署名は断る（strict な PKCS #1 v1.5）。ほかの vector はすべて自身の結果。
 - **RFC 8785**: 例外は無い。canonicalizer は参照実装の全 input に output を byte で一致して与え、Appendix B の有限の値すべてにその直列化を与える。NaN と Infinity は断る。参照実装の input `structures` は大文字小文字だけ違う object の名前を使い、製品の strict な decode はそれを断る（`canon.DuplicateKeyError`）。そのためこの 1 組は canonicalizer の段だけで照合する。strict な decode を通すと、ほかの 5 組は同じ bytes になる。canonicalize の前に admission が断るもの（`canon.AdmitSafeNumbers`。RFC 8785 自身の `1e30` など）は、この段に含まない。W3C の JCS の test vector は `vc` 自身の試験が照合している（`vc/w3c_forkw_internal_test.go`、`vc/rdfc_internal_test.go`）。
-- **JSON-Schema-Test-Suite**（`jsonschema.expected.tsv`）: 結果は、製品がそれをどう扱ったか（assertion が成り立つか、落ちるか、どの拒否か）で分ける。どの class にも当たらない error は失敗にする。2 つの class が profile の除外:
-  - `refused-external-ref`: 自分の外の document を指す schema（suite の `http://localhost:1234` の remote schema）は断る。製品は外部の `$ref` を読まない（22 case、run の前に列挙）。
-  - `refused-pattern-dialect`: Unicode の general category を長い名前（`\p{Letter}`）で書く pattern は断る。製品の pattern の方言は短い名前（`L`、`Lu`、`Nd` …）だけを受ける（2 case、run の中で見つけ、review を経て足した）。
+- **JSON-Schema-Test-Suite**（`jsonschema.expected.tsv`）: 結果は、製品がそれをどう扱ったか（assertion が成り立つか、落ちるか、どの拒否か）で分ける。どの class にも当たらない error は失敗にする。profile の除外の class は 1 つで、`refused-external-ref`: 自分の外の document を指す schema（suite の `http://localhost:1234` の remote schema）は断る。製品は外部の `$ref` を読まない（22 case、run の前に列挙）。pattern は Unicode の general category を、短い名前か、長い名前・別名で、ECMA-262 の綴りのとおりに書く（`L`、`Letter`、`Nd`、`digit` …）。
 
-  各行は期待する error も名指すので、別の理由の拒否は失敗になる。上限と予算、metaschema が断る schema、decode が断る payload の class は、run の前に 0 件と宣言し、0 件のまま。
+  各行は期待する error も名指すので、別の理由の拒否は失敗になる。上限と予算、製品の方言の外の pattern、metaschema が断る schema、decode が断る payload の class は、run の前に 0 件と宣言し、0 件のまま。
 
 ## 結果
 
@@ -166,13 +164,13 @@ CI を赤にする。
 | bearerorigins | 2 つの対照それぞれ | 上の表の lemma が期待どおり反証、ほかは証明 |
 | `NonceEpoch`（TLA+: 受理の窓、再起動の epoch、掃除） | — | 未着手 |
 
+未解決: 無し。
+
 | 標準 vector | 状態 |
 | --- | --- |
 | Wycheproof（1,248 vector） | すべて期待どおり。表の行は 32 で、すべて `acceptable` の vector |
 | RFC 8785（6 組、26 個の数） | すべて期待どおり |
-| JSON-Schema-Test-Suite（1,300 test） | すべて期待どおり。表の case は 24 |
-
-未解決: 無し。
+| JSON-Schema-Test-Suite（1,300 test） | すべて期待どおり。表の case は 22 |
 
 ## 回し方
 

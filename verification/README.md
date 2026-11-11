@@ -1,4 +1,4 @@
-# verification — formal models of provin OSS
+# verification — formal models and standard vectors for provin OSS
 
 This directory is a test-only Go module (`github.com/provin-line/oss/verification`)
 that checks provin OSS against formal models and against third-party standard
@@ -57,8 +57,8 @@ header comment says the same.
   is `R`, accepted the proof (`Verify` returned nil and recorded the nonce).
   `ReplayRejected(...)`: the signature verified and the nonce was already
   recorded (`ErrReplay`).
-- **Not modelled.** The fields' value grammar and the JCS bytes (D-w11; for
-  test vectors and fuzzing), authorization (a refusal leaves the store as it
+- **Not modelled.** The fields' value grammar and the JCS bytes (D-w11; left
+  to test vectors and fuzzing), authorization (a refusal leaves the store as it
   was, which is what a rule that does not fire does), DID spelling (the view
   and the store key use the same string), key rotation.
 
@@ -168,11 +168,18 @@ expectation, a row no vector uses and a row that repeats the vector's own
 outcome all fail.
 
 - **Wycheproof** (`wycheproof.expected.tsv`): every vector Wycheproof marks
-  `acceptable` has a row. Ed25519 public keys of small order are refused
-  (`ed25519.ValidatePublicKey`); signatures under a mixed-order key are
-  accepted as the standard library's equation accepts them; an RSA signature
-  whose DigestInfo lacks its NULL parameter is refused (strict PKCS #1 v1.5).
-  Every other vector has its own outcome.
+  `acceptable` has a row, and a row that refuses names the error it expects
+  (a package's error, or `-` for a verifier that answers false). An Ed25519
+  public key of small order is refused (`ed25519.ValidatePublicKey`), and so
+  is a signature whose R is a point of small order (both
+  `ed25519.ErrSmallOrder`); other signatures under a mixed-order key are
+  accepted as the standard library's equation accepts them. A test derives
+  every Ed25519 vector's outcome, those 21 rows among them, without the
+  product: from `crypto/ed25519.Verify`, and the curve's arithmetic for
+  whether a point is canonical and of small order (which alone refuses 8
+  vectors the standard library accepts). An RSA signature whose DigestInfo lacks its NULL
+  parameter is refused (strict PKCS #1 v1.5). Every other vector has its own
+  outcome.
 - **RFC 8785**: no exceptions. The canonicalizer gives every reference input
   its output byte for byte, and every finite value of Appendix B its
   serialization; NaN and Infinity are refused. The reference input
@@ -185,21 +192,18 @@ outcome all fail.
   own tests (`vc/w3c_forkw_internal_test.go`, `vc/rdfc_internal_test.go`).
 - **JSON-Schema-Test-Suite** (`jsonschema.expected.tsv`): an outcome is
   classed by what the product does with it (an assertion that holds or
-  fails, or which refusal), and an error no class names fails. Two classes
-  are the profile's exclusions:
-  - `refused-external-ref`: a schema that refers to a document outside
-    itself (the suite's remote schemas at `http://localhost:1234`) is
-    refused, as the product loads no external `$ref` (22 cases, listed
-    before the run);
-  - `refused-pattern-dialect`: a pattern that names a Unicode general
-    category by its long name (`\p{Letter}`) is refused, as the product's
-    pattern dialect takes the short names only (`L`, `Lu`, `Nd` …; 2 cases,
-    found in the run and added after review).
+  fails, or which refusal), and an error no class names fails. One class is
+  the profile's exclusion, `refused-external-ref`: a schema that refers to a
+  document outside itself (the suite's remote schemas at
+  `http://localhost:1234`) is refused, as the product loads no external
+  `$ref` (22 cases, listed before the run). A pattern names a Unicode
+  general category by its short name or by a long name or alias, spelled as
+  ECMA-262 spells them (`L`, `Letter`, `Nd`, `digit` …).
 
   Each row also names the error it expects, so a refusal for another reason
-  fails. The classes for bounds and budgets, for a schema its metaschema
-  refuses, and for a payload the decoder refuses were declared empty before
-  the run, and stay empty.
+  fails. The classes for bounds and budgets, for a pattern outside the
+  product's dialect, for a schema its metaschema refuses, and for a payload
+  the decoder refuses were declared empty before the run, and stay empty.
 
 ## Results
 
@@ -224,7 +228,7 @@ Unresolved: none.
 | --- | --- |
 | Wycheproof (1,248 vectors) | every vector has its expected outcome; 32 rows in the table, all for `acceptable` vectors |
 | RFC 8785 (6 pairs, 26 numbers) | every result as expected |
-| JSON-Schema-Test-Suite (1,300 tests) | every test has its expected outcome; 24 cases in the table |
+| JSON-Schema-Test-Suite (1,300 tests) | every test has its expected outcome; 22 cases in the table |
 
 ## Running the checks
 

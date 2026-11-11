@@ -166,7 +166,7 @@ func TestPrescan_WhatItAcceptsGoParsesWithinItsSize(t *testing.T) {
 	pieces := []string{
 		"a", "b", "é", ".", "^", "$", "|", "(", ")", "(?:", "(?<n", ">", "[", "]", "[^", "-", "\\", "\\d", "\\w", "\\s",
 		"\\b", "\\B", "\\x41", "\\x4", "\\p{L}", "\\P{Nd}", "\\p{", "{", "}", ",", "0", "1", "2", "*", "+", "?", ":", "=", "!",
-		"\\t", "\\.", "\\[", "\\]", "\\-", "\\/", "\\{", "(?i)",
+		"\\t", "\\.", "\\[", "\\]", "\\-", "\\/", "\\{", "(?i)", "\\p{Letter}", "\\P{digit}", "\\p{letter}",
 	}
 	rng := rand.New(rand.NewPCG(1, 2))
 	accepted := 0
@@ -188,7 +188,7 @@ func TestPrescan_WhatItAcceptsGoParsesWithinItsSize(t *testing.T) {
 
 func FuzzPrescan(f *testing.F) {
 	for _, expr := range []string{
-		`^[a-zA-Z\d][a-zA-Z\d._+()-]{0,254}$`, `[\p{L}\p{Nd}_-]+`, `\x41[\x41-\x5A]`, `a{2,5}?`, `[-a]|[a-]`, `(?<name>a)(?:b|c)*`,
+		`^[a-zA-Z\d][a-zA-Z\d._+()-]{0,254}$`, `[\p{L}\p{Nd}_-]+`, `\x41[\x41-\x5A]`, `a{2,5}?`, `[-a]|[a-]`, `(?<name>a)(?:b|c)*`, `\p{Letter}+`, `[\P{digit}_]`,
 	} {
 		f.Add(expr)
 	}

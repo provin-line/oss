@@ -187,8 +187,11 @@ func nodeSize(re *syntax.Regexp) int64 {
 //   - a character, other than ^ $ \ . * + ? ( ) [ ] { } |; and .
 //   - the escapes \d \D \w \W \s \S \b \B, \t \n \v \f \r, \xHH, and a
 //     syntax character or / escaped;
-//   - \p{Name} and \P{Name}, Name a general category of Go's tables
-//     (unicode.Categories: L, Lu, Nd ...), which ECMA-262 names alike;
+//   - \p{Name} and \P{Name}, Name a general category by its short name
+//     (unicode.Categories: L, Lu, Nd ...) or by a long name or alias
+//     (categoryAliases: Letter, Decimal_Number, digit ...), spelled exactly
+//     as ECMA-262 spells them; Go's parser, which reads such names
+//     loosely, reads these as ECMA-262 does;
 //   - a class [...] or [^...] of characters, those escapes (\b and \B
 //     aside) and \- , and ranges of two characters, the first not after
 //     the second; not empty, with no [ inside;
@@ -219,7 +222,7 @@ func prescan(expr string) error {
 			return 0, errors.New("regexp: a Unicode class is not closed")
 		}
 		name := expr[j+1 : j+k]
-		if _, ok := unicode.Categories[name]; !ok {
+		if categoryTable(name) == nil {
 			return 0, fmt.Errorf("regexp: %q is not a general category this package accepts", name)
 		}
 		ranges += unicodeClassRanges(name)
@@ -425,12 +428,44 @@ func isHex(c byte) bool    { return isDigit(c) || 'a' <= c && c <= 'f' || 'A' <=
 func isDigit(c byte) bool  { return '0' <= c && c <= '9' }
 func isLetter(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
 
+// categoryAliases are the names of a general category other than its short
+// name, each with the short name it names, as ECMA-262 11th edition (ES2020,
+// the edition JSON Schema 2020-12 refers to) lists them in Table 57, "Value
+// aliases and canonical values for the Unicode property General_Category".
+// They, and the short names of Go's tables, are what a pattern may name; Go's
+// parser reads each as its short name (the tests check it for the Go that
+// builds them).
+var categoryAliases = map[string]string{
+	"Cased_Letter": "LC", "Close_Punctuation": "Pe", "Connector_Punctuation": "Pc",
+	"Control": "Cc", "cntrl": "Cc", "Currency_Symbol": "Sc", "Dash_Punctuation": "Pd",
+	"Decimal_Number": "Nd", "digit": "Nd", "Enclosing_Mark": "Me", "Final_Punctuation": "Pf",
+	"Format": "Cf", "Initial_Punctuation": "Pi", "Letter": "L", "Letter_Number": "Nl",
+	"Line_Separator": "Zl", "Lowercase_Letter": "Ll", "Mark": "M", "Combining_Mark": "M",
+	"Math_Symbol": "Sm", "Modifier_Letter": "Lm", "Modifier_Symbol": "Sk",
+	"Nonspacing_Mark": "Mn", "Number": "N", "Open_Punctuation": "Ps", "Other": "C",
+	"Other_Letter": "Lo", "Other_Number": "No", "Other_Punctuation": "Po",
+	"Other_Symbol": "So", "Paragraph_Separator": "Zp", "Private_Use": "Co",
+	"Punctuation": "P", "punct": "P", "Separator": "Z", "Space_Separator": "Zs",
+	"Spacing_Mark": "Mc", "Surrogate": "Cs", "Symbol": "S", "Titlecase_Letter": "Lt",
+	"Unassigned": "Cn", "Uppercase_Letter": "Lu",
+}
+
+// categoryTable is the table of the general category name names, by its
+// short name or by a long name or alias spelled exactly (categoryAliases),
+// else nil.
+func categoryTable(name string) *unicode.RangeTable {
+	if short, ok := categoryAliases[name]; ok {
+		name = short
+	}
+	return unicode.Categories[name]
+}
+
 // unicodeClassRanges is the ranges Go's parser puts in a class for the
 // general category name (prescan counts one more for a negated class): one
 // per range of its table, or one per rune of a range whose stride is not 1.
 // A name that is not a general category counts none; prescan refuses it.
 func unicodeClassRanges(name string) int {
-	t := unicode.Categories[name]
+	t := categoryTable(name)
 	if t == nil {
 		return 0
 	}

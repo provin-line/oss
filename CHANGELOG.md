@@ -38,6 +38,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   SHA-256, with the outcomes that differ from a vector's own listed with
   their reasons, and the CI job `vectors`, which runs them on every change.
 
+### Changed
+
+- `schema`: a JSON Schema `pattern` may name a Unicode general category by a
+  long name or alias as well as by its short name, spelled as ECMA-262 spells
+  them (`\p{Letter}`, `\p{Decimal_Number}`, `\p{digit}` …, read as `\p{L}`,
+  `\p{Nd}`). Another spelling (`\p{letter}`, `\p{Uppercase Letter}`), a
+  property other than a general category (`\p{Greek}`, `\p{Any}`) and the
+  `\p{gc=…}` and `\p{General_Category=…}` forms are still refused.
+
 ### Breaking changes
 
 - **Wire:** the L2 signed view is version 2,
