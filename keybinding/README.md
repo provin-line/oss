@@ -45,6 +45,20 @@ share), `roles` is always a list of distinct names, and the key is `keyId` and
 a public JWK with exactly the members RFC 7638 hashes for its `kty` —
 Ed25519, P-256 or RSA, a key the `crypto` validators accept.
 
+A binding's `@context` begins with credentials v2, dplaax v1 and a snapshot of
+the dplaax key-binding branch context
+(`https://dplaax.dev/vc/branches/v1/keybinding/` and the twelve digits of the
+time it was frozen), in that order, then only absolute URIs, each a URI
+scheme and a colon first (dplaax `keybinding.context`). `Issue` names the
+snapshot `202611101543`; any snapshot is accepted by its URI's form. A
+binding with no snapshot anywhere (credentials v2 and dplaax v1, then only
+absolute URIs) is accepted while its `validFrom` is before
+2027-01-01T00:00:00Z, so that issuers have until then to add it. A list's
+`@context` begins with credentials v2, then only absolute URIs (dplaax
+`keybinding.status-list.shape`). The proof signs `@context` as written, and
+no context document is read. A relying party upgrades before its issuers:
+a verifier of 0.4.x refuses a binding that names the snapshot.
+
 A signature that cannot be checked now (the issuer's document unavailable) is
 `ErrSignatureUnestablished`, not `ErrSignature`: retry, do not treat it as a
 forgery.

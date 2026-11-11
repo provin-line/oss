@@ -11,6 +11,18 @@
 // JSON numbers: the list index is a decimal string, so no two indexes share a
 // canonical form.
 //
+// A binding's @context begins with credentials v2, dplaax v1 and a snapshot of
+// the dplaax key-binding branch context (https://dplaax.dev/vc/branches/v1/keybinding/
+// and the twelve digits of the time it was frozen), in that order, then only
+// absolute URIs, each a URI scheme and a colon first (dplaax
+// keybinding.context). Issue names the snapshot 202611101543, and any snapshot
+// is accepted by its URI's form. A binding with no snapshot anywhere
+// (credentials v2 and dplaax v1, then only absolute URIs) is accepted while
+// its validFrom is before 2027-01-01T00:00:00Z. A list's @context begins with
+// credentials v2, then only absolute URIs (dplaax
+// keybinding.status-list.shape). The proof signs @context as written; no
+// context document is read.
+//
 // What an issuer may bind (the kinds, roles and key classes in its scope) is
 // not evaluated here; Binding carries them for the caller's scope check.
 package keybinding
@@ -29,8 +41,10 @@ import (
 	"io"
 	"maps"
 	"math/big"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/provin-line/oss/canon"
@@ -167,7 +181,7 @@ func bindingBody(b Binding) (map[string]any, error) {
 		jwk[k] = v
 	}
 	return map[string]any{
-		"@context":   []any{vc.ContextCredentialsV2, vc.ContextDplaaxVCV1},
+		"@context":   []any{vc.ContextCredentialsV2, vc.ContextDplaaxVCV1, issuedBranchContext},
 		"type":       []any{"VerifiableCredential", TypeKeyBinding},
 		"issuer":     b.Issuer,
 		"validFrom":  from,
@@ -277,11 +291,69 @@ func checkJWK(jwk map[string]any) error {
 	return nil
 }
 
-// The @context of a binding and of a status list.
-var (
-	bindingContexts    = []any{vc.ContextCredentialsV2, vc.ContextDplaaxVCV1}
-	statusListContexts = []any{vc.ContextCredentialsV2}
+// The @context of a binding and of a status list (dplaax keybinding.context,
+// keybinding.status-list.shape).
+// A binding's begins with credentials v2, dplaax v1 and a snapshot of the
+// key-binding branch context, in that order; one with no snapshot anywhere
+// begins with the first two only, and is accepted while its validFrom is
+// before contextCutOff. A list's begins with credentials v2. Every member
+// after those is an absolute URI. Issue names issuedBranchContext.
+const (
+	branchContextPrefix = "https://dplaax.dev/vc/branches/v1/keybinding/"
+	issuedBranchContext = branchContextPrefix + "202611101543"
 )
+
+var (
+	contextCutOff           = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	bindingContextPrefix    = []string{vc.ContextCredentialsV2, vc.ContextDplaaxVCV1}
+	statusListContextPrefix = []string{vc.ContextCredentialsV2}
+	// contextURI is a URI by the scheme it begins with (RFC 3986 §3.1), the
+	// pattern the dplaax schemas give each member of @context.
+	contextURI = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
+)
+
+// contextsOf returns body's @context when it is an array of URIs that begins
+// with prefix.
+func contextsOf(body map[string]any, prefix []string) ([]string, error) {
+	members, ok := body["@context"].([]any)
+	if !ok {
+		return nil, errors.New("@context is not an array")
+	}
+	contexts := make([]string, len(members))
+	for i, m := range members {
+		s, ok := m.(string)
+		if !ok || !contextURI.MatchString(s) {
+			return nil, fmt.Errorf("@context member %d is not a URI", i)
+		}
+		contexts[i] = s
+	}
+	if len(contexts) < len(prefix) || !slices.Equal(contexts[:len(prefix)], prefix) {
+		return nil, fmt.Errorf("@context does not begin with %v", prefix)
+	}
+	return contexts, nil
+}
+
+// isBranchContext reports whether s is a snapshot of the key-binding branch
+// context: its prefix and the twelve digits of the time it was frozen.
+func isBranchContext(s string) bool {
+	digits, ok := strings.CutPrefix(s, branchContextPrefix)
+	return ok && len(digits) == 12 && strings.Trim(digits, "0123456789") == ""
+}
+
+// checkBranchContext checks a binding's contexts, which begin with
+// bindingContextPrefix, against its validFrom: a snapshot third, or none
+// anywhere and validFrom before contextCutOff.
+func checkBranchContext(contexts []string, validFrom time.Time) error {
+	switch {
+	case len(contexts) > 2 && isBranchContext(contexts[2]):
+		return nil
+	case slices.ContainsFunc(contexts, isBranchContext):
+		return errors.New("@context holds the key-binding branch context elsewhere than third")
+	case !validFrom.Before(contextCutOff):
+		return fmt.Errorf("@context holds no key-binding branch context, which a binding valid from %s needs", contextCutOff.Format(timeLayout))
+	}
+	return nil
+}
 
 // errNotMade is a Verifier's answer when it was not made by NewVerifier.
 var errNotMade = errors.New("keybinding: Verifier not made by NewVerifier")
@@ -317,13 +389,14 @@ func NewVerifier(sig *vc.Verifier, audience string, skew time.Duration) (*Verifi
 }
 
 // signed reads raw and checks that the anchor's issuer signed it with one of
-// the anchor's issuance keys, under the W3C eddsa-jcs-2022 contract, that its
-// @context is contexts and its type is VerifiableCredential and typ, and that
-// it carries no unsafe number. It returns the body and the verification method
-// that signed it. An unestablished signature (the
-// issuer's document or the lifecycle unavailable) is
-// ErrSignatureUnestablished; a context error is returned as is.
-func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string, contexts []any) (map[string]any, string, error) {
+// the anchor's issuance keys, under the W3C eddsa-jcs-2022 contract; that its
+// @context is absolute URIs that begin with prefix; that its type is
+// VerifiableCredential and typ; and that it carries no unsafe number. It
+// returns the body and the verification method that signed it. An
+// unestablished signature (the issuer's document or the lifecycle
+// unavailable) is ErrSignatureUnestablished; a context error is returned as
+// is.
+func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string, prefix []string) (map[string]any, string, error) {
 	var cred vc.Credential
 	if err := cred.UnmarshalJSON(raw); err != nil {
 		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
@@ -345,8 +418,8 @@ func (v *Verifier) signed(ctx context.Context, raw []byte, a Anchor, typ string,
 	if err := canon.AdmitSafeNumbers(body); err != nil {
 		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
-	if got, _ := body["@context"].([]any); !slices.Equal(got, contexts) {
-		return nil, "", fmt.Errorf("%w: @context is not %v", ErrMalformed, contexts)
+	if _, err := contextsOf(body, prefix); err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if types := cred.Types(); len(types) != 2 || types[0] != "VerifiableCredential" || types[1] != typ {
 		return nil, "", fmt.Errorf("%w: type is not [VerifiableCredential %s]", ErrMalformed, typ)
@@ -369,12 +442,19 @@ func (v *Verifier) VerifyBinding(ctx context.Context, raw []byte, a Anchor, list
 	if at.IsZero() {
 		return Binding{}, fmt.Errorf("%w: no time to verify at", ErrNotValidAt)
 	}
-	body, _, err := v.signed(ctx, raw, a, TypeKeyBinding, bindingContexts)
+	body, _, err := v.signed(ctx, raw, a, TypeKeyBinding, bindingContextPrefix)
 	if err != nil {
 		return Binding{}, err
 	}
 	b, err := readBinding(body)
 	if err != nil {
+		return Binding{}, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	contexts, err := contextsOf(body, bindingContextPrefix)
+	if err != nil {
+		return Binding{}, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	if err := checkBranchContext(contexts, b.ValidFrom); err != nil {
 		return Binding{}, fmt.Errorf("%w: %v", ErrMalformed, err)
 	}
 	if at.Before(b.ValidFrom.Add(-v.skew)) || !at.Before(b.ValidUntil.Add(v.skew)) {
@@ -573,6 +653,10 @@ func IssueStatusList(signer crypto.Signer, issuer, keyFragment, id string, valid
 }
 
 func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string, validFrom, validUntil time.Time, encoded string) ([]byte, error) {
+	return issueStatusListBody(signer, issuer, keyFragment, id, validFrom, validUntil, encoded, nil)
+}
+
+func issueStatusListBody(signer crypto.Signer, issuer, keyFragment, id string, validFrom, validUntil time.Time, encoded string, edit func(map[string]any)) ([]byte, error) {
 	if id == "" || !validUntil.After(validFrom) {
 		return nil, errors.New("keybinding: a status list needs an id and validUntil after validFrom")
 	}
@@ -584,7 +668,7 @@ func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string
 	if err != nil {
 		return nil, err
 	}
-	return sign(signer, issuer, keyFragment, map[string]any{
+	body := map[string]any{
 		"@context":   []any{vc.ContextCredentialsV2},
 		"type":       []any{"VerifiableCredential", TypeStatusList},
 		"id":         id,
@@ -597,7 +681,11 @@ func issueStatusListEncoded(signer crypto.Signer, issuer, keyFragment, id string
 			"statusPurpose": statusPurpose,
 			"encodedList":   encoded,
 		},
-	})
+	}
+	if edit != nil {
+		edit(body)
+	}
+	return sign(signer, issuer, keyFragment, body)
 }
 
 // VerifyStatusList checks raw against the anchor at at — signed by the
@@ -693,7 +781,7 @@ func (v *Verifier) RestoreStatusList(ctx context.Context, raw []byte, a Anchor, 
 // signedList reads raw as the anchor's issuer's revocation list: signed (see
 // signed), well formed, and its id a DID URL of the issuer.
 func (v *Verifier) signedList(ctx context.Context, raw []byte, a Anchor) (*StatusList, error) {
-	body, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContexts)
+	body, signer, err := v.signed(ctx, raw, a, TypeStatusList, statusListContextPrefix)
 	if err != nil {
 		return nil, err
 	}

@@ -46,6 +46,23 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `\p{Nd}`). Another spelling (`\p{letter}`, `\p{Uppercase Letter}`), a
   property other than a general category (`\p{Greek}`, `\p{Any}`) and the
   `\p{gc=…}` and `\p{General_Category=…}` forms are still refused.
+- `keybinding`: `Issue` names the dplaax key-binding branch context
+  (`https://dplaax.dev/vc/branches/v1/keybinding/202611101543`) in a
+  binding's `@context`, after credentials v2 and dplaax v1. `VerifyBinding`
+  accepts a binding whose `@context` begins with those three in that order
+  (any snapshot of the branch context, by its URI's form) followed only by
+  absolute URIs (a URI scheme and a colon first), and a binding with no
+  snapshot (credentials v2 and dplaax v1, then only absolute URIs) while its
+  `validFrom` is before 2027-01-01T00:00:00Z. A status list's `@context`
+  begins with credentials v2, followed only by absolute URIs. Before, a
+  binding's `@context` had to be exactly credentials v2 and dplaax v1, and a
+  list's exactly credentials v2 (dplaax `keybinding.context`,
+  `keybinding.status-list.shape`). **Upgrade relying parties before
+  issuers:** a 0.4.x verifier refuses a binding this release issues, and this
+  release accepts every binding a 0.4.x issuer made; an issuer still on
+  0.4.x upgrades before it issues a binding valid from
+  2027-01-01T00:00:00Z, which this release refuses without the branch
+  context.
 
 ### Breaking changes
 
