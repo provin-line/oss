@@ -109,6 +109,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Process's `PipelineDID` (`did.dplaax.hierarchy`). `PipelineDID`'s doc says
   that only for a Process is it the Pipeline the DID belongs to.
 
+### Fixed
+
+- `internal/jsonschema` fails the compile of a schema whose `minimum`,
+  `maximum`, `exclusiveMinimum` or `exclusiveMaximum` holds a number `big.Rat`
+  cannot read (such as `1e1000001`), under every draft; it compiled such a
+  keyword as absent, and so did `multipleOf` where the library skips the
+  metaschema check. The schema package refuses these numbers before the
+  library reads them, so its behaviour does not change.
+- `internal/jsonschema` reads an integer keyword (`minLength`, `maxLength`,
+  `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
+  `maxContains`) above `math.MaxInt` as `math.MaxInt`, and one whose number
+  `big.Rat` cannot read is a `LargeNumberError`.
+
 ### Breaking changes
 
 - **Wire:** the L2 signed view is version 2,

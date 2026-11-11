@@ -391,10 +391,10 @@ func cut(text string, bound int) string {
 // The library reads every number as an exact rational (math/big), at a cost
 // that grows with the number's length and steeply with its exponent: 1e999999
 // alone took about 10 ms, so a few kilobytes of such numbers cost seconds, and
-// one whose exponent is beyond ±10^6 it cannot read at all: it drops a schema
-// bound holding one, and fails a payload number as an ordinary assertion,
-// which "not" inverts and "if" steers on. A number it reads is therefore at
-// most maxNumberBytes long, and its exponent part
+// one whose exponent is beyond ±10^6 it cannot read at all: it fails the
+// compile of a schema bound holding one, and fails a payload number as an
+// ordinary assertion, which "not" inverts and "if" steers on. A number it
+// reads is therefore at most maxNumberBytes long, and its exponent part
 // (after "e" or "E"), if any, lies within ±maxExponent, beyond binary64's
 // range (about 1e±308) with room to spare. Within these bounds a number costs
 // it a few microseconds.

@@ -1,13 +1,16 @@
 // Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: a work budget (the
-// lines marked "work budget"), and a reference's target found once for each
-// URL it resolves to (the lines marked "reference index"). See README.md in
-// this directory.
+// lines marked "work budget"), a reference's target found once for each URL
+// it resolves to (the lines marked "reference index"), a number keyword whose
+// number cannot be read refused (the lines marked "number keyword"), and an
+// integer keyword beyond int read as the nearest int (the lines marked
+// "integer keyword"). See README.md in this directory.
 
 package jsonschema
 
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 )
@@ -151,24 +154,34 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
 		if arr := c.arrVal("enum"); arr != nil {
 			s.Enum = newEnum(arr)
 		}
-		s.MultipleOf = c.numVal("multipleOf")
-		s.Maximum = c.numVal("maximum")
+		if s.MultipleOf, err = c.numberKeyword("multipleOf"); err != nil { // number keyword
+			return err // number keyword
+		} // number keyword
+		if s.Maximum, err = c.numberKeyword("maximum"); err != nil { // number keyword
+			return err // number keyword
+		} // number keyword
 		if c.boolean("exclusiveMaximum") {
 			s.ExclusiveMaximum = s.Maximum
 			s.Maximum = nil
-		} else {
-			s.ExclusiveMaximum = c.numVal("exclusiveMaximum")
+		} else if s.ExclusiveMaximum, err = c.numberKeyword("exclusiveMaximum"); err != nil { // number keyword
+			return err // number keyword
 		}
-		s.Minimum = c.numVal("minimum")
+		if s.Minimum, err = c.numberKeyword("minimum"); err != nil { // number keyword
+			return err // number keyword
+		} // number keyword
 		if c.boolean("exclusiveMinimum") {
 			s.ExclusiveMinimum = s.Minimum
 			s.Minimum = nil
-		} else {
-			s.ExclusiveMinimum = c.numVal("exclusiveMinimum")
+		} else if s.ExclusiveMinimum, err = c.numberKeyword("exclusiveMinimum"); err != nil { // number keyword
+			return err // number keyword
 		}
 
-		s.MinLength = c.intVal("minLength")
-		s.MaxLength = c.intVal("maxLength")
+		if s.MinLength, err = c.intKeyword("minLength"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
+		if s.MaxLength, err = c.intKeyword("maxLength"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
 		if pat := c.strVal("pattern"); pat != nil {
 			s.Pattern, err = c.c.roots.regexpEngine(*pat)
 			if err != nil {
@@ -176,12 +189,20 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
 			}
 		}
 
-		s.MinItems = c.intVal("minItems")
-		s.MaxItems = c.intVal("maxItems")
+		if s.MinItems, err = c.intKeyword("minItems"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
+		if s.MaxItems, err = c.intKeyword("maxItems"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
 		s.UniqueItems = c.boolean("uniqueItems")
 
-		s.MaxProperties = c.intVal("maxProperties")
-		s.MinProperties = c.intVal("minProperties")
+		if s.MaxProperties, err = c.intKeyword("maxProperties"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
+		if s.MinProperties, err = c.intKeyword("minProperties"); err != nil { // integer keyword
+			return err // integer keyword
+		} // integer keyword
 		if arr := c.arrVal("required"); arr != nil {
 			s.Required = toStrings(arr)
 		}
@@ -280,8 +301,12 @@ func (c *objCompiler) compileDraft2019(s *Schema) error {
 
 	if c.hasVocab("validation") {
 		if s.Contains != nil {
-			s.MinContains = c.intVal("minContains")
-			s.MaxContains = c.intVal("maxContains")
+			if s.MinContains, err = c.intKeyword("minContains"); err != nil { // integer keyword
+				return err // integer keyword
+			} // integer keyword
+			if s.MaxContains, err = c.intKeyword("maxContains"); err != nil { // integer keyword
+				return err // integer keyword
+			} // integer keyword
 		}
 		if m := c.objVal("dependentRequired"); m != nil {
 			s.DependentRequired = map[string][]string{}
@@ -508,13 +533,37 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
 	return nil
 }
 
-func (c *objCompiler) intVal(pname string) *int {
-	if n := c.numVal(pname); n != nil && n.IsInt() {
-		n := int(n.Num().Int64())
-		return &n
-	}
-	return nil
-}
+// numberKeyword reads the number keyword pname as numVal does, but a number
+// big.Rat cannot read is a *LargeNumberError, not a keyword taken as absent.
+func (c *objCompiler) numberKeyword(pname string) (*big.Rat, error) { // number keyword
+	if n := c.numVal(pname); n != nil { // number keyword
+		return n, nil // number keyword
+	} // number keyword
+	switch v := c.obj[pname].(type) { // number keyword
+	case json.Number, float32, float64: // number keyword
+		return nil, &LargeNumberError{URL: c.up.format(pname), Value: v} // number keyword
+	} // number keyword
+	return nil, nil // number keyword
+} // number keyword
+
+// intKeyword reads the integer keyword pname: an integer within int as
+// itself, one above math.MaxInt as math.MaxInt, one below math.MinInt as
+// math.MinInt. A number big.Rat cannot read is a *LargeNumberError, and a
+// number that is not an integer reads as absent.
+func (c *objCompiler) intKeyword(pname string) (*int, error) { // integer keyword
+	n, err := c.numberKeyword(pname)          // integer keyword
+	if err != nil || n == nil || !n.IsInt() { // integer keyword
+		return nil, err // integer keyword
+	} // integer keyword
+	i := math.MaxInt         // integer keyword
+	switch num := n.Num(); { // integer keyword
+	case num.IsInt64() && num.Int64() <= math.MaxInt && num.Int64() >= math.MinInt: // integer keyword
+		i = int(num.Int64()) // integer keyword
+	case num.Sign() < 0: // integer keyword
+		i = math.MinInt // integer keyword
+	} // integer keyword
+	return &i, nil // integer keyword
+} // integer keyword
 
 func (c *objCompiler) objVal(pname string) map[string]any {
 	v, ok := c.obj[pname]
@@ -551,6 +600,22 @@ type InvalidRegexError struct {
 func (e *InvalidRegexError) Error() string {
 	return fmt.Sprintf("invalid regex %q at %q: %v", e.Regex, e.URL, e.Err)
 }
+
+// -- number keyword
+
+// LargeNumberError reports a number keyword (minimum, maximum,
+// exclusiveMinimum, exclusiveMaximum, multipleOf) or an integer keyword
+// (minLength, maxLength, minItems, maxItems, minProperties, maxProperties,
+// minContains, maxContains) whose number big.Rat cannot read, such as
+// 1e1000001, as kind.LargeNumber reports one in a value.
+type LargeNumberError struct { // number keyword
+	URL   string // number keyword
+	Value any    // number keyword
+} // number keyword
+
+func (e *LargeNumberError) Error() string { // number keyword
+	return fmt.Sprintf("number too large to parse %v at %q", e.Value, e.URL) // number keyword
+} // number keyword
 
 // --
 

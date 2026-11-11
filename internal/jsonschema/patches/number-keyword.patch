@@ -1,0 +1,140 @@
+diff --git a/compile_test.go b/compile_test.go
+index 2145e22..0961a6e 100644
+--- a/compile_test.go
++++ b/compile_test.go
+@@ -139,3 +139,56 @@ func TestCompile_ResolvesEachURLOnce(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A number keyword whose number the compiler cannot read fails the compile
++// with a *LargeNumberError at the keyword, under draft 2020-12 and under draft
++// 4 (where exclusiveMinimum and exclusiveMaximum are booleans that make
++// minimum and maximum exclusive): it is not compiled as if the keyword were
++// absent. A number it can read is still a bound.
++func TestCompile_RefusesANumberKeywordItCannotRead(t *testing.T) {
++	const draft4 = `"$schema": "http://json-schema.org/draft-04/schema#", `
++	refused := func(t *testing.T, label string, err error, keyword string) {
++		t.Helper()
++		var lne *jsonschema.LargeNumberError
++		if !errors.As(err, &lne) || !strings.HasSuffix(lne.URL, "#"+keyword) {
++			t.Errorf("%s: %v, want a *LargeNumberError at %s", label, err, keyword)
++		}
++	}
++	for _, c := range []struct{ schema, keyword string }{
++		{`{"minimum": ` + large + `}`, "/minimum"},
++		{`{"maximum": -` + large + `}`, "/maximum"},
++		{`{"exclusiveMinimum": ` + large + `}`, "/exclusiveMinimum"},
++		{`{"exclusiveMaximum": -` + large + `}`, "/exclusiveMaximum"},
++		{`{"properties": {"a": {"minimum": ` + large + `}}}`, "/properties/a/minimum"},
++		{`{` + draft4 + `"minimum": ` + large + `}`, "/minimum"},
++		{`{` + draft4 + `"maximum": -` + large + `}`, "/maximum"},
++		{`{` + draft4 + `"minimum": ` + large + `, "exclusiveMinimum": true}`, "/minimum"},
++		{`{` + draft4 + `"maximum": -` + large + `, "exclusiveMaximum": true}`, "/maximum"},
++	} {
++		_, err := compile(c.schema)
++		refused(t, c.schema, err, c.keyword)
++	}
++
++	// The metaschema refuses such a multipleOf, but the library does not check
++	// a schema located below json-schema.org against it: there the compiler
++	// alone refuses it.
++	const loc = "https://json-schema.org/number-keyword.json"
++	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"multipleOf": ` + large + `}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := jsonschema.NewCompiler()
++	if err := c.AddResource(loc, doc); err != nil {
++		t.Fatal(err)
++	}
++	_, err = c.Compile(loc)
++	refused(t, "multipleOf below json-schema.org", err, "/multipleOf")
++
++	sch, err := compile(`{"minimum": 1e1000000}`)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if sch.Validate(5) == nil {
++		t.Error(`{"minimum": 1e1000000} accepts 5`)
++	}
++}
+diff --git a/objcompiler.go b/objcompiler.go
+index 6ccc624..e432da9 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -146,20 +146,26 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 		if arr := c.arrVal("enum"); arr != nil {
+ 			s.Enum = newEnum(arr)
+ 		}
+-		s.MultipleOf = c.numVal("multipleOf")
+-		s.Maximum = c.numVal("maximum")
++		if s.MultipleOf, err = c.numberKeyword("multipleOf"); err != nil { // number keyword
++			return err // number keyword
++		} // number keyword
++		if s.Maximum, err = c.numberKeyword("maximum"); err != nil { // number keyword
++			return err // number keyword
++		} // number keyword
+ 		if c.boolean("exclusiveMaximum") {
+ 			s.ExclusiveMaximum = s.Maximum
+ 			s.Maximum = nil
+-		} else {
+-			s.ExclusiveMaximum = c.numVal("exclusiveMaximum")
++		} else if s.ExclusiveMaximum, err = c.numberKeyword("exclusiveMaximum"); err != nil { // number keyword
++			return err // number keyword
+ 		}
+-		s.Minimum = c.numVal("minimum")
++		if s.Minimum, err = c.numberKeyword("minimum"); err != nil { // number keyword
++			return err // number keyword
++		} // number keyword
+ 		if c.boolean("exclusiveMinimum") {
+ 			s.ExclusiveMinimum = s.Minimum
+ 			s.Minimum = nil
+-		} else {
+-			s.ExclusiveMinimum = c.numVal("exclusiveMinimum")
++		} else if s.ExclusiveMinimum, err = c.numberKeyword("exclusiveMinimum"); err != nil { // number keyword
++			return err // number keyword
+ 		}
+ 
+ 		s.MinLength = c.intVal("minLength")
+@@ -503,6 +509,19 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
+ 	return nil
+ }
+ 
++// numberKeyword reads the number keyword pname as numVal does, but a number
++// big.Rat cannot read is a *LargeNumberError, not a keyword taken as absent.
++func (c *objCompiler) numberKeyword(pname string) (*big.Rat, error) { // number keyword
++	if n := c.numVal(pname); n != nil { // number keyword
++		return n, nil // number keyword
++	} // number keyword
++	switch v := c.obj[pname].(type) { // number keyword
++	case json.Number, float32, float64: // number keyword
++		return nil, &LargeNumberError{URL: c.up.format(pname), Value: v} // number keyword
++	} // number keyword
++	return nil, nil // number keyword
++} // number keyword
++
+ func (c *objCompiler) intVal(pname string) *int {
+ 	if n := c.numVal(pname); n != nil && n.IsInt() {
+ 		n := int(n.Num().Int64())
+@@ -547,6 +566,20 @@ func (e *InvalidRegexError) Error() string {
+ 	return fmt.Sprintf("invalid regex %q at %q: %v", e.Regex, e.URL, e.Err)
+ }
+ 
++// -- number keyword
++
++// LargeNumberError reports a number keyword (minimum, maximum,
++// exclusiveMinimum, exclusiveMaximum, multipleOf) whose number big.Rat cannot
++// read, such as 1e1000001, as kind.LargeNumber reports one in a value.
++type LargeNumberError struct { // number keyword
++	URL   string // number keyword
++	Value any    // number keyword
++} // number keyword
++
++func (e *LargeNumberError) Error() string { // number keyword
++	return fmt.Sprintf("number too large to parse %v at %q", e.Value, e.URL) // number keyword
++} // number keyword
++
+ // --
+ 
+ func toStrings(arr []any) []string {
