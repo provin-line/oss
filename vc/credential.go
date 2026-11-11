@@ -45,6 +45,11 @@ const (
 //
 // Construction has exactly three paths: Builder (signed), New (unsigned;
 // tests/relay), and UnmarshalJSON (verifier path).
+//
+// The accessors (Issuer, Subject, PreviousCredential, SourceCommitment) and
+// Hash read the JSON body as received. What they return is what was signed
+// once the credential is verified (VerifyChain); for an eddsa-rdfc-2022
+// credential that includes its closed form (ValidateWireForm).
 type PipelinePassCredential struct {
 	body map[string]any
 	// proof is stored as the raw wire map so unknown proof members survive
@@ -440,6 +445,14 @@ func (c *PipelinePassCredential) Body() map[string]any {
 // Hash returns "sha256:<hex>" over the RFC 8785 canonical body — the
 // credential's content address used by previousCredential links and the VC
 // resolver.
+//
+// It is the address of the JSON body as received. Under eddsa-jcs-2022 the
+// signature covers that JSON, so a signed credential has one address. Under
+// eddsa-rdfc-2022 the signature covers the RDF dataset the body expands to,
+// and JSON forms that expand alike (the order of an array's entries, an IRI
+// written compact or in full) have different addresses: there Hash is not
+// the identity of the signed credential, and a caller that needs one does not
+// take it from Hash.
 func (c *PipelinePassCredential) Hash() (string, error) {
 	return jcs.HashRFC8785(c.body)
 }

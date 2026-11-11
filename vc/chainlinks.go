@@ -7,7 +7,9 @@ import (
 
 // ChainLinkError reports the first credential of a chain (origin first) whose
 // link to what precedes it does not hold: for the origin, the chain's input;
-// for a successor, its predecessor. It is ErrChainLinkBroken (errors.Is).
+// for a successor, its predecessor. An eddsa-rdfc-2022 credential not in its
+// closed form (ValidateWireForm) is one: its links are not read. It is
+// ErrChainLinkBroken (errors.Is).
 type ChainLinkError struct {
 	// Index is the credential's position in the chain, the origin being 0.
 	Index int
@@ -32,7 +34,11 @@ func (e *ChainLinkError) Is(target error) bool { return target == ErrChainLinkBr
 //   - each later credential names its predecessor's content address in
 //     previousCredential, its inputHash is the predecessor's (non-empty)
 //     outputHash, and a source commitment it carries includes the
-//     predecessor's issuer.
+//     predecessor's issuer;
+//   - a credential whose proof names eddsa-rdfc-2022 holds the members vc
+//     reads under their names and in their forms, and no others (the closed
+//     form ValidateWireForm describes). One that does not is a broken link at
+//     its position: its links are not read.
 //
 // These are the links VerifyChain checks, through the same implementation. A
 // broken link is a *ChainLinkError, and errors.Is ErrChainLinkBroken. An empty
@@ -44,8 +50,9 @@ func (e *ChainLinkError) Is(target error) bool { return target == ErrChainLinkBr
 // prefix of a linked chain is itself linked. Nor does it bind the origin to an
 // input — ValidateChainFrom does — so it accepts a chain whose origin has no
 // inputHash, such as an aggregation's. A chain that links is not a verified
-// chain: the credentials may be unsigned or forged, and their wire forms,
-// issuers and ordering are not checked; VerifyChain verifies those.
+// chain: the credentials may be unsigned or forged, and their wire forms
+// (beyond an eddsa-rdfc-2022 credential's closed form), issuers and ordering
+// are not checked; VerifyChain verifies those.
 func ValidateChainLinks(chain []*PipelinePassCredential) error {
 	if err := checkChainEntries(chain); err != nil {
 		return err
@@ -70,6 +77,9 @@ func ValidateChainFrom(chain []*PipelinePassCredential, originInput string) erro
 	}
 	if originInput == "" {
 		return errors.New("vc: no origin input to bind the chain to")
+	}
+	if err := closedFormBreak(0, chain[0]); err != nil {
+		return err
 	}
 	subject, err := chain[0].Subject()
 	if err != nil {
@@ -110,15 +120,22 @@ func (e chainMalformedError) Is(target error) bool { return target == ErrChainMa
 // nil when every link holds: the origin carries no previousCredential; each
 // successor names its predecessor's content address, takes the predecessor's
 // non-empty outputHash as its inputHash, and, when it carries a source
-// commitment, includes the predecessor's (non-empty) issuer in it. It is the one
-// implementation of these links, for VerifyChain, ValidateChainLinks and
-// ValidateChainFrom.
+// commitment, includes the predecessor's (non-empty) issuer in it; and each
+// credential is in its closed form (checkRDFCClosedForm) before any of its links is
+// read. It is the one implementation of these links, for VerifyChain,
+// ValidateChainLinks and ValidateChainFrom.
 func firstBrokenLink(chain []*PipelinePassCredential) *ChainLinkError {
+	if err := closedFormBreak(0, chain[0]); err != nil {
+		return err
+	}
 	if hasPredecessor(chain[0]) {
 		return &ChainLinkError{Index: 0, Reason: "the origin carries a previousCredential"}
 	}
 	for n := 1; n < len(chain); n++ {
 		prev, cur := chain[n-1], chain[n]
+		if err := closedFormBreak(n, cur); err != nil {
+			return err
+		}
 		prevHash, err := prev.Hash()
 		if err != nil {
 			return &ChainLinkError{Index: n, Reason: "the predecessor has no content address"}
@@ -140,6 +157,15 @@ func firstBrokenLink(chain []*PipelinePassCredential) *ChainLinkError {
 		if sc := cur.SourceCommitment(); sc != nil && (prev.Issuer() == "" || !containsString(sc.DerivedFrom, prev.Issuer())) {
 			return &ChainLinkError{Index: n, Reason: "the source commitment does not include the predecessor's issuer"}
 		}
+	}
+	return nil
+}
+
+// closedFormBreak is the *ChainLinkError at index for c when c is not in its closed
+// form (checkRDFCClosedForm), or nil.
+func closedFormBreak(index int, c *PipelinePassCredential) *ChainLinkError {
+	if err := checkRDFCClosedForm(c); err != nil {
+		return &ChainLinkError{Index: index, Reason: err.Error()}
 	}
 	return nil
 }

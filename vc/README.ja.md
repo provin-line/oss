@@ -18,6 +18,8 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 
 暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。`eddsa-jcs-2022` は init で登録し、発行の既定。`eddsa-rdfc-2022` は、process が `vc.RegisterEdDSARDFC2022` を、`main` か、main package の `init` 関数から 1 度呼んだ時だけ登録する。確かめると、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るので、それを負うのは verifier が選んだ時だけにする（手間の上限と、断る文書の形は、関数の doc に書いてある）。文書の `@context` に置けるのは、`vc` が埋め込む 3 つの context の IRI だけ。文書に書いた context を、どの深さでも持つ文書は、正規化の前に断る。だから、文書が使う term はすべて、埋め込みの context が定める。呼ぶまでは、どの関数もどの `Verifier` も、この suite の proof を断る。関数は `vc.ErrCryptosuiteNotRegistered` を包み、`vc.RegisterEdDSARDFC2022` の名前を出した誤りを返し、`Verifier` は issuer を引く前に、署名者の真正性を failed とし、同じ誤りを `SignerAuthenticityResult.Err` に入れる。呼んだ後は、発行者が `CreateProof` か `WithCryptosuite` にこの suite を渡した時に使う。この module の package はどれも呼ばない（`scripts/check-rdfc-registration.sh`）。その canonicalizer は、登録の時に **IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するより process がパニックする。
 
+`eddsa-rdfc-2022` で署名した `PipelinePassCredential` は、`vc` が読む項目を決まった名と形で持ち、ほかの項目を持たない。そうでないものは、`ValidateWireForm`・結び付きの検査・`VerifySourceCommitment` が断る（閉じた形は `ValidateWireForm` の doc にある）。その `Hash` は受け取った JSON の番地で、この suite では、同じ展開になる JSON の形ごとに番地が違う。だから `Hash` は、署名された credential の同一性ではない。`eddsa-jcs-2022` の credential は影響を受けない。
+
 ## チェーントポロジー — 線形不変
 
 - `previousCredential` は**単数**: チェーンは厳密に線形であり、DAG にはならない。欠落または null はチェーン起点（FirstDrop）を意味する: 外部インジェストまたは集約。

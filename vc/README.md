@@ -43,6 +43,14 @@ issuer, with the same error in `SignerAuthenticityResult.Err`. Once it is called
 expansion probe** when it is registered — the process panics rather than serve
 broken canonicalization.
 
+A `PipelinePassCredential` signed under `eddsa-rdfc-2022` holds the members
+`vc` reads under their names and in their forms, and no others.
+`ValidateWireForm`, the chain links and `VerifySourceCommitment` refuse one
+that does not; the closed form is in `ValidateWireForm`'s documentation. Its
+`Hash` is the address of the JSON as received: under this suite, JSON forms
+that expand alike have different addresses, so `Hash` is not the signed
+credential's identity. `eddsa-jcs-2022` credentials are not affected.
+
 ## Chain topology — linear invariant
 
 - `previousCredential` is **singular**: the chain is strictly linear, never a DAG.

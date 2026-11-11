@@ -168,6 +168,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
   `maxContains`) above `math.MaxInt` as `math.MaxInt`, and one whose number
   `big.Rat` cannot read is a `LargeNumberError`.
+- `vc`: an `eddsa-rdfc-2022` `PipelinePassCredential` must hold the members
+  `vc` reads under their names and in their forms, and no others.
+  `ValidateWireForm` (and so `Verify` and `VerifyChain`), `ValidateChainLinks`,
+  `ValidateChainFrom` and `VerifySourceCommitment` refuse one that does not;
+  `ValidateWireForm`'s documentation lists the form. `eddsa-jcs-2022`
+  credentials are not affected.
 
 ### Breaking changes
 
@@ -191,6 +197,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   payload client's `ResolvePayload` takes the upstream's audience, and
   `chainmanager.PeerClient`'s methods take the audience after the endpoint.
   `evidence.Record` has `Audience`.
+- **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
+  only the members `vc` reads, under their names and in their forms; one with
+  any other member is refused.
 
 ### Documentation
 
@@ -200,6 +209,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   cites by name.
 - `docs/architecture/deployment.md` describes the wire proof's audience, the
   optional keys, the one-process-per-registry constraint and the upgrade.
+- `vc`: `PipelinePassCredential.Hash` says it is the address of the JSON body
+  as received. Under `eddsa-rdfc-2022`, JSON forms that expand alike have
+  different addresses, so there it is not the signed credential's identity.
 
 ## [0.4.0] - 2026-11-09
 
