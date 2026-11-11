@@ -1,8 +1,9 @@
 // Package decisionrecord is the record a deciding party — a gate, a boundary
 // stage, a delivery decision — writes for each decision it makes, and the
-// levels at which it is written: every decision, refused and unenforced
-// decisions only, counts per window, or none. Configuration defaults to every decision; this package has
-// no default level, so a level is in effect only when it is chosen. It is not
+// levels at which it is written: every decision, the decisions not accepted
+// (refused, held and unenforced) only, counts per window, or none.
+// Configuration defaults to every decision; this package has no default
+// level, so a level is in effect only when it is chosen. It is not
 // the record of used nonces a gate keeps to refuse replays; that is another
 // record with another purpose.
 //
@@ -26,20 +27,21 @@ import (
 
 	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/contentaddress"
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // Outcome is what a decision decided. A record is written when the deciding
 // party decides, before what was decided on is carried out, by the deciding
-// party or by whoever it answers. A refused decision did not go ahead: the
-// deciding party enforces the check that refused. Of an accepted or
-// unenforced decision, a record does not say whether it went ahead, and a
-// reader takes it as one that may have.
+// party or by whoever it answers. A refused or held decision did not go
+// ahead: the deciding party enforces the check that refused or deferred it.
+// Of an accepted or unenforced decision, a record does not say whether it
+// went ahead, and a reader takes it as one that may have.
 type Outcome string
 
 const (
-	// Accepted: no check refused; the deciding party decided to accept what
-	// was decided on. If it refuses it afterwards, it records that too (see
-	// Record).
+	// Accepted: no check refused or deferred; the deciding party decided to
+	// accept what was decided on. If it refuses it afterwards, it records
+	// that too (see Record).
 	Accepted Outcome = "accepted"
 	// Refused: a check that the deciding party enforces refused; the deciding
 	// party refused what was decided on, and it did not go ahead.
@@ -48,20 +50,53 @@ const (
 	// enforcing refused; the deciding party did not enforce the refusal, so
 	// what was decided on may have gone ahead.
 	Unenforced Outcome = "unenforced"
+	// Held: a check the deciding party enforces deferred the decision; what
+	// was decided on has not gone ahead, and may later be decided again under
+	// another DecisionID. Only format v2 writes it (see FormatVersion).
+	Held Outcome = "held"
 )
 
+// quoteLimit is the most bytes an error here takes to quote a value it
+// refuses (internal/excerpt).
+const quoteLimit = 128
+
 // rank orders the outcomes: a decision has the outcome of its record of the
-// highest rank. An unknown outcome has none.
+// highest rank. Held is stronger than an acceptance, which it defers, and
+// weaker than a refusal, recorded or enforced. An unknown outcome has none.
 func rank(o Outcome) int {
 	switch o {
 	case Accepted:
 		return 1
-	case Unenforced:
+	case Held:
 		return 2
-	case Refused:
+	case Unenforced:
 		return 3
+	case Refused:
+		return 4
 	}
 	return 0
+}
+
+// Confidence is how far the hop a refusal is diagnosed at is established.
+type Confidence string
+
+const (
+	// ConfidenceClaimed: the hop is named by what was decided on, before its
+	// signature was verified.
+	ConfidenceClaimed Confidence = "claimed"
+	// ConfidenceVerified: the hop is named after its signature was verified.
+	ConfidenceVerified Confidence = "verified"
+	// ConfidenceUnknown: the check concerns a hop, but the deciding party
+	// cannot name it.
+	ConfidenceUnknown Confidence = "unknown"
+)
+
+// Position is where a refusal is diagnosed: a hop of what was decided on, one
+// step it came through, in the deciding party's terms. This package does not
+// read Hop; as with Actors, its meaning is the deciding party's.
+type Position struct {
+	Hop        string // the hop's ID; empty exactly when Confidence is ConfidenceUnknown
+	Confidence Confidence
 }
 
 // Evidence is one thing a decision was made on: its role (e.g. "approval",
@@ -80,15 +115,19 @@ type Evidence struct {
 // refusal. A
 // decision has the strongest outcome among its records, whatever the order
 // they are read in: it is refused when any of them is refused; otherwise
-// unenforced when any of them is unenforced; otherwise accepted.
+// unenforced when any of them is unenforced; otherwise held when any of them
+// is held; otherwise accepted.
 //
 // A writer follows one rule for the records of a decision: it records the
 // decision accepted any number of times, then unenforced or refused at most
 // once, and after that records nothing more of it; it makes each record only
 // once the previous one of the decision has been taken (Filter.Record
-// returned). The writer knows the outcome when it writes: refused when an
-// enforced check refused, unenforced when only checks it records without
-// enforcing did. Recording a decision accepted again changes nothing. A
+// returned). A held decision has one record, the held one: to decide again
+// what it deferred, the deciding party makes another decision, with another
+// DecisionID. The writer knows the outcome when it writes: refused when an
+// enforced check refused, held when an enforced check deferred, unenforced
+// when only checks it records without enforcing refused. Recording a decision
+// accepted again changes nothing. A
 // writer that breaks the rule makes the summary level count the decision
 // more than once, or under the check of the first of its records of that
 // outcome, never under a weaker outcome than its strongest record; nothing
@@ -98,21 +137,33 @@ type Record struct {
 	Point      string    // the deciding party's ID: a gate's, a boundary's
 	At         time.Time // when the decision was made
 	Outcome    Outcome
-	Check      string            // the check that refused: a fixed name, required unless Accepted
+	Check      string            // the check that refused or deferred: a fixed name, required unless Accepted
 	Reason     string            // for people
 	Actors     []string          // whom the decision is attributed to (a gate: the signers)
 	Evidence   []Evidence        // what was decided on, in order
 	Attributes map[string]string // the deciding party's own fields
+
+	// RefusedAt is where the refusal is diagnosed, when the deciding party
+	// can say: only with an outcome other than Accepted. Format v2 only.
+	RefusedAt *Position
+	// VerifiedHops are the hops whose signatures the deciding party
+	// verified, in order, whatever the outcome. Format v2 only: of length 0
+	// (nil included), every format takes it and writes no member.
+	VerifiedHops []string
 }
 
 // Validate checks the fields a reader keys on: a DecisionID and a Point, a
 // time within the years 0000–9999 (so it is written in RFC 3339 and sorts as
-// text), an outcome with a Check exactly when a check refused (Refused or
-// Unenforced), each Evidence a role and an address, each Actor and attribute name valid UTF-8 and not
-// empty. Filter.Record and every Sink here check it, whatever the level: a
-// malformed record is its writer's error. Text for people (Reason, attribute
-// values) is not refused for invalid UTF-8; it is written with the invalid
-// bytes replaced.
+// text), an outcome with a Check exactly when a check refused or deferred
+// (every outcome but Accepted), each Evidence a role and an address, each
+// Actor and attribute name valid UTF-8 and not empty; a RefusedAt only with
+// an outcome other than Accepted, its Confidence one of the three, its Hop
+// empty exactly when the Confidence is ConfidenceUnknown and otherwise valid
+// UTF-8; each of the VerifiedHops valid UTF-8 and not empty. It checks them
+// whatever the format version. Filter.Record and every Sink here check it,
+// whatever the level: a malformed record is its writer's error. Text for
+// people (Reason, attribute values) is not refused for invalid UTF-8; it is
+// written with the invalid bytes replaced.
 func (r Record) Validate() error {
 	switch {
 	case r.DecisionID == "" || !utf8.ValidString(r.DecisionID):
@@ -124,9 +175,9 @@ func (r Record) Validate() error {
 	case !writableTime(r.At):
 		return fmt.Errorf("decisionrecord: time %v outside the years 0000–9999", r.At)
 	case rank(r.Outcome) == 0:
-		return fmt.Errorf("decisionrecord: record with outcome %q", r.Outcome)
+		return fmt.Errorf("decisionrecord: record with outcome %s", excerpt.Quoted(string(r.Outcome), quoteLimit))
 	case r.Outcome != Accepted && r.Check == "":
-		return fmt.Errorf("decisionrecord: record with outcome %s without the check that refused", r.Outcome)
+		return fmt.Errorf("decisionrecord: record with outcome %s without the check that refused or deferred", r.Outcome)
 	case r.Outcome == Accepted && r.Check != "":
 		return errors.New("decisionrecord: an acceptance with a refusing check")
 	case !utf8.ValidString(r.Check):
@@ -145,6 +196,25 @@ func (r Record) Validate() error {
 	for k := range r.Attributes {
 		if k == "" || !utf8.ValidString(k) {
 			return errors.New("decisionrecord: an attribute name that is empty or not UTF-8")
+		}
+	}
+	if p := r.RefusedAt; p != nil {
+		switch {
+		case r.Outcome == Accepted:
+			return errors.New("decisionrecord: an acceptance with the position of a refusal")
+		case p.Confidence != ConfidenceClaimed && p.Confidence != ConfidenceVerified && p.Confidence != ConfidenceUnknown:
+			return fmt.Errorf("decisionrecord: a position with confidence %s", excerpt.Quoted(string(p.Confidence), quoteLimit))
+		case p.Confidence == ConfidenceUnknown && p.Hop != "":
+			return errors.New("decisionrecord: a position of confidence unknown with a hop")
+		case p.Confidence != ConfidenceUnknown && p.Hop == "":
+			return fmt.Errorf("decisionrecord: a position of confidence %s without a hop", p.Confidence)
+		case !utf8.ValidString(p.Hop):
+			return errors.New("decisionrecord: a position whose hop is not UTF-8")
+		}
+	}
+	for _, h := range r.VerifiedHops {
+		if h == "" || !utf8.ValidString(h) {
+			return errors.New("decisionrecord: a verified hop that is empty or not UTF-8")
 		}
 	}
 	return nil
@@ -166,16 +236,16 @@ const maxCount int64 = 1<<53 - 1
 type Summary struct {
 	Point       string
 	From, Until time.Time
-	Counts      []Count // ordered by outcome, then check, each as text (accepted, refused, unenforced)
+	Counts      []Count // ordered by outcome, then check, each as text (accepted, held, refused, unenforced)
 }
 
 // Validate checks a summary as Record.Validate checks a record: a Point, a
 // window within the years 0000–9999 whose end is not before its start, and
 // each Count an outcome with a Check exactly when it counts decisions a check
-// refused (Refused or Unenforced), and N
-// from 0 to 2^53−1, the Counts ordered by outcome, then check, with no two
-// alike; outcomes and checks are compared as text, so accepted, refused,
-// unenforced. Every Sink here checks it.
+// refused or deferred (every outcome but Accepted), and N from 0 to 2^53−1,
+// the Counts ordered by outcome, then check, with no two alike; outcomes and
+// checks are compared as text, so accepted, held, refused, unenforced. Every
+// Sink here checks it.
 func (s Summary) Validate() error {
 	switch {
 	case s.Point == "" || !utf8.ValidString(s.Point):
@@ -190,7 +260,7 @@ func (s Summary) Validate() error {
 	for i, c := range s.Counts {
 		switch {
 		case rank(c.Outcome) == 0:
-			return fmt.Errorf("decisionrecord: count with outcome %q", c.Outcome)
+			return fmt.Errorf("decisionrecord: count with outcome %s", excerpt.Quoted(string(c.Outcome), quoteLimit))
 		case c.Outcome != Accepted && c.Check == "":
 			return fmt.Errorf("decisionrecord: count with outcome %s without its check", c.Outcome)
 		case c.Outcome == Accepted && c.Check != "":
@@ -246,7 +316,9 @@ type Sink interface {
 type Level string
 
 const (
-	LevelAll      Level = "all"
+	LevelAll Level = "all"
+	// LevelRefusals writes every decision that is not accepted: refused,
+	// held and unenforced.
 	LevelRefusals Level = "refusals"
 	LevelSummary  Level = "summary"
 	LevelNone     Level = "none"
@@ -289,7 +361,8 @@ type Filter struct {
 	windows map[string]*window // point → its tally since from
 }
 
-// outcomeCheck is what a Count counts: an outcome and its refusing check.
+// outcomeCheck is what a Count counts: an outcome and its refusing or
+// deferring check.
 type outcomeCheck struct {
 	outcome Outcome
 	check   string
@@ -297,10 +370,11 @@ type outcomeCheck struct {
 
 // window is one deciding party's tally at LevelSummary. It keeps the ids of
 // the decisions accepted in it only: an acceptance needs whatever the
-// deciding party checks for, while any caller can cause a refused or
+// deciding party checks for, while any caller can cause a refused, held or
 // unenforced record (where the deciding party records only), so the ids kept
-// are bounded by what the deciding party admits. A refusal or an unenforced
-// decision not accepted in it is counted as it comes and keeps no id. Its
+// are bounded by what the deciding party admits. A refused, held or
+// unenforced decision not accepted in it is counted as it comes and keeps no
+// id. Its
 // counts are keyed by outcome and check, fixed names of the deciding party.
 type window struct {
 	counts   map[outcomeCheck]int64
@@ -357,9 +431,9 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 // count adds r to the window. A decision accepted in it is counted once, by
 // the strongest outcome of its records: a record of a stronger outcome moves
 // it there, with that record's check, and any other changes nothing. A
-// refused or unenforced record of a decision not accepted in the window is
-// counted as it comes and keeps no id: under the writer's rule (see Record)
-// a decision has at most one, so it is counted once.
+// refused, held or unenforced record of a decision not accepted in the
+// window is counted as it comes and keeps no id: under the writer's rule
+// (see Record) a decision has at most one, so it is counted once.
 func (f *Filter) count(r Record) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -439,28 +513,97 @@ func (f *Filter) notWritten(ctx context.Context, err error) {
 	f.warn.WarnContext(ctx, "decision record: not written", "level", string(f.level), "err", err)
 }
 
-// formatVersion is the version of the JSON form of records and summaries, the
-// "v" member of every line.
-const formatVersion = 1
+// FormatVersion is the version of the form in which the sinks here write
+// records and summaries: the "v" member of every line and log entry. The
+// version changes whenever a member changes, or the values of "kind",
+// "outcome" or "confidence"; within a version neither changes. The values of
+// "check" and the names in "attributes" are the deciding party's, and grow
+// whatever the version.
+type FormatVersion int
+
+const (
+	// FormatV1 is the form of 0.4.0: the outcomes accepted, refused and
+	// unenforced.
+	FormatV1 FormatVersion = 1
+	// FormatV2 adds the outcome held and a record's "refusedAt" and
+	// "verifiedHops".
+	FormatV2 FormatVersion = 2
+)
+
+// known reports whether the sinks here write format v.
+func (v FormatVersion) known() bool { return v == FormatV1 || v == FormatV2 }
+
+// Error is the type of this package's sentinel errors. The sentinels are
+// constants, so no importer can reassign them; errors.Is matches them as it
+// matches any comparable error.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
+// ErrNotInFormat reports a record or summary that a sink's format version
+// cannot express: in format v1, a held outcome, a RefusedAt, VerifiedHops, or
+// a count of held decisions. The sink writes nothing of it.
+const ErrNotInFormat Error = "decisionrecord: not expressible in this format version"
+
+// expressRecord is nil when format v expresses r, and otherwise names, as
+// ErrNotInFormat, a member it does not.
+func expressRecord(v FormatVersion, r Record) error {
+	if v != FormatV1 {
+		return nil
+	}
+	switch {
+	case r.Outcome == Held:
+		return fmt.Errorf("%w: format v1 has no outcome %s", ErrNotInFormat, Held)
+	case r.RefusedAt != nil:
+		return fmt.Errorf("%w: format v1 has no refusedAt", ErrNotInFormat)
+	case len(r.VerifiedHops) > 0:
+		return fmt.Errorf("%w: format v1 has no verifiedHops", ErrNotInFormat)
+	}
+	return nil
+}
+
+// expressSummary is expressRecord for a summary.
+func expressSummary(v FormatVersion, s Summary) error {
+	if v != FormatV1 {
+		return nil
+	}
+	for _, c := range s.Counts {
+		if c.Outcome == Held {
+			return fmt.Errorf("%w: format v1 has no outcome %s", ErrNotInFormat, Held)
+		}
+	}
+	return nil
+}
 
 // timeLayout is RFC 3339 in UTC with nine fraction digits, so that times sort
 // as text.
 const timeLayout = "2006-01-02T15:04:05.000000000Z"
 
-// NewJSONLines returns a sink writing each record and summary to w as one line
-// of RFC 8785 JSON, with "v" (the format version) and "kind" ("record" or
-// "summary"). Line breaks inside values are escaped, but U+2028 and U+2029 are
-// written as is (RFC 8785): a reader splits on "\n" only. A line is written
-// with one Write; after a failed Write, the next line starts with "\n", so a
-// partial line stays one unreadable line and the lines after it stay whole. A
-// nil w makes every write fail.
+// NewJSONLines returns a sink writing each record and summary to w in format
+// v1 as one line of RFC 8785 JSON, with "v" (the format version) and "kind"
+// ("record" or "summary"). Line breaks inside values are escaped, but U+2028
+// and U+2029 are written as is (RFC 8785): a reader splits on "\n" only. A
+// line is written with one Write; after a failed Write, the next line starts
+// with "\n", so a partial line stays one unreadable line and the lines after
+// it stay whole. A nil w makes every write fail. What format v1 cannot express
+// is ErrNotInFormat. NewJSONLines(w) is NewJSONLinesFormat(w, FormatV1).
 func NewJSONLines(w io.Writer) Sink {
-	return &jsonLines{w: w}
+	return &jsonLines{w: w, v: FormatV1}
+}
+
+// NewJSONLinesFormat is NewJSONLines writing format v. A version the sinks
+// here do not write is an error.
+func NewJSONLinesFormat(w io.Writer, v FormatVersion) (Sink, error) {
+	if !v.known() {
+		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
+	}
+	return &jsonLines{w: w, v: v}, nil
 }
 
 type jsonLines struct {
 	mu     sync.Mutex
 	w      io.Writer
+	v      FormatVersion
 	broken bool
 }
 
@@ -468,14 +611,22 @@ func (j *jsonLines) Record(_ context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	return j.write(recordMap(r))
+	m, err := recordMap(r, j.v)
+	if err != nil {
+		return err
+	}
+	return j.write(m)
 }
 
 func (j *jsonLines) Summary(_ context.Context, s Summary) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	return j.write(summaryMap(s))
+	m, err := summaryMap(s, j.v)
+	if err != nil {
+		return err
+	}
+	return j.write(m)
 }
 
 func (j *jsonLines) write(m map[string]any) error {
@@ -506,25 +657,47 @@ func (j *jsonLines) write(m map[string]any) error {
 // handle one, is an error (at LevelAll, the decision is refused). A handler
 // that returns nil without keeping the entry cannot be detected here: at
 // LevelAll, use a handler whose nil means kept. A nil l makes every write
-// fail.
+// fail. An entry carries the members of a JSON line as its attributes, in
+// format v1, "v" included; what format v1 cannot express is ErrNotInFormat.
+// NewLog(l) is NewLogFormat(l, FormatV1).
 func NewLog(l *slog.Logger) Sink {
-	return logSink{l: l}
+	return logSink{l: l, v: FormatV1}
 }
 
-type logSink struct{ l *slog.Logger }
+// NewLogFormat is NewLog writing format v. A version the sinks here do not
+// write is an error.
+func NewLogFormat(l *slog.Logger, v FormatVersion) (Sink, error) {
+	if !v.known() {
+		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
+	}
+	return logSink{l: l, v: v}, nil
+}
+
+type logSink struct {
+	l *slog.Logger
+	v FormatVersion
+}
 
 func (s logSink) Record(ctx context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	return s.emit(ctx, "decision record", recordMap(r))
+	m, err := recordMap(r, s.v)
+	if err != nil {
+		return err
+	}
+	return s.emit(ctx, "decision record", m)
 }
 
 func (s logSink) Summary(ctx context.Context, sum Summary) error {
 	if err := sum.Validate(); err != nil {
 		return err
 	}
-	return s.emit(ctx, "decision summary", summaryMap(sum))
+	m, err := summaryMap(sum, s.v)
+	if err != nil {
+		return err
+	}
+	return s.emit(ctx, "decision summary", m)
 }
 
 func (s logSink) emit(ctx context.Context, msg string, m map[string]any) error {
@@ -560,9 +733,14 @@ func mapAttrs(m map[string]any) []any {
 // so that the record is written rather than lost.
 func text(s string) string { return strings.ToValidUTF8(s, "�") }
 
-func recordMap(r Record) map[string]any {
+// recordMap is r's members in format v, or ErrNotInFormat when v cannot
+// express one of them: no map of a version holds a member the version lacks.
+func recordMap(r Record, v FormatVersion) (map[string]any, error) {
+	if err := expressRecord(v, r); err != nil {
+		return nil, err
+	}
 	m := map[string]any{
-		"v":          formatVersion,
+		"v":          int(v),
 		"kind":       "record",
 		"decisionId": r.DecisionID,
 		"point":      r.Point,
@@ -596,10 +774,28 @@ func recordMap(r Record) map[string]any {
 		}
 		m["attributes"] = attrs
 	}
-	return m
+	if p := r.RefusedAt; p != nil {
+		pm := map[string]any{"confidence": string(p.Confidence)}
+		if p.Hop != "" {
+			pm["hop"] = p.Hop
+		}
+		m["refusedAt"] = pm
+	}
+	if len(r.VerifiedHops) > 0 {
+		hops := make([]any, len(r.VerifiedHops))
+		for i, h := range r.VerifiedHops {
+			hops[i] = h
+		}
+		m["verifiedHops"] = hops
+	}
+	return m, nil
 }
 
-func summaryMap(s Summary) map[string]any {
+// summaryMap is recordMap for a summary.
+func summaryMap(s Summary, v FormatVersion) (map[string]any, error) {
+	if err := expressSummary(v, s); err != nil {
+		return nil, err
+	}
 	counts := make([]any, len(s.Counts))
 	for i, c := range s.Counts {
 		cm := map[string]any{"outcome": string(c.Outcome), "n": c.N}
@@ -609,11 +805,11 @@ func summaryMap(s Summary) map[string]any {
 		counts[i] = cm
 	}
 	return map[string]any{
-		"v":      formatVersion,
+		"v":      int(v),
 		"kind":   "summary",
 		"point":  s.Point,
 		"from":   s.From.UTC().Format(timeLayout),
 		"until":  s.Until.UTC().Format(timeLayout),
 		"counts": counts,
-	}
+	}, nil
 }

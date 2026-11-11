@@ -23,6 +23,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `decisionrecord`: format v2 of records and summaries, beside format v1,
+  which `NewJSONLines` and `NewLog` keep writing as 0.4.0 does: the same
+  lines, byte for byte, and the same log entries.
+  `NewJSONLinesFormat` and `NewLogFormat` take the version (`FormatVersion`,
+  `FormatV1`, `FormatV2`). Format v2 adds the outcome `Held` (a check the
+  deciding party enforces deferred the decision; it ranks above accepted and
+  below unenforced and refused, and `LevelRefusals` writes it), and a
+  record's `RefusedAt` (a `Position`: the hop a refusal is diagnosed at, with
+  its `Confidence`) and `VerifiedHops` (the hops whose signatures were
+  verified). A format v1 sink refuses what format v1 cannot express with
+  `ErrNotInFormat`, a constant of the new type `decisionrecord.Error`, and
+  writes nothing of it. The README states when the version changes.
 - `delegation.VerifyFor` checks a delegation as authority for one identity:
   its `credentialSubject.id` is that identity's DID, byte for byte, and
   `Verify` accepts it. A delegation presented for another identity (another
