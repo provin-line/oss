@@ -80,6 +80,26 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- `decisionrecord`: the sinks `NewJSONLines`, `NewLog` and their `Format`
+  forms return as soon as the call's context ends, without waiting for a
+  write to end, with an error wrapping `ctx.Err()` that names the sink and
+  says whether the write had started. Before, a writer or handler that did
+  not return held the call, and every call after it. A record whose context
+  ended before its write started is not written, then or later; a write that
+  started may end, and be kept, after the call returned. A write that never
+  ends is not recovered: each sink holds at most one. With a context that
+  cannot end, a call waits for its write as before.
+  - The log sink calls its handler one entry at a time.
+  - A panic in the writer or the handler reaches the caller while it waits;
+    after the caller has returned, it is dropped and the write counts as
+    failed.
+  - A nil context is `context.Background()`.
+  - A `Filter`'s warning that a sink failed does not wait past the context:
+    it is written late, or, when another warning is being written and the
+    context ends first, not at all.
+  - `Filter.Flush` with a context that has already ended returns its error
+    and keeps the window for the next `Flush`; before, it wrote the
+    window's summaries whatever the context said.
 - `schema`: a JSON Schema `pattern` may name a Unicode general category by a
   long name or alias as well as by its short name, spelled as ECMA-262 spells
   them (`\p{Letter}`, `\p{Decimal_Number}`, `\p{digit}` …, read as `\p{L}`,

@@ -82,6 +82,28 @@ record is kept (an unbuffered or synced writer):
   one whose nil means kept. An entry carries the members of a JSON line as
   its attributes, `"v"` included.
 
+These sinks return as soon as the call's context ends, without waiting for
+a write to end: the error wraps `ctx.Err()` (so `errors.Is` matches
+`context.DeadlineExceeded` or `context.Canceled`), names the sink, and says
+whether the write had started. A record whose context ended before its write
+started is not written, then or later; a write that started cannot be
+stopped, and may end, and be kept, after the call returned. A sink makes one
+write at a time (the log sink calls its handler one entry at a time): a
+call behind a write that does not end returns at its own context's end, and
+the sink writes again once that write ends. A write that never ends (a
+writer or handler stuck for good) is not recovered, so each sink holds at
+most one. With a context that cannot end (`context.Background()`, or one
+from `context.WithoutCancel`) a call waits for its write, as in 0.4.0; a nil
+context is `context.Background()`. A panic in the writer or the handler
+reaches the caller while it waits; after the caller has returned, it is
+dropped and the write counts as failed.
+
+Below `all`, a `Filter`'s warning that a sink failed does not wait past the
+context either: when no warning is being written it is written, late if the
+context has ended; when one is, and the context ends first, it is not.
+`Filter.Flush` with a context that has already ended returns its error and
+keeps the window, counts and all, for the next `Flush`.
+
 ## Format versions
 
 A sink writes one format version, the `"v"` of every line and entry.

@@ -23,6 +23,10 @@
 - `NewJSONLines`: 1 行に RFC 8785 の JSON を 1 つ。`"v"`（形の版）と `"kind"` を持つ。時刻は UTC で小数 9 桁なので、文字列のまま並べられる。行は `"\n"` だけで分ける（U+2028 と U+2029 はそのまま書く）。書けなかった後の行は、新しい行から始める。
 - `NewLog`: 記録か要約ごとに構造化ログを 1 件。handler を通すので、info を取らない logger や、失敗した handler は error になる。残さずに nil を返す handler は見分けられないので、`all` では nil が「残した」を意味する handler を使う。ログの 1 件は、JSON の 1 行の member を、`"v"` も含めて属性として持つ。
 
+これらの書き出し先は、呼び出しの context が終わったら、書き込みの終わりを待たずにすぐ返す。error は `ctx.Err()` を包み（`errors.Is` で `context.DeadlineExceeded` か `context.Canceled` に当たる）、どの書き出し先かと、書き込みを始めていたかを言う。書き込みを始める前に context が終わった記録は、そのときも後でも書かない。始めた書き込みは止められず、呼び出しが返った後に書き終わり、残ることがある。1 つの書き出し先は、書き込みを 1 つずつ行う（ログの書き出し先は、handler を 1 件ずつ呼ぶ）。終わらない書き込みの後ろの呼び出しは自分の context の終わりで返り、その書き込みが終われば、書き出し先はまた書く。永久に終わらない書き込み（ずっと詰まった writer や handler）は取り戻せないので、書き出し先ごとに 1 つまで残る。終わり得ない context（`context.Background()` や `context.WithoutCancel` で作ったもの）では、0.4.0 と同じく書き込みを待つ。nil の context は `context.Background()` として扱う。writer や handler の panic は、呼び手が待っている間なら呼び手に届く。呼び手が返った後なら捨て、その書き込みは失敗したものとする。
+
+`all` より下の水準で、`Filter` が書き出し先の失敗を知らせる警告も、context の終わりを過ぎて待たない。ほかの警告を書いていなければ、context が終わっていても遅れて書く。ほかの警告を書いている間に context が終わったら、書かない。`Filter.Flush` は、呼んだ時に context がもう終わっていたら、その error を返し、窓を数ごと次の `Flush` に持ち越す。
+
 ## 形の版
 
 書き出し先は 1 つの形の版で書き、それが各行・各件の `"v"` になる。`NewJSONLines` と `NewLog` は、0.4.0 と同じく版 1 で書く。`NewJSONLinesFormat` と `NewLogFormat` は渡された版（`FormatV1` か `FormatV2`）で書き、それ以外の版は断る。

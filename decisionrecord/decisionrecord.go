@@ -307,9 +307,164 @@ type SummaryRecorder interface {
 // error from Record is what lets a decision be accepted, or passed with its
 // refusal unenforced, so a Sink returns nil only once the record is written
 // where it is kept (an unbuffered or synced writer).
+//
+// The sinks here return as soon as the call's context ends, without waiting
+// for a write to end: the error wraps ctx.Err(), so errors.Is matches
+// context.DeadlineExceeded or context.Canceled, and its text names the sink
+// and says whether the write had started. A record or summary whose context
+// ended before its write started is not written, then or later. A write that
+// started cannot be stopped: it may end, and be kept, after the call
+// returned. A sink here makes one write at a time (the log sink, one call of
+// its handler at a time); a call behind a write that does not end returns at
+// its own context's end, and once the write ends the sink writes again. A
+// write that never ends (an io.Writer or a handler stuck for good) is not
+// recovered: it keeps the sink's turn, so each sink holds at most one such
+// write.
+//
+// With a context that cannot end (context.Background(), or one from
+// context.WithoutCancel), a call waits for its write, behind any write that
+// does not end, as in 0.4.0. A nil context is context.Background(). A panic
+// in the io.Writer or the handler reaches the caller while the caller waits;
+// after the caller has returned it is dropped, and the write counts as
+// failed.
 type Sink interface {
 	Recorder
 	SummaryRecorder
+}
+
+// turn is a sink's right to write: one write at a time, waited for with a
+// context. A write keeps the turn until it has really ended.
+type turn chan struct{}
+
+func newTurn() turn { return make(turn, 1) }
+
+// run runs write while holding t, and returns its error. A nil ctx is
+// context.Background(). With a context that cannot end (ctx.Done() is nil),
+// write runs in the caller's goroutine, as under a mutex. Otherwise it runs
+// in a goroutine; when ctx ends first, run returns ctx's error: as
+// notStarted when the write did not start (ctx ended before t was taken, or
+// by the time write was about to run), and as unfinished when it started:
+// write goes on, gives t back when it ends, and its result is dropped. A
+// panic in write reaches the caller while the caller waits; after the
+// caller has returned, it is dropped, a failed write.
+func (t turn) run(ctx context.Context, who string, write func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Done() == nil {
+		t <- struct{}{}
+		defer func() { <-t }()
+		return write()
+	}
+	select {
+	case t <- struct{}{}:
+	case <-ctx.Done():
+		return notStarted(who, ctx.Err())
+	}
+	done := make(chan writeResult, 1)
+	go func() {
+		// With t held, ctx is looked at once more right before write runs:
+		// a write whose context has ended by then does not start.
+		r := catch(func() error {
+			if err := ctx.Err(); err != nil {
+				return notStarted(who, err)
+			}
+			return write()
+		})
+		<-t
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		return r.result()
+	case <-ctx.Done():
+		select {
+		case r := <-done:
+			return r.result()
+		default:
+			return unfinished(who, ctx.Err())
+		}
+	}
+}
+
+// runLate runs write while holding t, for a write that may come late: when t
+// is free it takes it whatever ctx says, and write gets ctx without its
+// cancellation, so it runs even after the caller has gone. Only when t is
+// held does runLate wait for it, and then no longer than ctx; it waits for
+// write no longer than ctx either. A nil ctx and one that cannot end are as
+// in run, and so is a panic in write.
+func (t turn) runLate(ctx context.Context, write func(context.Context)) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Done() == nil {
+		t <- struct{}{}
+		defer func() { <-t }()
+		write(ctx)
+		return
+	}
+	select {
+	case t <- struct{}{}:
+	default:
+		select {
+		case t <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+	}
+	done := make(chan writeResult, 1)
+	go func() {
+		r := catch(func() error {
+			write(context.WithoutCancel(ctx))
+			return nil
+		})
+		<-t
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		_ = r.result()
+	case <-ctx.Done():
+	}
+}
+
+// writeResult is how a write in a goroutine ended: its error, or the value
+// it panicked with.
+type writeResult struct {
+	err      error
+	panicked bool
+	value    any
+}
+
+// catch runs write and keeps a panic in it as a writeResult.
+func catch(write func() error) (r writeResult) {
+	defer func() {
+		if v := recover(); v != nil {
+			r = writeResult{panicked: true, value: v}
+		}
+	}()
+	return writeResult{err: write()}
+}
+
+// result is r's error; when write panicked, result panics again with its
+// value, in the caller's goroutine.
+func (r writeResult) result() error {
+	if r.panicked {
+		panic(r.value)
+	}
+	return r.err
+}
+
+// notStarted is the error of a write that who did not start because the
+// context ended with err.
+func notStarted(who string, err error) error {
+	return fmt.Errorf("decisionrecord: %s: not written, the context ended before the write started: %w", who, err)
+}
+
+// unfinished is the error of a write that who started and that had not ended
+// when the context ended with err: it goes on, and may still be kept.
+func unfinished(who string, err error) error {
+	return fmt.Errorf("decisionrecord: %s: the context ended before the write did, which goes on and may still be kept: %w", who, err)
 }
 
 // Level is how much a Filter writes.
@@ -351,10 +506,18 @@ var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 // without its record. A deciding party that must not pass one unrecorded
 // uses LevelAll. At LevelNone nothing is written. A Filter not made by
 // NewFilter returns an error from every call.
+//
+// Record and Flush return when the sink does once the context ends (see
+// Sink). A warning does not wait past the context either: when no warning is
+// being written, it is written, late if the context has ended; when one is,
+// and the context ends first, it is not written. A warning logger that does
+// not end holds back only the warnings after it, as a sink's write that does
+// not end holds back its writes.
 type Filter struct {
-	level Level
-	sink  Sink
-	warn  *slog.Logger
+	level    Level
+	sink     Sink
+	warn     *slog.Logger
+	warnTurn turn
 
 	mu      sync.Mutex
 	from    time.Time
@@ -394,7 +557,7 @@ func NewFilter(level Level, sink Sink, warn *slog.Logger) (*Filter, error) {
 	if warn == nil {
 		warn = slog.Default()
 	}
-	f := &Filter{level: level, sink: sink, warn: warn}
+	f := &Filter{level: level, sink: sink, warn: warn, warnTurn: newTurn()}
 	f.resetWindow(time.Time{})
 	return f, nil
 }
@@ -467,13 +630,18 @@ func (f *Filter) count(r Record) {
 // fall in two windows is counted in each. It starts a new window at until. A
 // window without decisions writes nothing.
 // until must not be zero or before the window's start. At other levels it does
-// nothing. A sink's failure is a warning; the decisions do not change.
+// nothing. A sink's failure is a warning; the decisions do not change. A
+// context that has ended when Flush is called is an error wrapping its
+// ctx.Err(), and the window is kept, counts and all, for the next Flush.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	if f == nil || f.level == "" {
 		return errNotMade
 	}
 	if f.level != LevelSummary {
 		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return fmt.Errorf("decisionrecord: flush with a context that has ended, the window kept for the next flush: %w", ctx.Err())
 	}
 	f.mu.Lock()
 	windows, from := f.windows, f.from
@@ -501,7 +669,7 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 		}
 		sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
 		if err := f.sink.Summary(ctx, s); err != nil {
-			f.warn.WarnContext(ctx, "decision record: summary not written", "point", p, "err", err)
+			f.warnf(ctx, "decision record: summary not written", "point", p, "err", err)
 		}
 	}
 	return nil
@@ -510,7 +678,17 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 // notWritten warns that the sink did not write a record, at a level where
 // that does not change the decision.
 func (f *Filter) notWritten(ctx context.Context, err error) {
-	f.warn.WarnContext(ctx, "decision record: not written", "level", string(f.level), "err", err)
+	f.warnf(ctx, "decision record: not written", "level", string(f.level), "err", err)
+}
+
+// warnf writes a warning, one at a time, without waiting past ctx: when no
+// warning is being written it is written, late if ctx has ended or ends
+// first; when one is being written and ctx ends before it does, it is not
+// written.
+func (f *Filter) warnf(ctx context.Context, msg string, args ...any) {
+	f.warnTurn.runLate(ctx, func(ctx context.Context) {
+		f.warn.WarnContext(ctx, msg, args...)
+	})
 }
 
 // FormatVersion is the version of the form in which the sinks here write
@@ -588,7 +766,7 @@ const timeLayout = "2006-01-02T15:04:05.000000000Z"
 // it stay whole. A nil w makes every write fail. What format v1 cannot express
 // is ErrNotInFormat. NewJSONLines(w) is NewJSONLinesFormat(w, FormatV1).
 func NewJSONLines(w io.Writer) Sink {
-	return &jsonLines{w: w, v: FormatV1}
+	return &jsonLines{turn: newTurn(), w: w, v: FormatV1}
 }
 
 // NewJSONLinesFormat is NewJSONLines writing format v. A version the sinks
@@ -597,17 +775,19 @@ func NewJSONLinesFormat(w io.Writer, v FormatVersion) (Sink, error) {
 	if !v.known() {
 		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
 	}
-	return &jsonLines{w: w, v: v}, nil
+	return &jsonLines{turn: newTurn(), w: w, v: v}, nil
 }
 
 type jsonLines struct {
-	mu     sync.Mutex
-	w      io.Writer
-	v      FormatVersion
+	turn turn
+	w    io.Writer
+	v    FormatVersion
+	// broken is set by a failed Write, so the next line starts on a line of
+	// its own. Only the holder of turn reads or sets it.
 	broken bool
 }
 
-func (j *jsonLines) Record(_ context.Context, r Record) error {
+func (j *jsonLines) Record(ctx context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
@@ -615,10 +795,10 @@ func (j *jsonLines) Record(_ context.Context, r Record) error {
 	if err != nil {
 		return err
 	}
-	return j.write(m)
+	return j.write(ctx, m)
 }
 
-func (j *jsonLines) Summary(_ context.Context, s Summary) error {
+func (j *jsonLines) Summary(ctx context.Context, s Summary) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
@@ -626,10 +806,12 @@ func (j *jsonLines) Summary(_ context.Context, s Summary) error {
 	if err != nil {
 		return err
 	}
-	return j.write(m)
+	return j.write(ctx, m)
 }
 
-func (j *jsonLines) write(m map[string]any) error {
+// write makes m's line before it waits for the turn, so the line is the
+// caller's record as given, whatever the caller changes after the call.
+func (j *jsonLines) write(ctx context.Context, m map[string]any) error {
 	if j.w == nil {
 		return errors.New("decisionrecord: no writer")
 	}
@@ -638,17 +820,20 @@ func (j *jsonLines) write(m map[string]any) error {
 		return fmt.Errorf("decisionrecord: %w", err)
 	}
 	line := append(b, '\n')
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.broken {
-		line = append([]byte{'\n'}, line...)
-	}
-	if _, err := j.w.Write(line); err != nil {
+	return j.turn.run(ctx, "JSON lines sink", func() error {
+		out := line
+		if j.broken {
+			out = append([]byte{'\n'}, line...)
+		}
+		// broken holds until the Write succeeds, so a Write that fails or
+		// panics leaves the next line to start on a line of its own.
 		j.broken = true
-		return fmt.Errorf("decisionrecord: %w", err)
-	}
-	j.broken = false
-	return nil
+		if _, err := j.w.Write(out); err != nil {
+			return fmt.Errorf("decisionrecord: %w", err)
+		}
+		j.broken = false
+		return nil
+	})
 }
 
 // NewLog returns a sink writing each record and summary as one structured log
@@ -661,7 +846,7 @@ func (j *jsonLines) write(m map[string]any) error {
 // format v1, "v" included; what format v1 cannot express is ErrNotInFormat.
 // NewLog(l) is NewLogFormat(l, FormatV1).
 func NewLog(l *slog.Logger) Sink {
-	return logSink{l: l, v: FormatV1}
+	return logSink{turn: newTurn(), l: l, v: FormatV1}
 }
 
 // NewLogFormat is NewLog writing format v. A version the sinks here do not
@@ -670,12 +855,13 @@ func NewLogFormat(l *slog.Logger, v FormatVersion) (Sink, error) {
 	if !v.known() {
 		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
 	}
-	return logSink{l: l, v: v}, nil
+	return logSink{turn: newTurn(), l: l, v: v}, nil
 }
 
 type logSink struct {
-	l *slog.Logger
-	v FormatVersion
+	turn turn
+	l    *slog.Logger
+	v    FormatVersion
 }
 
 func (s logSink) Record(ctx context.Context, r Record) error {
@@ -700,20 +886,28 @@ func (s logSink) Summary(ctx context.Context, sum Summary) error {
 	return s.emit(ctx, "decision summary", m)
 }
 
+// emit makes the entry before it waits for the turn, so the entry is the
+// caller's record as given; the handler's Enabled and Handle run with the
+// turn held.
 func (s logSink) emit(ctx context.Context, msg string, m map[string]any) error {
 	if s.l == nil {
 		return errors.New("decisionrecord: no logger")
 	}
 	h := s.l.Handler()
-	if !h.Enabled(ctx, slog.LevelInfo) {
-		return errors.New("decisionrecord: the logger does not take info entries")
-	}
 	rec := slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0)
 	rec.Add(mapAttrs(m)...)
-	if err := h.Handle(ctx, rec); err != nil {
-		return fmt.Errorf("decisionrecord: %w", err)
-	}
-	return nil
+	return s.turn.run(ctx, "log sink", func() error {
+		if !h.Enabled(ctx, slog.LevelInfo) {
+			return errors.New("decisionrecord: the logger does not take info entries")
+		}
+		if err := ctx.Err(); err != nil {
+			return notStarted("log sink", err)
+		}
+		if err := h.Handle(ctx, rec); err != nil {
+			return fmt.Errorf("decisionrecord: %w", err)
+		}
+		return nil
+	})
 }
 
 func mapAttrs(m map[string]any) []any {
