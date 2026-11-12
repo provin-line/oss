@@ -100,9 +100,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   present one that is not the DID the rule asks for is `ErrOwnerBinding`.
   `ErrSignatureUnestablished` is a resolution of the issuer that gave no
   definite answer, that returned neither a document nor an error, or that
-  returned the document of another DID: the one a caller may retry. `ErrIssuerNotFound` is the
-  resolver answering `resolver.ErrNotFound`, or a document with no key usable
-  for assertion under the proof's `verificationMethod`. An error another package returned stays reachable, a
+  returned the document of another DID: the one a caller may retry.
+  `ErrIssuerNotFound` is the resolver answering `resolver.ErrNotFound`, or a
+  document with no key usable for assertion under the proof's
+  `verificationMethod`. An error another package returned stays reachable, a
   resolver's and a signature verifier's as they return it; if such an error
   is a sentinel of `delegation` under `errors.Is`, that one is found too,
   beside the one `Verify` attaches.
@@ -134,6 +135,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- `resolver.Resolver`'s contract says `Resolve` returns a non-nil document or
+  a non-nil error, never both nil, so a caller that gets a nil error uses the
+  document without checking it for nil. The module's resolvers keep it:
+  `resolver/local`, `network/pkg/didresolver`, the CLI's registry resolver
+  and the bundle's archive and export resolvers by what they return, and
+  `resolver/cache`, `appraisal/inputcapture.DIDResolver` and the registry's
+  own store resolver as long as what they pass through does. A resolver that
+  returns neither is outside the contract: some of the module's callers
+  panic on it, and `delegation` refuses it (see Fixed).
 - `decisionrecord`: the sinks `NewJSONLines`, `NewLog` and their `Format`
   forms return as soon as the call's context ends, without waiting for a
   write to end, with an error wrapping `ctx.Err()` that names the sink and
@@ -390,6 +400,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `nil`, or giving a variable their type and then assigning another error
   to it). Their messages are the same; compare an error with them by
   `errors.Is`.
+- **Go API:** an implementation of `resolver.Resolver` must return a non-nil
+  document or a non-nil error, never both nil (see Changed). One that
+  answered with neither must return an error instead.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
   only the members `vc` reads, under their names and in their forms; one with
   any other member is refused.

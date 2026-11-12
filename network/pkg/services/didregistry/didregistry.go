@@ -852,7 +852,10 @@ func hashEvent(ev store.LifecycleEvent) (string, error) {
 }
 
 // storeResolver adapts a DIDStore to resolver.Resolver so delegation.Verify can
-// resolve the owner document from this registry's own store.
+// resolve the owner document from this registry's own store. It returns the
+// store's document or error as they are (a store miss also matches
+// resolver.ErrNotFound), so it returns a document or an error (the
+// resolver.Resolver contract) as long as the store's Resolve does.
 type storeResolver struct {
 	st store.DIDStore
 }

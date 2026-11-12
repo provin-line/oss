@@ -73,7 +73,10 @@ func record(ctx context.Context, name, digest string) {
 }
 
 // DIDResolver records the canonical hash of each successfully resolved DID
-// document, then returns the original object unchanged.
+// document, then returns the original object unchanged; a document it cannot
+// hash is an error. It returns Next's result otherwise as it is, so it returns
+// a document or an error (the resolver.Resolver contract) as long as Next
+// does.
 type DIDResolver struct {
 	Next resolver.Resolver
 }

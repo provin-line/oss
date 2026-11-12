@@ -1,7 +1,7 @@
 # resolver — DID Document 解決
 > 日本語版 — English: [README.md](README.md)
 
-`Resolver` インターフェース（`Resolve(did string) (*did.DIDDocument, error)`）とその実装群。
+`Resolver` インターフェース（`Resolve(ctx, did string) (*did.DIDDocument, error)`）とその実装群。`Resolve` は nil でない文書か nil でない error のどちらかを返し、どちらも nil にはしない。
 
 ## 実装
 

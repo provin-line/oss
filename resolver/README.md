@@ -1,7 +1,8 @@
 # resolver — DID Document Resolution
 
-The `Resolver` interface (`Resolve(did string) (*did.DIDDocument, error)`) and its
-implementations.
+The `Resolver` interface (`Resolve(ctx, did string) (*did.DIDDocument, error)`)
+and its implementations. `Resolve` returns a non-nil document or a non-nil
+error, never both nil.
 
 ## Implementations
 
