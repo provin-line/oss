@@ -139,6 +139,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- `didregistry/store.DIDStore`'s contract says `Resolve` returns a non-nil
+  document or a non-nil error, and `ResolveDelegation` a non-nil delegation
+  or a non-nil error, never both nil; `yamlstore` keeps it, and so the
+  registry's own store resolver keeps `resolver.Resolver`'s. A store that
+  answers with neither is outside the contract. With one, the DID service's
+  `ResolveDID` and `ResolveDelegation` answer `null` as the document or the
+  delegation, with no error, and so does `UpdateStatus` for a DID already
+  revoked; revoking a DID records the revocation and then panics before its
+  lifecycle event is appended, so a later request for it answers `null`
+  with no error and the event is never appended; re-registering an owner
+  already registered panics; and issuing a Pipeline or Process is refused
+  as `Unavailable`.
 - `resolver.Resolver`'s contract says `Resolve` returns a non-nil document or
   a non-nil error, never both nil, so a caller that gets a nil error uses the
   document without checking it for nil. The module's resolvers keep it:
@@ -446,6 +458,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - **Go API:** an implementation of `resolver.Resolver` must return a non-nil
   document or a non-nil error, never both nil (see Changed). One that
   answered with neither must return an error instead.
+- **Go API:** an implementation of `didregistry/store.DIDStore` must return
+  a non-nil value or a non-nil error from `Resolve` and `ResolveDelegation`,
+  never both nil (see Changed). One that answered with neither must return
+  an error instead, `store.ErrNotFound` for a miss.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
   only the members `vc` reads, under their names and in their forms; one with
   any other member is refused.

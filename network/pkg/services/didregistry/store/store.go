@@ -103,7 +103,11 @@ type DIDStore interface {
 	SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 	SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 
+	// Resolve returns d's document: a non-nil document or a non-nil error,
+	// never both nil, as resolver.Resolver's Resolve does.
 	Resolve(d *dplaax.DID) (*did.DIDDocument, error)
+	// ResolveDelegation returns d's delegation: a non-nil delegation or a
+	// non-nil error, never both nil.
 	ResolveDelegation(d *dplaax.DID) (*delegation.DelegationCredential, error)
 
 	UpdateStatus(d *dplaax.DID, status DIDStatus) error
