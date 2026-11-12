@@ -748,6 +748,15 @@ func (f *Filter) count(r Record) {
 // may wait for good behind a write that does not end. When the deadline
 // passes first, the counts not written by then are lost, as above. A write
 // that fails still loses its summary.
+//
+// A panic as Flush writes one point's summary, in the sink or in the handler
+// of the warning that the summary was not written, goes on to the caller as
+// it was raised, with its own stack, once Flush has written every point after
+// it; so does runtime.Goexit in the caller's goroutine. Flush calls the sink
+// again after it panicked, so a sink not made here stays callable after a
+// panic, and the panic reaches the caller once those writes have returned. A
+// panic as one of those is a warning that its point's summary was not
+// written, with its value; a panic in that warning's handler is dropped.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	if f == nil || f.level == "" {
 		return errNotMade
@@ -775,19 +784,54 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 		points = append(points, p)
 	}
 	sort.Strings(points)
-	for _, p := range points {
-		s := Summary{Point: p, From: from, Until: until}
-		for k, n := range windows[p].counts {
-			if n > 0 {
-				s.Counts = append(s.Counts, Count{Outcome: k.outcome, Check: k.check, N: n})
+	// A panic, or runtime.Goexit, as one point's summary is written goes on
+	// to the caller as it is, its stack with it, once this deferred call has
+	// written the points after it; a panic in one of those is a warning.
+	next := 0
+	defer func() {
+		if next == len(points) {
+			return
+		}
+		for _, p := range points[next+1:] {
+			if v, panicked := panicOf(func() { f.writeSummary(ctx, windows[p], p, from, until) }); panicked {
+				panicOf(func() { f.warnf(ctx, "decision record: summary not written", "point", p, "panic", v) })
 			}
 		}
-		sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
-		if err := f.sink.Summary(ctx, s); err != nil {
-			f.warnf(ctx, "decision record: summary not written", "point", p, "err", err)
-		}
+	}()
+	for ; next < len(points); next++ {
+		f.writeSummary(ctx, windows[points[next]], points[next], from, until)
 	}
 	return nil
+}
+
+// writeSummary writes the summary of point p's window w, from from until
+// until, warning when the sink fails to.
+func (f *Filter) writeSummary(ctx context.Context, w *window, p string, from, until time.Time) {
+	s := Summary{Point: p, From: from, Until: until}
+	for k, n := range w.counts {
+		if n > 0 {
+			s.Counts = append(s.Counts, Count{Outcome: k.outcome, Check: k.check, N: n})
+		}
+	}
+	sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
+	if err := f.sink.Summary(ctx, s); err != nil {
+		f.warnf(ctx, "decision record: summary not written", "point", p, "err", err)
+	}
+}
+
+// panicOf runs fn and reports what it panicked with, if it did. Whether fn
+// returned tells a panic from a return, not the value recover gives, which
+// is nil for panic(nil) under GODEBUG panicnil=1.
+func panicOf(fn func()) (v any, panicked bool) {
+	returned := false
+	defer func() {
+		if !returned {
+			v, panicked = recover(), true
+		}
+	}()
+	fn()
+	returned = true
+	return nil, false
 }
 
 // notWritten warns that the sink did not write a record, at a level where

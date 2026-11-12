@@ -340,6 +340,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Fixed
 
+- `decisionrecord`: a panic as `Filter.Flush` writes one point's summary, in
+  the sink or in the handler of the warning that the summary was not written,
+  no longer loses the other points' summaries without a warning: `Flush`
+  writes every point after it, then the panic goes on to the caller as it was
+  raised, with its own stack (and so does `runtime.Goexit` in the caller's
+  goroutine). A panic as one of those writes is a warning that its point's
+  summary was not written, with its value. `Flush` calls a sink again after it
+  panicked, so a sink not made here stays callable after a panic.
 - `chainmanager`: subscribing to a publisher, and unsubscribing from one,
   refuse a resolved DID Document whose id is not the publisher's DID, as a
   failure to resolve the publisher (`ErrRemotePeer`, which the operator API

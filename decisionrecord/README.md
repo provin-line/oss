@@ -134,7 +134,15 @@ at shutdown, takes a context that the signal does not end and that has a
 deadline of its own, as `context.WithTimeout(context.WithoutCancel(ctx), d)`.
 Without a deadline it may wait for good behind a write that does not end. When
 the deadline passes first, the counts not written by then are lost, as above.
-A write that fails still loses its summary.
+A write that fails still loses its summary. A panic as `Flush` writes one
+point's summary, in the sink or in the handler of the warning that the summary
+was not written, goes on to the caller as it was raised, with its own stack,
+once `Flush` has written every point after it; so does `runtime.Goexit` in the
+caller's goroutine. `Flush` calls the sink again after it panicked, so a sink
+not made here stays callable after a panic, and the panic reaches the caller
+once those writes have returned. A panic as one of those is a warning that its
+point's summary was not written, with its value; a panic in that warning's
+handler is dropped.
 
 ## Format versions
 
