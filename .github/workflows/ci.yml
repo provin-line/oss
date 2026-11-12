@@ -69,13 +69,14 @@ jobs:
         working-directory: verification
         run: go test ./... -count=1
 
-  # The module reads Unicode general categories from tables it pins to
-  # Unicode 15.0.0 (internal/ucd), so a schema's regular expressions are read
-  # alike whatever Unicode version the toolchain carries. build-test runs these
-  # packages on the toolchain go.mod names (Unicode 15.0.0), where the pinned
-  # tables are compared with Go's own code point by code point; this job runs
-  # them on a toolchain of a later Unicode version (go1.27: 17.0.0), where the
-  # same schemas must be admitted and the same strings matched.
+  # The module reads Unicode general categories and White_Space from tables it
+  # pins to Unicode 15.0.0 (internal/ucd), so a schema's regular expressions
+  # and a credential's claim charset are read alike whatever Unicode version
+  # the toolchain carries. build-test runs these packages on the toolchain
+  # go.mod names (Unicode 15.0.0), where the pinned tables are compared with
+  # Go's own code point by code point; this job runs them on a toolchain of a
+  # later Unicode version (go1.27: 17.0.0), where the same schemas must be
+  # admitted, the same strings matched and the same claims judged.
   unicode-pin:
     runs-on: ubuntu-latest
     steps:
@@ -89,4 +90,4 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go version
-          go test ./internal/ucd/... ./schema/... -count=1
+          go test ./internal/ucd/... ./schema/... ./vc/... -count=1
