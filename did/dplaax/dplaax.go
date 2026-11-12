@@ -41,8 +41,17 @@ const MaxRegistryLen = 253
 // MaxRegistryLen octets. It is the check Parse applies to a DID's registry,
 // for a registry ID that comes on its own, such as from configuration. It is
 // not a DNS-name check: a segment with an underscore, or with a label longer
-// than DNS allows, passes it.
+// than DNS allows, passes it. Its refusal is ErrSyntax (errors.Is).
 func ValidateRegistry(id string) error {
+	if err := validateRegistry(id); err != nil {
+		return syntaxError(err.Error())
+	}
+	return nil
+}
+
+// validateRegistry is ValidateRegistry's check, its refusal not yet made
+// ErrSyntax: Parse makes its own refusals ErrSyntax.
+func validateRegistry(id string) error {
 	if !IsSafeSegment(id) {
 		return fmt.Errorf("did:%s registry %s violates the safe-segment rule ([A-Za-z0-9._-], not all dots)", Method, excerpt.Quoted(id, quoteLimit))
 	}
@@ -68,9 +77,19 @@ type DID struct {
 // Parse parses s as a did:dplaax identifier, by the dplaax rule
 // did.dplaax.syntax. Every segment is validated against the safe-segment rule
 // so parsed segments can participate in storage paths without traversal risk,
-// and the registry against ValidateRegistry. Parse performs no semantic
-// classification — see the Is* methods and validate.go.
+// and the registry against ValidateRegistry. Its refusal is ErrSyntax
+// (errors.Is). Parse performs no semantic classification — see the Is*
+// methods and validate.go.
 func Parse(s string) (*DID, error) {
+	d, err := parse(s)
+	if err != nil {
+		return nil, syntaxError(err.Error())
+	}
+	return d, nil
+}
+
+// parse is Parse, its refusal not yet made ErrSyntax.
+func parse(s string) (*DID, error) {
 	rest, ok := strings.CutPrefix(s, "did:"+Method+":")
 	if !ok {
 		return nil, fmt.Errorf("not a did:%s identifier: %s", Method, excerpt.Quoted(s, quoteLimit))
@@ -84,7 +103,7 @@ func Parse(s string) (*DID, error) {
 			return nil, fmt.Errorf("did:%s segment %s violates the safe-segment rule", Method, excerpt.Quoted(seg, quoteLimit))
 		}
 	}
-	if err := ValidateRegistry(segs[0]); err != nil {
+	if err := validateRegistry(segs[0]); err != nil {
 		return nil, err
 	}
 	d := &DID{

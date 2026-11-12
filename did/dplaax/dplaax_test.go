@@ -1,11 +1,13 @@
 package dplaax_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/resolver"
 )
 
 func TestParse_Owner(t *testing.T) {
@@ -202,6 +204,75 @@ func TestParse_BoundsTheRegistry(t *testing.T) {
 	if _, err := dplaax.Parse("did:dplaax:" + strings.Repeat("a", 254) + ":org:acme"); err == nil {
 		t.Error("a registry of 254 octets was taken")
 	}
+}
+
+// Every refusal of Parse and of ValidateRegistry is ErrSyntax, also wrapped,
+// with its text as it is: one case per refusal, and the one Parse makes when
+// two hold (a segment is checked before the registry's length).
+func TestErrSyntax_EveryRefusalOfParseAndValidateRegistry(t *testing.T) {
+	long := strings.Repeat("a", 254)
+	for name, c := range map[string]struct {
+		err  error
+		text string
+	}{
+		"Parse: another method":                            {parseErr("did:web:example.com"), `not a did:dplaax identifier: "did:web:example.com"`},
+		"Parse: too few segments":                          {parseErr("did:dplaax:poc.dplaax.dev:org"), "did:dplaax requires registry:accountType:accountId, got 2 segment(s)"},
+		"Parse: an unsafe segment":                         {parseErr("did:dplaax:poc.dplaax.dev:org:ac/me"), `did:dplaax segment "ac/me" violates the safe-segment rule`},
+		"Parse: an empty segment":                          {parseErr("did:dplaax:poc.dplaax.dev:org:"), `did:dplaax segment "" violates the safe-segment rule`},
+		"Parse: a registry too long":                       {parseErr("did:dplaax:" + long + ":org:acme"), "did:dplaax registry of 254 octets, beyond 253"},
+		"Parse: a registry too long and an unsafe segment": {parseErr("did:dplaax:" + long + ":org:ac/me"), `did:dplaax segment "ac/me" violates the safe-segment rule`},
+		"ValidateRegistry: empty":                          {dplaax.ValidateRegistry(""), `did:dplaax registry "" violates the safe-segment rule ([A-Za-z0-9._-], not all dots)`},
+		"ValidateRegistry: all dots":                       {dplaax.ValidateRegistry(".."), `did:dplaax registry ".." violates the safe-segment rule ([A-Za-z0-9._-], not all dots)`},
+		"ValidateRegistry: unsafe":                         {dplaax.ValidateRegistry("a/b"), `did:dplaax registry "a/b" violates the safe-segment rule ([A-Za-z0-9._-], not all dots)`},
+		"ValidateRegistry: too long":                       {dplaax.ValidateRegistry(long), "did:dplaax registry of 254 octets, beyond 253"},
+	} {
+		if c.err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !errors.Is(c.err, dplaax.ErrSyntax) || !errors.Is(fmt.Errorf("caller: %w", c.err), dplaax.ErrSyntax) {
+			t.Errorf("%s: %v is not ErrSyntax", name, c.err)
+		}
+		// It is ErrSyntax and no other error, so a caller branching on
+		// another sentinel beside it reads no refusal of the syntax as that.
+		for _, other := range []error{dplaax.Error(c.text), errors.New(c.text), resolver.ErrNotFound} {
+			if errors.Is(c.err, other) {
+				t.Errorf("%s: %v is also %v", name, c.err, other)
+			}
+		}
+		if c.err.Error() != c.text {
+			t.Errorf("%s: %q, want %q", name, c.err, c.text)
+		}
+	}
+}
+
+// The semantic gates refuse under other rules: none of their refusals is
+// ErrSyntax, ValidateDID's of an empty registry included.
+func TestErrSyntax_NotTheSemanticGates(t *testing.T) {
+	parse := func(s string) *dplaax.DID {
+		t.Helper()
+		d, err := dplaax.Parse(s)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", s, err)
+		}
+		return d
+	}
+	for name, err := range map[string]error{
+		"ValidateDID: an account type":         dplaax.ValidateDID(parse("did:dplaax:poc.dplaax.dev:person:acme")),
+		"ValidateDID: an empty registry":       dplaax.ValidateDID(&dplaax.DID{Method: dplaax.Method, AccountType: "org", AccountID: "acme"}),
+		"ValidateDID: a resource path":         dplaax.ValidateDID(parse("did:dplaax:poc.dplaax.dev:org:acme:widget:w1")),
+		"RequireKnownPattern: a resource path": dplaax.RequireKnownPattern(parse("did:dplaax:poc.dplaax.dev:org:acme:widget:w1")),
+		"RequireOwner: a Process":              dplaax.RequireOwner(parse("did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:x")),
+	} {
+		if err == nil || errors.Is(err, dplaax.ErrSyntax) {
+			t.Errorf("%s: %v, want a refusal that is not ErrSyntax", name, err)
+		}
+	}
+}
+
+func parseErr(s string) error {
+	_, err := dplaax.Parse(s)
+	return err
 }
 
 // Parse quotes what it refuses within a bound, however long the input: the

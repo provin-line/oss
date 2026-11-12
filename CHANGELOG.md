@@ -83,6 +83,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   not a DNS-name check. `(*DID).Pipeline` returns a Process's Pipeline, and
   false for any other DID (dplaax `did.dplaax.hierarchy`); `PipelineDID`
   stays a truncation of the resource path.
+- `did/dplaax`: `Error`, the type of its sentinels, and `ErrSyntax`. Every
+  refusal of `Parse` and `ValidateRegistry` is `ErrSyntax` under `errors.Is`
+  (dplaax `did.dplaax.syntax`), its text unchanged, so a caller that wraps
+  it with `%w` keeps it. The refusals of `ValidateDID`, `RequireKnownPattern`
+  and `RequireOwner` are not `ErrSyntax`.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI

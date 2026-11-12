@@ -13,9 +13,11 @@ import (
 var supportedAccountTypes = map[string]bool{"org": true}
 
 // ValidateDID performs semantic validation beyond syntax: account type
-// against the supported set (currently "org"), registry shape, and the
-// known-pattern rule. Parsers stay forward-compatible; this gate is where
-// the current deployment's policy lives.
+// against the supported set (currently "org"), a registry that is not empty,
+// and the known-pattern rule. It checks no segment against the syntax: a DID
+// a caller builds rather than parses is held to the syntax only by Parse.
+// Parsers stay forward-compatible; this gate is where the current
+// deployment's policy lives. Its refusals are not ErrSyntax.
 func ValidateDID(d *DID) error {
 	if !supportedAccountTypes[d.AccountType] {
 		return fmt.Errorf("did:%s: unsupported accountType %s (supported: org)", Method, excerpt.Quoted(d.AccountType, quoteLimit))
