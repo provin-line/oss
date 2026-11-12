@@ -7,4 +7,5 @@ Owner DID が Pipeline または Process DID へ権限を委任することを�
 
 - 発行者は `delegatedBy` と一致しなければならない。検証時には発行者の DID Document を解決し、オーナーのアサーションキーに対して証明を検証する。
 - 委任クレデンシャルは委任先 DID とともにレジストリに永続化され、`ResolveDelegation` 経由で提供される。
-- 証明のメカニズムは `vc`（`CreateProof`・`VerifyProof`）を再利用する — このパッケージが所有するのは委任固有の形状とルールのみである。
+- 証明のメカニズムは `vc`（`CreateProof`・`VerifyProofWithContract`）を再利用する — このパッケージが所有するのは委任固有の形状とルールのみである。
+- `Verify` は断りのそれぞれに、外れた確かめの種類の sentinel を 1 つ付ける（`errors.Is`）: `ErrMalformed`、`ErrOwnerBinding`、`ErrProofPolicy`、`ErrScoped`、`ErrIssuerNotFound`、`ErrSignatureInvalid`、`ErrSignatureUnestablished`（呼ぶ側がやり直してよいのはこれだけ）。`VerifyFor` は、別の identity に向けて出された委任を `ErrNotForIdentity` で断り、ほかは `Verify` の断りを返す。どの確かめで外れたかは、error の文が言う。

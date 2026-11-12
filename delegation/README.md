@@ -11,5 +11,11 @@ scope optional for other wire profiles; provin opts out — see `delegation.go`)
   checks the proof against the owner's assertion key.
 - Delegation credentials are persisted alongside the delegated DID by the registry and
   served via `ResolveDelegation`.
-- Proof mechanics are reused from `vc` (`CreateProof` / `VerifyProof`) —
+- Proof mechanics are reused from `vc` (`CreateProof` / `VerifyProofWithContract`) —
   this package owns only the delegation-specific shape and rules.
+- `Verify` attaches one sentinel to each refusal (`errors.Is`), for the kind of
+  check that failed: `ErrMalformed`, `ErrOwnerBinding`, `ErrProofPolicy`,
+  `ErrScoped`, `ErrIssuerNotFound`, `ErrSignatureInvalid`, or
+  `ErrSignatureUnestablished`, the one a caller may retry. `VerifyFor` refuses a
+  delegation presented for another identity with `ErrNotForIdentity`, and any
+  other with `Verify`'s. The text says which check failed.

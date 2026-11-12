@@ -74,14 +74,15 @@ did-resolution-id-mismatch-001・did-resolution-unavailable-001（外向きの r
 `network/pkg/didresolver`: 別の id の文書は `ErrDIDIdentityMismatch`、registry の
 5xx は一時の失敗）。
 
-**拒否の vector は、規則が名指す sentinel で断られた時だけ通る（規則にまだ
-sentinel が無いものは、断りの文の一部で）。** `keybinding-*` の
+**拒否の vector は、規則が名指す sentinel で断られた時だけ通る。** `keybinding-*` の
 拒否の vector は vector ごとに sentinel と断る段に結ぶ。restore の段で断るのは、
 判定の時より後の日付の list を持つ `keybinding-023` だけで、ほかの binding の
 vector の list は restore できなければならない。`did-008..021`
-（`did.dplaax.syntax`）は `did/dplaax.ErrSyntax` に結ぶ。`delegation-007..008` は
-`delegation.ErrNotForIdentity` に、`delegation-002..005` は、`delegation` に
-その規則の sentinel ができるまで error の文の一部に結ぶ。`claims-coverage-002`
+（`did.dplaax.syntax`）は `did/dplaax.ErrSyntax` に結ぶ。`delegation-002..003`
+（`delegation.binding`）は `delegation.ErrOwnerBinding` に、`delegation-004`
+（`delegation.proof`）は `delegation.ErrProofPolicy` に、`delegation-005`
+（`delegation.scope`）は `delegation.ErrScoped` に、`delegation-007..008`
+（`delegation.use.subject-bound`）は `delegation.ErrNotForIdentity` に結ぶ。`claims-coverage-002`
 と `-004` は `appraisal.ErrInvalidVector` に結び、decode できない view はその
 vector を落とす。どの表も manifest の拒否の vector をちょうど覆うことを guard の
 試験が確かめる。

@@ -489,8 +489,9 @@ func runDelegation(t *testing.T, v dplaaxVector) {
 		DelegatedBy: wire.CredentialSubject.DelegatedBy,
 	})
 	if err != nil {
-		// Build refuses what Verify would refuse (e.g. delegatedBy != issuer);
-		// a reject vector may legitimately end here, refused as its tie says.
+		// Build refuses a subject whose delegatedBy is not the issuer, with an
+		// error that is no sentinel: a reject vector refused here fails its
+		// tie, which names the sentinel of Verify's refusal.
 		if want != "reject" {
 			t.Errorf("Build rejected an accept vector: %v", err)
 		} else {
@@ -523,45 +524,33 @@ func runDelegation(t *testing.T, v dplaaxVector) {
 	}
 }
 
-// refusalTie is how a reject vector's refusal is recognized: by a sentinel
-// (errors.Is), or, for a rule that has none yet, by a part of the error's
-// text.
+// refusalTie is how a reject vector's refusal is recognized: by the sentinel
+// its rule names (errors.Is).
 type refusalTie struct {
-	err  error
-	text string
+	err error
 }
 
 func (r refusalTie) holds(err error) bool {
-	switch {
-	case r.err != nil:
-		return errors.Is(err, r.err)
-	case r.text != "":
-		return err != nil && strings.Contains(err.Error(), r.text)
-	default: // a tie that names nothing holds for no error
-		return false
-	}
+	// a tie that names nothing holds for no error
+	return r.err != nil && errors.Is(err, r.err)
 }
 
 func (r refusalTie) String() string {
-	if r.err != nil {
-		return r.err.Error()
+	if r.err == nil {
+		return "a tie that names nothing"
 	}
-	return fmt.Sprintf("an error saying %q", r.text)
+	return r.err.Error()
 }
 
-// delegationRefusals ties each delegation reject vector to the refusal its
-// rule names, so a vector refused otherwise fails. delegation has a sentinel
-// only for delegation.use.subject-bound (ErrNotForIdentity); the other rules'
-// vectors are tied by a part of the error's text, which is not a contract
-// (delegation-003's is did/dplaax.RequireOwner's). When a sentinel comes for
-// one of those refusals, tie its vectors to the sentinel instead.
+// delegationRefusals ties each delegation reject vector to the sentinel its
+// rule names, so a vector refused otherwise fails.
 var delegationRefusals = map[string]refusalTie{
-	"delegation-002": {text: "is not under the issuing owner"},     // delegation.binding
-	"delegation-003": {text: "owner-level authority required"},     // delegation.binding
-	"delegation-004": {text: "proof type/purpose"},                 // delegation.proof
-	"delegation-005": {text: "credentialSubject.scope is present"}, // delegation.scope
-	"delegation-007": {err: delegation.ErrNotForIdentity},          // delegation.use.subject-bound
-	"delegation-008": {err: delegation.ErrNotForIdentity},          // delegation.use.subject-bound
+	"delegation-002": {err: delegation.ErrOwnerBinding},   // delegation.binding
+	"delegation-003": {err: delegation.ErrOwnerBinding},   // delegation.binding
+	"delegation-004": {err: delegation.ErrProofPolicy},    // delegation.proof
+	"delegation-005": {err: delegation.ErrScoped},         // delegation.scope
+	"delegation-007": {err: delegation.ErrNotForIdentity}, // delegation.use.subject-bound
+	"delegation-008": {err: delegation.ErrNotForIdentity}, // delegation.use.subject-bound
 }
 
 // checkDelegationRefusal fails unless err, call's refusal of reject vector id,

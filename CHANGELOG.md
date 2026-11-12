@@ -88,6 +88,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   (dplaax `did.dplaax.syntax`), its text unchanged, so a caller that wraps
   it with `%w` keeps it. The refusals of `ValidateDID`, `RequireKnownPattern`
   and `RequireOwner` are not `ErrSyntax`.
+- `delegation`: a sentinel for each kind of check `Verify` makes, constants
+  of `delegation.Error`: `ErrMalformed` (dplaax `delegation.shape`),
+  `ErrOwnerBinding` (`delegation.binding`), `ErrProofPolicy`
+  (`delegation.proof`), `ErrScoped` (`delegation.scope`), and, for the
+  issuer's key and signature, `ErrIssuerNotFound`, `ErrSignatureInvalid` and
+  `ErrSignatureUnestablished`. `Verify` attaches exactly one of them to each
+  refusal, and so does `VerifyFor` to each refusal other than
+  `ErrNotForIdentity`; the texts are unchanged. The documentation lists the
+  checks each covers. An empty issuer or subject id is `ErrMalformed`, and a
+  present one that is not the DID the rule asks for is `ErrOwnerBinding`.
+  `ErrSignatureUnestablished` is a resolution of the issuer that gave no
+  definite answer, that returned neither a document nor an error, or that
+  returned the document of another DID: the one a caller may retry. `ErrIssuerNotFound` is the
+  resolver answering `resolver.ErrNotFound`, or a document with no key usable
+  for assertion under the proof's `verificationMethod`. An error another package returned stays reachable, a
+  resolver's and a signature verifier's as they return it; if such an error
+  is a sentinel of `delegation` under `errors.Is`, that one is found too,
+  beside the one `Verify` attaches.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
@@ -229,15 +247,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - Conformance: a reject vector of the `keybinding`, `did`, `delegation` and
   `claims-coverage` families passes only when it is refused with the
   sentinel its rule names: `did-008`..`did-021` (`did.dplaax.syntax`) with
-  `did/dplaax.ErrSyntax`, and a `keybinding` vector also at the step that
-  refuses it. `delegation-002`..`delegation-005`, whose rules have no
-  sentinel yet, are tied to a part of the refusal's text. Guard tests check
+  `did/dplaax.ErrSyntax`, `delegation-002`..`delegation-005` with
+  `delegation.ErrOwnerBinding`, `ErrProofPolicy` and `ErrScoped`, and a
+  `keybinding` vector also at the step that refuses it. Guard tests check
   that the tables tie every reject vector of these families, and nothing
   else, and a `claims-coverage` view that does not decode fails its
   vector.
 
 ### Fixed
 
+- `delegation.Verify` and `VerifyFor` refuse, with
+  `delegation.ErrSignatureUnestablished`, a resolver that returns neither a
+  document nor an error for the issuer. Before, they panicked.
 - `vc.ClassifyChain` refuses a nil credential with an error that is
   `vc.ErrChainEmpty`. Before, it classified a chain of one nil credential as
   an origin, and a nil credential in a longer chain panicked.

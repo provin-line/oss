@@ -96,11 +96,11 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `did-resolution-id-mismatch-001`, `did-resolution-unavailable-001` | the outbound resolver `network/pkg/didresolver` over an HTTP server that serves the vector's registry response: a document of another id is `ErrDIDIdentityMismatch`, a registry 5xx is transient (neither `resolver.ErrNotFound` nor a mismatch) |
 
 A reject vector passes only when it is refused with the sentinel its rule
-names (or, where its rule has none yet, with a part of the refusal's text):
+names:
 
 - each `keybinding-*` reject vector is tied to a sentinel and to the step that refuses it. Only `keybinding-023`'s list, dated after the decision, is refused when it is restored; every other binding vector's list must restore;
 - `did-008..021` (`did.dplaax.syntax`) are tied to `did/dplaax.ErrSyntax`;
-- `delegation-007..008` are tied to `delegation.ErrNotForIdentity`, and `delegation-002..005` to a part of the error's text until `delegation` has a sentinel for their rules;
+- `delegation-002..003` (`delegation.binding`) are tied to `delegation.ErrOwnerBinding`, `delegation-004` (`delegation.proof`) to `delegation.ErrProofPolicy`, `delegation-005` (`delegation.scope`) to `delegation.ErrScoped`, and `delegation-007..008` (`delegation.use.subject-bound`) to `delegation.ErrNotForIdentity`;
 - `claims-coverage-002` and `-004` are tied to `appraisal.ErrInvalidVector`, and a view that does not decode fails its vector;
 - a guard test checks that each table ties exactly the manifest's reject vectors.
 
