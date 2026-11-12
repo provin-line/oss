@@ -22,12 +22,12 @@ import (
 
 func TestMirrorClientFactory_CachesPerDID(t *testing.T) {
 	f := newMirrorClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
-	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1"))(t)
-	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1"))(t)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
 	if a1 != a2 {
 		t.Error("For(sameDID) returned two different clients, want the cached one")
 	}
-	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:b:process:p1"))(t)
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:b:process:p1")
 	if a1 == b1 {
 		t.Error("For(differentDID) returned the SAME client as another DID")
 	}
@@ -68,13 +68,13 @@ func TestBuildShippers_OneShipperPerCustodyLogWithCorrectSigner(t *testing.T) {
 	var mu sync.Mutex
 	var requestedDIDs []string
 	spies := map[string]*spyMirrorClient{}
-	mirrorClientFor := func(signerDID string) (tlogship.MirrorClient, error) {
+	mirrorClientFor := func(signerDID string) tlogship.MirrorClient {
 		mu.Lock()
 		defer mu.Unlock()
 		requestedDIDs = append(requestedDIDs, signerDID)
 		c := &spyMirrorClient{}
 		spies[signerDID] = c
-		return c, nil
+		return c
 	}
 
 	tm := pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 10, MaxBatchBytes: 1 << 20, FlushInterval: time.Hour}
@@ -126,7 +126,7 @@ func assertOnlyLogID(t *testing.T, calls []spiedMirrorCall, wantLogID string) {
 }
 
 func TestBuildShippers_EmptyCustodyYieldsNoShippers(t *testing.T) {
-	shippers, err := buildShippers(nil, func(string) (tlogship.MirrorClient, error) { return &spyMirrorClient{}, nil }, pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 1, MaxBatchBytes: 1})
+	shippers, err := buildShippers(nil, func(string) tlogship.MirrorClient { return &spyMirrorClient{} }, pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 1, MaxBatchBytes: 1})
 	if err != nil {
 		t.Fatalf("buildShippers(empty): %v", err)
 	}

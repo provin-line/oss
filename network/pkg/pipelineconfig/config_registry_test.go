@@ -18,8 +18,8 @@ func TestRegistryOverridesAreOptional(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadPipelineConfig: %v", err)
 			}
-			if pc.VCStoreRegistry != "" || pc.Loops[0].Sink.UpstreamRegistry != "" || pc.Loops[0].Chained.UpstreamRegistry != "" {
-				t.Errorf("registries without the keys: %q %q %q, want empty", pc.VCStoreRegistry, pc.Loops[0].Sink.UpstreamRegistry, pc.Loops[0].Chained.UpstreamRegistry)
+			if pc.NodeRegistry != "" || pc.Loops[0].Sink.UpstreamRegistry != "" || pc.Loops[0].Chained.UpstreamRegistry != "" {
+				t.Errorf("registries without the keys: %q %q %q, want empty", pc.NodeRegistry, pc.Loops[0].Sink.UpstreamRegistry, pc.Loops[0].Chained.UpstreamRegistry)
 			}
 			for _, ing := range pc.Loops[0].Aggregate.Ingresses {
 				if ing.UpstreamRegistry != "" {
@@ -31,14 +31,14 @@ func TestRegistryOverridesAreOptional(t *testing.T) {
 }
 
 func TestRegistryOverridesAreRead(t *testing.T) {
-	conf := "provin.network.pipeline.vc-store-registry = \"node.example\"\n" +
+	conf := "provin.network.pipeline.node-registry = \"node.example\"\n" +
 		loopsConf(strings.Replace(validSinkLoop, sinkUpstream, sinkUpstream+"\n      upstream-registry = \"up.example\"", 1))
 	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(conf)))
 	if err != nil {
 		t.Fatalf("LoadPipelineConfig: %v", err)
 	}
-	if pc.VCStoreRegistry != "node.example" || pc.Loops[0].Sink.UpstreamRegistry != "up.example" {
-		t.Errorf("registries = %q, %q; want node.example, up.example", pc.VCStoreRegistry, pc.Loops[0].Sink.UpstreamRegistry)
+	if pc.NodeRegistry != "node.example" || pc.Loops[0].Sink.UpstreamRegistry != "up.example" {
+		t.Errorf("registries = %q, %q; want node.example, up.example", pc.NodeRegistry, pc.Loops[0].Sink.UpstreamRegistry)
 	}
 
 	chained := strings.Replace(validChainedLoop, sinkUpstream, sinkUpstream+"\n      upstream-registry = \"up.example\"", 1)
@@ -69,9 +69,9 @@ func TestRegistryOverridesAreRead(t *testing.T) {
 func TestRegistryOverrideGrammar(t *testing.T) {
 	for _, bad := range []string{"a b", "*", "..", strings.Repeat("a", 254)} {
 		t.Run(bad[:min(len(bad), 8)], func(t *testing.T) {
-			node := "provin.network.pipeline.vc-store-registry = \"" + bad + "\"\n" + loopsConf(validSinkLoop)
+			node := "provin.network.pipeline.node-registry = \"" + bad + "\"\n" + loopsConf(validSinkLoop)
 			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(node))); err == nil {
-				t.Errorf("vc-store-registry %q: want a boot error", bad)
+				t.Errorf("node-registry %q: want a boot error", bad)
 			}
 			sink := strings.Replace(validSinkLoop, sinkUpstream, sinkUpstream+"\n      upstream-registry = \""+bad+"\"", 1)
 			if _, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer(loopsConf(sink)))); err == nil {
@@ -92,11 +92,11 @@ func TestRegistryOverrideGrammar(t *testing.T) {
 // A registry ID of 253 octets, the longest DNS name, is read.
 func TestRegistryOverrideAtTheBound(t *testing.T) {
 	long := strings.Repeat("a", 253)
-	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer("provin.network.pipeline.vc-store-registry = \""+long+"\"\n"+loopsConf(validSinkLoop))))
+	pc, err := pipelineconfig.LoadPipelineConfig(loadWith(t, withBearer("provin.network.pipeline.node-registry = \""+long+"\"\n"+loopsConf(validSinkLoop))))
 	if err != nil {
-		t.Fatalf("vc-store-registry of 253 octets: %v", err)
+		t.Fatalf("node-registry of 253 octets: %v", err)
 	}
-	if pc.VCStoreRegistry != long {
-		t.Errorf("vc-store-registry = %d octets, want 253", len(pc.VCStoreRegistry))
+	if pc.NodeRegistry != long {
+		t.Errorf("node-registry = %d octets, want 253", len(pc.NodeRegistry))
 	}
 }

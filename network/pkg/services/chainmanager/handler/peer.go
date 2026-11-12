@@ -11,6 +11,7 @@ import (
 	"github.com/provin-line/oss/did"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
@@ -73,7 +74,7 @@ func NewPeerWithEvidence(svc PeerService, v Verifier, rec RelationshipRecorder) 
 }
 
 func (h *PeerHandler) GetPublisherInfo(ctx context.Context, req *connect.Request[chainpb.GetPublisherInfoRequest]) (*connect.Response[chainpb.GetPublisherInfoResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, peerMapError(err)
 	}
@@ -93,7 +94,7 @@ func (h *PeerHandler) GetPublisherInfo(ctx context.Context, req *connect.Request
 }
 
 func (h *PeerHandler) RegisterSubscription(ctx context.Context, req *connect.Request[chainpb.RegisterSubscriptionRequest]) (*connect.Response[chainpb.RegisterSubscriptionResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, peerMapError(err)
 	}
@@ -139,7 +140,7 @@ func (h *PeerHandler) RegisterSubscription(ctx context.Context, req *connect.Req
 }
 
 func (h *PeerHandler) Disconnect(ctx context.Context, req *connect.Request[chainpb.DisconnectRequest]) (*connect.Response[chainpb.DisconnectResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, peerMapError(err)
 	}
@@ -190,7 +191,7 @@ func (h *PeerHandler) recordEvidence(ctx context.Context, op string, proof wirea
 	}
 	rec := evidence.Record{
 		Op:          op,
-		ViewVersion: wireauth.ViewVersion,
+		ViewVersion: proof.ViewVersion,
 		SignerDID:   proof.SignerDID,
 		Audience:    proof.Audience,
 		Nonce:       proof.Nonce,
@@ -209,32 +210,13 @@ func (h *PeerHandler) recordEvidence(ctx context.Context, op string, proof wirea
 	return nil
 }
 
-// decodeProof converts the wire AuthProof to a wireauth.Proof, parsing issued_at
-// through the strict codec. A nil proof is ErrMissingProof.
-func decodeProof(ap *chainpb.AuthProof) (wireauth.Proof, error) {
-	if ap == nil {
-		return wireauth.Proof{}, wireauth.ErrMissingProof
-	}
-	issuedAt, err := parseIssuedAt(ap.GetIssuedAt())
-	if err != nil {
-		return wireauth.Proof{}, err
-	}
-	return wireauth.Proof{
-		SignerDID: ap.GetSignerDid(),
-		Audience:  ap.GetAudience(),
-		Nonce:     ap.GetNonce(),
-		IssuedAt:  issuedAt,
-		Signature: ap.GetSignature(),
-	}, nil
-}
-
 // peerMapError maps codec, wireauth, and domain sentinels to connect codes
 // (errors.Is, never string matching) — slice-11 D-p9.
 func peerMapError(err error) error {
 	switch {
 	// Malformed request (issued_at codec). Wireauth's own structural
 	// sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-resolution: report it as such, not as a
 	// server-side "unavailable" (which would inflate server-fault metrics).

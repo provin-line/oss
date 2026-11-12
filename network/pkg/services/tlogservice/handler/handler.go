@@ -15,6 +15,7 @@ import (
 
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
 	"github.com/provin-line/oss/network/pkg/wireauth"
@@ -133,7 +134,7 @@ func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlo
 	if err != nil {
 		return nil, mapError(err)
 	}
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -184,8 +185,8 @@ func (h *Handler) GetMirrorState(_ context.Context, req *connect.Request[tlogpb.
 // `.UTC().Format(RFC3339)` (a Z string) while re-serving the ORIGINAL
 // signature, making the SERVED checkpoint unverifiable. Requiring the wire
 // string to equal its own canonical-UTC form (the same discipline
-// parseIssuedAt applies to the wireauth proof) rejects that class outright as
-// InvalidArgument. (SignedView still does not normalize, so the accept-time
+// network/internal/authproof applies to the wire proof's issued_at) rejects
+// that class outright as InvalidArgument. (SignedView still does not normalize, so the accept-time
 // signature check remains over the exact stored bytes — but those bytes are
 // now guaranteed canonical.)
 func checkpointFromWire(w *tlogpb.GetLogCheckpointResponse) (*tlog.Checkpoint, error) {
@@ -222,7 +223,7 @@ func mapError(err error) error {
 	switch {
 	// Malformed request (MirrorLogSegment's issued_at codec). Wireauth's own
 	// structural sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-verification: CodeCanceled, not a
 	// server-side "unavailable". Precedes the wireautherr delegation below,

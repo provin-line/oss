@@ -157,21 +157,24 @@ already holds:
 
 | destination | audience | override (optional) |
 | --- | --- | --- |
-| its own node (`vc-store-endpoint`) | the registry segment of the DID the proof is signed as | `provin.network.pipeline.vc-store-registry` |
+| its own node (`vc-store-endpoint`) | one for every proof it sends there, decided at start: the registry segment every DID it signs those proofs as shares | `provin.network.pipeline.node-registry` |
 | a by-reference upstream (a loop's `upstream-endpoint`) | the registry segment of the loop's `ingress-subject`, or of an aggregate ingress's `subject` | `upstream-registry`, beside that `upstream-endpoint` |
 | a publisher's `#chain-manager` | the registry segment of the publisher DID | — |
 
 Set an override only when the node at that endpoint belongs to another
 registry. A wrong audience fails closed: the node refuses the call as
 `Unauthenticated`, naming the audience it expected. One `upstream-endpoint`
-named for two registries is a boot error.
+named for two registries is a boot error, and so are a pipeline's own-node
+signers (its node DID, each producing loop's `output-subject` and issuer,
+each sink's receipt issuer) of two registries without `node-registry`: the
+node accepts one audience.
 
 The pairing of an endpoint with its audience is the configuration's: a wire
 proof does not show that the node at an endpoint is the one its audience
 names. When the two disagree, the node at the endpoint refuses the call, but
 it has received a proof that the named node accepts while the proof is fresh
 (the acceptance window, 60 s by default). So a `vc-store-endpoint` that points
-at another registry's node, with no `vc-store-registry`, hands that node's
+at another registry's node, with no `node-registry`, hands that node's
 operator proofs valid at your own node; an `upstream-endpoint` that is not
 the upstream's node does the same for the upstream. Point each endpoint at
 the node of the registry it is paired with, or set the override.
@@ -191,8 +194,8 @@ The audience changed the signed view (`v` = 2), and a node accepts no
 other version. Upgrade every network node and every pipeline that talk to
 each other in one window. During the window, calls between upgraded and
 not-yet-upgraded processes are refused: an upgraded node answers a proof
-with no audience as `Unauthenticated` ("names no audience"), and a node not
-yet upgraded refuses a version 2 proof's signature. Subscriptions do not
+that carries no view version as `Unauthenticated` ("view version 0"), and
+a node not yet upgraded refuses a version 2 proof's signature. Subscriptions do not
 establish in the window, and a by-reference fetch that fails rejects,
 errors or drops its event as any fetch failure does, so stop by-reference
 consumption before the window or accept those events' loss. Relationship

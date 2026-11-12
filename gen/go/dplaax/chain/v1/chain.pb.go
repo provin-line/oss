@@ -54,7 +54,12 @@ type AuthProof struct {
 	// audience is the party the proof was signed for: the registry ID of the
 	// node the request is sent to. The signed view binds it, and a node accepts
 	// only a proof for its own audience.
-	Audience      string `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
+	Audience string `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
+	// view_version is the version of the signed view the proof was made over,
+	// the view's "v". A node accepts only the versions it is configured to,
+	// and refuses any other before it resolves the signer; it never accepts
+	// version 1, which binds no audience.
+	ViewVersion   uint32 `protobuf:"varint,6,opt,name=view_version,json=viewVersion,proto3" json:"view_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -122,6 +127,13 @@ func (x *AuthProof) GetAudience() string {
 		return x.Audience
 	}
 	return ""
+}
+
+func (x *AuthProof) GetViewVersion() uint32 {
+	if x != nil {
+		return x.ViewVersion
+	}
+	return 0
 }
 
 // Subscription is one established pipeline chain connection (mirrors store.Subscription).
@@ -1172,14 +1184,15 @@ var File_dplaax_chain_v1_chain_proto protoreflect.FileDescriptor
 
 const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\n" +
-	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"\x97\x01\n" +
+	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"\xba\x01\n" +
 	"\tAuthProof\x12\x1d\n" +
 	"\n" +
 	"signer_did\x18\x01 \x01(\tR\tsignerDid\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x1b\n" +
 	"\tissued_at\x18\x03 \x01(\tR\bissuedAt\x12\x1c\n" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x1a\n" +
-	"\baudience\x18\x05 \x01(\tR\baudience\"\xf1\x02\n" +
+	"\baudience\x18\x05 \x01(\tR\baudience\x12!\n" +
+	"\fview_version\x18\x06 \x01(\rR\vviewVersion\"\xf1\x02\n" +
 	"\fSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0esubscriber_did\x18\x02 \x01(\tR\rsubscriberDid\x12#\n" +

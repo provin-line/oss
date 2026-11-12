@@ -19,6 +19,7 @@ import (
 	"github.com/provin-line/oss/did"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
@@ -154,7 +155,7 @@ func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Req
 	if h.emitHealth == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chainmanager: ReportEmitHealth not wired (WithEmitHealth)"))
 	}
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -217,7 +218,7 @@ func mapError(err error) error {
 	switch {
 	// Malformed request (ReportEmitHealth's issued_at codec). Wireauth's own
 	// structural sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, allowlist.ErrInvalidPattern):
 		return connect.NewError(connect.CodeInvalidArgument, err)

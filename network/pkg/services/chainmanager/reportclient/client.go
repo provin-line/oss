@@ -25,8 +25,8 @@ import (
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
-	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Config configures a Client. Signer, SignerDID, BaseURL, and HTTPClient are
@@ -42,10 +42,10 @@ type Config struct {
 	// BaseURL is the ChainService operator endpoint (L1-authorized — distinct
 	// from the L2 ChainPeerService endpoint peerclient dials).
 	BaseURL string
-	// Audience is the registry ID of the node at BaseURL. Every proof this
-	// client signs names it, and that node accepts only a proof for its own
-	// audience. A call with no Audience fails before anything is sent
-	// (wireauth.ErrMalformedProof).
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
 	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint, e.g. core.URLGuard.HTTPClient().
@@ -125,23 +125,11 @@ func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, heal
 }
 
 // proof signs wirecontract.OpReportEmitHealth over fields as the configured
-// identity and converts the wireauth.Proof to the wire AuthProof (issued_at
-// as canonical second-precision UTC RFC 3339 — the exact form the handler's
-// strict codec accepts).
+// identity, in the proof's one wire form (network/internal/authproof).
 func (c *Client) proof(fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, wirecontract.OpReportEmitHealth, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("reportclient: nonce: %w", err)
+		return nil, fmt.Errorf("reportclient: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, wirecontract.OpReportEmitHealth, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("reportclient: sign %s: %w", wirecontract.OpReportEmitHealth, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Audience:  p.Audience,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }

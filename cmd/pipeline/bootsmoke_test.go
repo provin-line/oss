@@ -66,7 +66,7 @@ func TestPipeline_ActualBoot(t *testing.T) {
 	// the source loop's issuer DID (its emission log's checkpoint-signer
 	// identity, dp.CustodyLogs()) must ALSO already be provisioned, or this
 	// binary now rejects boot before ever reaching readiness.
-	const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	const nodeDID = "did:dplaax:reg:org:acme:pipeline:p1:process:node"
 	provisionPayloadRetainKey(t, dataDir, nodeDID)
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
 

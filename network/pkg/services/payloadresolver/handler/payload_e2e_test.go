@@ -116,7 +116,7 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 	t.Cleanup(srv.Close)
 	return &harness{
 		svc:    svc,
-		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: srv.Client(), MaxBytes: maxBytes}),
+		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: srv.Client(), MaxBytes: maxBytes, UpstreamAudiences: map[string]string{srv.URL: nodeAudience}}),
 		url:    srv.URL,
 		allow:  allow,
 	}
@@ -131,7 +131,7 @@ func TestPayloadService_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	got, err := h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
+	got, err := h.client.ResolvePayload(context.Background(), h.url, hash)
 	if err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestPayloadService_NotAdmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	_, err = h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
+	_, err = h.client.ResolvePayload(context.Background(), h.url, hash)
 	// The client re-maps a wire NotFound to client.ErrNotFound — the SAME error
 	// it returns for a well-formed miss (TestPayloadService_NotFound). Identical
 	// error ⇒ the caller cannot distinguish "present but forbidden" from "absent".
@@ -167,7 +167,7 @@ func TestPayloadService_NotAdmitted(t *testing.T) {
 func TestPayloadService_NotFound(t *testing.T) {
 	h := newHarness(t, 0)
 	missing := "sha256:" + "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-	_, err := h.client.ResolvePayload(context.Background(), h.url, nodeAudience, missing)
+	_, err := h.client.ResolvePayload(context.Background(), h.url, missing)
 	if !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("err = %v, want client.ErrNotFound", err)
 	}
@@ -184,7 +184,7 @@ func TestPayloadService_MaxBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	_, err = h.client.ResolvePayload(context.Background(), h.url, nodeAudience, hash)
+	_, err = h.client.ResolvePayload(context.Background(), h.url, hash)
 	if err == nil {
 		t.Fatal("ResolvePayload over cap: want error, got nil")
 	}

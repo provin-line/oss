@@ -74,8 +74,9 @@ in the request itself. **There is no auth-off mode for L2.**
 Each RPC carries a proof over the request it authenticates:
 
 - an Ed25519 **signature over a canonical (JCS) view** of exactly
-  `{signerDID, aud, op, v, nonce, issuedAt, fields}` — `v` is the frozen view
-  version (currently `2`; any other version is rejected), `aud` is the
+  `{signerDID, aud, op, v, nonce, issuedAt, fields}` — `v` is the view
+  version (currently `2`), which the proof also carries (`view_version`),
+  `aud` is the
   **audience**, the registry ID of the node the request is sent to,
   `issuedAt` is RFC 3339 at second precision, `op` is the RPC's view
   discriminator and `fields` its business object, both reconstructed by the
@@ -83,7 +84,11 @@ Each RPC carries a proof over the request it authenticates:
   `signerDID` into the signed bytes means a shared-key DID alias cannot
   reuse another DID's signature; binding `aud` means a proof made for one
   node does not verify at another;
-- **the audience is checked first**: a node's verifier accepts only a proof
+- **the view version is checked first**: a node's verifier accepts only the
+  versions it is configured to, by default the current one, and never
+  version 1, which binds no audience; it refuses any other version before
+  it resolves the signer, and rebuilds the view of the proof's version;
+- **the audience is checked next**: a node's verifier accepts only a proof
   whose audience is exactly its own `provin.network.registry.id`. It checks
   this with the structural checks, before it resolves the signer, and
   rebuilds the view with its own registry ID, so a proof for another node
@@ -105,10 +110,12 @@ Each RPC carries a proof over the request it authenticates:
   exhaustion — or a peer whose clock skew exceeds the budget — the racing
   call is dropped: an accepted PoC-posture residual loss, closed post-v0
   alongside a durable nonce store;
-- ordered verification: structural checks (the audience among them) → time
-  bounds → key resolution → signature → authorization → nonce record
-  **last**, so neither a forgery nor a proof for another node can burn a
-  legitimate signer's nonce;
+- ordered verification: structural checks (the view version and the
+  audience among them) → time bounds → key resolution → signature →
+  authorization → nonce record **last**, so neither a forgery nor a proof
+  for another node or another view version can burn a legitimate signer's
+  nonce; the nonce store refuses a nonce that reaches it after the proof's
+  expiry;
 - an optional per-op **authorizer** (signer-to-actor policy) runs only
   after signature verification — it never sees unauthenticated input.
 
@@ -132,9 +139,11 @@ these names:
   for, by that node's registry ID, and the view binds it: a proof a node
   received does not verify at a node of another registry. A sender takes the
   audience from the same source as the endpoint:
-  - a pipeline's own node (`vc-store-endpoint`): the registry segment of the
-    DID the proof is signed as, as a pipeline publishes to its own
-    registry's node;
+  - a pipeline's own node (`vc-store-endpoint`): one audience for every
+    proof the pipeline sends it, decided at start — the registry segment
+    every DID it signs those proofs as shares, as a pipeline publishes to its
+    own registry's node; signers of two registries keep it from starting
+    unless `node-registry` names the node's registry;
   - a by-reference upstream (a loop's `upstream-endpoint`): the registry
     segment of the loop's upstream pipeline DID (`ingress-subject`, or an
     aggregate ingress's `subject`), whose node holds that pipeline's
@@ -144,9 +153,10 @@ these names:
     document. A registry's `#chain-manager` endpoint is served by that
     registry's node.
 
-  `vc-store-registry` and `upstream-registry` name the registry where the
-  node at that endpoint is another registry's. The sender pairs an endpoint
-  with its audience; a wire proof does not authenticate that pairing, so an
+  The registry segment of a DID is its node's audience
+  (`wireauth.AudienceForDID`). `node-registry` and `upstream-registry` name
+  the registry where the node at that endpoint is another registry's. The
+  sender pairs an endpoint with its audience; a wire proof does not authenticate that pairing, so an
   endpoint pointed at the wrong node hands that node a proof its paired node
   accepts while it is fresh
   ([deployment.md](../architecture/deployment.md#wire-proof-audience)).

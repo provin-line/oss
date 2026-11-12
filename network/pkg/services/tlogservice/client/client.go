@@ -31,8 +31,8 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
-	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -52,10 +52,10 @@ type Config struct {
 	SignerDID string
 	// BaseURL is the registry's ConnectRPC endpoint.
 	BaseURL string
-	// Audience is the registry ID of the node at BaseURL. Every proof this
-	// client signs names it, and that node accepts only a proof for its own
-	// audience. A call with no Audience fails before anything is sent
-	// (wireauth.ErrMalformedProof).
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
 	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint.
@@ -164,26 +164,14 @@ func (c *Client) GetMirrorState(ctx context.Context, logID string) (uint64, erro
 	return resp.Msg.GetAckedSize(), nil
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical
-// second-precision UTC RFC 3339 — the exact form the handler's strict codec
-// accepts).
+// proof signs op over fields as the configured identity, in the proof's one
+// wire form (network/internal/authproof).
 func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, op, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("tlogservice/client: nonce: %w", err)
+		return nil, fmt.Errorf("tlogservice/client: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, op, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("tlogservice/client: sign %s: %w", op, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Audience:  p.Audience,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }
 
 // checkpointToWire converts a tlog.Checkpoint to the

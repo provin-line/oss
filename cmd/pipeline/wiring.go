@@ -357,6 +357,7 @@ var (
 	_ pipelineruntime.CredentialPublisher = vcStoreAdapter{}
 	_ pipelineruntime.IngressStorer       = vcStoreAdapter{}
 	_ contract.PayloadResolver            = wireRetryingPayloadResolver{}
+	_ contract.PayloadResolver            = (*payloadclient.Resolver)(nil)
 )
 
 // StoreCredential implements pipeline/runtime.CredentialPublisher.
@@ -406,7 +407,7 @@ func (a vcStoreAdapter) StoreVC(ctx context.Context, credential []byte, upstream
 type auditClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
-	registry   string
+	audience   string
 	bearer     string
 	httpClient connect.HTTPClient
 
@@ -414,32 +415,28 @@ type auditClientFactory struct {
 	clients map[string]*auditorclient.Client
 }
 
-func newAuditClientFactory(signer crypto.Signer, baseURL, registry, bearer string, httpClient connect.HTTPClient) *auditClientFactory {
-	return &auditClientFactory{signer: signer, baseURL: baseURL, registry: registry, bearer: bearer, httpClient: httpClient, clients: map[string]*auditorclient.Client{}}
+func newAuditClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient connect.HTTPClient) *auditClientFactory {
+	return &auditClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*auditorclient.Client{}}
 }
 
 // For returns the cached client signing as signerDID, building and caching
 // one on first use.
-func (f *auditClientFactory) For(signerDID string) (*auditorclient.Client, error) {
+func (f *auditClientFactory) For(signerDID string) *auditorclient.Client {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[signerDID]; ok {
-		return c, nil
-	}
-	aud, err := ownNodeAudience(f.registry, signerDID)
-	if err != nil {
-		return nil, err
+		return c
 	}
 	c := auditorclient.New(auditorclient.Config{
 		Signer:     f.signer,
 		SignerDID:  signerDID,
 		BaseURL:    f.baseURL,
-		Audience:   aud,
+		Audience:   f.audience,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
 	f.clients[signerDID] = c
-	return c, nil
+	return c
 }
 
 // wireAuditRegistrar adapts a FIXED auditorclient.Client (this node's own
@@ -549,10 +546,7 @@ func (w wireReceiptWriter) Put(headHash string, registrantDID string, consumedHa
 	if err != nil {
 		return fmt.Errorf("pipeline: derive wire variant for emitted credential %s: %w", headHash, err)
 	}
-	client, err := w.factory.For(registrantDID)
-	if err != nil {
-		return err
-	}
+	client := w.factory.For(registrantDID)
 	return retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		return client.RegisterEvidence(ctx, variant, consumedHashes)
 	})
@@ -634,12 +628,15 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 // client signing as the node identity (For(nodeDID)), sharing this SAME
 // cache rather than needing a second factory.
 type payloadClientFactory struct {
-	signer          crypto.Signer
-	storeEndpoint   string
-	registry        string
-	bearer          string
-	httpClient      connect.HTTPClient
-	retainChunkSize int
+	signer        crypto.Signer
+	storeEndpoint string
+	// upstreamAudiences maps each by-reference upstream endpoint to the
+	// audience its fetches name (upstreamAudiences); every client gets it.
+	upstreamAudiences map[string]string
+	audience          string
+	bearer            string
+	httpClient        connect.HTTPClient
+	retainChunkSize   int
 
 	mu      sync.Mutex
 	clients map[string]*payloadclient.Resolver
@@ -686,41 +683,39 @@ func retainChunkSizeFor(maxRetainChunkSize int) int {
 	return size
 }
 
-func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, registry, bearer string, httpClient connect.HTTPClient, maxRetainChunkSize int) *payloadClientFactory {
+func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, audience, bearer string, httpClient connect.HTTPClient, maxRetainChunkSize int, upstreamAudiences map[string]string) *payloadClientFactory {
 	return &payloadClientFactory{
-		signer:          signer,
-		storeEndpoint:   storeEndpoint,
-		registry:        registry,
-		bearer:          bearer,
-		httpClient:      httpClient,
-		retainChunkSize: retainChunkSizeFor(maxRetainChunkSize),
-		clients:         map[string]*payloadclient.Resolver{},
+		signer:            signer,
+		storeEndpoint:     storeEndpoint,
+		upstreamAudiences: upstreamAudiences,
+		audience:          audience,
+		bearer:            bearer,
+		httpClient:        httpClient,
+		retainChunkSize:   retainChunkSizeFor(maxRetainChunkSize),
+		clients:           map[string]*payloadclient.Resolver{},
 	}
 }
 
 // For returns the cached client signing as signerDID, building and caching
 // one on first use.
-func (f *payloadClientFactory) For(signerDID string) (*payloadclient.Resolver, error) {
+func (f *payloadClientFactory) For(signerDID string) *payloadclient.Resolver {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[signerDID]; ok {
-		return c, nil
-	}
-	aud, err := ownNodeAudience(f.registry, signerDID)
-	if err != nil {
-		return nil, err
+		return c
 	}
 	c := payloadclient.New(payloadclient.Config{
-		Signer:          f.signer,
-		SignerDID:       signerDID,
-		HTTPClient:      f.httpClient,
-		StoreEndpoint:   f.storeEndpoint,
-		StoreAudience:   aud,
-		Bearer:          f.bearer,
-		RetainChunkSize: f.retainChunkSize,
+		Signer:            f.signer,
+		SignerDID:         signerDID,
+		HTTPClient:        f.httpClient,
+		StoreEndpoint:     f.storeEndpoint,
+		StoreAudience:     f.audience,
+		UpstreamAudiences: f.upstreamAudiences,
+		Bearer:            f.bearer,
+		RetainChunkSize:   f.retainChunkSize,
 	})
 	f.clients[signerDID] = c
-	return c, nil
+	return c
 }
 
 // wirePayloadStore adapts payloadClientFactory's per-owner *payloadclient.
@@ -746,12 +741,9 @@ type wirePayloadStore struct {
 // Retain, which signs a fresh wireauth proof internally on every call
 // (payloadresolver/client.Resolver.proof) — never a resent cached proof.
 func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID string) (string, error) {
-	client, err := s.factory.For(ownerDID)
-	if err != nil {
-		return "", err
-	}
+	client := s.factory.For(ownerDID)
 	var contentAddress string
-	err = retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
+	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
 		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
 		return attemptErr
@@ -769,20 +761,13 @@ func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID st
 // every call — never a resent cached proof.
 type wireRetryingPayloadResolver struct {
 	client *payloadclient.Resolver
-	// audiences maps each by-reference upstream endpoint to the audience its
-	// fetches name (upstreamAudiences). An endpoint not in it is not fetched.
-	audiences map[string]string
 }
 
 func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
-	audience, ok := r.audiences[upstreamEndpoint]
-	if !ok {
-		return nil, fmt.Errorf("pipeline: by-reference fetch from %q: no by-reference ingress names that endpoint", upstreamEndpoint)
-	}
 	var payload []byte
 	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
-		payload, attemptErr = r.client.ResolvePayload(ctx, upstreamEndpoint, audience, contentHash)
+		payload, attemptErr = r.client.ResolvePayload(ctx, upstreamEndpoint, contentHash)
 		return attemptErr
 	})
 	return payload, err
@@ -801,7 +786,7 @@ func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstrea
 // guaranteed non-empty by the time this runs (main's guards require the nats
 // transport whenever any loop is configured, and chainconfig.
 // LoadChainConfig requires node-did non-empty on that transport).
-func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID string, upstream map[string]string) (pipelineruntime.Deps, error) {
+func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID, ownAudience string, upstream map[string]string) pipelineruntime.Deps {
 	// The clients built over httpClient present vc-store-bearer to a
 	// destination the operator configured, so none follows a redirect: the
 	// bearer goes to that destination's origin only.
@@ -810,7 +795,7 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 	vcClient := newVCStoreClient(pipeCfg, httpClient)
 	store := vcStoreAdapter{client: vcClient}
 
-	factory := newAuditClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, httpClient)
+	factory := newAuditClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, httpClient)
 
 	schemaCli := schemaclient.New(schemaclient.Config{
 		BaseURL:    pipeCfg.VCStoreEndpoint,
@@ -820,16 +805,8 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 
 	// The payload client confines its own bearer-carrying store client; its
 	// tokenless fetches from a publisher follow redirects as before.
-	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize)
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize, upstream)
 
-	auditClient, err := factory.For(nodeDID)
-	if err != nil {
-		return pipelineruntime.Deps{}, err
-	}
-	payloadClient, err := payloadFactory.For(nodeDID)
-	if err != nil {
-		return pipelineruntime.Deps{}, err
-	}
 	return pipelineruntime.Deps{
 		Resolver:      didResolver,
 		ChainResolver: vcClient,
@@ -844,14 +821,14 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 		},
 		AppraisalMaxDepth:   pipeCfg.BatchResolver.MaxDepth,
 		VCStore:             store,
-		AuditQueue:          wireAuditRegistrar{client: auditClient},
+		AuditQueue:          wireAuditRegistrar{client: factory.For(nodeDID)},
 		Receipts:            wireReceiptWriter{resolver: vcClient, factory: factory},
 		SchemaResolver:      wireSchemaBridge{client: schemaCli},
 		SchemaGetter:        wireSchemaGetter{client: schemaCli},
 		PayloadStore:        wirePayloadStore{factory: payloadFactory},
-		PayloadResolver:     wireRetryingPayloadResolver{client: payloadClient, audiences: upstream},
+		PayloadResolver:     wireRetryingPayloadResolver{client: payloadFactory.For(nodeDID)},
 		CredentialPublisher: store,
-	}, nil
+	}
 }
 
 // preflightProbeData is signed (never transmitted anywhere) purely to probe

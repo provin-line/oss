@@ -57,7 +57,7 @@ func TestPipeline_BootRejectsZeroLoops(t *testing.T) {
 		AccSeed:    accSeedFile,
 		TrustSeed:  trustSeedFile,
 		ResolveDir: filepath.Join(dir, "resolver"),
-		NodeDID:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:    "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		// PipelineLoops / VCStoreEndpoint / VCStoreBearer intentionally left
 		// empty — the zero-loop guard must fire before either the transport
 		// guard or the vc-store guard even considers them.
@@ -137,7 +137,7 @@ func TestPipeline_BootRejectsMissingVCStoreEndpointAndBearer(t *testing.T) {
 		AccSeed:       accSeedFile,
 		TrustSeed:     trustSeedFile,
 		ResolveDir:    filepath.Join(dir, "resolver"),
-		NodeDID:       "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:       "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops: validSourceLoopConf,
 		// VCStoreEndpoint / VCStoreBearer intentionally left empty.
 	})
@@ -177,7 +177,7 @@ func TestPipeline_BootRejectsMalformedDecisionRecord(t *testing.T) {
 		AccSeed:       accSeedFile,
 		TrustSeed:     trustSeedFile,
 		ResolveDir:    filepath.Join(dir, "resolver"),
-		NodeDID:       "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:       "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops: validSourceLoopConf,
 		Extra:         "\nprovin.decision-record.level = \"everything\"\n",
 	})
@@ -222,7 +222,7 @@ func TestPipeline_BootRejectsPrivateNetworksWithoutScopedResolution(t *testing.T
 		AccSeed:              accSeedFile,
 		TrustSeed:            trustSeedFile,
 		ResolveDir:           filepath.Join(dir, "resolver"),
-		NodeDID:              "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:              "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops:        validSourceLoopConf,
 		VCStoreEndpoint:      "https://127.0.0.1:1/",
 		VCStoreBearer:        "test-bearer",
@@ -275,7 +275,7 @@ func TestPipeline_BootRejectsMissingPayloadRetainKey(t *testing.T) {
 		AccSeed:         accSeedFile,
 		TrustSeed:       trustSeedFile,
 		ResolveDir:      filepath.Join(dir, "resolver"),
-		NodeDID:         "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:         "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops:   twoProducingLoopsConf,
 		VCStoreEndpoint: "https://127.0.0.1:1/",
 		VCStoreBearer:   "test-bearer",
@@ -329,7 +329,7 @@ func TestPipeline_BootRejectsMissingNodeIdentityKey(t *testing.T) {
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
 
-	const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	const nodeDID = "did:dplaax:reg:org:acme:pipeline:p1:process:node"
 	confPath := writeBootConfigFile(t, dir, bootConfig{
 		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", freePort(t)),
 		DataDir:         dataDir,
@@ -352,6 +352,50 @@ func TestPipeline_BootRejectsMissingNodeIdentityKey(t *testing.T) {
 	for _, want := range []string{"node identity", nodeDID} {
 		if !strings.Contains(out, want) {
 			t.Errorf("boot failure does not name the guard 6 node-identity check (want %q):\n%s", want, out)
+		}
+	}
+}
+
+// A pipeline whose own-node signers are DIDs of two registries — here the
+// node DID's and the source loop's — without node-registry does not start:
+// it decides one audience for its node at start, and the refusal names both
+// registries and node-registry. The decision precedes the data plane's
+// build, so no broker is needed.
+func TestPipeline_BootRejectsOwnNodeSignersOfTwoRegistries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary")
+	}
+	bin := buildPipelineBinary(t)
+	dir := t.TempDir()
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+	dataDir := filepath.Join(dir, "data")
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
+
+	const nodeDID = "did:dplaax:other.example:org:acme:pipeline:p1:process:node"
+	provisionPayloadRetainKey(t, dataDir, nodeDID)
+	confPath := writeBootConfigFile(t, dir, bootConfig{
+		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:         dataDir,
+		AllowLoopback:   true,
+		Transport:       "nats",
+		NATSURL:         "nats://127.0.0.1:1",
+		AccSeed:         accSeedFile,
+		TrustSeed:       trustSeedFile,
+		ResolveDir:      filepath.Join(dir, "resolver"),
+		NodeDID:         nodeDID,
+		PipelineLoops:   validSourceLoopConf,
+		VCStoreEndpoint: "http://127.0.0.1:1",
+		VCStoreBearer:   "test-bearer",
+	})
+
+	out, err := runPipelineBinary(t, bin, dir, confPath)
+	if err == nil {
+		t.Fatalf("pipeline booted with own-node signers of two registries; want a non-zero exit\noutput:\n%s", out)
+	}
+	for _, want := range []string{"node-registry", `"other.example"`, `"reg"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("boot failure does not name %s:\n%s", want, out)
 		}
 	}
 }

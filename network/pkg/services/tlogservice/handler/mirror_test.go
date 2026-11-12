@@ -21,6 +21,7 @@ import (
 
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
+	"github.com/provin-line/oss/network/internal/authproof"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
@@ -212,7 +213,7 @@ func newMirrorFixture(t *testing.T, maxRecords, maxBytes int) *mirrorFixture {
 	verifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
-		Nonces:   wireauth.NewMemoryNonceStore(),
+		Nonces:   wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(mirrorFixedClock)),
 		Audience: mirrorAudience,
 		Clock:    mirrorFixedClock,
 		// An explicit, far-past epoch so the restart-replay barrier never
@@ -317,16 +318,13 @@ func (f *mirrorFixture) buildRequest(t *testing.T, p mirrorReqParams) *tlogpb.Mi
 	if err != nil {
 		t.Fatalf("NewNonce: %v", err)
 	}
-	proof, err := wireauth.Sign(f.ks, p.ProofSignerDID, mirrorAudience, tlogservice.OpMirrorLogSegment, fields, nonce, p.Timestamp)
+	proof, err := wireauth.Sign(f.ks, tlogservice.OpMirrorLogSegment, fields, wireauth.Claims{SignerDID: p.ProofSignerDID, Audience: mirrorAudience, Nonce: nonce, IssuedAt: p.Timestamp})
 	if err != nil {
 		t.Fatalf("wireauth.Sign: %v", err)
 	}
 	return &tlogpb.MirrorLogSegmentRequest{
 		LogId: p.LogID, FromIndex: p.FromIndex, RecordPayloadsFramed: tlogservice.FrameRecordPayloads(p.Payloads), Checkpoint: wireCP,
-		AuthProof: &chainpb.AuthProof{
-			SignerDid: proof.SignerDID, Audience: proof.Audience, Nonce: proof.Nonce,
-			IssuedAt: proof.IssuedAt.Format(time.RFC3339), Signature: proof.Signature,
-		},
+		AuthProof: authproof.Encode(proof),
 	}
 }
 

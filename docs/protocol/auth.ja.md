@@ -27,11 +27,12 @@ L2 の問い: *この名前の peer が本当にこの要求を送ったか？* 
 
 各 RPC は、それが認証する要求への proof を運ぶ:
 
-- 正確に `{signerDID, aud, op, v, nonce, issuedAt, fields}` の canonical（JCS）view への **Ed25519 署名** — `v` は凍結された view version（現在 `2`。他の version は拒否）、`aud` は **audience**（要求の送り先の node の registry ID）、`issuedAt` は秒精度の RFC 3339、`op` は RPC の view 判別子、`fields` はその business object。`op` と `fields` は verifier が**提供中の要求から**再構成する（proof からは決して読まない）。`signerDID` を署名 bytes に bind するので、鍵を共有する DID の alias が他 DID の署名を再利用することはできない。`aud` を bind するので、ある node 向けの proof は別の node では検証に通らない。
-- **audience を最初に確かめる**: node の verifier は、audience が自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。この照合は構造チェックと一緒に、署名者を解決する前に行い、view は自分の registry ID で組み直す。そのため別の node 向けの proof はそこで nonce を消費せず、書き換えた audience は署名で落ちる。照合は要求の URL も `Host` も使わないので、proxy の後ろや別名の node でも同じに確かめる。
+- 正確に `{signerDID, aud, op, v, nonce, issuedAt, fields}` の canonical（JCS）view への **Ed25519 署名** — `v` は view version（現在 `2`。proof も `view_version` として持つ）、`aud` は **audience**（要求の送り先の node の registry ID）、`issuedAt` は秒精度の RFC 3339、`op` は RPC の view 判別子、`fields` はその business object。`op` と `fields` は verifier が**提供中の要求から**再構成する（proof からは決して読まない）。`signerDID` を署名 bytes に bind するので、鍵を共有する DID の alias が他 DID の署名を再利用することはできない。`aud` を bind するので、ある node 向けの proof は別の node では検証に通らない。
+- **view version を最初に確かめる**: node の verifier は、設定された version（既定は今の version）だけを受理し、audience を束ねない version 1 は決して受理しない。それ以外の version は署名者を解決する前に断り、view は proof の version で組み直す。
+- **次に audience を確かめる**: node の verifier は、audience が自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。この照合は構造チェックと一緒に、署名者を解決する前に行い、view は自分の registry ID で組み直す。そのため別の node 向けの proof はそこで nonce を消費せず、書き換えた audience は署名で落ちる。照合は要求の URL も `Host` も使わないので、proxy の後ろや別名の node でも同じに確かめる。
 - 署名者の鍵は **署名者の DID document 経由**で解決（`#auth` verification method）— cross-registry、事前共有鍵なし。
 - **replay 防御**: acceptance window 内の single-use nonce（clock-skew 許容は非対称 — 過去向きが未来向きより大きい）+ **restart epoch barrier**（in-memory nonce store のリセットが restart 前の proof を再受理させない）。boot window 中はこの barrier が正当な fresh proof も拒否するが、handler は permanent な `Unauthenticated` ではなく **retryable な `Unavailable`** を返し、conforming peer は bounded な再署名 retry で回復する。retry budget 枯渇時（または budget を超える clock skew の peer）は racing call が drop される — post-v0 の durable nonce store で閉じる、PoC posture の許容された残存 loss。
-- 順序付き検証: 構造チェック（audience を含む）→ 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造も別の node 向けの proof も、正規署名者の nonce を焼くことはできない。
+- 順序付き検証: 構造チェック（view version と audience を含む）→ 時刻境界 → 鍵解決 → 署名 → authorization → **最後に** nonce 記録。偽造も、別の node 向けや別の view version の proof も、正規署名者の nonce を焼くことはできない。nonce store は、proof の期限の後に届いた nonce を断る。
 - 任意の per-op **authorizer**（signer-to-actor policy）は署名検証の後にのみ走る — 未認証入力を見ることがない。
 
 proof の形は 4 つの設計判断で決まっている。code とその試験はこの名前で参照する:
@@ -40,11 +41,11 @@ proof の形は 4 つの設計判断で決まっている。code とその試験
 - **D-w10 — nonce は署名者ごとに記録する。** nonce store の鍵は `(signerDID, nonce)`。nonce は署名者に対してだけ意味を持つ。同じ nonce を使う 2 人の署名者はぶつからず、ある署名者が他の署名者の nonce を先に使って消費することもできない。
 - **D-w11 — fields の値は string、boolean、`null` と、それらの object と array だけ。** 数は decimal の string で運ぶ。同じ値の Go の `int` と `float64` は別の bytes に canonical 化され、JCS の数の直列化は凍結された組織間の wire で相互運用の危険になる。数を持たない fields の bytes の形は 1 つに決まる。
 - **D-w12 — view は audience を覆う。** proof は、それが向かう node をその registry ID で名指し、view がそれを束ねる。ある node が受け取った proof は、別の registry の node では検証に通らない。送り手は endpoint と同じ出所から audience を得る:
-  - pipeline の自 node（`vc-store-endpoint`）: proof の署名に使う DID の registry segment（pipeline は自分の registry の node に publish する）。
+  - pipeline の自 node（`vc-store-endpoint`）: そこへ送る proof のすべてに 1 つの audience を起動時に決める。proof の署名に使う DID のすべてに共通の registry segment（pipeline は自分の registry の node に publish する）。署名者が 2 つの registry にまたがるときは、`node-registry` で node の registry を名指さない限り起動しない。
   - by-reference の上流（loop の `upstream-endpoint`）: loop の上流の pipeline DID（`ingress-subject`、または aggregate の ingress の `subject`）の registry segment（その node がその pipeline の payload を持つ）。
   - publisher の `#chain-manager` endpoint: publisher の DID の registry segment（その registry が DID document にその endpoint を載せる）。registry の `#chain-manager` endpoint は、その registry の node が受ける。
 
-  その endpoint の node が別の registry のものなら、`vc-store-registry` と `upstream-registry` で registry を名指す。endpoint と audience を組にするのは送り手で、wire 証明はその組を認証しない。endpoint を誤った node に向けると、その node に、組の相手の node が新しいうちは受理する proof を渡すことになる（[deployment.ja.md](../architecture/deployment.ja.md)）。
+  DID の registry segment が、その node の audience である（`wireauth.AudienceForDID`）。その endpoint の node が別の registry のものなら、`node-registry` と `upstream-registry` で registry を名指す。endpoint と audience を組にするのは送り手で、wire 証明はその組を認証しない。endpoint を誤った node に向けると、その node に、組の相手の node が新しいうちは受理する proof を渡すことになる（[deployment.ja.md](../architecture/deployment.ja.md)）。
 
 D-w1、D-w10、D-w12 と、nonce は署名が通った後にだけ記録されることは、Dolev-Yao の攻撃者に対して Tamarin の model `verification/tamarin/wireauth.spthy` で確かめている（[verification/README.ja.md](../../verification/README.ja.md)）。
 

@@ -177,8 +177,8 @@ evidence AFTER the domain call succeeds — so a rejected/failed relationship
 change (unknown publisher, ownership failure) is never retained as an
 established relationship; a record failure then surfaces as `Internal`
 (fail-closed) after the domain mutation. The retained record carries the
-signed-view version the proof was verified under (`wireauth.ViewVersion`, the
-`"v"` member of the JCS view), the audience it was signed for (the `"aud"`
+signed-view version the proof was verified under (the proof's view version,
+the `"v"` member of the JCS view), the audience it was signed for (the `"aud"`
 member, from view version 2), the exact signed fields, and the key material —
 extracted from the resolved DID
 document exactly as the verifier resolved it (`did.ExtractPublicKey` under the

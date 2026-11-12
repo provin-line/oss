@@ -17,6 +17,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/noop"
@@ -84,14 +85,11 @@ func e2eNonce(t *testing.T) string {
 // serializing issued_at as the canonical RFC 3339 UTC second-precision string.
 func authProof(t *testing.T, signer crypto.Signer, signerDID, op string, fields map[string]any, nonce string) *chainpb.AuthProof {
 	t.Helper()
-	p, err := wireauth.Sign(signer, signerDID, e2eAudience, op, fields, nonce, e2eAt())
+	p, err := wireauth.Sign(signer, op, fields, wireauth.Claims{SignerDID: signerDID, Audience: e2eAudience, Nonce: nonce, IssuedAt: e2eAt()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID, Audience: p.Audience, Nonce: p.Nonce,
-		IssuedAt: p.IssuedAt.UTC().Format(time.RFC3339), Signature: p.Signature,
-	}
+	return authproof.Encode(p)
 }
 
 // e2eAudience is the audience of the peer server's verifier.
@@ -110,7 +108,7 @@ func e2eSetup(t *testing.T) (chainpbconnect.ChainPeerServiceClient, crypto.Signe
 		e2eStranger: e2eAuthDoc(e2eStranger, strangerPub),
 	}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: e2eAudience,
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(e2eAt)), Audience: e2eAudience,
 		Clock: func() time.Time { return e2eAt().Add(time.Second) }, Epoch: e2eAt().Add(-time.Hour),
 	})
 	if err != nil {
@@ -172,7 +170,7 @@ func TestPeerRequestWithoutAudienceIsUnauthenticated(t *testing.T) {
 	ctx := context.Background()
 	client, sub, _ := e2eSetup(t)
 	ap := authProof(t, sub, e2eSub, "GetPublisherInfo", map[string]any{"publisher_did": e2ePub}, e2eNonce(t))
-	unbound := &chainpb.AuthProof{SignerDid: ap.SignerDid, Nonce: ap.Nonce, IssuedAt: ap.IssuedAt, Signature: ap.Signature}
+	unbound := &chainpb.AuthProof{SignerDid: ap.SignerDid, Nonce: ap.Nonce, IssuedAt: ap.IssuedAt, Signature: ap.Signature, ViewVersion: ap.ViewVersion}
 	_, err := client.GetPublisherInfo(ctx, connect.NewRequest(&chainpb.GetPublisherInfoRequest{AuthProof: unbound, PublisherDid: e2ePub}))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("no audience: code %v (%v), want Unauthenticated", connect.CodeOf(err), err)

@@ -27,6 +27,12 @@ const (
 
 func at() time.Time { return time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC) }
 
+// testNonces is a memory nonce store on the tests' clock: a store decides a
+// nonce's expiry by its own clock, which must agree with the verifier's.
+func testNonces() wireauth.NonceStore {
+	return wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(at))
+}
+
 func ed25519JWK(pub []byte) map[string]any {
 	return map[string]any{"kty": "OKP", "crv": "Ed25519", "x": base64.RawURLEncoding.EncodeToString(pub)}
 }
@@ -78,7 +84,7 @@ func testVerifier(t *testing.T, resolver wireauth.DIDResolver) *wireauth.Verifie
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
-		Nonces:   wireauth.NewMemoryNonceStore(), Audience: testAudience,
+		Nonces:   testNonces(), Audience: testAudience,
 		Clock: func() time.Time { return at().Add(time.Second) },
 		Epoch: at().Add(-time.Hour),
 	})
@@ -90,10 +96,29 @@ func testVerifier(t *testing.T, resolver wireauth.DIDResolver) *wireauth.Verifie
 
 func okFields() map[string]any { return map[string]any{"actor": pubDID, "mode": "by-reference"} }
 
+// Sign takes the members of the view that the request does not carry as
+// Claims, and the proof carries them back, issuedAt at second precision.
+func TestSign_TakesClaims(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{
+		SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at().Add(300 * time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if proof.SignerDID != subDID || proof.Audience != testAudience || proof.Nonce != "n1" || !proof.IssuedAt.Equal(at()) {
+		t.Errorf("proof = %+v, want the claims back with issuedAt %v", proof, at())
+	}
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+}
+
 func TestVerify_RoundTrip(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-	proof, err := wireauth.Sign(signer, subDID, testAudience, "RegisterSubscription", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "RegisterSubscription", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -109,10 +134,99 @@ func TestVerify_RoundTrip(t *testing.T) {
 	}
 }
 
+// recordingNonces is a NonceStore that keeps what it was handed.
+type recordingNonces struct {
+	ctx           context.Context
+	signer, nonce string
+	expiresAt     time.Time
+	calls         int
+}
+
+func (r *recordingNonces) Use(ctx context.Context, signerDID, nonce string, expiresAt time.Time) error {
+	r.ctx, r.signer, r.nonce, r.expiresAt = ctx, signerDID, nonce, expiresAt
+	r.calls++
+	return nil
+}
+
+// Verify hands the nonce store the request's context and when the proof
+// stops being acceptable (its issuedAt plus the window's MaxPast), so a store
+// may forget the nonce after that.
+func TestVerify_HandsTheNonceStoreTheContextAndExpiry(t *testing.T) {
+	type key struct{}
+	signer, pub := signerFor(t, subDID)
+	nonces := &recordingNonces{}
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: mapResolver{subDID: authDoc(subDID, pub)},
+		Crypto:   ed25519.Verifier{},
+		Nonces:   nonces, Audience: testAudience,
+		Clock:  func() time.Time { return at().Add(time.Second) },
+		Epoch:  at().Add(-time.Hour),
+		Window: wireauth.AcceptanceWindow{MaxPast: 30 * time.Second, MaxFuture: 2 * time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), key{}, "the request")
+	if err := v.Verify(ctx, "Op", okFields(), proof, nil); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if nonces.calls != 1 || nonces.ctx == nil || nonces.ctx.Value(key{}) != "the request" || nonces.signer != subDID || nonces.nonce != "n1" || !nonces.expiresAt.Equal(at().Add(30*time.Second)) {
+		t.Errorf("nonce store handed %+v, want the request's context, %s, n1 and %v", nonces, subDID, at().Add(30*time.Second))
+	}
+}
+
+// clockedResolver resolves as its map does, after running before, which a
+// test uses to move the clock while a verification waits on resolution.
+type clockedResolver struct {
+	mapResolver
+	before func()
+}
+
+func (r clockedResolver) Resolve(ctx context.Context, d string) (*did.DIDDocument, error) {
+	if r.before != nil {
+		r.before()
+	}
+	return r.mapResolver.Resolve(ctx, d)
+}
+
+// The nonce store decides at admission whether the proof has expired: a
+// proof whose nonce reaches the store after the proof's expiry is refused
+// with ErrExpired, whatever the checks before it found.
+func TestVerify_ANonceAdmittedAfterItsExpiryIsRefused(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	now := at().Add(time.Second)
+	clock := func() time.Time { return now }
+	window := wireauth.AcceptanceWindow{MaxPast: 30 * time.Second, MaxFuture: 2 * time.Second}
+	resolver := clockedResolver{mapResolver: mapResolver{subDID: authDoc(subDID, pub)}}
+	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
+		Resolver: &resolver, Crypto: ed25519.Verifier{},
+		Nonces:   wireauth.NewMemoryNonceStore(wireauth.WithNonceRetention(window.NonceRetention()), wireauth.WithNonceClock(clock)),
+		Audience: testAudience, Clock: clock, Epoch: at().Add(-time.Hour), Window: window,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+		t.Fatalf("first Verify: %v", err)
+	}
+	resolver.before = func() { now = at().Add(window.MaxPast + window.NonceRetention() + time.Minute) }
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); !errors.Is(err, wireauth.ErrExpired) {
+		t.Fatalf("a nonce admitted after its expiry: %v, want ErrExpired", err)
+	}
+}
+
 func TestVerify_NilAuthorizerSkipsAuthz(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	v := testVerifier(t, mapResolver{subDID: authDoc(subDID, pub)})
-	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
 		t.Fatalf("Verify with nil authorizer: %v", err)
 	}
@@ -120,7 +234,7 @@ func TestVerify_NilAuthorizerSkipsAuthz(t *testing.T) {
 
 func TestVerify_KeyResolutionFailures(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 
 	otherPub := make([]byte, len(pub))
 
@@ -168,7 +282,7 @@ func TestVerify_SharedKeyAliasingRejected(t *testing.T) {
 		subDID: authDoc(subDID, pub),
 		alias:  authDoc(alias, pub),
 	})
-	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 	// Attacker re-labels the proof as the alias DID (whose doc shares the key).
 	proof.SignerDID = alias
 	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); !errors.Is(err, wireauth.ErrSignatureInvalid) {
@@ -178,7 +292,7 @@ func TestVerify_SharedKeyAliasingRejected(t *testing.T) {
 
 func TestNewVerifier_RequiresDeps(t *testing.T) {
 	base := wireauth.VerifierConfig{
-		Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(), Audience: testAudience,
+		Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: testNonces(), Audience: testAudience,
 	}
 	if _, err := wireauth.NewVerifier(base); err != nil {
 		t.Fatalf("complete config: %v", err)
@@ -215,7 +329,7 @@ func (e errResolver) Resolve(context.Context, string) (*did.DIDDocument, error) 
 // authenticity is reported "could not be evaluated, retry", never "rejected".
 func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.T) {
 	signer, _ := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 
 	for name, resErr := range map[string]error{
 		"timeout":      context.DeadlineExceeded,
@@ -242,7 +356,7 @@ func TestVerify_TransientResolverError_IsUnavailableNotKeyResolution(t *testing.
 // ErrKeyResolution → Unauthenticated.
 func TestVerify_DefinitiveResolverError_IsKeyResolution(t *testing.T) {
 	signer, _ := signerFor(t, subDID)
-	proof, _ := wireauth.Sign(signer, subDID, testAudience, "Op", okFields(), "n1", at())
+	proof, _ := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 	v := testVerifier(t, errResolver{err: errors.New("registry: no such DID")})
 	err := v.Verify(context.Background(), "Op", okFields(), proof, nil)
 	if !errors.Is(err, wireauth.ErrKeyResolution) {

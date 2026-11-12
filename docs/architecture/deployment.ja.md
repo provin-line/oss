@@ -53,13 +53,13 @@ pipeline は、各宛先の audience を設定に既にある DID から得る:
 
 | 宛先 | audience | 上書き（任意） |
 | --- | --- | --- |
-| 自 node（`vc-store-endpoint`） | proof の署名に使う DID の registry segment | `provin.network.pipeline.vc-store-registry` |
+| 自 node（`vc-store-endpoint`） | そこへ送る proof のすべてに 1 つ、起動時に決める: その proof の署名に使う DID のすべてに共通の registry segment | `provin.network.pipeline.node-registry` |
 | by-reference の上流（loop の `upstream-endpoint`） | loop の `ingress-subject`、または aggregate の ingress の `subject` の registry segment | その `upstream-endpoint` の隣の `upstream-registry` |
 | publisher の `#chain-manager` | publisher の DID の registry segment | — |
 
-上書きは、その endpoint の node が別の registry のものであるときだけ置く。audience が違うと fail closed になる: node はその呼び出しを `Unauthenticated` で断り、期待した audience を文に含める。1 つの `upstream-endpoint` に 2 つの registry が出ると boot error。
+上書きは、その endpoint の node が別の registry のものであるときだけ置く。audience が違うと fail closed になる: node はその呼び出しを `Unauthenticated` で断り、期待した audience を文に含める。1 つの `upstream-endpoint` に 2 つの registry が出ると boot error。pipeline の自 node への署名者（node の DID、producing loop ごとの `output-subject` と issuer、sink ごとの receipt の issuer）が `node-registry` なしで 2 つの registry にまたがっても boot error（node が受ける audience は 1 つ）。
 
-endpoint とその audience の組は設定が決める: wire 証明は、endpoint の node が audience の名指す node であることを示さない。2 つが食い違うと、endpoint の node はその呼び出しを断るが、名指された node が proof の新しいうち（受理の窓、既定 60 秒）は受理する proof を受け取っている。そのため、別の registry の node を指す `vc-store-endpoint` を `vc-store-registry` なしで置くと、その node の運用者に自分の node で通る proof を渡すことになる。上流の node ではない `upstream-endpoint` も、上流について同じことをする。各 endpoint は組にした registry の node に向けるか、上書きを置く。
+endpoint とその audience の組は設定が決める: wire 証明は、endpoint の node が audience の名指す node であることを示さない。2 つが食い違うと、endpoint の node はその呼び出しを断るが、名指された node が proof の新しいうち（受理の窓、既定 60 秒）は受理する proof を受け取っている。そのため、別の registry の node を指す `vc-store-endpoint` を `node-registry` なしで置くと、その node の運用者に自分の node で通る proof を渡すことになる。上流の node ではない `upstream-endpoint` も、上流について同じことをする。各 endpoint は組にした registry の node に向けるか、上書きを置く。
 
 ここから 2 つの制約が出る:
 
@@ -68,7 +68,7 @@ endpoint とその audience の組は設定が決める: wire 証明は、endpoi
 
 ### view version 2 への更新
 
-audience で署名する view が変わり（`v` = 2）、node は他の version を受理しない。互いに話す全ての network node と pipeline を、1 つの窓で更新する。窓の間、更新済みと未更新の process の間の呼び出しは断られる: 更新済みの node は audience の無い proof を `Unauthenticated`（"names no audience"）で断り、未更新の node は version 2 の proof を署名で断る。窓の間は subscription が確立せず、by-reference の取得に失敗した event は、取得の失敗と同じく rejected / errored / dropped になる。そのため、窓の前に by-reference の消費を止めるか、それらの event を失うことを受け入れる。更新前に書かれた relationship evidence（view version 1）は読めるまま。
+audience で署名する view が変わり（`v` = 2）、node は他の version を受理しない。互いに話す全ての network node と pipeline を、1 つの窓で更新する。窓の間、更新済みと未更新の process の間の呼び出しは断られる: 更新済みの node は view version を持たない proof を `Unauthenticated`（"view version 0"）で断り、未更新の node は version 2 の proof を署名で断る。窓の間は subscription が確立せず、by-reference の取得に失敗した event は、取得の失敗と同じく rejected / errored / dropped になる。そのため、窓の前に by-reference の消費を止めるか、それらの event を失うことを受け入れる。更新前に書かれた relationship evidence（view version 1）は読めるまま。
 
 ## Health エンドポイント
 

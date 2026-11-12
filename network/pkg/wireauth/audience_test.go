@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
@@ -17,9 +18,9 @@ type countingNonces struct {
 	uses  int
 }
 
-func (n *countingNonces) Use(signerDID, nonce string) error {
+func (n *countingNonces) Use(ctx context.Context, signerDID, nonce string, expiresAt time.Time) error {
 	n.uses++
-	return n.inner.Use(signerDID, nonce)
+	return n.inner.Use(ctx, signerDID, nonce, expiresAt)
 }
 
 // audienceVerifier is testVerifier with the given audience and nonce store.
@@ -42,9 +43,9 @@ func audienceVerifier(t *testing.T, resolver wireauth.DIDResolver, audience stri
 func TestVerifyRefusesProofForAnotherAudience(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := &countingResolver{mapResolver: mapResolver{subDID: authDoc(subDID, pub)}}
-	nonces := &countingNonces{inner: wireauth.NewMemoryNonceStore()}
+	nonces := &countingNonces{inner: testNonces()}
 	v := audienceVerifier(t, resolver, "b.example", nonces)
-	proof, err := wireauth.Sign(signer, subDID, "a.example", "Op", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: "a.example", Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -59,9 +60,9 @@ func TestVerifyRefusesProofForAnotherAudience(t *testing.T) {
 
 func TestVerifyRefusesProofNamingNoAudience(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	nonces := &countingNonces{inner: wireauth.NewMemoryNonceStore()}
+	nonces := &countingNonces{inner: testNonces()}
 	v := audienceVerifier(t, mapResolver{subDID: authDoc(subDID, pub)}, "b.example", nonces)
-	proof, err := wireauth.Sign(signer, subDID, "b.example", "Op", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: "b.example", Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -80,9 +81,9 @@ func TestVerifyRefusesProofNamingNoAudience(t *testing.T) {
 
 func TestVerifyRefusesAudienceRewritten(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	nonces := &countingNonces{inner: wireauth.NewMemoryNonceStore()}
+	nonces := &countingNonces{inner: testNonces()}
 	v := audienceVerifier(t, mapResolver{subDID: authDoc(subDID, pub)}, "b.example", nonces)
-	proof, err := wireauth.Sign(signer, subDID, "a.example", "Op", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: "a.example", Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -98,10 +99,10 @@ func TestVerifyRefusesAudienceRewritten(t *testing.T) {
 func TestWrongAudienceLeavesNonceUnspent(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := mapResolver{subDID: authDoc(subDID, pub)}
-	store := wireauth.NewMemoryNonceStore()
+	store := testNonces()
 	a := audienceVerifier(t, resolver, "a.example", store)
 	b := audienceVerifier(t, resolver, "b.example", store)
-	proof, err := wireauth.Sign(signer, subDID, "a.example", "Op", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: "a.example", Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -116,13 +117,13 @@ func TestWrongAudienceLeavesNonceUnspent(t *testing.T) {
 func TestVerifyRefusesOverlongAudience(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
 	resolver := &countingResolver{mapResolver: mapResolver{subDID: authDoc(subDID, pub)}}
-	nonces := &countingNonces{inner: wireauth.NewMemoryNonceStore()}
+	nonces := &countingNonces{inner: testNonces()}
 	v := audienceVerifier(t, resolver, "b.example", nonces)
-	proof, err := wireauth.Sign(signer, subDID, "b.example", "Op", okFields(), "n1", at())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: "b.example", Nonce: "n1", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	proof.Audience = strings.Repeat("a", 254)
+	proof.Audience = strings.Repeat("a", dplaax.MaxRegistryLen+1)
 	err = v.Verify(context.Background(), "Op", okFields(), proof, nil)
 	if !errors.Is(err, wireauth.ErrMalformedProof) {
 		t.Fatalf("want ErrMalformedProof, got %v", err)
@@ -135,11 +136,26 @@ func TestVerifyRefusesOverlongAudience(t *testing.T) {
 	}
 }
 
+// An audience is a registry ID, so the longest audience Sign, NewVerifier and
+// Verify take is the longest registry a did:dplaax DID may name.
+func TestTheAudienceBoundIsTheRegistryBound(t *testing.T) {
+	signer, pub := signerFor(t, subDID)
+	longest := strings.Repeat("a", dplaax.MaxRegistryLen)
+	v := audienceVerifier(t, mapResolver{subDID: authDoc(subDID, pub)}, longest, testNonces())
+	proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: longest, Nonce: "n1", IssuedAt: at()})
+	if err != nil {
+		t.Fatalf("Sign with an audience of %d bytes: %v", dplaax.MaxRegistryLen, err)
+	}
+	if err := v.Verify(context.Background(), "Op", okFields(), proof, nil); err != nil {
+		t.Errorf("Verify with an audience of %d bytes: %v", dplaax.MaxRegistryLen, err)
+	}
+}
+
 func TestAudienceComparedExactly(t *testing.T) {
 	signer, pub := signerFor(t, subDID)
-	v := audienceVerifier(t, mapResolver{subDID: authDoc(subDID, pub)}, "b.example", wireauth.NewMemoryNonceStore())
+	v := audienceVerifier(t, mapResolver{subDID: authDoc(subDID, pub)}, "b.example", testNonces())
 	for _, spelling := range []string{"B.example", "b.example."} {
-		proof, err := wireauth.Sign(signer, subDID, spelling, "Op", okFields(), "n-"+spelling, at())
+		proof, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: spelling, Nonce: "n-" + spelling, IssuedAt: at()})
 		if err != nil {
 			t.Fatalf("Sign %q: %v", spelling, err)
 		}
@@ -150,10 +166,10 @@ func TestAudienceComparedExactly(t *testing.T) {
 }
 
 func TestNewVerifierRequiresAudience(t *testing.T) {
-	for name, audience := range map[string]string{"empty": "", "254 bytes": strings.Repeat("a", 254)} {
+	for name, audience := range map[string]string{"empty": "", "one byte past the registry bound": strings.Repeat("a", dplaax.MaxRegistryLen+1)} {
 		t.Run(name, func(t *testing.T) {
 			_, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-				Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+				Resolver: mapResolver{}, Crypto: ed25519.Verifier{}, Nonces: testNonces(),
 				Audience: audience,
 			})
 			if err == nil {
@@ -165,9 +181,9 @@ func TestNewVerifierRequiresAudience(t *testing.T) {
 
 func TestSignRequiresAudience(t *testing.T) {
 	signer, _ := signerFor(t, subDID)
-	for name, audience := range map[string]string{"empty": "", "254 bytes": strings.Repeat("a", 254)} {
+	for name, audience := range map[string]string{"empty": "", "one byte past the registry bound": strings.Repeat("a", dplaax.MaxRegistryLen+1)} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := wireauth.Sign(signer, subDID, audience, "Op", okFields(), "n1", at()); !errors.Is(err, wireauth.ErrMalformedProof) {
+			if _, err := wireauth.Sign(signer, "Op", okFields(), wireauth.Claims{SignerDID: subDID, Audience: audience, Nonce: "n1", IssuedAt: at()}); !errors.Is(err, wireauth.ErrMalformedProof) {
 				t.Errorf("audience %s: want ErrMalformedProof, got %v", name, err)
 			}
 		})

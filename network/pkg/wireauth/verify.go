@@ -8,6 +8,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/didresolver"
 )
 
@@ -35,11 +36,6 @@ func isTransientResolverErr(err error) bool {
 // above NewNonce's 22-char output and any reasonable peer nonce.
 const maxNonceLen = 256
 
-// maxAudienceLen caps an audience's length: the longest DNS name, which is
-// the longest audience a deployment that names its verifiers by domain needs.
-// A longer audience is refused before it is compared or quoted in an error.
-const maxAudienceLen = 253
-
 // DIDResolver resolves a peer DID to its DID Document — the source of the
 // signer's #auth key. Implementations may do network I/O (cross-registry
 // resolution), so Resolve takes a context.
@@ -63,11 +59,11 @@ type AcceptanceWindow struct {
 	MaxFuture time.Duration
 }
 
-// NonceRetention is how long a nonce must be retained for replay defense: the
-// full reach of the window. A proof is acceptable until issuedAt+MaxPast, and
-// issuedAt may be as late as now+MaxFuture, so a nonce recorded at first use
-// could still be re-presented up to MaxPast+MaxFuture later. Past that it can
-// never be re-admitted, so it is safe to evict (see memNonceStore).
+// NonceRetention is the full reach of the window: a proof is acceptable until
+// issuedAt+MaxPast, and issuedAt may be as late as now+MaxFuture, so a nonce
+// recorded at first use could be re-presented up to MaxPast+MaxFuture later.
+// It is the memory nonce store's default retention (WithNonceRetention); the
+// store keeps each nonce until its expiry whatever the retention.
 func (w AcceptanceWindow) NonceRetention() time.Duration {
 	return w.MaxPast + w.MaxFuture
 }
@@ -83,22 +79,29 @@ func DefaultAcceptanceWindow() AcceptanceWindow {
 // VerifierConfig configures a Verifier. Resolver, Crypto, Nonces, and Audience
 // are required (NewVerifier errors if any is nil or empty). Audience is this
 // verifier's own audience: it accepts only a proof signed for exactly this
-// string (D-w12), and it is at most 253 bytes. Clock defaults to time.Now and
-// Epoch to the first whole second at or after boot+MaxFuture — the restart
-// replay barrier (see NewVerifier). Window defaults to {60s past, 5s future}
-// ONLY when wholly unset (the zero AcceptanceWindow); a partially-set window is
-// honored exactly, so MaxFuture:0 stays expressible.
+// string (D-w12), and it is at most dplaax.MaxRegistryLen bytes: an audience
+// is a registry ID, so its bound is the registry's bound. Clock defaults to
+// time.Now and Epoch to the first whole second at or after boot+MaxFuture —
+// the restart replay barrier (see NewVerifier). Window defaults to {60s past,
+// 5s future} ONLY when wholly unset (the zero AcceptanceWindow); a
+// partially-set window is honored exactly, so MaxFuture:0 stays expressible.
 // Negative window durations are rejected. Canonicalization is NOT configurable:
 // the signed-view format is frozen to JCS (ViewVersion), and a verify-side canon
 // the sign side did not honor would be a divergence hazard, not a feature.
+//
+// AcceptedViewVersions are the view versions the verifier accepts; nil or
+// empty is {ViewVersion}. A version this package does not compose — version
+// 1 among them — is refused, so the list holds more than one version only
+// while a version change is rolled out across the nodes.
 type VerifierConfig struct {
-	Resolver DIDResolver
-	Crypto   crypto.Verifier
-	Nonces   NonceStore
-	Audience string
-	Clock    func() time.Time
-	Epoch    time.Time
-	Window   AcceptanceWindow
+	Resolver             DIDResolver
+	Crypto               crypto.Verifier
+	Nonces               NonceStore
+	Audience             string
+	Clock                func() time.Time
+	Epoch                time.Time
+	Window               AcceptanceWindow
+	AcceptedViewVersions []int
 }
 
 // Verifier runs the ordered L2 verification pipeline over a Proof.
@@ -110,6 +113,7 @@ type Verifier struct {
 	clock    func() time.Time
 	epoch    time.Time
 	window   AcceptanceWindow
+	versions map[int]bool
 }
 
 // NewVerifier validates cfg and applies defaults. It errors rather than
@@ -127,8 +131,18 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if cfg.Audience == "" {
 		return nil, fmt.Errorf("wireauth: VerifierConfig.Audience is required")
 	}
-	if len(cfg.Audience) > maxAudienceLen {
-		return nil, fmt.Errorf("wireauth: VerifierConfig.Audience exceeds %d bytes", maxAudienceLen)
+	if len(cfg.Audience) > dplaax.MaxRegistryLen {
+		return nil, fmt.Errorf("wireauth: VerifierConfig.Audience exceeds %d bytes", dplaax.MaxRegistryLen)
+	}
+	versions := map[int]bool{ViewVersion: true}
+	if len(cfg.AcceptedViewVersions) > 0 {
+		versions = map[int]bool{}
+		for _, v := range cfg.AcceptedViewVersions {
+			if !composes(v) {
+				return nil, fmt.Errorf("wireauth: VerifierConfig.AcceptedViewVersions: this package does not compose view version %d", v)
+			}
+			versions[v] = true
+		}
 	}
 	clock := cfg.Clock
 	if clock == nil {
@@ -159,6 +173,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	return &Verifier{
 		resolver: cfg.Resolver, crypto: cfg.Crypto, nonces: cfg.Nonces,
 		audience: cfg.Audience, clock: clock, epoch: epoch, window: window,
+		versions: versions,
 	}, nil
 }
 
@@ -181,14 +196,19 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 	if proof.SignerDID == "" || proof.Nonce == "" || len(proof.Signature) == 0 {
 		return ErrMissingProof
 	}
+	if !v.versions[proof.ViewVersion] {
+		return fmt.Errorf("%w: view version %d", ErrViewVersion, proof.ViewVersion)
+	}
 	if op == "" {
 		return fmt.Errorf("%w: empty op", ErrMalformedProof)
 	}
 	if len(proof.Nonce) > maxNonceLen {
 		return fmt.Errorf("%w: nonce exceeds %d bytes", ErrMalformedProof, maxNonceLen)
 	}
-	if len(proof.Audience) > maxAudienceLen {
-		return fmt.Errorf("%w: audience exceeds %d bytes", ErrMalformedProof, maxAudienceLen)
+	// An audience is a registry ID, so its bound is the registry's bound. A
+	// longer audience is refused before it is compared or quoted in an error.
+	if len(proof.Audience) > dplaax.MaxRegistryLen {
+		return fmt.Errorf("%w: audience exceeds %d bytes", ErrMalformedProof, dplaax.MaxRegistryLen)
 	}
 	if proof.Audience == "" {
 		return fmt.Errorf("%w: the proof names no audience; this verifier's is %q", ErrWrongAudience, v.audience)
@@ -236,7 +256,7 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 
 	// 5. Rebuild the canonical bytes through the same helper Sign used, with
 	// this verifier's own audience.
-	msg, err := viewBytes(proof.SignerDID, v.audience, op, proof.Nonce, proof.IssuedAt, fields)
+	msg, err := viewBytes(proof.ViewVersion, proof.SignerDID, v.audience, op, proof.Nonce, proof.IssuedAt, fields)
 	if err != nil {
 		return err
 	}
@@ -257,8 +277,10 @@ func (v *Verifier) Verify(ctx context.Context, op string, fields map[string]any,
 		}
 	}
 
-	// 8. Record the nonce — last, only on success (no-burn property).
-	return v.nonces.Use(proof.SignerDID, proof.Nonce)
+	// 8. Record the nonce — last, only on success (no-burn property). The
+	// proof is acceptable until issuedAt+MaxPast, so the store keeps the nonce
+	// until then.
+	return v.nonces.Use(ctx, proof.SignerDID, proof.Nonce, proof.IssuedAt.Add(v.window.MaxPast))
 }
 
 // ceilToSecond rounds t up to the next whole second unless it is already

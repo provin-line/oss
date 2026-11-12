@@ -17,25 +17,37 @@ import (
 	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
+// A fetch's proof names the audience Config.UpstreamAudiences gives its
+// endpoint.
 func TestResolvePayloadProofNamesUpstreamAudience(t *testing.T) {
 	fake := &fakeServer{frames: [][]byte{[]byte("ab")}}
 	c, url := newClient(t, fake, 0)
-	if _, err := c.ResolvePayload(context.Background(), url, "upstream.example", fetchTestHash); err != nil {
+	if _, err := c.ResolvePayload(context.Background(), url, fetchTestHash); err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
 	}
-	if fake.gotAudience != "upstream.example" {
-		t.Errorf("the proof names %q, want %q", fake.gotAudience, "upstream.example")
+	if fake.gotAudience != upstreamAudience {
+		t.Errorf("the proof names %q, want %q", fake.gotAudience, upstreamAudience)
 	}
 }
 
-func TestResolvePayloadWithoutAudienceFailsBeforeSending(t *testing.T) {
+// The client fetches nothing from an endpoint whose audience it does not
+// know: one not in Config.UpstreamAudiences, or given there no audience. It
+// fails with ErrUnknownUpstream before anything is sent.
+func TestResolvePayloadFromAnEndpointWithoutAudienceFailsBeforeSending(t *testing.T) {
 	fake := &fakeServer{frames: [][]byte{[]byte("ab")}}
-	c, url := newClient(t, fake, 0)
-	if _, err := c.ResolvePayload(context.Background(), url, "", fetchTestHash); !errors.Is(err, wireauth.ErrMalformedProof) {
-		t.Fatalf("no audience: %v, want ErrMalformedProof", err)
+	_, url := newClient(t, fake, 0)
+	for name, audiences := range map[string]map[string]string{
+		"not in the map": {"http://other.example": upstreamAudience},
+		"no audience":    {url: ""},
+		"an empty map":   {},
+	} {
+		c, _ := newClientCfg(t, fake, client.Config{UpstreamAudiences: audiences})
+		if _, err := c.ResolvePayload(context.Background(), url, fetchTestHash); !errors.Is(err, client.ErrUnknownUpstream) {
+			t.Errorf("%s: %v, want ErrUnknownUpstream", name, err)
+		}
 	}
 	if fake.calls != 0 {
-		t.Errorf("no audience: %d requests reached the server, want 0", fake.calls)
+		t.Errorf("%d requests reached the server, want 0", fake.calls)
 	}
 }
 

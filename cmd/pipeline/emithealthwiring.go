@@ -66,7 +66,7 @@ type emitHealthReportClient interface {
 type reportClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
-	registry   string
+	audience   string
 	bearer     string
 	httpClient connect.HTTPClient
 
@@ -74,41 +74,33 @@ type reportClientFactory struct {
 	clients map[string]*reportclient.Client
 }
 
-func newReportClientFactory(signer crypto.Signer, baseURL, registry, bearer string, httpClient connect.HTTPClient) *reportClientFactory {
-	return &reportClientFactory{signer: signer, baseURL: baseURL, registry: registry, bearer: bearer, httpClient: httpClient, clients: map[string]*reportclient.Client{}}
+func newReportClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient connect.HTTPClient) *reportClientFactory {
+	return &reportClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*reportclient.Client{}}
 }
 
 // For returns the cached client signing/reporting as publisherDID, building
 // and caching one on first use.
-func (f *reportClientFactory) For(publisherDID string) (*reportclient.Client, error) {
+func (f *reportClientFactory) For(publisherDID string) *reportclient.Client {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c, ok := f.clients[publisherDID]; ok {
-		return c, nil
-	}
-	aud, err := ownNodeAudience(f.registry, publisherDID)
-	if err != nil {
-		return nil, err
+		return c
 	}
 	c := reportclient.New(reportclient.Config{
 		Signer:     f.signer,
 		SignerDID:  publisherDID,
 		BaseURL:    f.baseURL,
-		Audience:   aud,
+		Audience:   f.audience,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
 	f.clients[publisherDID] = c
-	return c, nil
+	return c
 }
 
 // forClient adapts For to buildEmitHealthReporters' reportClientFor seam.
-func (f *reportClientFactory) forClient(publisherDID string) (emitHealthReportClient, error) {
-	c, err := f.For(publisherDID)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+func (f *reportClientFactory) forClient(publisherDID string) emitHealthReportClient {
+	return f.For(publisherDID)
 }
 
 // minEmitHealthCadence floors the reporting cadence: a TTL small enough to
@@ -352,19 +344,15 @@ func producingLoops(loops []pipelineconfig.LoopConfig) []producingLoopRef {
 // reporter thereafter from the registry's own returned TTL — see
 // emitHealthReporter.report's doc), sending spec.Healthy() on every tick
 // (P1 fix — see emitHealthReporterSpecsFor's doc).
-func buildEmitHealthReporters(specs []emitHealthReporterSpec, reportClientFor func(publisherDID string) (emitHealthReportClient, error), cadence time.Duration) ([]*emitHealthReporter, error) {
+func buildEmitHealthReporters(specs []emitHealthReporterSpec, reportClientFor func(publisherDID string) emitHealthReportClient, cadence time.Duration) []*emitHealthReporter {
 	reporters := make([]*emitHealthReporter, 0, len(specs))
 	for _, s := range specs {
-		client, err := reportClientFor(s.OutputSubject)
-		if err != nil {
-			return nil, err
-		}
 		reporters = append(reporters, &emitHealthReporter{
-			client:       client,
+			client:       reportClientFor(s.OutputSubject),
 			publisherDID: s.OutputSubject,
 			interval:     cadence,
 			healthy:      s.Healthy,
 		})
 	}
-	return reporters, nil
+	return reporters
 }

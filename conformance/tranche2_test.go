@@ -1010,6 +1010,7 @@ func runTransferRelationshipRecord(t *testing.T, v dplaaxVector) {
 		Op:          "RegisterSubscription",
 		ViewVersion: wireauth.ViewVersion,
 		SignerDID:   "did:dplaax:conf.example:org:sub",
+		Audience:    "conf.example",
 		Nonce:       "n-transfer-004",
 		IssuedAt:    "2026-07-11T12:00:00Z",
 		Signature:   []byte{0xde, 0xad, 0xbe, 0xef},

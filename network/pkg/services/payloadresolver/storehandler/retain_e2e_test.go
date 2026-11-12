@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/auth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
@@ -169,17 +170,11 @@ func mustProof(t *testing.T, sgn crypto.Signer, signerDID, ownerDID string, size
 	if err != nil {
 		t.Fatalf("NewNonce: %v", err)
 	}
-	p, err := wireauth.Sign(sgn, signerDID, nodeAudience, payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size), nonce, time.Now())
+	p, err := wireauth.Sign(sgn, payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size), wireauth.Claims{SignerDID: signerDID, Audience: nodeAudience, Nonce: nonce, IssuedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Audience:  p.Audience,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}
+	return authproof.Encode(p)
 }
 
 // TestRetainPayload_RoundTrip_HappyPath streams via the real client and reads

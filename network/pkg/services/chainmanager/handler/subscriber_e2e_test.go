@@ -182,7 +182,7 @@ func TestSubscriberE2E_ServingPublisher_AdvertisesByReference(t *testing.T) {
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	pc := peerclient.New(subSigner, e2eSub, guard.HTTPClient())
 
-	_, modes, err := pc.GetPublisherInfo(ctx, srvURL, e2ePubRegistry, e2eSub, e2ePub)
+	_, modes, err := pc.GetPublisherInfo(ctx, chainmanager.Peer{Endpoint: srvURL, Audience: e2ePubRegistry}, e2eSub, e2ePub)
 	if err != nil {
 		t.Fatalf("GetPublisherInfo: %v", err)
 	}

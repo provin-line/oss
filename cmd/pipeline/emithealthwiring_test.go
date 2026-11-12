@@ -19,12 +19,12 @@ import (
 
 func TestReportClientFactory_CachesPerDID(t *testing.T) {
 	f := newReportClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
-	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:a"))(t)
-	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:a"))(t)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a")
 	if a1 != a2 {
 		t.Error("For(samePublisherDID) returned two different clients, want the cached one")
 	}
-	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:b"))(t)
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:b")
 	if a1 == b1 {
 		t.Error("For(differentPublisherDID) returned the SAME client as another publisher")
 	}
@@ -447,19 +447,16 @@ func TestEmitHealthReporter_NonPositiveReturnedTTLLeavesCadenceUnchanged(t *test
 
 func TestBuildEmitHealthReporters_WiresSpecsToReporters(t *testing.T) {
 	seenDIDs := map[string]bool{}
-	clientFor := func(publisherDID string) (emitHealthReportClient, error) {
+	clientFor := func(publisherDID string) emitHealthReportClient {
 		seenDIDs[publisherDID] = true
-		return &spyEmitHealthClient{}, nil
+		return &spyEmitHealthClient{}
 	}
 	h1, h2 := true, false
 	specs := []emitHealthReporterSpec{
 		{OutputSubject: "did:dplaax:reg:org:acme:pipeline:a", Healthy: func() bool { return h1 }},
 		{OutputSubject: "did:dplaax:reg:org:acme:pipeline:b", Healthy: func() bool { return h2 }},
 	}
-	reporters, err := buildEmitHealthReporters(specs, clientFor, 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reporters := buildEmitHealthReporters(specs, clientFor, 5*time.Second)
 	if len(reporters) != 2 {
 		t.Fatalf("buildEmitHealthReporters = %d reporters, want 2", len(reporters))
 	}

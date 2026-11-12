@@ -20,6 +20,7 @@ import (
 
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/wireauth"
@@ -100,7 +101,7 @@ func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
 // before Verify — a malformed consumed set is a structural request defect,
 // same posture as the issued_at codec, checked before any signature work.
 func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[auditpb.RegisterEvidenceRequest]) (*connect.Response[auditpb.RegisterEvidenceResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -127,7 +128,7 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 // receiptless RegisterHead (contrast RegisterEvidence, which delegates to
 // Register; see EvidenceRegistrar's own doc for how the two differ).
 func (h *Handler) RegisterAuditHead(ctx context.Context, req *connect.Request[auditpb.RegisterAuditHeadRequest]) (*connect.Response[auditpb.RegisterAuditHeadResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -287,7 +288,7 @@ func mapError(err error) error {
 	switch {
 	// Malformed request (the evidence-write RPCs' issued_at codec). Wireauth's
 	// own structural sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-verification: CodeCanceled, not a server-side
 	// "unavailable". Precedes the wireautherr delegation below, which the

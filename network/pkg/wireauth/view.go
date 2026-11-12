@@ -11,17 +11,23 @@ import (
 	"github.com/provin-line/oss/internal/jsondepth"
 )
 
-// ViewVersion is the frozen version of the signed-view composition, folded
-// into the signed bytes as "v". The version is not carried on the wire: the
-// verifier always reconstructs the view with this constant, so a signer using
-// any other version fails signature verification (ErrSignatureInvalid) — a
-// clean, detectable break rather than a silent canonicalization divergence
-// across peers.
+// ViewVersion is the version of the signed-view composition that Sign makes,
+// folded into the signed bytes as "v" and carried in the proof
+// (Proof.ViewVersion). A verifier rebuilds the view of the proof's version
+// when it accepts that version (VerifierConfig.AcceptedViewVersions), and
+// refuses any other with ErrViewVersion, so a version change is a detectable
+// refusal rather than a silent canonicalization divergence across peers.
+// Version 1, which binds no audience, is accepted by no verifier.
 const ViewVersion = 2
 
-// viewBytes builds the canonical signing scope of one ChainPeerService RPC and
-// returns its JCS bytes. Sign and Verify both go through this single helper so
-// the signed and reconstructed bytes are identical by construction.
+// composes reports whether this package composes the view of version v. It
+// composes the current version only; version 1 is below the floor.
+func composes(v int) bool { return v == ViewVersion }
+
+// viewBytes builds the canonical signing scope of one RPC, in the view of
+// version (which composes), and returns its JCS bytes. Sign and Verify both go
+// through this single helper so the signed and reconstructed bytes are
+// identical by construction.
 //
 // The composition is {signerDID, aud, op, v, nonce, issuedAt, fields}:
 // signerDID is bound into the signed bytes (a shared-key DID alias therefore
@@ -32,7 +38,7 @@ const ViewVersion = 2
 // calling here). fields is validated against the value grammar
 // (ErrInvalidView) so no canonical bytes are ever produced over a payload a peer
 // implementation might canonicalize differently.
-func viewBytes(signerDID, audience, op, nonce string, issuedAt time.Time, fields map[string]any) ([]byte, error) {
+func viewBytes(version int, signerDID, audience, op, nonce string, issuedAt time.Time, fields map[string]any) ([]byte, error) {
 	if err := validateFields(fields); err != nil {
 		return nil, err
 	}
@@ -40,7 +46,7 @@ func viewBytes(signerDID, audience, op, nonce string, issuedAt time.Time, fields
 		"signerDID": signerDID,
 		"aud":       audience,
 		"op":        op,
-		"v":         ViewVersion,
+		"v":         version,
 		"nonce":     nonce,
 		"issuedAt":  issuedAt.UTC().Format(time.RFC3339),
 		"fields":    fields,

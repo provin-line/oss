@@ -87,10 +87,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
   that runs them on pull requests that change them (`formal.yml`).
-- Optional pipeline config keys `vc-store-registry` and, beside a loop's
+- Optional pipeline config keys `node-registry` (the registry of the
+  pipeline's own node, at `vc-store-endpoint`) and, beside a loop's
   `upstream-endpoint`, `upstream-registry`: the registry ID of the node at
   that endpoint, where it is not the one derived from the configuration's
   DIDs (`docs/architecture/deployment.md`, "Wire proof audience").
+- `wireauth.AudienceForDID`: the audience of the node that serves a DID,
+  the one place a sender derives an audience from a DID.
+- `wireauth.Error`, the type of `wireauth`'s sentinel errors, as in `did`
+  and `vc`.
+- `payloadresolver/client.ErrUnknownUpstream`: `ResolvePayload` refuses
+  with it an upstream endpoint to which `Config.UpstreamAudiences` gives no
+  audience, before anything is sent.
 - `verification/vectors`: third-party standard vectors through the product's
   own code — Wycheproof (Ed25519, ECDSA P-256, RSA PKCS #1 v1.5) through
   `crypto/{ed25519,es256,rs256}`, RFC 8785 through `canon/jcs`, and the
@@ -164,7 +172,7 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `did/dplaax`: `Parse` refuses a DID whose registry segment is longer than
   `MaxRegistryLen` (253) octets, the longest DNS name (dplaax
   `did.dplaax.syntax`). The registry server's `provin.network.registry.id`,
-  the pipeline's `vc-store-registry` and `upstream-registry`, and the chain's
+  the pipeline's `node-registry` and `upstream-registry`, and the chain's
   `registry-base-urls` keys are refused at boot past that bound, and so is an
   allowlist pattern's literal registry, each through
   `dplaax.ValidateRegistry` (the configuration loaders' refusals carry its
@@ -226,33 +234,55 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `ValidateChainFrom` and `VerifySourceCommitment` refuse one that does not;
   `ValidateWireForm`'s documentation lists the form. `eddsa-jcs-2022`
   credentials are not affected.
+- `wireauth`: a `NonceStore` refuses, with `ErrExpired`, a nonce that
+  reaches it after its proof's expiry, and the memory store keeps a nonce
+  until that expiry.
 
 ### Breaking changes
 
 - **Wire:** the L2 signed view is version 2,
   `{signerDID, aud, op, v, nonce, issuedAt, fields}`, and `AuthProof` gains
-  field 5, `audience`. A node accepts no version 1 proof, and a node not yet
-  upgraded refuses a version 2 proof: upgrade every network node and pipeline
-  that talk to each other in one window (`docs/architecture/deployment.md`,
-  "Upgrading to view version 2"). One network process serves a registry's L2
-  surfaces.
+  field 5, `audience`, and field 6, `view_version`, the version of the view
+  it was signed over. A node refuses a proof of a view version it does not
+  accept, or of none, before it resolves the signer, and accepts no version
+  1 proof; a node not yet upgraded refuses a version 2 proof: upgrade every
+  network node and pipeline that talk to each other in one window
+  (`docs/architecture/deployment.md`, "Upgrading to view version 2"). One
+  network process serves a registry's L2 surfaces.
 - **Configuration:** a pipeline whose configuration names one
   `upstream-endpoint` for two registries (the loops at that endpoint derive,
   or override with `upstream-registry`, different audiences) does not start:
   one endpoint is one node (`docs/architecture/deployment.md`, "Wire proof
-  audience").
+  audience"). Nor does a pipeline that signs its own node's proofs as DIDs
+  of two registries (its node DID, a producing loop's output subject or
+  issuer, a sink's receipt issuer) without `node-registry`: it decides one
+  audience for its node at start, and that node accepts one.
 - **Go API:** `wireauth` moves from
   `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
   the RPCs of several services carry its proof, not the chain manager's
   alone. Its identifiers move unchanged.
-- **Go API:** `wireauth.Sign` takes the audience after the signer DID;
-  `wireauth.Proof` has `Audience`; `wireauth.VerifierConfig.Audience` is
-  required; the new sentinel `wireauth.ErrWrongAudience` maps to
-  `Unauthenticated`. The report, audit, mirror and payload-store clients'
-  `Config` take `Audience` (`StoreAudience` for the payload store), the
-  payload client's `ResolvePayload` takes the upstream's audience, and
-  `chainmanager.PeerClient`'s methods take the audience after the endpoint.
-  `evidence.Record` has `Audience`.
+- **Go API:** `wireauth.Sign` is `Sign(signer, op, fields, Claims)`, the
+  view's signer DID, audience, nonce and issued-at in `wireauth.Claims`;
+  `wireauth.Proof` has `Audience` and `ViewVersion`;
+  `wireauth.VerifierConfig.Audience` is required, and
+  `AcceptedViewVersions` (default the current version; version 1 is
+  refused) is new; the new sentinels `wireauth.ErrWrongAudience` and
+  `wireauth.ErrViewVersion` map to `Unauthenticated`.
+  `wireauth.NonceStore.Use` takes the request's context and the nonce's
+  expiry: `Use(ctx, signerDID, nonce, expiresAt)`; a store takes no nonce
+  after its expiry (`ErrExpired`), so it may forget one after it. The
+  report, audit, mirror and payload-store clients' `Config` take `Audience`
+  (`StoreAudience` for the payload store); the payload client's
+  `ResolvePayload` keeps its 0.4.0 form, and takes each upstream's audience
+  from `Config.UpstreamAudiences`, fetching from no endpoint without one
+  (`ErrUnknownUpstream`).
+  `chainmanager.PeerClient`'s methods, and `peerclient.Client`'s, take a
+  `chainmanager.Peer` (endpoint and audience) in place of the endpoint.
+  `evidence.Record` has `Audience`, and records the view version the proof
+  was verified under.
+- **Go API:** `wireauth`'s sentinel errors are constants of the new type
+  `wireauth.Error`, not variables, so no importer can reassign them. Their
+  messages are the same; compare an error with them by `errors.Is`.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
   only the members `vc` reads, under their names and in their forms; one with
   any other member is refused.

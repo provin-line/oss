@@ -183,10 +183,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("pipeline: %v", err)
 	}
-	deps, err := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID, upstream)
+	// The audience of every proof sent to this pipeline's own node, decided
+	// once: node-registry, else the registry every signer shares; signers of
+	// two registries without node-registry do not start.
+	ownAudience, err := ownNodeAudience(pipeCfg.NodeRegistry, ownNodeSigners(pipeCfg.Loops, nodeDID))
 	if err != nil {
-		log.Fatalf("pipeline: %v", err)
+		log.Fatalf("%v", err)
 	}
+	deps := buildDeps(pipeCfg, keyStore, guard, didResolver, nodeDID, ownAudience, upstream)
 
 	dp, err := pipelineruntime.Build(ctx, &rtCfg, keyStore, deps)
 	if err != nil {
@@ -209,7 +213,7 @@ func main() {
 
 	// Mirror shippers (D-T6): one per durable custody log, signed as that
 	// log's own checkpoint-signer identity.
-	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
+	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
 	if err != nil {
 		_ = dp.Close()
@@ -223,13 +227,9 @@ func main() {
 	// health (P1 fix, branch review — every report used to hardcode
 	// healthy=true regardless of the producer's actual state; see
 	// emitHealthReporterSpecsFor's doc).
-	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreRegistry, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
+	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
-	reporters, err := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
-	if err != nil {
-		_ = dp.Close()
-		log.Fatalf("pipeline: %v", err)
-	}
+	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
 
 	mountIngest := func(mux *http.ServeMux) error {
 		return mountPushRoutes(mux, dp.PushBindings(), verifier)

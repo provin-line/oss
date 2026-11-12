@@ -32,7 +32,7 @@ func TestDIDsRefusedForTheirFormAreNamedWithinTheLimit(t *testing.T) {
 	unparsable := owner + "!"
 	svc, _ := subSvc(&fakeInfra{}, defaultPeer(), publicGuard())
 	_, subscribeErr := svc.Subscribe(context.Background(), unparsable, pubPipeline, "inline")
-	_, _, targetErr := svc.resolveTarget(context.Background(), unparsable)
+	_, targetErr := svc.resolveTarget(context.Background(), unparsable)
 	named := map[string]string{
 		"an unparsable pipeline DID":   unparsable,
 		"a pipeline DID that is not":   owner,

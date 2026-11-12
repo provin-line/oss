@@ -13,6 +13,7 @@ import (
 
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
@@ -59,7 +60,7 @@ func New(svc Serving, v Verifier) *Handler {
 // serving boundary (which admits the caller against the payload's owner set and
 // reads the bytes only on admission), then streams the bytes in order.
 func (h *Handler) ResolvePayload(ctx context.Context, req *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return mapError(err)
 	}
@@ -101,7 +102,7 @@ func mapError(err error) error {
 	// Malformed request (issued_at codec + domain-level argument errors).
 	// Wireauth's own structural sentinels are handled by the wireautherr
 	// delegation below.
-	case errors.Is(err, errMalformedIssuedAt),
+	case errors.Is(err, authproof.ErrMalformedIssuedAt),
 		errors.Is(err, payloadresolver.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-resolution: CodeCanceled, not a server-side

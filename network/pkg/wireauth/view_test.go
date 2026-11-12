@@ -16,7 +16,7 @@ func fixedTime() time.Time { return time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC
 const viewAudience = "verifier.example"
 
 func TestViewBytesV2Composition(t *testing.T) {
-	got, err := viewBytes("did:dplaax:a.example:org:o1:pipeline:p1", "b.example", "Op", "n1",
+	got, err := viewBytes(ViewVersion, "did:dplaax:a.example:org:o1:pipeline:p1", "b.example", "Op", "n1",
 		time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), map[string]any{"k": "v"})
 	if err != nil {
 		t.Fatalf("viewBytes: %v", err)
@@ -29,8 +29,8 @@ func TestViewBytesV2Composition(t *testing.T) {
 
 func TestViewBytes_BindsAudience(t *testing.T) {
 	fields := map[string]any{"actor": "did:dplaax:poc:org:acme"}
-	a, _ := viewBytes("did:dplaax:poc:org:sub", "a.example", "Op", "n1", fixedTime(), fields)
-	b, _ := viewBytes("did:dplaax:poc:org:sub", "b.example", "Op", "n1", fixedTime(), fields)
+	a, _ := viewBytes(ViewVersion, "did:dplaax:poc:org:sub", "a.example", "Op", "n1", fixedTime(), fields)
+	b, _ := viewBytes(ViewVersion, "did:dplaax:poc:org:sub", "b.example", "Op", "n1", fixedTime(), fields)
 	if bytes.Equal(a, b) {
 		t.Error("viewBytes does not bind the audience: distinct audiences produced identical bytes")
 	}
@@ -38,11 +38,11 @@ func TestViewBytes_BindsAudience(t *testing.T) {
 
 func TestViewBytes_Deterministic(t *testing.T) {
 	fields := map[string]any{"actor": "did:dplaax:poc:org:acme", "mode": "by-reference"}
-	a, err := viewBytes("did:dplaax:poc:org:sub", viewAudience, "RegisterSubscription", "n1", fixedTime(), fields)
+	a, err := viewBytes(ViewVersion, "did:dplaax:poc:org:sub", viewAudience, "RegisterSubscription", "n1", fixedTime(), fields)
 	if err != nil {
 		t.Fatalf("viewBytes: %v", err)
 	}
-	b, err := viewBytes("did:dplaax:poc:org:sub", viewAudience, "RegisterSubscription", "n1", fixedTime(), fields)
+	b, err := viewBytes(ViewVersion, "did:dplaax:poc:org:sub", viewAudience, "RegisterSubscription", "n1", fixedTime(), fields)
 	if err != nil {
 		t.Fatalf("viewBytes (2nd): %v", err)
 	}
@@ -53,8 +53,8 @@ func TestViewBytes_Deterministic(t *testing.T) {
 
 func TestViewBytes_BindsSignerDID(t *testing.T) {
 	fields := map[string]any{"actor": "did:dplaax:poc:org:acme"}
-	a, _ := viewBytes("did:dplaax:poc:org:sub-A", viewAudience, "Op", "n1", fixedTime(), fields)
-	b, _ := viewBytes("did:dplaax:poc:org:sub-B", viewAudience, "Op", "n1", fixedTime(), fields)
+	a, _ := viewBytes(ViewVersion, "did:dplaax:poc:org:sub-A", viewAudience, "Op", "n1", fixedTime(), fields)
+	b, _ := viewBytes(ViewVersion, "did:dplaax:poc:org:sub-B", viewAudience, "Op", "n1", fixedTime(), fields)
 	if bytes.Equal(a, b) {
 		t.Error("viewBytes does not bind signerDID: distinct signers produced identical bytes")
 	}
@@ -75,7 +75,7 @@ func TestViewBytes_RejectsBadFields(t *testing.T) {
 	}
 	for name, fields := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := viewBytes("did:x", viewAudience, "Op", "n1", fixedTime(), fields); !errors.Is(err, ErrInvalidView) {
+			if _, err := viewBytes(ViewVersion, "did:x", viewAudience, "Op", "n1", fixedTime(), fields); !errors.Is(err, ErrInvalidView) {
 				t.Errorf("%s: want ErrInvalidView, got %v", name, err)
 			}
 		})
@@ -90,7 +90,7 @@ func TestViewBytes_AllowsScalarGrammar(t *testing.T) {
 		"nested": map[string]any{"inner": "v", "flag": false},
 		"arr":    []any{"a", "b", nil, true},
 	}
-	if _, err := viewBytes("did:x", viewAudience, "Op", "n1", fixedTime(), fields); err != nil {
+	if _, err := viewBytes(ViewVersion, "did:x", viewAudience, "Op", "n1", fixedTime(), fields); err != nil {
 		t.Errorf("scalar grammar rejected: %v", err)
 	}
 }
@@ -112,14 +112,14 @@ func TestSign_SignsViewBytesWithAuthKey(t *testing.T) {
 	cs := &capturingSigner{}
 	signerDID := "did:dplaax:poc:org:sub"
 	fields := map[string]any{"actor": "did:dplaax:poc:org:acme"}
-	proof, err := Sign(cs, signerDID, viewAudience, "RegisterSubscription", fields, "nonce-1", fixedTime())
+	proof, err := Sign(cs, "RegisterSubscription", fields, Claims{SignerDID: signerDID, Audience: viewAudience, Nonce: "nonce-1", IssuedAt: fixedTime()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 	if cs.keyID != "auth" {
 		t.Errorf("signed with keyID %q, want \"auth\"", cs.keyID)
 	}
-	want, _ := viewBytes(signerDID, viewAudience, "RegisterSubscription", "nonce-1", fixedTime(), fields)
+	want, _ := viewBytes(ViewVersion, signerDID, viewAudience, "RegisterSubscription", "nonce-1", fixedTime(), fields)
 	if !bytes.Equal(cs.data, want) {
 		t.Errorf("Sign signed unexpected bytes:\n got=%s\nwant=%s", cs.data, want)
 	}
@@ -134,7 +134,7 @@ func TestSign_SignsViewBytesWithAuthKey(t *testing.T) {
 func TestSign_TruncatesSubSecondIssuedAt(t *testing.T) {
 	cs := &capturingSigner{}
 	sub := time.Date(2026, 6, 16, 12, 0, 0, 500_000_000, time.UTC) // .5s
-	proof, err := Sign(cs, "did:x", viewAudience, "Op", map[string]any{"a": "b"}, "n1", sub)
+	proof, err := Sign(cs, "Op", map[string]any{"a": "b"}, Claims{SignerDID: "did:x", Audience: viewAudience, Nonce: "n1", IssuedAt: sub})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestSign_TruncatesSubSecondIssuedAt(t *testing.T) {
 	}
 	// The signed bytes must use the truncated second, matching what a verifier
 	// (which rejects sub-second input) will rebuild.
-	want, _ := viewBytes("did:x", viewAudience, "Op", "n1", fixedTime(), map[string]any{"a": "b"})
+	want, _ := viewBytes(ViewVersion, "did:x", viewAudience, "Op", "n1", fixedTime(), map[string]any{"a": "b"})
 	if !bytes.Equal(cs.data, want) {
 		t.Errorf("Sign did not sign the truncated-second view:\n got=%s\nwant=%s", cs.data, want)
 	}
@@ -160,7 +160,7 @@ func TestSign_RejectsEmptyParts(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Sign(cs, c.did, c.audience, c.op, fields, c.nonce, fixedTime()); err == nil {
+			if _, err := Sign(cs, c.op, fields, Claims{SignerDID: c.did, Audience: c.audience, Nonce: c.nonce, IssuedAt: fixedTime()}); err == nil {
 				t.Errorf("%s: want error, got nil", name)
 			}
 		})
@@ -172,7 +172,7 @@ func TestSign_RejectsEmptyParts(t *testing.T) {
 func TestSign_RejectsOversizedNonce(t *testing.T) {
 	cs := &capturingSigner{}
 	oversized := string(make([]byte, maxNonceLen+1))
-	if _, err := Sign(cs, "did:x", viewAudience, "Op", map[string]any{"a": "b"}, oversized, fixedTime()); !errors.Is(err, ErrMalformedProof) {
+	if _, err := Sign(cs, "Op", map[string]any{"a": "b"}, Claims{SignerDID: "did:x", Audience: viewAudience, Nonce: oversized, IssuedAt: fixedTime()}); !errors.Is(err, ErrMalformedProof) {
 		t.Errorf("oversized nonce: want ErrMalformedProof, got %v", err)
 	}
 }

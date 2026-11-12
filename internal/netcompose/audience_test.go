@@ -41,7 +41,7 @@ func audienceProbe(t *testing.T, client chainpbconnect.ChainPeerServiceClient, a
 		t.Fatal(err)
 	}
 	fields := map[string]any{"publisher_did": ownerDID + ":pipeline:p1"}
-	p, err := wireauth.Sign(ks, signerDID, audience, "GetPublisherInfo", fields, nonce, time.Now())
+	p, err := wireauth.Sign(ks, "GetPublisherInfo", fields, wireauth.Claims{SignerDID: signerDID, Audience: audience, Nonce: nonce, IssuedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -49,6 +49,7 @@ func audienceProbe(t *testing.T, client chainpbconnect.ChainPeerServiceClient, a
 		AuthProof: &chainpb.AuthProof{
 			SignerDid: p.SignerDID, Audience: p.Audience, Nonce: p.Nonce,
 			IssuedAt: p.IssuedAt.UTC().Format(time.RFC3339), Signature: p.Signature,
+			ViewVersion: uint32(p.ViewVersion),
 		},
 		PublisherDid: ownerDID + ":pipeline:p1",
 	}))

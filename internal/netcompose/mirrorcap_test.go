@@ -75,7 +75,7 @@ func assembledHandlerWithMirror(t *testing.T, maxCredentialSize, maxBatchRecords
 // default, 4 MiB) but well over max-credential-size (the repo's shipped
 // default, 1 MiB) — through the real assembled mux. The request carries NO
 // AuthProof, so IF it reaches the RPC handler at all, the deterministic
-// outcome is CodeInvalidArgument (decodeProof's missing-proof case) — a code
+// outcome is CodeInvalidArgument (authproof.Decode's missing-proof case) — a code
 // connect's own read-cap enforcement can NEVER return (that path always
 // returns CodeResourceExhausted, "message size N is larger than configured
 // max M", before the message is ever decoded far enough to see a missing

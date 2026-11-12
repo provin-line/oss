@@ -54,25 +54,25 @@ func TestFields_RefusedPastTheBoundAtTheGate(t *testing.T) {
 	v := testVerifier(t, resolver)
 	for _, depth := range []int{jsondepth.Max - 1, jsondepth.Max, 1000000} {
 		fields := map[string]any{"k": deep(depth)}
-		_, err := wireauth.Sign(signer, subDID, testAudience, "Op", fields, "n1", at())
+		_, err := wireauth.Sign(signer, "Op", fields, wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 		if !errors.Is(err, wireauth.ErrInvalidView) || !strings.Contains(err.Error(), "nested deeper than") || len(err.Error()) > 1024 {
 			t.Errorf("Sign, fields %d deep: %.200v (%d bytes), want ErrInvalidView for the nesting within 1 KiB", depth+1, err, len(fmt.Sprint(err)))
 		}
 		resolver.calls = 0
-		if err := v.Verify(context.Background(), "Op", fields, wireauth.Proof{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at(), Signature: []byte("x")}, nil); !errors.Is(err, wireauth.ErrInvalidView) || resolver.calls != 0 {
+		if err := v.Verify(context.Background(), "Op", fields, wireauth.Proof{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at(), Signature: []byte("x"), ViewVersion: wireauth.ViewVersion}, nil); !errors.Is(err, wireauth.ErrInvalidView) || resolver.calls != 0 {
 			t.Errorf("Verify, fields %d deep: %.200v, %d resolutions, want ErrInvalidView before resolving", depth+1, err, resolver.calls)
 		}
 	}
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	_, _ = wireauth.Sign(signer, subDID, testAudience, "Op", map[string]any{"k": deep(jsondepth.Max)}, "n1", at())
+	_, _ = wireauth.Sign(signer, "Op", map[string]any{"k": deep(jsondepth.Max)}, wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n1", IssuedAt: at()})
 	runtime.ReadMemStats(&after)
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
 		t.Errorf("refusing fields past the bound allocated %d bytes", allocated)
 	}
 	fields := map[string]any{"k": deep(jsondepth.Max - 2)}
-	proof, err := wireauth.Sign(signer, subDID, testAudience, "Op", fields, "n3", at())
+	proof, err := wireauth.Sign(signer, "Op", fields, wireauth.Claims{SignerDID: subDID, Audience: testAudience, Nonce: "n3", IssuedAt: at()})
 	if err != nil {
 		t.Fatalf("Sign, fields %d deep: %v", jsondepth.Max-1, err)
 	}

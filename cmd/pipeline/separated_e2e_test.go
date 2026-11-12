@@ -723,10 +723,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("pipelineRuntimeConfigFrom(%s): %v", dataDirName, rerr)
 		}
-		deps, err := buildDeps(pipeCfg, ks, guard, localResolver, nodeDID, mustUpstreamAudiences(t, pipeCfg))
-		if err != nil {
-			t.Fatal(err)
-		}
+		deps := buildDeps(pipeCfg, ks, guard, localResolver, nodeDID, mustOwnNodeAudience(t, pipeCfg, nodeDID), mustUpstreamAudiences(t, pipeCfg))
 		dp, berr := pipelineruntime.Build(context.Background(), &rtCfg, ks, deps)
 		if berr != nil {
 			t.Fatalf("pipelineruntime.Build(%s): %v", dataDirName, berr)
@@ -861,7 +858,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 			t.Fatalf("custody logs matched = %d, want 3 (src1 emission + archive receipt + agg emission); all custody logs: %+v", len(wanted), dp.CustodyLogs())
 		}
 
-		mirrorFactory := newMirrorClientFactory(ks, reg.url, "", sepBearer, guard.HTTPClient())
+		mirrorFactory := newMirrorClientFactory(ks, reg.url, mustOwnNodeAudience(t, pipeCfg, sepSrc1Pipeline), sepBearer, guard.HTTPClient())
 		shippers, err := buildShippers(wanted, mirrorFactory.forClient, pipeCfg.TlogMirror)
 		if err != nil {
 			t.Fatalf("buildShippers: %v", err)
@@ -1021,16 +1018,13 @@ func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 
 	guard := core.NewURLGuard(core.WithAllowLoopback(true))
 	// No consuming loop in this pipeline, so no resolver is needed at all.
-	deps, err := buildDeps(pipeCfg, ks, guard, nil, sepShutSrcPipeline, mustUpstreamAudiences(t, pipeCfg))
-	if err != nil {
-		t.Fatal(err)
-	}
+	deps := buildDeps(pipeCfg, ks, guard, nil, sepShutSrcPipeline, mustOwnNodeAudience(t, pipeCfg, sepShutSrcPipeline), mustUpstreamAudiences(t, pipeCfg))
 	dp, err := pipelineruntime.Build(context.Background(), &rtCfg, ks, deps)
 	if err != nil {
 		t.Fatalf("pipelineruntime.Build: %v", err)
 	}
 
-	mirrorFactory := newMirrorClientFactory(ks, reg.url, "", sepBearer, guard.HTTPClient())
+	mirrorFactory := newMirrorClientFactory(ks, reg.url, mustOwnNodeAudience(t, pipeCfg, sepShutSrcPipeline), sepBearer, guard.HTTPClient())
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
 	if err != nil {
 		t.Fatalf("buildShippers: %v", err)

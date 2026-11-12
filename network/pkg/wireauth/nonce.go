@@ -1,6 +1,8 @@
 package wireauth
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -10,20 +12,26 @@ import (
 // returns ErrReplay if that pair was already present. Keying per signer is
 // deliberate (D-w10) — a nonce is meaningful relative to its signer, so two
 // distinct signers reusing the same nonce must not collide.
+//
+// expiresAt is when the proof that spends the nonce stops being acceptable.
+// A store takes no pair after its expiry: Use then returns ErrExpired and
+// records nothing, decided together with the check-and-set, by the store's
+// own clock. That is what lets a store forget a pair after its expiry.
+// ctx is the request's, for a store that does I/O. Any error other than ErrReplay and ErrExpired is the store's own
+// failure; the verifier refuses the proof with it, as it cannot tell whether
+// the nonce was spent.
 type NonceStore interface {
-	Use(signerDID, nonce string) error
+	Use(ctx context.Context, signerDID, nonce string, expiresAt time.Time) error
 }
 
 // NonceOption configures a memory NonceStore at construction.
 type NonceOption func(*memNonceStore)
 
-// WithNonceRetention sets how long a recorded nonce is kept before it is
-// eligible for eviction. It MUST be at least the verifier's acceptance-window
-// reach (MaxPast + MaxFuture): a proof can be presented until issuedAt+MaxPast,
-// and issuedAt may be as late as now+MaxFuture, so an entry younger than the
-// window could still be replayed and must be retained. The default is
-// DefaultAcceptanceWindow().NonceRetention(); a deployment using a custom
-// window must pass the matching retention here so the two cannot drift.
+// WithNonceRetention sets the least time a recorded nonce is kept after its
+// insertion, and how often the store sweeps (at most once per retention). A
+// nonce is kept until its expiry whatever the retention, and the store takes
+// no nonce after its expiry, so the retention bounds memory, not safety. The
+// default is DefaultAcceptanceWindow().NonceRetention().
 func WithNonceRetention(d time.Duration) NonceOption {
 	return func(s *memNonceStore) {
 		if d > 0 {
@@ -46,14 +54,15 @@ func WithNonceClock(now func() time.Time) NonceOption {
 // replay window that opens). A persistent store is a documented follow-up.
 //
 // It self-prunes so it cannot grow without bound within a single run: each
-// recorded nonce carries its insertion time, and entries older than retention
-// (past which the acceptance window can never re-admit a proof) are swept.
-// The sweep is global (all signers) and throttled to at most once per
-// retention interval, so a flood of unique nonces from many signers is
-// amortized O(1) per Use rather than an O(n) scan on every call.
+// recorded nonce carries the time until which it is kept, the later of its
+// insertion plus retention and its expiresAt, and entries past that are
+// swept. The
+// sweep is global (all signers) and throttled to at most once per retention
+// interval, so a flood of unique nonces from many signers is amortized O(1)
+// per Use rather than an O(n) scan on every call.
 type memNonceStore struct {
 	mu   sync.Mutex
-	seen map[string]map[string]time.Time // signerDID -> nonce -> inserted-at
+	seen map[string]map[string]time.Time // signerDID -> nonce -> kept until
 
 	retention time.Duration
 	now       func() time.Time
@@ -75,11 +84,15 @@ func NewMemoryNonceStore(opts ...NonceOption) NonceStore {
 	return s
 }
 
-func (s *memNonceStore) Use(signerDID, nonce string) error {
+// Use ignores ctx: the memory store does no I/O.
+func (s *memNonceStore) Use(_ context.Context, signerDID, nonce string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := s.now()
+	if now.After(expiresAt) {
+		return fmt.Errorf("%w: its nonce reached the store after the proof's expiry %s", ErrExpired, expiresAt.UTC().Format(time.RFC3339))
+	}
 	s.sweepLocked(now)
 
 	bySigner := s.seen[signerDID]
@@ -90,24 +103,27 @@ func (s *memNonceStore) Use(signerDID, nonce string) error {
 	if _, ok := bySigner[nonce]; ok {
 		return ErrReplay
 	}
-	bySigner[nonce] = now
+	keep := now.Add(s.retention)
+	if expiresAt.After(keep) {
+		keep = expiresAt
+	}
+	bySigner[nonce] = keep
 	return nil
 }
 
-// sweepLocked removes entries whose age STRICTLY exceeds retention and drops any
-// signer bucket left empty. It runs at most once per retention interval (a proof
-// cannot survive a full retention anyway), keeping Use amortized cheap. Strict
-// ">" mirrors the verifier's strict window comparison: an entry at exactly
-// age==retention is still within reach and must be kept.
+// sweepLocked removes entries STRICTLY past the time they are kept until and
+// drops any signer bucket left empty. It runs at most once per retention
+// interval, keeping Use amortized cheap. Strict ">" mirrors the verifier's
+// strict window comparison: an entry at exactly its keep time is still within
+// reach and must be kept.
 func (s *memNonceStore) sweepLocked(now time.Time) {
 	if !s.lastSweep.IsZero() && now.Sub(s.lastSweep) < s.retention {
 		return
 	}
 	s.lastSweep = now
-	cutoff := now.Add(-s.retention)
 	for signer, byNonce := range s.seen {
-		for nonce, inserted := range byNonce {
-			if inserted.Before(cutoff) { // age > retention (strict)
+		for nonce, keep := range byNonce {
+			if now.After(keep) {
 				delete(byNonce, nonce)
 			}
 		}

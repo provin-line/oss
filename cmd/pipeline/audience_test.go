@@ -21,78 +21,71 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
-	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
-	"github.com/provin-line/oss/pipeline/transport/tlogship"
 	"github.com/provin-line/oss/tlog"
 )
 
-// must is c, failing the test with err.
-func must[T any](c T, err error) func(testing.TB) T {
-	return func(t testing.TB) T {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
+// The audience of the pipeline's own node is node-registry when it is set,
+// whatever the signers' registries.
+func TestOwnNodeAudience_NodeRegistryWins(t *testing.T) {
+	got, err := ownNodeAudience("node.example", []string{"did:dplaax:a.example:org:o1", "did:dplaax:b.example:org:o1:pipeline:p1"})
+	if err != nil || got != "node.example" {
+		t.Errorf("own-node audience with node-registry = %q, %v, want node.example", got, err)
 	}
 }
 
-func TestOwnNodeAudienceDerivedFromSigner(t *testing.T) {
-	if got, err := ownNodeAudience("", "did:dplaax:home.example:org:o1:pipeline:p1:process:s1"); err != nil || got != "home.example" {
-		t.Errorf("derived audience = %q, %v, want home.example", got, err)
+// Without node-registry it is the registry every signer shares.
+func TestOwnNodeAudience_TheRegistryOfEverySigner(t *testing.T) {
+	got, err := ownNodeAudience("", []string{"did:dplaax:home.example:org:o1", "did:dplaax:home.example:org:o1:pipeline:p1:process:s1"})
+	if err != nil || got != "home.example" {
+		t.Errorf("own-node audience = %q, %v, want home.example", got, err)
+	}
+	if got, err := ownNodeAudience("", nil); err != nil || got != "" {
+		t.Errorf("no signer = %q, %v, want none: the pipeline sends its node no proof", got, err)
 	}
 }
 
-// A signer DID that does not parse has no node to derive an audience from;
-// the error names it and the reason Parse gives, within a bound however long
-// it is.
+// Signers of two registries, without node-registry, are an error naming both
+// and node-registry: the node accepts proofs for one audience only.
+func TestOwnNodeAudience_SignersOfTwoRegistriesAreAnError(t *testing.T) {
+	_, err := ownNodeAudience("", []string{"did:dplaax:a.example:org:o1", "did:dplaax:a.example:org:o1:pipeline:p1", "did:dplaax:b.example:org:o2:pipeline:p2"})
+	if err == nil || !strings.Contains(err.Error(), "a.example") || !strings.Contains(err.Error(), "b.example") || !strings.Contains(err.Error(), "node-registry") {
+		t.Errorf("signers of two registries: %v, want an error naming both and node-registry", err)
+	}
+}
+
+// A signer DID that does not parse has no registry; the error names it within
+// a bound, with the parser's reason.
 func TestOwnNodeAudienceOfAnUnparsableSignerIsAnError(t *testing.T) {
-	if got, err := ownNodeAudience("", "not a did"); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
-		t.Errorf("audience for an unparsable signer = %q, %v, want an error naming it", got, err)
+	if _, err := ownNodeAudience("", []string{"not a did"}); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
+		t.Errorf("an unparsable signer: %v, want an error naming it", err)
 	}
-	if _, err := ownNodeAudience("", "did:dplaax:home.example:org:o/1:pipeline:p1"); err == nil || !strings.Contains(err.Error(), "violates the safe-segment rule") {
+	if _, err := ownNodeAudience("", []string{"did:dplaax:home.example:org:o/1:pipeline:p1"}); err == nil || !strings.Contains(err.Error(), "violates the safe-segment rule") {
 		t.Errorf("an unsafe segment: %v, want the reason Parse gives", err)
 	}
 	long := "did:dplaax:" + strings.Repeat("x", 5000)
-	if _, err := ownNodeAudience("", long); err == nil || len(err.Error()) > 400 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+	if _, err := ownNodeAudience("", []string{long}); err == nil || len(err.Error()) > 400 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
 		t.Errorf("a long unparsable signer: %v, want an error naming its head and length", err)
 	}
 }
 
-// Each client factory refuses a signer DID that does not parse, rather than
-// building a client that fails at its first call for want of an audience.
-func TestClientFactoriesRefuseAnUnparsableSigner(t *testing.T) {
-	for name, forDID := range map[string]func(string) error{
-		"audit": func(d string) error {
-			_, err := newAuditClientFactory(nil, "http://node.example", "", "", nil).For(d)
-			return err
-		},
-		"mirror": func(d string) error {
-			_, err := newMirrorClientFactory(nil, "http://node.example", "", "", nil).For(d)
-			return err
-		},
-		"report": func(d string) error {
-			_, err := newReportClientFactory(nil, "http://node.example", "", "", nil).For(d)
-			return err
-		},
-		"payload": func(d string) error {
-			_, err := newPayloadClientFactory(nil, "http://node.example", "", "", nil, 0).For(d)
-			return err
-		},
-	} {
-		if err := forDID("not a did"); err == nil || !strings.Contains(err.Error(), `"not a did"`) {
-			t.Errorf("%s: %v, want an error naming the signer", name, err)
-		}
-		if err := forDID("did:dplaax:home.example:org:o1:pipeline:p1"); err != nil {
-			t.Errorf("%s: a parsable signer: %v", name, err)
-		}
+// The pipeline signs its own node's proofs as the node DID, as each producing
+// loop's output subject and issuer, and as each sink's receipt issuer.
+func TestOwnNodeSigners(t *testing.T) {
+	loops := []pipelineconfig.LoopConfig{
+		{Role: pipelineconfig.RoleSource, Source: pipelineconfig.SourceConfig{OutputSubject: "src-subject", Issuer: pipelineconfig.IssuerConfig{DID: "src-issuer"}}},
+		{Role: pipelineconfig.RoleChained, Chained: pipelineconfig.ChainedConfig{OutputSubject: "chained-subject", Issuer: pipelineconfig.IssuerConfig{DID: "chained-issuer"}}},
+		{Role: pipelineconfig.RoleAggregate, Aggregate: pipelineconfig.AggregateConfig{OutputSubject: "agg-subject", Issuer: pipelineconfig.IssuerConfig{DID: "agg-issuer"}}},
+		{Role: pipelineconfig.RoleSink, Sink: pipelineconfig.SinkConfig{Receipt: pipelineconfig.SinkReceiptConfig{Issue: true, Issuer: pipelineconfig.IssuerConfig{DID: "receipt-issuer"}}}},
+		{Role: pipelineconfig.RoleSink},
+	}
+	got := ownNodeSigners(loops, "node-did")
+	want := []string{"node-did", "src-subject", "src-issuer", "chained-subject", "chained-issuer", "agg-subject", "agg-issuer", "receipt-issuer"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("ownNodeSigners = %q, want %q", got, want)
 	}
 }
 
-func TestOverrideWinsOverDerivedAudience(t *testing.T) {
-	if got, err := ownNodeAudience("node.example", "did:dplaax:home.example:org:o1:pipeline:p1"); err != nil || got != "node.example" {
-		t.Errorf("own-node audience with an override = %q, %v, want node.example", got, err)
-	}
+func TestUpstreamAudienceOverride(t *testing.T) {
 	loops := []pipelineconfig.LoopConfig{{
 		Role: pipelineconfig.RoleSink, IngressSubject: "did:dplaax:up.example:org:o2:pipeline:p2",
 		Sink: pipelineconfig.SinkConfig{UpstreamEndpoint: "https://up.example/p", PayloadDelivery: "by-reference", UpstreamRegistry: "node.example"},
@@ -179,8 +172,8 @@ func TestResolvePayloadUnknownEndpointFailsClosed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	ks := newAuthKeyStore(t, wireNodeDID)
-	factory := newPayloadClientFactory(ks, "", "", "", srv.Client(), 0)
-	r := wireRetryingPayloadResolver{client: must(factory.For(wireNodeDID))(t), audiences: map[string]string{"https://configured.example": "configured.example"}}
+	factory := newPayloadClientFactory(ks, "", "", "", srv.Client(), 0, map[string]string{"https://configured.example": "configured.example"})
+	r := wireRetryingPayloadResolver{client: factory.For(wireNodeDID)}
 	if _, err := r.ResolvePayload(context.Background(), srv.URL, "sha256:00"); err == nil {
 		t.Fatal("an endpoint no by-reference ingress configures was fetched")
 	}
@@ -200,29 +193,22 @@ func (c *reportCapture) ReportEmitHealth(_ context.Context, req *connect.Request
 	return connect.NewResponse(&chainpb.ReportEmitHealthResponse{}), nil
 }
 
-// The own-node clients the factories build sign for the derived audience, or
-// for the override when one is configured.
+// The own-node clients a factory builds sign for the audience it was given,
+// whatever their signer's registry.
 func TestFactoriesSignForTheOwnNodeAudience(t *testing.T) {
 	const publisher = "did:dplaax:home.example:org:o1:pipeline:p1"
-	for name, c := range map[string]struct{ override, want string }{
-		"derived":  {"", "home.example"},
-		"override": {"node.example", "node.example"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			capture := &reportCapture{}
-			path, h := chainpbconnect.NewChainServiceHandler(capture)
-			mux := http.NewServeMux()
-			mux.Handle(path, h)
-			srv := httptest.NewServer(mux)
-			t.Cleanup(srv.Close)
-			f := newReportClientFactory(newAuthKeyStore(t, publisher), srv.URL, c.override, "", srv.Client())
-			if _, err := must(f.For(publisher))(t).ReportEmitHealth(context.Background(), publisher, true); err != nil && !errors.Is(err, context.Canceled) {
-				t.Fatalf("ReportEmitHealth: %v", err)
-			}
-			if capture.audience != c.want {
-				t.Errorf("proof audience = %q, want %q", capture.audience, c.want)
-			}
-		})
+	capture := &reportCapture{}
+	path, h := chainpbconnect.NewChainServiceHandler(capture)
+	mux := http.NewServeMux()
+	mux.Handle(path, h)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	f := newReportClientFactory(newAuthKeyStore(t, publisher), srv.URL, "node.example", "", srv.Client())
+	if _, err := f.For(publisher).ReportEmitHealth(context.Background(), publisher, true); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReportEmitHealth: %v", err)
+	}
+	if capture.audience != "node.example" {
+		t.Errorf("proof audience = %q, want node.example", capture.audience)
 	}
 }
 
@@ -232,6 +218,16 @@ func newAuthKeyStore(t *testing.T, did string) *ksfilestore.Store {
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, did)
 	return ks
+}
+
+// mustOwnNodeAudience is the audience main decides for c's own node.
+func mustOwnNodeAudience(t *testing.T, c *pipelineconfig.Config, nodeDID string) string {
+	t.Helper()
+	a, err := ownNodeAudience(c.NodeRegistry, ownNodeSigners(c.Loops, nodeDID))
+	if err != nil {
+		t.Fatalf("ownNodeAudience: %v", err)
+	}
+	return a
 }
 
 // mustUpstreamAudiences is upstreamAudiences for a test's config.
@@ -266,13 +262,13 @@ func (c *mirrorCapture) MirrorLogSegment(_ context.Context, req *connect.Request
 	return connect.NewResponse(&tlogpb.MirrorLogSegmentResponse{}), nil
 }
 
-// Every own-node factory signs for the derived audience, or for
-// vc-store-registry when it is set.
-func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
+// Every own-node factory signs for the audience main decided, whether the
+// signer's registry or node-registry.
+func TestOwnNodeFactoriesSignForTheDecidedAudience(t *testing.T) {
 	const signer = "did:dplaax:home.example:org:o1:pipeline:p1:process:s1"
-	cases := map[string]struct{ override, want string }{
-		"derived":  {"", "home.example"},
-		"override": {"node.example", "node.example"},
+	cases := map[string]struct{ audience, want string }{
+		"the signer's registry": {"home.example", "home.example"},
+		"node-registry":         {"node.example", "node.example"},
 	}
 	for name, c := range cases {
 		t.Run("audit/"+name, func(t *testing.T) {
@@ -282,8 +278,8 @@ func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
 			mux.Handle(path, h)
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
-			f := newAuditClientFactory(newAuthKeyStore(t, signer), srv.URL, c.override, "", srv.Client())
-			if err := must(f.For(signer))(t).RegisterAuditHead(context.Background(), addr("a")); err != nil {
+			f := newAuditClientFactory(newAuthKeyStore(t, signer), srv.URL, c.audience, "", srv.Client())
+			if err := f.For(signer).RegisterAuditHead(context.Background(), addr("a")); err != nil {
 				t.Fatalf("RegisterAuditHead: %v", err)
 			}
 			if capture.audience != c.want {
@@ -297,9 +293,9 @@ func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
 			mux.Handle(path, h)
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
-			f := newMirrorClientFactory(newAuthKeyStore(t, signer), srv.URL, c.override, "", srv.Client())
+			f := newMirrorClientFactory(newAuthKeyStore(t, signer), srv.URL, c.audience, "", srv.Client())
 			cp := &tlog.Checkpoint{Origin: "did:dplaax:home.example:org:o1:pipeline:p1", Size: 1, Head: addr("b"), Timestamp: time.Now()}
-			if _, err := must(f.For(signer))(t).MirrorLogSegment(context.Background(), cp.Origin, 0, [][]byte{[]byte("r")}, cp); err != nil {
+			if _, err := f.For(signer).MirrorLogSegment(context.Background(), cp.Origin, 0, [][]byte{[]byte("r")}, cp); err != nil {
 				t.Fatalf("MirrorLogSegment: %v", err)
 			}
 			if capture.audience != c.want {
@@ -308,18 +304,18 @@ func TestOwnNodeFactoriesHonorTheOverride(t *testing.T) {
 		})
 	}
 	// The payload store's harness verifies for registry "reg", its owners'
-	// registry: the derived audience goes through, and an override naming
-	// another registry is refused there.
+	// registry: that audience goes through, and one naming another registry
+	// is refused there.
 	t.Run("payload store", func(t *testing.T) {
 		h := newPayloadRetainHarness(t, payloadOwnerA)
-		derived := wirePayloadStore{factory: newPayloadClientFactory(h.ks, h.url, "", "", h.httpc, 0)}
-		if _, err := derived.Store(context.Background(), []byte("derived"), payloadOwnerA); err != nil {
-			t.Fatalf("Store with the derived audience: %v", err)
+		own := wirePayloadStore{factory: newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)}
+		if _, err := own.Store(context.Background(), []byte("own"), payloadOwnerA); err != nil {
+			t.Fatalf("Store with the node's audience: %v", err)
 		}
-		other := wirePayloadStore{factory: newPayloadClientFactory(h.ks, h.url, "other.example", "", h.httpc, 0)}
+		other := wirePayloadStore{factory: newPayloadClientFactory(h.ks, h.url, "other.example", "", h.httpc, 0, nil)}
 		_, err := other.Store(context.Background(), []byte("override"), payloadOwnerA)
 		if connect.CodeOf(err) != connect.CodeUnauthenticated || !strings.Contains(err.Error(), "other.example") {
-			t.Fatalf("Store with an override for another registry: %v, want Unauthenticated naming it", err)
+			t.Fatalf("Store with another registry's audience: %v, want Unauthenticated naming it", err)
 		}
 	})
 }
@@ -343,32 +339,5 @@ func TestUpstreamOverrideForChainedAndAggregate(t *testing.T) {
 	}
 	if got["https://b.example/p"] != "node-b.example" || got["https://c.example/p"] != "node-c.example" {
 		t.Errorf("audiences with overrides = %v, want node-b.example and node-c.example", got)
-	}
-}
-
-// A factory caches no client for a signer DID it refused: asked again, it
-// refuses again.
-func TestClientFactoriesCacheNothingOnARefusal(t *testing.T) {
-	f := newAuditClientFactory(nil, "http://node.example", "", "", nil)
-	for range 2 {
-		if _, err := f.For("not a did"); err == nil {
-			t.Fatal("an unparsable signer was taken")
-		}
-	}
-	if len(f.clients) != 0 {
-		t.Errorf("%d clients cached after refusals", len(f.clients))
-	}
-}
-
-// A seam's refusal stops the builders that call it.
-func TestBuildersPassOnTheirSeamsRefusal(t *testing.T) {
-	refused := errors.New("seam refused")
-	custody := []pipelineruntime.CustodyLog{{LogID: "l1", Signer: pipelineruntime.IssuerConfig{DID: "did:dplaax:reg:org:acme:pipeline:a:process:p1"}}}
-	if _, err := buildShippers(custody, func(string) (tlogship.MirrorClient, error) { return nil, refused }, pipelineconfig.TlogMirrorConfig{MaxBatchRecords: 1, MaxBatchBytes: 1 << 10, FlushInterval: time.Hour}); !errors.Is(err, refused) {
-		t.Errorf("buildShippers: %v, want the seam's refusal", err)
-	}
-	specs := []emitHealthReporterSpec{{OutputSubject: "did:dplaax:reg:org:acme:pipeline:a", Healthy: func() bool { return true }}}
-	if _, err := buildEmitHealthReporters(specs, func(string) (emitHealthReportClient, error) { return nil, refused }, time.Second); !errors.Is(err, refused) {
-		t.Errorf("buildEmitHealthReporters: %v, want the seam's refusal", err)
 	}
 }

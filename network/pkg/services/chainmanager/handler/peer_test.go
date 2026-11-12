@@ -16,6 +16,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/keystore"
 	keyfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
@@ -111,7 +112,7 @@ func (f *fakePeer) Disconnect(_ context.Context, _, _ string) error {
 const goodIssuedAt = "2026-06-17T12:00:00Z"
 
 func proofMsg(signer, issuedAt string) *chainpb.AuthProof {
-	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: issuedAt, Signature: []byte("sig")}
+	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: issuedAt, Signature: []byte("sig"), ViewVersion: wireauth.ViewVersion}
 }
 
 func TestPeerHandler_GetPublisherInfo_VerifyContract(t *testing.T) {
@@ -323,6 +324,26 @@ var pubForEvidence = func() []byte {
 	}
 	return kp.PublicKey
 }()
+
+// The evidence records the view version the proof was verified under, the
+// proof's own, whatever version the verifier accepted.
+func TestPeerHandler_RecordsTheVerifiedViewVersion(t *testing.T) {
+	signer := "did:dplaax:reg:org:sub"
+	v := &spyVerifier{runAuth: true, authDoc: authDoc(signer, pubForEvidence)}
+	rec := &spyRecorder{}
+	h := handler.NewPeerWithEvidence(&fakePeer{sub: &store.Subscription{ID: "s1"}}, v, rec)
+	ap := proofMsg(signer, goodIssuedAt)
+	ap.ViewVersion = 7
+	if _, err := h.RegisterSubscription(context.Background(), connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
+		AuthProof:     ap,
+		SubscriberDid: signer, PublisherDid: "did:dplaax:reg:org:acme:pipeline:p1", PayloadDelivery: "inline",
+	})); err != nil {
+		t.Fatalf("RegisterSubscription: %v", err)
+	}
+	if !rec.called || rec.gotRec.ViewVersion != 7 {
+		t.Errorf("recorded %+v, want view version 7", rec.gotRec)
+	}
+}
 
 // A successful RegisterSubscription, with evidence configured, records the
 // resolved doc's #auth key material alongside the signed view — AFTER the
@@ -537,7 +558,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 	verifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: evResolver{subscriber: authDoc(subscriber, kp.PublicKey)},
 		Crypto:   ed25519.Verifier{},
-		Nonces:   wireauth.NewMemoryNonceStore(),
+		Nonces:   wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(func() time.Time { return signedAt })),
 		Audience: e2eAudience,
 		Clock:    func() time.Time { return signedAt.Add(time.Second) },
 		Epoch:    signedAt.Add(-time.Hour),
@@ -552,7 +573,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		"publisher_did":    publisher,
 		"payload_delivery": "inline",
 	}
-	proof, err := wireauth.Sign(signer, subscriber, e2eAudience, "RegisterSubscription", fields, "n-closed-loop", signedAt)
+	proof, err := wireauth.Sign(signer, "RegisterSubscription", fields, wireauth.Claims{SignerDID: subscriber, Audience: e2eAudience, Nonce: "n-closed-loop", IssuedAt: signedAt})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -567,7 +588,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 
 	h := handler.NewPeerWithEvidence(&fakePeer{sub: &store.Subscription{ID: "s1"}}, verifier, evLog)
 	if _, err := h.RegisterSubscription(ctx, connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
-		AuthProof:     &chainpb.AuthProof{SignerDid: subscriber, Audience: proof.Audience, Nonce: proof.Nonce, IssuedAt: proof.IssuedAt.UTC().Format(time.RFC3339), Signature: proof.Signature},
+		AuthProof:     authproof.Encode(proof),
 		SubscriberDid: subscriber, PublisherDid: publisher, PayloadDelivery: "inline",
 	})); err != nil {
 		t.Fatalf("RegisterSubscription: %v (code %v)", err, connect.CodeOf(err))

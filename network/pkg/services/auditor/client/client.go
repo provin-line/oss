@@ -24,7 +24,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"connectrpc.com/connect"
 
@@ -32,8 +31,8 @@ import (
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
-	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Config configures a Client. Signer, SignerDID, BaseURL, and HTTPClient are
@@ -52,10 +51,10 @@ type Config struct {
 	// client always registers evidence with ONE node's own AuditService, so
 	// the endpoint is fixed at construction rather than passed per call.
 	BaseURL string
-	// Audience is the registry ID of the node at BaseURL. Every proof this
-	// client signs names it, and that node accepts only a proof for its own
-	// audience. A call with no Audience fails before anything is sent
-	// (wireauth.ErrMalformedProof).
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
 	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client, e.g.
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
@@ -177,26 +176,14 @@ func (c *Client) RegisterAuditHead(ctx context.Context, headVariantID string) er
 	return err
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical
-// second-precision UTC RFC 3339 — the exact form the handler's strict codec
-// accepts). Shared by every write RPC this client signs (RegisterEvidence,
-// RegisterAuditHead) — op and fields are the only things that vary between
-// them.
+// proof signs op over fields as the configured identity, in the proof's one
+// wire form (network/internal/authproof). Shared by every write RPC this
+// client signs (RegisterEvidence, RegisterAuditHead) — op and fields are the
+// only things that vary between them.
 func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, op, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("auditor/client: nonce: %w", err)
+		return nil, fmt.Errorf("auditor/client: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, c.audience, op, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("auditor/client: sign %s: %w", op, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Audience:  p.Audience,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }

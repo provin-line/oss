@@ -62,7 +62,7 @@ const (
 	pipelineKey        = "provin.network.pipeline"
 	loopsKey           = pipelineKey + ".loops"
 	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
-	vcStoreRegistryKey = pipelineKey + ".vc-store-registry"
+	nodeRegistryKey    = pipelineKey + ".node-registry"
 	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
 	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
 	// requirement — cmd/network boot-validates it unconditionally (Task 9),
@@ -124,11 +124,13 @@ type Config struct {
 	// (Full-chain coverage is the async audit runner's job — slice-17h — which resolves
 	// over the local store, not this endpoint; slice-17j retired real-time "full".)
 	VCStoreEndpoint string
-	// VCStoreRegistry is the registry ID of the node at VCStoreEndpoint, which the
-	// node's wire proofs to it name as their audience. Optional: empty means
-	// each proof names the registry of the DID it is signed as (the node a
-	// pipeline publishes to is its own registry's node).
-	VCStoreRegistry string
+	// NodeRegistry is the registry ID of this pipeline's node, the node at
+	// VCStoreEndpoint: the audience of every wire proof the pipeline sends
+	// that node. Optional: empty means the registry every DID the pipeline
+	// signs those proofs as shares (the node a pipeline publishes to is its
+	// own registry's node); when they are of more than one registry, the
+	// pipeline does not start without it.
+	NodeRegistry string
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
 	// and whenever any consuming loop runs (the async batch resolver presents the same
@@ -506,7 +508,7 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
 		return nil, err
 	}
-	if out.VCStoreRegistry, err = loadRegistry(cfg, vcStoreRegistryKey); err != nil {
+	if out.NodeRegistry, err = loadRegistry(cfg, nodeRegistryKey); err != nil {
 		return nil, err
 	}
 	if cfg.Has(VCStoreBearerKey) {

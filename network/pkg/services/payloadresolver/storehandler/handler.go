@@ -29,6 +29,7 @@ import (
 	"github.com/provin-line/oss/did"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
@@ -135,7 +136,7 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 	}
 	meta := first.Metadata
 
-	proof, err := decodeProof(meta.GetAuthProof())
+	proof, err := authproof.Decode(meta.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -219,7 +220,7 @@ func mapError(err error) error {
 	// Malformed request (issued_at codec + domain-level argument errors).
 	// Wireauth's own structural sentinels are handled by the wireautherr
 	// delegation below.
-	case errors.Is(err, errMalformedIssuedAt),
+	case errors.Is(err, authproof.ErrMalformedIssuedAt),
 		errors.Is(err, payloadresolver.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-retain: CodeCanceled, not a server-side

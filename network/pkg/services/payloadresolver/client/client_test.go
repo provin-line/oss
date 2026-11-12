@@ -78,7 +78,10 @@ func newClient(t *testing.T, srv *fakeServer, maxBytes int) (*client.Resolver, s
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	return client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpSrv.Client(), MaxBytes: maxBytes}), httpSrv.URL
+	return client.New(client.Config{
+		Signer: ks, SignerDID: clientDID, HTTPClient: httpSrv.Client(), MaxBytes: maxBytes,
+		UpstreamAudiences: map[string]string{httpSrv.URL: upstreamAudience},
+	}), httpSrv.URL
 }
 
 // newClientCfg is newClient with an explicit Config (short fetch/idle budgets for
@@ -102,6 +105,9 @@ func newClientCfg(t *testing.T, srv payloadpbconnect.PayloadServiceHandler, cfg 
 	cfg.Signer = ks
 	cfg.SignerDID = clientDID
 	cfg.HTTPClient = httpSrv.Client()
+	if cfg.UpstreamAudiences == nil {
+		cfg.UpstreamAudiences = map[string]string{httpSrv.URL: upstreamAudience}
+	}
 	return client.New(cfg), httpSrv.URL
 }
 
@@ -110,7 +116,7 @@ func newClientCfg(t *testing.T, srv payloadpbconnect.PayloadServiceHandler, cfg 
 func TestResolvePayload_MultiChunkAssembly(t *testing.T) {
 	frames := [][]byte{[]byte("alpha-"), []byte("beta-"), []byte("gamma")}
 	c, url := newClient(t, &fakeServer{frames: frames}, 0)
-	got, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	got, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
@@ -125,7 +131,7 @@ func TestResolvePayload_MultiChunkAssembly(t *testing.T) {
 func TestResolvePayload_EmptyChunkRejected(t *testing.T) {
 	frames := [][]byte{[]byte("data"), {}, []byte("more")}
 	c, url := newClient(t, &fakeServer{frames: frames}, 0)
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if err == nil {
 		t.Fatal("empty chunk: want error, got nil")
@@ -137,7 +143,7 @@ func TestResolvePayload_EmptyChunkRejected(t *testing.T) {
 func TestResolvePayload_MaxBytesExceeded(t *testing.T) {
 	frames := [][]byte{bytes.Repeat([]byte("x"), 600), bytes.Repeat([]byte("y"), 600)}
 	c, url := newClient(t, &fakeServer{frames: frames}, 1000)
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if err == nil || !strings.Contains(err.Error(), "exceeds max-bytes 1000") {
 		t.Fatalf("over cap: err = %v, want the max-bytes error", err)
@@ -148,7 +154,7 @@ func TestResolvePayload_MaxBytesExceeded(t *testing.T) {
 func TestResolvePayload_AcceptsAPayloadOfExactlyTheCapInOneFrame(t *testing.T) {
 	want := bytes.Repeat([]byte("x"), 1000)
 	c, url := newClient(t, &fakeServer{frames: [][]byte{want}}, 1000)
-	got, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	got, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("payload of exactly the cap: %d bytes, err %v", len(got), err)
@@ -159,7 +165,7 @@ func TestResolvePayload_AcceptsAPayloadOfExactlyTheCapInOneFrame(t *testing.T) {
 // holding it in memory: the upstream is another organization's server.
 func TestResolvePayload_RefusesAFrameOverTheCapWithoutHoldingIt(t *testing.T) {
 	c, url := newClient(t, &fakeServer{frames: [][]byte{bytes.Repeat([]byte("x"), 1100)}}, 1000)
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Fatalf("frame over the cap: err = %v, want resource_exhausted", err)
@@ -179,8 +185,8 @@ func TestResolvePayload_AcceptsNoCompression(t *testing.T) {
 	}))
 	httpSrv := httptest.NewServer(mux)
 	t.Cleanup(httpSrv.Close)
-	c, _ := newClient(t, &fakeServer{}, 0)
-	if _, err := c.ResolvePayload(context.Background(), httpSrv.URL, upstreamAudience, "sha256:"+
+	c, _ := newClientCfg(t, &fakeServer{}, client.Config{UpstreamAudiences: map[string]string{httpSrv.URL: upstreamAudience}})
+	if _, err := c.ResolvePayload(context.Background(), httpSrv.URL, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"); err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
 	}
@@ -193,7 +199,7 @@ func TestResolvePayload_AcceptsNoCompression(t *testing.T) {
 func TestResolvePayload_NotFound(t *testing.T) {
 	srv := &fakeServer{err: connect.NewError(connect.CodeNotFound, errors.New("no such payload"))}
 	c, url := newClient(t, srv, 0)
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	_, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("err = %v, want client.ErrNotFound", err)
@@ -215,7 +221,7 @@ func TestResolvePayload_NeverPresentsBearer(t *testing.T) {
 	frames := [][]byte{[]byte("data")}
 	srv := &fakeServer{frames: frames}
 	c, url := newClientCfg(t, srv, client.Config{Bearer: "leak-if-broken", StoreEndpoint: "http://unused.invalid"})
-	if _, err := c.ResolvePayload(context.Background(), url, upstreamAudience, "sha256:"+
+	if _, err := c.ResolvePayload(context.Background(), url, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"); err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
 	}
@@ -271,7 +277,7 @@ func TestResolvePayload_IdleStall(t *testing.T) {
 		IdleTimeout:  50 * time.Millisecond,
 		FetchTimeout: 10 * time.Second, // generous — idle must be what fires
 	})
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, fetchTestHash)
+	_, err := c.ResolvePayload(context.Background(), url, fetchTestHash)
 	if !errors.Is(err, client.ErrFetchStalled) {
 		t.Fatalf("err = %v, want ErrFetchStalled", err)
 	}
@@ -284,7 +290,7 @@ func TestResolvePayload_NoFirstByte(t *testing.T) {
 		IdleTimeout:  50 * time.Millisecond,
 		FetchTimeout: 10 * time.Second,
 	})
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, fetchTestHash)
+	_, err := c.ResolvePayload(context.Background(), url, fetchTestHash)
 	if !errors.Is(err, client.ErrFetchStalled) {
 		t.Fatalf("err = %v, want ErrFetchStalled (no first byte)", err)
 	}
@@ -297,7 +303,7 @@ func TestResolvePayload_TotalBudget(t *testing.T) {
 		IdleTimeout:  10 * time.Second,       // never fires (steady 20ms progress)
 		FetchTimeout: 120 * time.Millisecond, // the total budget is the bound
 	})
-	_, err := c.ResolvePayload(context.Background(), url, upstreamAudience, fetchTestHash)
+	_, err := c.ResolvePayload(context.Background(), url, fetchTestHash)
 	if !errors.Is(err, client.ErrFetchTimeout) {
 		t.Fatalf("err = %v, want ErrFetchTimeout", err)
 	}
@@ -315,7 +321,7 @@ func TestResolvePayload_CallerCancelIsNotBudget(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		cancel()
 	}()
-	_, err := c.ResolvePayload(ctx, url, upstreamAudience, fetchTestHash)
+	_, err := c.ResolvePayload(ctx, url, fetchTestHash)
 	if err == nil {
 		t.Fatal("want an error on caller cancel")
 	}

@@ -39,6 +39,11 @@ message AuthProof {
   // node the request is sent to. The signed view binds it, and a node accepts
   // only a proof for its own audience.
   string audience = 5;
+  // view_version is the version of the signed view the proof was made over,
+  // the view's "v". A node accepts only the versions it is configured to,
+  // and refuses any other before it resolves the signer; it never accepts
+  // version 1, which binds no audience.
+  uint32 view_version = 6;
 }
 
 // Subscription is one established pipeline chain connection (mirrors store.Subscription).

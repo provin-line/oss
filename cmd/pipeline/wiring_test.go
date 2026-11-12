@@ -166,12 +166,12 @@ func TestPipelineRuntimeConfigFrom_MapsEnvelopeLimits(t *testing.T) {
 
 func TestAuditClientFactory_CachesPerDID(t *testing.T) {
 	f := newAuditClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
-	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1"))(t)
-	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1"))(t)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
 	if a1 != a2 {
 		t.Error("For(sameDID) returned two different clients, want the cached one")
 	}
-	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg:process:b1"))(t)
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:b1")
 	if a1 == b1 {
 		t.Error("For(differentDID) returned the SAME client as another DID")
 	}
@@ -485,8 +485,8 @@ func TestWireAuditRegistrar_Add_RoundTrip(t *testing.T) {
 		t.Fatalf("StoreVC: %v", err)
 	}
 
-	factory := newAuditClientFactory(h.signer, h.url, "", "", h.httpc)
-	registrar := wireAuditRegistrar{client: must(factory.For(wireNodeDID))(t)}
+	factory := newAuditClientFactory(h.signer, h.url, "poc.dplaax.dev", "", h.httpc)
+	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
 	if err := registrar.Add(head); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 		t.Fatalf("StoreVC: %v", err)
 	}
 
-	factory := newAuditClientFactory(h.signer, h.url, "", "", h.httpc)
+	factory := newAuditClientFactory(h.signer, h.url, "poc.dplaax.dev", "", h.httpc)
 	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
 	consumed := []string{addr("c"), addr("b")}
 	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, consumed); err != nil {
@@ -579,13 +579,13 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPayloadClientFactory_CachesPerDID(t *testing.T) {
-	f := newPayloadClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient, 0)
-	a1 := must(f.For("did:dplaax:reg:org:acme:pipeline:src1"))(t)
-	a2 := must(f.For("did:dplaax:reg:org:acme:pipeline:src1"))(t)
+	f := newPayloadClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient, 0, nil)
+	a1 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
+	a2 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
 	if a1 != a2 {
 		t.Error("For(sameDID) returned two different clients, want the cached one")
 	}
-	b1 := must(f.For("did:dplaax:reg:org:acme:pipeline:agg"))(t)
+	b1 := f.For("did:dplaax:reg:org:acme:pipeline:agg")
 	if a1 == b1 {
 		t.Error("For(differentDID) returned the SAME client as another DID")
 	}
@@ -624,8 +624,8 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 		resolver[owner] = authDoc(owner, kp.PublicKey)
 	}
 
-	// The owners are DIDs of registry "reg": the derived audience of their
-	// retains.
+	// The owners are DIDs of registry "reg", whose node this is: the audience
+	// of their retains.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
@@ -659,7 +659,7 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 // now succeed, each recorded under its OWN owner.
 func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA, payloadOwnerB)
-	factory := newPayloadClientFactory(h.ks, h.url, "", "", h.httpc, 0)
+	factory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	store := wirePayloadStore{factory: factory}
 
 	payloadA := []byte("bytes produced by src1's output subject")
@@ -690,7 +690,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 
 	// The factory must have cached (and reused) a distinct client per owner —
 	// never one shared client the way the pre-fix wiring did.
-	if must(factory.For(payloadOwnerA))(t) == must(factory.For(payloadOwnerB))(t) {
+	if factory.For(payloadOwnerA) == factory.For(payloadOwnerB) {
 		t.Error("factory returned the SAME client for two different owners")
 	}
 }
@@ -701,7 +701,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 // before it ever reaches this wire call.
 func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA) // payloadOwnerB's key is never provisioned
-	factory := newPayloadClientFactory(h.ks, h.url, "", "", h.httpc, 0)
+	factory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	store := wirePayloadStore{factory: factory}
 
 	if _, err := store.Store(context.Background(), []byte("orphan bytes"), payloadOwnerB); err == nil {
@@ -740,8 +740,8 @@ func newPayloadRetainHarnessWithChunkCap(t *testing.T, chunkCap int, owners ...s
 		resolver[owner] = authDoc(owner, kp.PublicKey)
 	}
 
-	// The owners are DIDs of registry "reg": the derived audience of their
-	// retains.
+	// The owners are DIDs of registry "reg", whose node this is: the audience
+	// of their retains.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
@@ -776,7 +776,7 @@ func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
 	h := newPayloadRetainHarnessWithChunkCap(t, chunkCap, payloadOwnerA)
 	payload := bytes.Repeat([]byte("x"), 10_000) // spans several chunks under chunkCap
 
-	defaultFactory := newPayloadClientFactory(h.ks, h.url, "", "", h.httpc, 0)
+	defaultFactory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	_, err := (wirePayloadStore{factory: defaultFactory}).Store(context.Background(), payload, payloadOwnerA)
 	if err == nil {
 		t.Fatal("Store with the default (unconfigured) chunk size against a small server cap: want an error, got nil (this pins the PRE-FIX bug)")
@@ -785,7 +785,7 @@ func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
 		t.Fatalf("Store with oversized default chunks: code = %v, want ResourceExhausted", connect.CodeOf(err))
 	}
 
-	configuredFactory := newPayloadClientFactory(h.ks, h.url, "", "", h.httpc, chunkCap)
+	configuredFactory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, chunkCap, nil)
 	addr, err := (wirePayloadStore{factory: configuredFactory}).Store(context.Background(), payload, payloadOwnerA)
 	if err != nil {
 		t.Fatalf("Store with configured chunk size: %v", err)
@@ -1097,7 +1097,7 @@ func TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, payloadOwnerA)
 
-	factory := newPayloadClientFactory(ks, srv.URL, "", "", srv.Client(), 0)
+	factory := newPayloadClientFactory(ks, srv.URL, "reg", "", srv.Client(), 0, nil)
 	store := wirePayloadStore{factory: factory}
 
 	contentAddress, err := store.Store(context.Background(), []byte("payload racing the boot window"), payloadOwnerA)
@@ -1154,8 +1154,8 @@ func TestWireRetryingPayloadResolver_ResolvePayload_RetriesOnUnavailableAndResig
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireNodeDID)
 
-	factory := newPayloadClientFactory(ks, "", "", "", http.DefaultClient, 0)
-	resolver := wireRetryingPayloadResolver{client: must(factory.For(wireNodeDID))(t), audiences: map[string]string{srv.URL: "poc.dplaax.dev"}}
+	factory := newPayloadClientFactory(ks, "", "", "", http.DefaultClient, 0, map[string]string{srv.URL: "poc.dplaax.dev"})
+	resolver := wireRetryingPayloadResolver{client: factory.For(wireNodeDID)}
 
 	got, err := resolver.ResolvePayload(context.Background(), srv.URL, addr("d"))
 	if err != nil {
@@ -1225,8 +1225,8 @@ func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireNodeDID)
 
-	factory := newAuditClientFactory(ks, srv.URL, "", "", srv.Client())
-	registrar := wireAuditRegistrar{client: must(factory.For(wireNodeDID))(t)}
+	factory := newAuditClientFactory(ks, srv.URL, "poc.dplaax.dev", "", srv.Client())
+	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
 
 	if err := registrar.Add(pipelineruntime.StoredHead{WireVariantID: "variant-1"}); err != nil {
 		t.Fatalf("Add: %v, want recovery via retry", err)
@@ -1264,7 +1264,7 @@ func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t 
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireAggregateIssuerDID)
 
-	factory := newAuditClientFactory(ks, srv.URL, "", "", srv.Client())
+	factory := newAuditClientFactory(ks, srv.URL, "poc.dplaax.dev", "", srv.Client())
 	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
 
 	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, []string{addr("c")}); err != nil {
@@ -1333,10 +1333,7 @@ func TestBuildDeps_ShowsTheBearerToNoServerTheVCStoreRedirectsTo(t *testing.T) {
 	}))
 	t.Cleanup(store.Close)
 	pipeCfg := &pipelineconfig.Config{VCStoreEndpoint: store.URL, VCStoreBearer: "node-token", MaxCredentialSize: 1 << 20, MaxRetainChunkSize: 1 << 20}
-	deps, err := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme", mustUpstreamAudiences(t, pipeCfg))
-	if err != nil {
-		t.Fatal(err)
-	}
+	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme", mustOwnNodeAudience(t, pipeCfg, "did:dplaax:poc.dplaax.dev:org:acme"), mustUpstreamAudiences(t, pipeCfg))
 	if _, err := deps.ChainResolver.ResolveCredential(context.Background(), addr("a")); err == nil {
 		t.Error("a redirected fetch succeeded")
 	}

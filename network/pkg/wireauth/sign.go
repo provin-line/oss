@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/keystore"
 )
 
@@ -23,43 +24,59 @@ type Proof struct {
 	Nonce     string
 	IssuedAt  time.Time
 	Signature []byte
+	// ViewVersion is the version of the view the proof was signed over (the
+	// view's "v"); Sign sets ViewVersion. A verifier rebuilds the view of
+	// this version, if it accepts it (VerifierConfig.AcceptedViewVersions).
+	ViewVersion int
+}
+
+// Claims are the members of a signed view that the request does not carry,
+// which a Proof carries beside the signature: who signs (SignerDID), the
+// party the request is sent to (Audience), the single-use replay guard
+// (Nonce) and when it was signed (IssuedAt). The verifier rebuilds the rest
+// of the view, op and fields, from the request it serves.
+type Claims struct {
+	SignerDID string
+	Audience  string
+	Nonce     string
+	IssuedAt  time.Time
 }
 
 // Sign produces a Proof over the per-RPC view for op with the given business
-// fields, for audience: the party the request is sent to. The signer signs
-// canon(view) with the signer DID's #auth key; issuedAt is truncated to second
-// precision (the wire form the verifier rebuilds), and the returned Proof
-// carries that truncated instant so the transported value and the signed value
-// never diverge.
+// fields and claims. The signer signs canon(view) with the claims' SignerDID's
+// #auth key; IssuedAt is truncated to second precision (the wire form the
+// verifier rebuilds), and the returned Proof carries that truncated instant so
+// the transported value and the signed value never diverge.
 //
-// signerDID, audience, op, and nonce must be non-empty, audience and nonce
-// within the lengths a verifier accepts, and fields must satisfy the value
-// grammar (ErrInvalidView), which also refuses fields nested more than 9,999
-// objects and arrays deep, the fields object counted, so that the view, which
-// holds them one level down, nests at most 10,000, as encoding/json decodes;
-// a real caller obtains nonce from NewNonce and issuedAt from time.Now().
-func Sign(signer crypto.Signer, signerDID, audience, op string, fields map[string]any, nonce string, issuedAt time.Time) (Proof, error) {
-	if signerDID == "" || audience == "" || op == "" || nonce == "" {
+// The claims' SignerDID, Audience and Nonce and op must be non-empty, Audience
+// and Nonce within the lengths a verifier accepts, and fields must satisfy the
+// value grammar (ErrInvalidView), which also refuses fields nested more than
+// 9,999 objects and arrays deep, the fields object counted, so that the view,
+// which holds them one level down, nests at most 10,000, as encoding/json
+// decodes; a real caller obtains Nonce from NewNonce and IssuedAt from
+// time.Now().
+func Sign(signer crypto.Signer, op string, fields map[string]any, c Claims) (Proof, error) {
+	if c.SignerDID == "" || c.Audience == "" || op == "" || c.Nonce == "" {
 		return Proof{}, fmt.Errorf("%w: signerDID, audience, op, and nonce must be non-empty", ErrMalformedProof)
 	}
 	// Mirror the verifier's bounds so Sign never mints a proof a verifier is
 	// structurally bound to reject.
-	if len(audience) > maxAudienceLen {
-		return Proof{}, fmt.Errorf("%w: audience exceeds %d bytes", ErrMalformedProof, maxAudienceLen)
+	if len(c.Audience) > dplaax.MaxRegistryLen {
+		return Proof{}, fmt.Errorf("%w: audience exceeds %d bytes", ErrMalformedProof, dplaax.MaxRegistryLen)
 	}
-	if len(nonce) > maxNonceLen {
+	if len(c.Nonce) > maxNonceLen {
 		return Proof{}, fmt.Errorf("%w: nonce exceeds %d bytes", ErrMalformedProof, maxNonceLen)
 	}
-	issuedAt = issuedAt.UTC().Truncate(time.Second)
-	msg, err := viewBytes(signerDID, audience, op, nonce, issuedAt, fields)
+	issuedAt := c.IssuedAt.UTC().Truncate(time.Second)
+	msg, err := viewBytes(ViewVersion, c.SignerDID, c.Audience, op, c.Nonce, issuedAt, fields)
 	if err != nil {
 		return Proof{}, err
 	}
-	sig, err := signer.Sign(signerDID, string(keystore.KeyIDAuth), msg)
+	sig, err := signer.Sign(c.SignerDID, string(keystore.KeyIDAuth), msg)
 	if err != nil {
 		return Proof{}, fmt.Errorf("wireauth: sign view: %w", err)
 	}
-	return Proof{SignerDID: signerDID, Audience: audience, Nonce: nonce, IssuedAt: issuedAt, Signature: sig}, nil
+	return Proof{SignerDID: c.SignerDID, Audience: c.Audience, Nonce: c.Nonce, IssuedAt: issuedAt, Signature: sig, ViewVersion: ViewVersion}, nil
 }
 
 // NewNonce returns an unpredictable 128-bit nonce (base64url, no padding) for
