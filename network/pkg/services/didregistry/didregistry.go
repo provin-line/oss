@@ -42,15 +42,29 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
+// Error is the type of this package's sentinel errors. The sentinels are
+// constants, so no importer can reassign them. Compare an error with them by
+// errors.Is only: the service wraps them with detail.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
 // Sentinel errors. ErrNotFound / ErrExists / ErrConflict from the store package
 // surface unchanged; handlers map all of these to Connect codes with errors.Is.
-var (
+const (
 	// ErrInvalidArgument is a malformed request (bad DID, wrong shape, unknown
 	// status).
-	ErrInvalidArgument = errors.New("didregistry: invalid argument")
+	ErrInvalidArgument Error = "didregistry: invalid argument"
 	// ErrUnauthorized is a failed cryptographic check: a bad self-signed owner
-	// proof, a delegation that does not verify, or a cross-registry DID.
-	ErrUnauthorized = errors.New("didregistry: unauthorized")
+	// proof, a delegation VerifyFor refuses (but one whose owner's document
+	// could not be established now, which is ErrUnavailable), or a
+	// cross-registry DID.
+	ErrUnauthorized Error = "didregistry: unauthorized"
+	// ErrUnavailable is a check the request needs that could not be completed
+	// now: the owner's document, which a delegation is verified against, could
+	// not be established (delegation.ErrSignatureUnestablished). A later
+	// request may succeed.
+	ErrUnavailable Error = "didregistry: unavailable"
 )
 
 const (
@@ -334,6 +348,9 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	// subject is targetDID, and the owner's document, resolved from this store,
 	// verifies it (an unregistered owner fails here).
 	if err := delegation.VerifyFor(ctx, s.verifier, storeResolver{s.store}, dlg, targetDID); err != nil {
+		if errors.Is(err, delegation.ErrSignatureUnestablished) {
+			return nil, nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
 		return nil, nil, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 

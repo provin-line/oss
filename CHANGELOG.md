@@ -119,6 +119,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   the one place a sender derives an audience from a DID.
 - `wireauth.Error`, the type of `wireauth`'s sentinel errors, as in `did`
   and `vc`.
+- `didregistry.Error`, the type of `didregistry`'s sentinel errors, and
+  `didregistry.ErrUnavailable`: a check an issuing request needs could not
+  be completed now, which the DID service answers with `Unavailable`.
 - `payloadresolver/client.ErrUnknownUpstream`: `ResolvePayload` refuses
   with it an upstream endpoint to which `Config.UpstreamAudiences` gives no
   audience, before anything is sent.
@@ -233,9 +236,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   wraps. `UpdateStatus` names a status it does not take within 128 bytes,
   and says that only `revoked` is accepted.
 - `didregistry`: issuing a Pipeline or Process checks its delegation through
-  `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
-  (Connect `PermissionDenied`); the refusal's text, which clients see in that
-  status, is VerifyFor's.
+  `delegation.VerifyFor`. A delegation whose owner's document the registry
+  cannot read now is `ErrUnavailable` (Connect `Unavailable`): see Breaking
+  changes. Every other delegation VerifyFor refuses is still
+  `ErrUnauthorized` (Connect `PermissionDenied`); the refusal's text, which
+  clients see in that status, is VerifyFor's.
 - Conformance: this release follows dPLaaX spec `v0.2.0-alpha.1`. The
   vendored dPLaaX vectors are that tag's 235, byte for byte, and the README's
   "Specification conformance" names the pair. `keybinding-001`..`keybinding-054`
@@ -328,6 +333,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   binding a 0.4.x issuer made, valid from before 2027-01-01T00:00:00Z, still
   verifies: the branch context this change adds after them is not among the
   contexts the declaration pins, so it does not amend the freeze.
+- **Wire:** the registry's `IssuePipeline` and `IssueProcess` answer
+  `Unavailable` when the owner's document, which the delegation is verified
+  against, cannot be read now: the store fails, returns the document of
+  another DID, or returns neither a document nor an error. 0.4.x answered
+  `PermissionDenied`. A client may retry
+  `Unavailable`; a delegation the registry refuses is still
+  `PermissionDenied`.
 - **Schema:** a JSON Schema `pattern` may name a Unicode general category by
   a long name or alias (`\p{Letter}`), which 0.4.x refuses: a schema that
   does is accepted here and refused by a 0.4.x process. Upgrade every
@@ -370,6 +382,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - **Go API:** `wireauth`'s sentinel errors are constants of the new type
   `wireauth.Error`, not variables, so no importer can reassign them. Their
   messages are the same; compare an error with them by `errors.Is`.
+- **Go API:** `didregistry.ErrInvalidArgument` and
+  `didregistry.ErrUnauthorized` are constants of the new type
+  `didregistry.Error`, not variables of type `error`: no importer can
+  reassign them, and code that relied on them being variables of type
+  `error` no longer compiles (taking their address, comparing them with
+  `nil`, or giving a variable their type and then assigning another error
+  to it). Their messages are the same; compare an error with them by
+  `errors.Is`.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
   only the members `vc` reads, under their names and in their forms; one with
   any other member is refused.

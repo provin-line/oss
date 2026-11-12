@@ -266,6 +266,9 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeAborted, err)
 	case errors.Is(err, didregistry.ErrUnauthorized):
 		return connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, didregistry.ErrUnavailable):
+		// A check could not be completed now; the caller may retry.
+		return connect.NewError(connect.CodeUnavailable, err)
 	case errors.Is(err, didregistry.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, context.Canceled):

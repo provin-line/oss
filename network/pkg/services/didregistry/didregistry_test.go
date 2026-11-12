@@ -129,6 +129,12 @@ func newService(t *testing.T) (*didregistry.Service, crypto.Signer, []byte) {
 // callers have no way to check since the keystore never leaves New's call.
 func newServiceWithKeys(t *testing.T) (*didregistry.Service, crypto.Signer, []byte, *memKeyStore) {
 	t.Helper()
+	return newServiceOn(t, yamlstore.New(t.TempDir()))
+}
+
+// newServiceOn is newServiceWithKeys over st.
+func newServiceOn(t *testing.T, st store.DIDStore) (*didregistry.Service, crypto.Signer, []byte, *memKeyStore) {
+	t.Helper()
 	ownerKP, err := (ed25519.Generator{}).Generate()
 	if err != nil {
 		t.Fatalf("generate owner key: %v", err)
@@ -139,7 +145,7 @@ func newServiceWithKeys(t *testing.T) (*didregistry.Service, crypto.Signer, []by
 	}
 	keys := newMemKS()
 	svc := didregistry.New(
-		yamlstore.New(t.TempDir()),
+		st,
 		keys,
 		ed25519.Generator{},
 		ed25519.Verifier{},
