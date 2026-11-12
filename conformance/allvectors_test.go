@@ -36,7 +36,8 @@ func registerSkip(family string, lo, hi int, reason string) {
 }
 
 func init() {
-	// Tranche 1 — pure-function families (drivers in dplaax_test.go).
+	// Tranche 1 — pure-function families (drivers in dplaax_test.go,
+	// did_test.go, keybinding_test.go and evidenceview_test.go).
 	registerRunner(runCanon, "canon", 1, 8)
 	registerRunner(runCred, "cred", 1, 32)
 	registerRunner(runCommitment, "commitment", 1, 11)

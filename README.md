@@ -50,7 +50,7 @@ cmd/provin/     operator CLI
 conformance/    provin profile conformance vectors + harness (test-only)
 docs/           architecture / concepts / protocol / did
 scripts/        lint hygiene checks (run by `make lint`)
-verification/   formal models of the implementation (test-only nested module)
+verification/   formal models of the implementation and third-party standard vectors (test-only nested module)
 ```
 
 The remaining top-level directories are the **library packages** — pure domain

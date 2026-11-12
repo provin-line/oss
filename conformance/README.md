@@ -55,7 +55,8 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 
 ### Coverage: 199 driven, 36 ledgered skips (235 total)
 
-**Tranche 1** — pure-function families (runners in `dplaax_test.go`):
+**Tranche 1 (166)** — pure-function families (runners in `dplaax_test.go`,
+`did_test.go`, `keybinding_test.go` and `evidenceview_test.go`):
 
 | family | driver |
 |---|---|
@@ -66,12 +67,16 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `confidence-001..006` | `vc.EvaluateConfidence` (synthesis) / real `Verify` with an entries-driven lifecycle registry, effectiveDates time-shifted so the proof.created order relations are preserved |
 | `delegation-001..005` | `delegation.Build` re-signing + `delegation.Verify` — structural defects (purpose, scope, foreign subject) are checked before the signature, so they survive the re-signing |
 | `delegation-006..008` | the same re-signing + `delegation.VerifyFor` with the vector's `target` — a delegation is authority only for the identity its subject names (`delegation.use.subject-bound`) |
-| `did-001..031` | `did/dplaax.Parse` accepts or refuses the DID (`did.dplaax.syntax`); for one it accepts, the level `IsOwner` / `IsPipeline` / `IsProcess` give it, its `OwnerDID`, and a Process's `PipelineDID` (`did.dplaax.hierarchy`) |
-| `keybinding-001..054` | each credential re-signed as an eddsa-jcs-2022 proof for the verification method its proof names, adding only the proof-local `@context` and the `proofValue` and signing every other proof member as written, `created` among them (dplaax `vectors/README.md`, "Fixture proofs"), then `keybinding.Verifier`: `RestoreStatusList` (the list the verifier holds) then `VerifyBinding` for a binding, `RestoreStatusList` then `VerifyStatusList` for a list against the one held, `VerifyStatusList` for a list alone, and `StatusListContentHash` for a content hash; a reason (`status-list-rewound`, `status-list-revocation-cleared`) is checked with `errors.Is` |
+| `did-001..031` | `did/dplaax.Parse` accepts or refuses the DID (`did.dplaax.syntax`); for one it accepts, the level `IsOwner` / `IsPipeline` / `IsProcess` give it, its `OwnerDID`, and `Pipeline`: a Process's Pipeline, and none for any other level (`did.dplaax.hierarchy`) |
+| `keybinding-001..054` | each credential re-signed as an eddsa-jcs-2022 proof for the verification method its proof names, adding only the proof-local `@context` and the `proofValue` and signing every other proof member as written, `created` among them (dplaax `vectors/README.md`, "Fixture proofs"), then `keybinding.Verifier`: `RestoreStatusList` (the list the verifier holds) then `VerifyBinding` for a binding, `RestoreStatusList` then `VerifyStatusList` for a list against the one held, `VerifyStatusList` for a list alone, and `StatusListContentHash` for a content hash |
 | `signer-001..003` | `vc.VerifyProof` mandatory-member / no-op gates; `vc.RegisterCryptosuite` registration gate |
+| `identity-001..002` | `vc.PipelinePassCredential.Hash` (the body address) and `vc.WireVariantID` against hashes the catalog derived from its rule text; a re-issued proof keeps the body address and separates the variant id |
+| `evidence-view-001..002` | `appraisal.View`: the manifest's canonical bytes and its `evidenceViewId` (`ValidateID`), and a view whose id does not match refused as `appraisal.ErrViewIDMismatch` |
+| `claims-coverage-001..004` | `appraisal.View.ValidateShape` accepts or refuses the view; `appraisal.Decide` does not reach the decision the vector forbids |
+| `claims-policy-001` | `appraisal.Decide` reaches the decision the vector names for its profile and scope entries |
 
-**Tranche 2** — behavior-fixture families driven against real seams
-(`tranche2_test.go`):
+**Tranche 2 (33)** — behavior-fixture families driven against real seams
+(`tranche2_test.go` and `didresolution_test.go`):
 
 | family | driver |
 |---|---|
@@ -83,11 +88,27 @@ Run it: `make conformance`, or `go test ./conformance/ -run TestDplaaxAllVectors
 | `audit-001..004` | real `vc.Verifier.AttributeOwner` (exported P0-11) walking a resolver built from the vector's controller-binding fixture — per-segment attribution + origin default, cross-checked against the structural `did/dplaax.Parse().OwnerDID()` prefix |
 | `process-004` | real `sink.Processor`: order-recording `Verifier`+`Writer` assert the sink verifies the received credential strictly before its external write (driven for both production and observation-only kinds — verify precedes write regardless of verdict policy) |
 | `process-005..006` | receipt wire-form + `PreviousCredential` presence + the receipt identity shape (`transformationClaim == provin:sink-receipt`, `inputHash == outputHash`); Custom-origin must not carry `previousCredential` |
+| `identity-003..007` | the real `vcresolver.VariantStore`: write-once and append-only variants, the legacy body-only projection, and a stored id that serves other bytes refused |
+| `transfer-001` | an emission log (`tlog`) and the ingress store (`vcfilestore`) hold a credential under the one content-hash join key, `vc.PipelinePassCredential.Hash` |
+| `transfer-002` | the real `filelog`: a rewritten recorded entry fails the replay verification when the log is reopened |
+| `transfer-003` | the ingress `vcfilestore`: a received credential is kept byte for byte across a restart and listed by `ListHashes` |
+| `transfer-004` | `chainmanager/evidence.Log` over a `filelog`: a relationship record (signed view and key material) is kept across a restart |
+| `did-resolution-id-mismatch-001`, `did-resolution-unavailable-001` | the outbound resolver `network/pkg/didresolver` over an HTTP server that serves the vector's registry response: a document of another id is `ErrDIDIdentityMismatch`, a registry 5xx is transient (neither `resolver.ErrNotFound` nor a mismatch) |
+
+A reject vector passes only when it is refused with the sentinel its rule
+names (or, where its rule has none yet, with a part of the refusal's text):
+
+- each `keybinding-*` reject vector is tied to a sentinel and to the step that refuses it. Only `keybinding-023`'s list, dated after the decision, is refused when it is restored; every other binding vector's list must restore;
+- `did-008..021` (`did.dplaax.syntax`) are tied to `did/dplaax.ErrSyntax`;
+- `delegation-007..008` are tied to `delegation.ErrNotForIdentity`, and `delegation-002..005` to a part of the error's text until `delegation` has a sentinel for their rules;
+- `claims-coverage-002` and `-004` are tied to `appraisal.ErrInvalidVector`, and a view that does not decode fails its vector;
+- a guard test checks that each table ties exactly the manifest's reject vectors.
 
 **Ledgered skips (36)** — visible via the guard, each with its own ground (not
 a blanket family reason):
 
-- `resolver-006` — structurally enforced (P0-11): `vcresolver.Store` exposes no
+- `resolver-006` — structurally enforced (P0-11): neither
+  `vcresolver.VariantStore` nor the `VariantBackend` under it exposes an
   eviction/delete surface, so the forbidden Resolved→NotFound transition is
   unconstructible — the API's absence is the enforcement, stronger than a
   behavioral test. The vector is retained as the shape pin should an eviction
@@ -97,8 +118,7 @@ a blanket family reason):
   exist; `dplaax.vc.v1` defines none. The vector pins the shape such a surface
   must satisfy.
 - `process-001..003` — blocked: no process-type/behavior classifier seam (the
-  four-type catalog is a static deployment attribute, not a callable classifier;
-  recorded in the scope's gap-backlog).
+  four-type catalog is a static deployment attribute, not a callable classifier).
 - `auth-grant-kid-mismatch-001`, `auth-grant-legacy-no-method-001` and
   `auth-grant-legacy-no-method-ambiguous-001` — the L1 DID-grant JWS path at
   `/oauth/token`: there is no JWS grant surface in this repo; provin-line/auth

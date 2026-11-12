@@ -1,6 +1,7 @@
 package conformance_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"testing"
 
@@ -9,8 +10,12 @@ import (
 
 // runDID drives the did family. did.dplaax.syntax: whether dplaax.Parse
 // accepts the DID. did.dplaax.hierarchy: the level the Is* methods give the
-// parsed DID, its OwnerDID, and, for a Process only, its PipelineDID (only a
-// Process has a Pipeline, so the vector names one for no other level).
+// parsed DID, its OwnerDID, and its Pipeline: a Process's, and none for any
+// other level (only a Process has a Pipeline, so the vector names one for no
+// other level).
+//
+// A reject vector passes only when Parse refuses it under its rule:
+// didRefusals ties the rule to its sentinel.
 func runDID(t *testing.T, v dplaaxVector) {
 	var input struct {
 		DID string `json:"did"`
@@ -22,6 +27,15 @@ func runDID(t *testing.T, v dplaaxVector) {
 		want := expectString(t, v)
 		if (err == nil) != (want == "accept") {
 			t.Errorf("Parse(%q) err=%v, want %s", input.DID, err, want)
+		}
+		if want == "reject" {
+			tie, ok := didRefusals[v.Rule]
+			if !ok {
+				t.Fatalf("no refusal tied to %s in didRefusals", v.Rule)
+			}
+			if !tie.holds(err) {
+				t.Errorf("Parse(%q) refused with %v, want %s", input.DID, err, tie)
+			}
 		}
 		// A DID accepted is taken as it is, never repaired or normalized.
 		if err == nil && d.String() != input.DID {
@@ -93,5 +107,37 @@ func TestDIDVectorsAreDrivenNotSkipped(t *testing.T) {
 	}
 	if n == 0 {
 		t.Error("the manifest lists no did vector")
+	}
+}
+
+// didRefusals ties each did rule a reject vector names to its sentinel, so a
+// vector refused with another error fails. did.dplaax.syntax is one rule with
+// one sentinel, so the tie is by rule.
+var didRefusals = map[string]refusalTie{
+	"did.dplaax.syntax": {err: dplaax.ErrSyntax},
+}
+
+// didRefusals ties the rule of every did vector the manifest lists as
+// reject, and no rule no such vector names.
+func TestDIDRefusalsTieEveryRejectVector(t *testing.T) {
+	named := map[string]bool{}
+	for _, id := range manifestIDs(t) {
+		if !didVectorID.MatchString(id) {
+			continue
+		}
+		v := loadDplaax(t, id)
+		var want string
+		if json.Unmarshal(v.Expect, &want) != nil || want != "reject" {
+			continue
+		}
+		named[v.Rule] = true
+		if _, tied := didRefusals[v.Rule]; !tied {
+			t.Errorf("%s expects reject under %s, which didRefusals does not tie", id, v.Rule)
+		}
+	}
+	for rule := range didRefusals {
+		if !named[rule] {
+			t.Errorf("didRefusals ties %s, which no reject vector names", rule)
+		}
 	}
 }

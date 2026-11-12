@@ -40,11 +40,13 @@ export seam は飛行中の NATS メッセージを変換できない（account 
 
 ## L2 ピア認証（`network/pkg/wireauth`）
 
-ChainPeerService のすべての RPC は `AuthProof` を持つ: JCS 正規化された RPC ごとのビュー（オペレーション識別子 + ビューバージョン + ノンス + issuedAt + ビジネスフィールド）に対する Ed25519 署名。検証は順序付きパイプライン — 安価なフェイルファストチェックを先に行い、署名検証を後回しにし、ノンスの記録は署名成功後のみ行う（失敗した偽造によって正規の署名者のノンスが消費されてはならない）:
+ChainPeerService のすべての RPC は `AuthProof`（proto の message。Go の library の型は `wireauth.Proof`）を持つ: JCS 正規化された RPC ごとのビュー（**signerDID** + **aud** + オペレーション識別子 + ビューバージョン + ノンス + issuedAt + ビジネスフィールド）に対する Ed25519 署名。`signerDID` を署名するバイトに入れることで unknown-key-share を閉じる: 別の DID の `#auth` 鍵を共有する DID の別名は、その署名を使い回せない。`aud`（audience。受ける node の registry ID）を入れることで、ある node 宛ての proof は別の node では通らない（D-w12、[auth.md § L2](../../../../docs/protocol/auth.md#l2--peer-wire-proof-wireauth)）。検証は順序付きパイプライン — 安価なフェイルファストチェックを先に行い、署名検証を後回しにし、**認可は署名の後**に行い（認証されていない呼び手に policy を走らせない — 許可リストの oracle を作らない）、ノンスの記録は署名成功後のみ行う（失敗した偽造によって正規の署名者のノンスが消費されてはならない）:
 
-1. プルーフ欠如フェイルファスト → 2. issuedAt 切り捨て → 3. 再起動エポックバリア →
-4. 受け入れウィンドウ（非対称な過去/スキュー） → 5. DID ドキュメント経由の鍵解決
-（`#auth`、authentication リレーションシップ + コントローラー一致） → 6. 署名者-アクター認可 → 7. 正規バイト再構築 → 8. Ed25519 検証 → 9. ノンス記録。
+1. 構造・形式のフェイルファスト（プルーフ欠如。この verifier が受けないビューバージョン、または無いものは `ErrViewVersion`。空の op。長すぎるノンス。長すぎる audience。この verifier のものでない audience、または無いものは `ErrWrongAudience` — 何かを解決・記録する前に断る。秒の精度でない issuedAt は切り捨てずに断る — 秒未満の精度があると、署名するバイトを変えずに window の確かめをずらせるため。フィールドの値の文法） →
+2. 再起動エポックバリア（次の秒に切り上げる） → 3. 受け入れウィンドウ（非対称な過去/スキュー） →
+4. DID ドキュメント経由の鍵解決（`#auth`、authentication リレーションシップ + コントローラー一致） →
+5. 正規バイト再構築（この verifier 自身の audience で） → 6. Ed25519 検証 →
+7. 署名者-アクター認可（解決した文書とフィールドの変わらない写しの上で） → 8. ノンス記録。
 
 **L2 identity と監査期間。** 署名ビューは呼び出し瞬間のアクセス制御だが、保存された記録は監査期間にわたる監査証拠を兼ねる。deployment が L2 当事者に web アンカー系 DID method（例: did:web の consumer）を許す場合、CM は署名ビューと並べて「解決した DID document のスナップショット（鍵束縛）」を tlog に記録する — 署名はスナップショット内の鍵に対して永久に再検証可能になり、残る主張は「その束縛が登録時に本当に提供されていたか」だけになる。検証可能な鍵履歴を持つ method はその残余も閉じる。監査感度の高い deployment は L2 当事者を T1/T2 に制限する（GLOSSARY の DID method tiers 参照）。
 

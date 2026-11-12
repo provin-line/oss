@@ -13,7 +13,7 @@ schema レジストリのクライアント側コントラクト：`Validator` �
 
 ## 限り
 
-JSON Schema の library は `internal/jsonschema` で、`santhosh-tekuri/jsonschema` の写しに patch を足したもの: 手間の予算、読めない数で upstream が panic する所の誤り、schema の大きさにほぼ線形の時間での compile（`uniqueItems` が長い前置きを共にする object の名前を並べる所では、最大で log n 倍） と、予算の中での metaschema の確かめ（その README を参照）。断る時の誤りの文は、どの限りで断ったかを書く。
+JSON Schema の library は `internal/jsonschema` で、`santhosh-tekuri/jsonschema` の写しに patch を足したもの: 手間の予算、読めない数で upstream が panic する所の誤り、schema の大きさにほぼ線形の時間での compile（`uniqueItems` が長い前置きを共にする object の名前を並べる所では、最大で log n 倍）、予算の中での metaschema の確かめ、数を読めない数の keyword を compile の誤りにすること、`int` の範囲を越える整数の keyword を範囲の端として読むこと（その README を参照）。断る時の誤りの文は、どの限りで断ったかを書く。
 
 この package は、schema の大きさを限らない。限るのは呼び手で、network の schema の登録は 1 MiB で限る（文書の request の限り）。下の限りは schema の大きさとともに増え、schema の重さもそれとともに増える。1 MiB の schema が compile した形で持つのは約 170 MB まで。測った最悪の形で、compile か拒否に約 0.8 s かかる（下）。
 

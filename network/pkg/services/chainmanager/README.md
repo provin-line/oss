@@ -130,7 +130,8 @@ policy never runs on an unauthenticated caller — no allow-list oracle), nonce
 recorded **only after** signature success (a failed forgery must not burn a
 legitimate signer's nonce):
 
-1. structural / malformed fail-fast (missing proof; empty op; oversized nonce;
+1. structural / malformed fail-fast (missing proof; a view version this
+   verifier does not accept, or none, is `ErrViewVersion`; empty op; oversized nonce;
    oversized audience; an audience other than this verifier's, or none, is
    `ErrWrongAudience` — before anything is resolved or recorded;
    non-second-precision issuedAt rejected, not truncated — sub-second precision

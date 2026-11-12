@@ -136,8 +136,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
     it is written late, or, when another warning is being written and the
     context ends first, not at all.
   - `Filter.Flush` with a context that has already ended returns its error
-    and keeps the window for the next `Flush`; before, it wrote the
-    window's summaries whatever the context said. When the context ends
+    and keeps the window for the next `Flush`; before, it passed the
+    window's summaries to its sink whatever the context said and started the
+    next window. When the context ends
     during a `Flush`, a summary whose write has not started is lost, with a
     warning at most; so that none of the last window is lost to the
     shutdown signal, the last `Flush` at shutdown takes a context that the
@@ -225,6 +226,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   each DID (dplaax `did.dplaax.syntax`), and, for one it accepts, the level
   `IsOwner`, `IsPipeline` and `IsProcess` give it, its `OwnerDID`, and its
   `Pipeline`, which a Process alone has (`did.dplaax.hierarchy`).
+- Conformance: a reject vector of the `keybinding`, `did`, `delegation` and
+  `claims-coverage` families passes only when it is refused with the
+  sentinel its rule names: `did-008`..`did-021` (`did.dplaax.syntax`) with
+  `did/dplaax.ErrSyntax`, and a `keybinding` vector also at the step that
+  refuses it. `delegation-002`..`delegation-005`, whose rules have no
+  sentinel yet, are tied to a part of the refusal's text. Guard tests check
+  that the tables tie every reject vector of these families, and nothing
+  else, and a `claims-coverage` view that does not decode fails its
+  vector.
 
 ### Fixed
 
@@ -237,10 +247,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   keyword as absent, and so did `multipleOf` where the library skips the
   metaschema check. The schema package refuses these numbers before the
   library reads them, so its behaviour does not change.
-- `internal/jsonschema` reads an integer keyword (`minLength`, `maxLength`,
-  `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
-  `maxContains`) above `math.MaxInt` as `math.MaxInt`, and one whose number
-  `big.Rat` cannot read is a `LargeNumberError`.
+- `schema`: in a schema it compiles, an integer keyword (`minLength`,
+  `maxLength`, `minItems`, `maxItems`, `minProperties`, `maxProperties`,
+  `minContains`, `maxContains`) whose value is an integer above `math.MaxInt`
+  is read as `math.MaxInt`, under every draft that has the keyword
+  (`internal/jsonschema`'s change 14; a number `big.Rat` cannot read is a
+  `LargeNumberError` there, and the schema package's own bound on numbers
+  refuses it first).
 - `vc`: an `eddsa-rdfc-2022` `PipelinePassCredential` must hold the members
   `vc` reads under their names and in their forms, and no others.
   `ValidateWireForm` (and so `Verify` and `VerifyChain`), `ValidateChainLinks`,
@@ -270,10 +283,50 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   of two registries (its node DID, a producing loop's output subject or
   issuer, a sink's receipt issuer) without `node-registry`: it decides one
   audience for its node at start, and that node accepts one.
+- **Wire and configuration:** a DID whose registry segment is longer than
+  253 octets (`did/dplaax.MaxRegistryLen`) does not parse, so this release
+  refuses such a DID that 0.4.x accepted, wherever it reads one. A registry
+  server whose `provin.network.registry.id` is such a registry, and a chain
+  configuration whose `registry-base-urls` names one, do not start. The
+  registry's DID service answers
+  such a DID `InvalidArgument`, where it answered `PermissionDenied` for a
+  registry that is not its own.
+- **Wire:** a key binding this release issues names the dplaax key-binding
+  branch context in its `@context`, after credentials v2 and dplaax v1, and
+  a 0.4.x relying party refuses it: it takes only a binding whose `@context`
+  is exactly those two. This release accepts every binding a 0.4.x issuer
+  made while its `validFrom` is before 2027-01-01T00:00:00Z, and refuses a
+  binding without the branch context whose `validFrom` is
+  2027-01-01T00:00:00Z or later.
+
+  Migration: upgrade relying parties before issuers, and every issuer before
+  it issues a binding valid from 2027-01-01T00:00:00Z.
+
+  The two context documents of the v0 credential wire freeze that a key
+  binding names (credentials v2, dplaax `vc/v1`) are unchanged, and a
+  binding a 0.4.x issuer made, valid from before 2027-01-01T00:00:00Z, still
+  verifies: the branch context this change adds after them is not among the
+  contexts the declaration pins, so it does not amend the freeze.
+- **Schema:** a JSON Schema `pattern` may name a Unicode general category by
+  a long name or alias (`\p{Letter}`), which 0.4.x refuses: a schema that
+  does is accepted here and refused by a 0.4.x process. Upgrade every
+  process that compiles or validates against a schema before a schema uses
+  one.
+- **Go API:** `decisionrecord.Filter.Flush` with a context that has already
+  ended returns its error and keeps the window for the next `Flush`, where
+  0.4.x passed the window's summaries to its sink whatever the context said
+  and started the next window. A caller's
+  last `Flush` at shutdown passes a context the shutdown signal does not end,
+  with a deadline of its own (see Changed).
 - **Go API:** `wireauth` moves from
   `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
   the RPCs of several services carry its proof, not the chain manager's
-  alone. Its identifiers move unchanged.
+  alone. Its identifiers move unchanged, and the `Verifier` interfaces of
+  the auditor, chain manager, payload resolver, payload store and tlog
+  handlers take its `Proof` and `Authorizer` from there.
+- **Go API:** `payloadresolver/client.Config` holds a map
+  (`UpstreamAudiences`), so it is no longer comparable, and neither is
+  `client.Resolver`.
 - **Go API:** `wireauth.Sign` is `Sign(signer, op, fields, Claims)`, the
   view's signer DID, audience, nonce and issued-at in `wireauth.Claims`;
   `wireauth.Proof` has `Audience` and `ViewVersion`;

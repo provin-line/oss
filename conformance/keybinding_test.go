@@ -47,6 +47,79 @@ var kbReasons = map[string]error{
 	"status-list-revocation-cleared": keybinding.ErrStatusListRevocationCleared,
 }
 
+// kbRefusal is the refusal a reject vector is tied to: the sentinel of the
+// condition its description names, and whether that refusal comes when the
+// list the verifier is to hold is restored rather than when the vector's
+// credential is verified. Only a binding vector has such a list to restore.
+type kbRefusal struct {
+	err       error
+	atRestore bool
+}
+
+// kbRefusals ties every keybinding reject vector to its refusal, so a vector
+// refused with another sentinel fails. A rule can have several refusals
+// (keybinding.status.entry: a malformed entry, a revoked one, a list not
+// current), so the table is by vector, not by rule.
+//
+// The driver holds a binding vector's list as of the vector's time, the only
+// time the vector gives. keybinding-023's list is dated after that time, and
+// RestoreStatusList refuses a list dated after the time it is restored at, so
+// its refusal is at the restore. Every other binding vector's list restores.
+var kbRefusals = map[string]kbRefusal{
+	"keybinding-002": {err: keybinding.ErrMalformed},
+	"keybinding-003": {err: keybinding.ErrSignature},
+	"keybinding-004": {err: keybinding.ErrSignature},
+	"keybinding-005": {err: keybinding.ErrNotValidAt},
+	"keybinding-006": {err: keybinding.ErrValidityTooLong},
+	"keybinding-007": {err: keybinding.ErrAudience},
+	"keybinding-008": {err: keybinding.ErrMalformed},
+	"keybinding-009": {err: keybinding.ErrRevoked},
+	"keybinding-010": {err: keybinding.ErrStatusListStale},
+	"keybinding-012": {err: keybinding.ErrMalformed},
+	"keybinding-013": {err: keybinding.ErrMalformed},
+	"keybinding-014": {err: keybinding.ErrMalformed},
+	"keybinding-019": {err: keybinding.ErrStatusListRewound},
+	"keybinding-020": {err: keybinding.ErrStatusListRewound},
+	"keybinding-021": {err: keybinding.ErrStatusListRevocationCleared},
+	"keybinding-022": {err: keybinding.ErrStatusListStale},
+	"keybinding-023": {err: keybinding.ErrStatusListStale, atRestore: true},
+	"keybinding-026": {err: keybinding.ErrSignature},
+	"keybinding-027": {err: keybinding.ErrSignature},
+	"keybinding-033": {err: keybinding.ErrMalformed},
+	"keybinding-034": {err: keybinding.ErrMalformed},
+	"keybinding-035": {err: keybinding.ErrMalformed},
+	"keybinding-036": {err: keybinding.ErrMalformed},
+	"keybinding-037": {err: keybinding.ErrStatusListStale},
+	"keybinding-040": {err: keybinding.ErrMalformed},
+	"keybinding-041": {err: keybinding.ErrMalformed},
+	"keybinding-042": {err: keybinding.ErrMalformed},
+	"keybinding-043": {err: keybinding.ErrStatusListStale},
+	"keybinding-045": {err: keybinding.ErrMalformed},
+	"keybinding-047": {err: keybinding.ErrMalformed},
+	"keybinding-048": {err: keybinding.ErrMalformed},
+	"keybinding-049": {err: keybinding.ErrMalformed},
+	"keybinding-050": {err: keybinding.ErrMalformed},
+	"keybinding-051": {err: keybinding.ErrMalformed},
+	"keybinding-052": {err: keybinding.ErrMalformed},
+	"keybinding-053": {err: keybinding.ErrMalformed},
+	"keybinding-054": {err: keybinding.ErrMalformed},
+}
+
+// kbExpect reads a vector's expect: "accept", "reject", or an object with a
+// result and a reason. A vector about a content hash has neither, and reads "".
+func kbExpect(t *testing.T, v dplaaxVector) (result, reason string) {
+	t.Helper()
+	if json.Unmarshal(v.Expect, &result) == nil {
+		return result, ""
+	}
+	var want struct {
+		Result string `json:"result"`
+		Reason string `json:"reason"`
+	}
+	mustParse(t, v.Expect, &want)
+	return want.Result, want.Reason
+}
+
 // kbKeys signs as DID#fragment with the fixture keys it holds.
 type kbKeys map[string]stded25519.PrivateKey
 
@@ -208,13 +281,27 @@ func runKeybinding(t *testing.T, v dplaaxVector) {
 		t.Fatalf("at: %v", err)
 	}
 	ctx := context.Background()
+	result, reason := kbExpect(t, v)
+	refusal, tied := kbRefusals[v.ID]
+	if refusal.atRestore && in.StatusList == nil {
+		t.Fatalf("kbRefusals refuses %s at the restore, but it holds no list to restore", v.ID)
+	}
 
 	switch {
 	case in.StatusList != nil: // a binding, with the list the verifier holds
-		// The list is held as RestoreStatusList holds one, which leaves its
-		// freshness to VerifyBinding (keybinding.status-list.fresh).
-		var l *keybinding.StatusList
-		if l, err = verifier.RestoreStatusList(ctx, kbResign(t, keys, in.StatusList), anchor, at); err == nil {
+		// The list is held as RestoreStatusList holds one. It refuses a list
+		// dated after at, and leaves its age and its validUntil to
+		// VerifyBinding (keybinding.status-list.fresh).
+		l, rerr := verifier.RestoreStatusList(ctx, kbResign(t, keys, in.StatusList), anchor, at)
+		switch {
+		case refusal.atRestore:
+			if rerr == nil {
+				t.Fatalf("the vector's list restores, want the restore refused with %v", refusal.err)
+			}
+			err = rerr
+		case rerr != nil:
+			t.Fatalf("the vector's list does not restore: %v", rerr)
+		default:
 			_, err = verifier.VerifyBinding(ctx, kbResign(t, keys, in.Credential), anchor, l, at)
 		}
 	case in.Held != nil: // a list, against the one held
@@ -227,33 +314,44 @@ func runKeybinding(t *testing.T, v dplaaxVector) {
 		_, err = verifier.VerifyStatusList(ctx, kbResign(t, keys, in.Credential), anchor, nil, at)
 	}
 
-	var want struct {
-		Result string `json:"result"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal(v.Expect, &want.Result); err != nil {
-		mustParse(t, v.Expect, &want)
-	}
-	switch want.Result {
+	switch result {
 	case "accept":
 		if err != nil {
 			t.Errorf("refused: %v, want accept", err)
 		}
 	case "reject":
-		if err == nil {
-			t.Error("accepted, want reject")
+		if !tied {
+			t.Fatalf("no refusal tied to %s in kbRefusals", v.ID)
 		}
-		if want.Reason != "" {
-			sentinel, ok := kbReasons[want.Reason]
-			if !ok {
-				t.Fatalf("no refusal for reason %q", want.Reason)
-			}
-			if !errors.Is(err, sentinel) {
-				t.Errorf("refused with %v, want %v (%s)", err, sentinel, want.Reason)
-			}
+		if !errors.Is(err, refusal.err) {
+			t.Errorf("refused with %v, want %v", err, refusal.err)
+		}
+		if reason != "" && kbReasons[reason] != refusal.err {
+			t.Errorf("reason %q names %v, kbRefusals %v", reason, kbReasons[reason], refusal.err)
 		}
 	default:
 		t.Fatalf("expect %s names no outcome", v.Expect)
+	}
+}
+
+// kbRefusals ties exactly the keybinding vectors the manifest lists as
+// reject: an accept vector tied, or a reject vector untied, fails.
+func TestKbRefusalsTieEveryRejectVector(t *testing.T) {
+	listed := map[string]bool{}
+	for _, id := range manifestIDs(t) {
+		if !strings.HasPrefix(id, "keybinding-") {
+			continue
+		}
+		listed[id] = true
+		result, _ := kbExpect(t, loadDplaax(t, id))
+		if _, tied := kbRefusals[id]; tied != (result == "reject") {
+			t.Errorf("%s expects %q, tied in kbRefusals: %t", id, result, tied)
+		}
+	}
+	for id := range kbRefusals {
+		if !listed[id] {
+			t.Errorf("kbRefusals ties %s, which the manifest does not list", id)
+		}
 	}
 }
 

@@ -20,9 +20,12 @@ no validator skips the check.
 
 The JSON Schema library is `internal/jsonschema`, a copy of
 `santhosh-tekuri/jsonschema` with patches: a work budget, an error for a
-number it cannot read where upstream panics, and compiling a schema in time
-about linear in its size, its check against its metaschema within a work budget
-(its README). Each refusal names the bound it hit.
+number it cannot read where upstream panics, compiling a schema in time
+about linear in its size (up to a factor of log n where `uniqueItems` sorts
+object names that share a long prefix), its check against its metaschema within a work
+budget, a compile error for a number keyword whose number it cannot read, and
+an integer keyword beyond the range of `int` read at that range's end (its
+README). Each refusal names the bound it hit.
 
 This package does not bound a schema's size: its caller does, as the
 network's schema registration does at 1 MiB (the bound of a document request).

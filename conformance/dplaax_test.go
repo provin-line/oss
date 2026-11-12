@@ -490,9 +490,11 @@ func runDelegation(t *testing.T, v dplaaxVector) {
 	})
 	if err != nil {
 		// Build refuses what Verify would refuse (e.g. delegatedBy != issuer);
-		// a reject vector may legitimately end here.
+		// a reject vector may legitimately end here, refused as its tie says.
 		if want != "reject" {
 			t.Errorf("Build rejected an accept vector: %v", err)
+		} else {
+			checkDelegationRefusal(t, v.ID, "Build", err)
 		}
 		return
 	}
@@ -516,10 +518,83 @@ func runDelegation(t *testing.T, v dplaaxVector) {
 	if (err == nil) != (want == "accept") {
 		t.Errorf("%s err=%v, want %s", call, err, want)
 	}
-	// A vector that names a target other than the subject is refused as not
-	// for it. One that names the subject is refused, if at all, by Verify.
-	if input.Target != nil && *input.Target != built.CredentialSubject.ID && want == "reject" && !errors.Is(err, delegation.ErrNotForIdentity) {
-		t.Errorf("VerifyFor err=%v, want ErrNotForIdentity", err)
+	if want == "reject" {
+		checkDelegationRefusal(t, v.ID, call, err)
+	}
+}
+
+// refusalTie is how a reject vector's refusal is recognized: by a sentinel
+// (errors.Is), or, for a rule that has none yet, by a part of the error's
+// text.
+type refusalTie struct {
+	err  error
+	text string
+}
+
+func (r refusalTie) holds(err error) bool {
+	switch {
+	case r.err != nil:
+		return errors.Is(err, r.err)
+	case r.text != "":
+		return err != nil && strings.Contains(err.Error(), r.text)
+	default: // a tie that names nothing holds for no error
+		return false
+	}
+}
+
+func (r refusalTie) String() string {
+	if r.err != nil {
+		return r.err.Error()
+	}
+	return fmt.Sprintf("an error saying %q", r.text)
+}
+
+// delegationRefusals ties each delegation reject vector to the refusal its
+// rule names, so a vector refused otherwise fails. delegation has a sentinel
+// only for delegation.use.subject-bound (ErrNotForIdentity); the other rules'
+// vectors are tied by a part of the error's text, which is not a contract
+// (delegation-003's is did/dplaax.RequireOwner's). When a sentinel comes for
+// one of those refusals, tie its vectors to the sentinel instead.
+var delegationRefusals = map[string]refusalTie{
+	"delegation-002": {text: "is not under the issuing owner"},     // delegation.binding
+	"delegation-003": {text: "owner-level authority required"},     // delegation.binding
+	"delegation-004": {text: "proof type/purpose"},                 // delegation.proof
+	"delegation-005": {text: "credentialSubject.scope is present"}, // delegation.scope
+	"delegation-007": {err: delegation.ErrNotForIdentity},          // delegation.use.subject-bound
+	"delegation-008": {err: delegation.ErrNotForIdentity},          // delegation.use.subject-bound
+}
+
+// checkDelegationRefusal fails unless err, call's refusal of reject vector id,
+// is the refusal delegationRefusals ties id to.
+func checkDelegationRefusal(t *testing.T, id, call string, err error) {
+	t.Helper()
+	tie, ok := delegationRefusals[id]
+	if !ok {
+		t.Fatalf("no refusal tied to %s in delegationRefusals", id)
+	}
+	if !tie.holds(err) {
+		t.Errorf("%s refused %s with %v, want %s", call, id, err, tie)
+	}
+}
+
+// delegationRefusals ties exactly the delegation vectors the manifest lists
+// as reject.
+func TestDelegationRefusalsTieEveryRejectVector(t *testing.T) {
+	listed := map[string]bool{}
+	for _, id := range manifestIDs(t) {
+		if !strings.HasPrefix(id, "delegation-") {
+			continue
+		}
+		listed[id] = true
+		_, tied := delegationRefusals[id]
+		if want := expectString(t, loadDplaax(t, id)); tied != (want == "reject") {
+			t.Errorf("%s expects %q, tied in delegationRefusals: %t", id, want, tied)
+		}
+	}
+	for id := range delegationRefusals {
+		if !listed[id] {
+			t.Errorf("delegationRefusals ties %s, which the manifest does not list", id)
+		}
 	}
 }
 
