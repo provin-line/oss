@@ -35,7 +35,7 @@ import (
 // included) a loss-sensitive wireauth-signed call may spend retrying a
 // connect.CodeUnavailable failure. Sized to cmd/network's boot-window
 // barrier (restart-epoch = ceilToSecond(boot + MaxFuture); MaxFuture
-// defaults to a few seconds, per network/pkg/services/chainmanager/wireauth's
+// defaults to a few seconds, per network/pkg/wireauth's
 // VerifierConfig) plus a margin generous enough that a caller racing the
 // barrier is still retrying once the verifier is past its own boot — the
 // spec's "~MaxFuture+ceil ≈ 6s default, plus margin" budget.

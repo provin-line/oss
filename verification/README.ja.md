@@ -212,7 +212,7 @@ SHA-256 で 2 つのずれが分かる。
 ## review
 
 CI は `verification/tamarin/` か workflow が変わった時に model を回す。model か、
-model の契約が述べる code（`network/pkg/services/chainmanager/wireauth`、
+model の契約が述べる code（`network/pkg/wireauth`、
 `wireauth.Sign` の呼び手と、その audience の出所（`cmd/pipeline/audience.go`、chain manager の subscriber）、node の検証者（`internal/netcompose`）、L2 の proof を検証する handler、`pipelineconfig.Config.PresentsCredentialTo`、
 `internal/origin`、`vc-store-bearer` を付ける client）を変える pull request は、
 上の契約が code でまだ成り立つかを review する。

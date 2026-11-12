@@ -11,7 +11,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 const ttl90s = 90 * time.Second

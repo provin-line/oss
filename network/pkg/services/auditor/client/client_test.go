@@ -28,9 +28,9 @@ import (
 	auditclient "github.com/provin-line/oss/network/pkg/services/auditor/client"
 	"github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/vc"
 )
 

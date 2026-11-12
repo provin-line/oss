@@ -22,7 +22,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/noop"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store/memstore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 const (

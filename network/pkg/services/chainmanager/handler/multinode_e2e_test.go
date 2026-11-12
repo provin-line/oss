@@ -24,7 +24,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store/memstore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // bridgeDirToResolver copies every <accountPub>.jwt the operators wrote into a

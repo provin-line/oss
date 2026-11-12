@@ -16,11 +16,11 @@ import (
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 const (

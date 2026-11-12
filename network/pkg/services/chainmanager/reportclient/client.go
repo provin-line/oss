@@ -25,8 +25,8 @@ import (
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Config configures a Client. Signer, SignerDID, BaseURL, and HTTPClient are

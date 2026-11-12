@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto/ed25519"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // countingNonces counts the nonces recorded, to show a refusal spent none.

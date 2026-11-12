@@ -47,7 +47,7 @@ service SignerService {
   }
 
   // SignRaw produces an Ed25519 signature over data with the DID's #auth
-  // authentication key — the L2 wire-signing domain (chainmanager wireauth).
+  // authentication key — the L2 wire-signing domain (network/pkg/wireauth).
   // data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
   // the returned signature is the raw 64-byte Ed25519 signature. key_id must be
   // "auth"; any other value is rejected (D-s3).

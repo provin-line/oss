@@ -39,8 +39,8 @@ import (
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/internal/origin"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // opResolvePayload MUST match the publisher verifier's signed view.

@@ -12,7 +12,7 @@ import (
 	"connectrpc.com/connect"
 
 	auditclient "github.com/provin-line/oss/network/pkg/services/auditor/client"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // The proof names the configured audience: the harness's verifier refuses a

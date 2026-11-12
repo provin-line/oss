@@ -6,7 +6,7 @@ import (
 	"time"
 
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // errMalformedIssuedAt marks an AuthProof.issued_at that is not a canonical

@@ -75,7 +75,7 @@ type SignerServiceClient interface {
 	// "signing"; any other value is rejected (D-s3).
 	Sign(context.Context, *connect.Request[v1.SignRequest]) (*connect.Response[v1.SignResponse], error)
 	// SignRaw produces an Ed25519 signature over data with the DID's #auth
-	// authentication key — the L2 wire-signing domain (chainmanager wireauth).
+	// authentication key — the L2 wire-signing domain (network/pkg/wireauth).
 	// data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
 	// the returned signature is the raw 64-byte Ed25519 signature. key_id must be
 	// "auth"; any other value is rejected (D-s3).
@@ -133,7 +133,7 @@ type SignerServiceHandler interface {
 	// "signing"; any other value is rejected (D-s3).
 	Sign(context.Context, *connect.Request[v1.SignRequest]) (*connect.Response[v1.SignResponse], error)
 	// SignRaw produces an Ed25519 signature over data with the DID's #auth
-	// authentication key — the L2 wire-signing domain (chainmanager wireauth).
+	// authentication key — the L2 wire-signing domain (network/pkg/wireauth).
 	// data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
 	// the returned signature is the raw 64-byte Ed25519 signature. key_id must be
 	// "auth"; any other value is rejected (D-s3).

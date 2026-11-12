@@ -16,7 +16,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/didresolver"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/resolver"
 )
 

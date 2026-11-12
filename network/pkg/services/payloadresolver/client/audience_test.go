@@ -13,8 +13,8 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 func TestResolvePayloadProofNamesUpstreamAudience(t *testing.T) {

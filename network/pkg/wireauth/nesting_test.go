@@ -11,7 +11,7 @@ import (
 
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/internal/jsondepth"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // deep is depth arrays and objects, alternating, around a string.

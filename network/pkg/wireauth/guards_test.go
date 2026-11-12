@@ -8,7 +8,7 @@ import (
 
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // verifierWith builds a Verifier with an explicit clock and epoch for the

@@ -217,6 +217,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   or override with `upstream-registry`, different audiences) does not start:
   one endpoint is one node (`docs/architecture/deployment.md`, "Wire proof
   audience").
+- **Go API:** `wireauth` moves from
+  `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
+  the RPCs of several services carry its proof, not the chain manager's
+  alone. Its identifiers move unchanged.
 - **Go API:** `wireauth.Sign` takes the audience after the signer DID;
   `wireauth.Proof` has `Audience`; `wireauth.VerifierConfig.Audience` is
   required; the new sentinel `wireauth.ErrWrongAudience` maps to

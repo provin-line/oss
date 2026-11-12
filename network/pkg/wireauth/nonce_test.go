@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Concurrent hammer: many goroutines racing Use for the same (signer, nonce)

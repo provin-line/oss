@@ -30,7 +30,7 @@ audit-reachable conformance class（ソースコミットメント — [pipeline
 ## 二層認証
 
 - **L1（オペレーター向け）**: `pkg/auth` が検証する Bearer JWT（JWKS/Ed25519 または HS256）。プロトコル内で宣言されたリソース + アクションのポリシーオプションに対して RPC ごとに適用。
-- **L2（ピア向け）**: ChainPeerService の全 RPC が `AuthProof` を持つ — JCS 正規化ビューに対する Ed25519 署名で、ノンスリプレイ保護と再起動エポックバリアを備える。`pkg/services/chainmanager/wireauth` に実装。**L2 に認証オフモードは存在しない。**
+- **L2（ピア向け）**: ChainPeerService の全 RPC が `AuthProof` を持つ — JCS 正規化ビューに対する Ed25519 署名で、ノンスリプレイ保護と再起動エポックバリアを備える。`pkg/wireauth` に実装。**L2 に認証オフモードは存在しない。**
 - **Evidence 書き込み**（`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`）: L1 + in-band wireauth — PDP ゲート（L1 のポリシーオプション）が「そもそも書き込みを許可するか」を判定し、リクエストはさらに wireauth `AuthProof` を運び、ハンドラーが in-band で検証する。証明された DID が authoritative。
 
 ## レイアウト
@@ -40,5 +40,6 @@ cmd/network/      バイナリ: 設定ロード、DI ワイヤリング、マル
 config/           application.conf（オペレーターレイヤー）
 pkg/core/         マージ済み設定モデル、シークレット解決、SSRF 耐性 URL チェック
 pkg/auth/         L1 JWT 検証 + 認可インターセプター
+pkg/wireauth/     L2 のワイヤー証明: 帯域内の AuthProof の署名と検証
 pkg/services/     サービスごとに 1 パッケージ — pkg/services/README.md 参照
 ```

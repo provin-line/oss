@@ -14,10 +14,10 @@ import (
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/network/pkg/didresolver"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 )
 

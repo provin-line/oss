@@ -31,8 +31,8 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 )
 

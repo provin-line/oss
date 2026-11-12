@@ -1,5 +1,5 @@
 /*
- * The L2 peer wire proof (network/pkg/services/chainmanager/wireauth), as a
+ * The L2 peer wire proof (network/pkg/wireauth), as a
  * Tamarin model.
  *
  * A request carries an op and its fields; its proof carries the signer DID,

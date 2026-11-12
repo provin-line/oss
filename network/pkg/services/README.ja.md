@@ -24,5 +24,5 @@
 | `didregistry/` | DID ライフサイクル; YAML の DID/鍵ストアを所有 |
 | `signer/` | `keystore` 経由の署名; 独自ストアなし |
 | `schemaregistry/` | イミュータブルスキーマ; コンテンツアドレス指定のバージョン命名 |
-| `chainmanager/` | サブスクリプション、許可リスト、インフラオペレーター、L2 wireauth |
+| `chainmanager/` | サブスクリプション、許可リスト、インフラオペレーター |
 | `vcresolver/` | VC ストア + 非同期バッチチェーン解決 |

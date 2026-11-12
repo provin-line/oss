@@ -14,7 +14,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 	"github.com/provin-line/oss/tlog"
 )

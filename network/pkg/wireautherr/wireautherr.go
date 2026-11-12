@@ -15,7 +15,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Code returns the Connect status code for a wireauth sentinel error err (as

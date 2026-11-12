@@ -22,7 +22,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 	"github.com/provin-line/oss/vc"
 )

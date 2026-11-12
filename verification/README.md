@@ -275,7 +275,7 @@ Tools: Tamarin 1.12.0 and Maude 3.5.1, the versions CI pins by SHA-256
 
 CI runs the models when `verification/tamarin/` or the workflow changes. A
 pull request that changes a model, or the code a model's contract describes
-(`network/pkg/services/chainmanager/wireauth`, the callers of `wireauth.Sign`
+(`network/pkg/wireauth`, the callers of `wireauth.Sign`
 and where their audience comes from (`cmd/pipeline/audience.go`, the chain
 manager's subscriber), the node's verifier (`internal/netcompose`), the
 handlers that verify an L2 proof,

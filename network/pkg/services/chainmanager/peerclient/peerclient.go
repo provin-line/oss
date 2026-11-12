@@ -16,7 +16,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // op names — these MUST match the publisher verifier's per-op signed view

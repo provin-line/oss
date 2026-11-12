@@ -18,7 +18,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store/memstore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // e2ePubRegistry is e2ePub's registry segment: the audience of the

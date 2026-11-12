@@ -11,7 +11,7 @@ Two signing domains, two consumers:
 | RPC | Input | Output | Key | Authz | Used by |
 |---|---|---|---|---|---|
 | `Sign` | raw bytes | raw Ed25519 signature | `#signing` | `signer:sign-vc` | VC proof creation (pipeline provenance) |
-| `SignRaw` | raw bytes | raw 64-byte Ed25519 signature | `#auth` | `signer:sign-wire` | L2 wire-signing (chainmanager wireauth) |
+| `SignRaw` | raw bytes | raw 64-byte Ed25519 signature | `#auth` | `signer:sign-wire` | L2 wire-signing (`network/pkg/wireauth`) |
 
 ## Raw-bytes seam
 
@@ -37,8 +37,8 @@ VC endpoint to sign with the auth key, or vice versa.
 
 The production `crypto.Signer` is `client.New(SignerServiceClient)` — it dispatches
 by keyID (the inverse of the server binding: `signing` → `Sign`, `auth` →
-`SignRaw`) and returns the raw signature. A consumer (pipeline runtime, chainmanager
-wireauth) depends on the service through that adapter / a narrowed consumer-side
+`SignRaw`) and returns the raw signature. A consumer (pipeline runtime,
+`network/pkg/wireauth`) depends on the service through that adapter / a narrowed consumer-side
 interface — never on the service package itself (avoids service-to-service import
 cycles). The `client` package imports only the generated client, `crypto`, and the
 `keystore` key-ID contract.

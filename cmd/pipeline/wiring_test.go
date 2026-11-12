@@ -39,7 +39,6 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/storehandler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
@@ -50,6 +49,7 @@ import (
 	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	vcresolvermemstore "github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/vc"
 )

@@ -114,7 +114,7 @@ is the Hub swap point for the pub-sub backend. Implementations:
 - `nats/` — dynamic NATS account-claims JWT management (requires full-resolver mode)
 - `noop/` — debug/testing only; must be impossible to wire in non-debug builds
 
-## wireauth/ — L2 peer authentication
+## L2 peer authentication (`network/pkg/wireauth`)
 
 Every ChainPeerService RPC carries an `AuthProof` (the proto message; the Go
 library type is `wireauth.Proof`): Ed25519 signature over a

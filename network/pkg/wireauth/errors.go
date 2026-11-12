@@ -1,5 +1,7 @@
-// Package wireauth is the L2 peer-authentication layer of the chain manager:
-// every internet-facing ChainPeerService RPC carries an Ed25519 Proof over a
+// Package wireauth is the L2 peer-authentication layer of the network
+// services: every RPC that takes an AuthProof (ChainPeerService's, and those
+// of ChainService, AuditService, PayloadService, PayloadStoreService and
+// TlogService that take one) carries an Ed25519 Proof over a
 // JCS-canonicalized per-RPC view, and this package signs and verifies them.
 //
 // It is the only authentication on the ChainPeerService surface (there is no L1

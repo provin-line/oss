@@ -74,7 +74,7 @@ posture.
   `pkg/auth` itself decides no policy and verifies no JWT signature.
 - **L2 (peer-facing)**: every ChainPeerService RPC carries an `AuthProof` — Ed25519
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
-  epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no
+  epoch barrier. Implemented in `pkg/wireauth`. **There is no
   auth-off mode for L2.** L2 is independent of the PDP — it needs no policy-verifier.
 - **Evidence writes** (`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`):
   L1 + in-band wireauth — the PDP gate (the L1 policy option) decides whether the
@@ -142,5 +142,6 @@ cmd/network/      binary: config load, DI wiring, mux registration
 config/           application.conf (operator layer)
 pkg/core/         merged config model, secret resolution, SSRF-resistant URL checks
 pkg/auth/         L1 JWT verification + authorization interceptor
+pkg/wireauth/     L2 wire proof: signs and verifies the in-band AuthProof
 pkg/services/     one package per service — see pkg/services/README.md
 ```

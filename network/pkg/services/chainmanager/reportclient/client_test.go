@@ -21,7 +21,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/reportclient"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // nodeAudience is the audience of the harness's verifier.

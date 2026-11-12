@@ -18,7 +18,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // audienceProbe signs a GetPublisherInfo proof for audience as a signer the
