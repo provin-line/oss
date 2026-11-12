@@ -161,9 +161,11 @@ type PayloadStoreServiceClient interface {
 	// Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
 	// rationale in reverse: retained payloads can be large, so the wire must not
 	// impose a unary message-size ceiling on the way in either. The first frame
-	// MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
-	// subsequent frame carries a chunk. The server assembles the chunks and mints
-	// the content address itself — a caller-supplied address is never trusted.
+	// MUST carry metadata (owner_did, declared_size, content_address, and the
+	// wireauth proof, which covers the first three); every subsequent frame
+	// carries a chunk. The server assembles the chunks, computes their content
+	// address itself, and keeps them only when it is the declared
+	// content_address (InvalidArgument otherwise).
 	//
 	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
 	// decides whether the caller may retain payloads at all; the metadata frame
@@ -211,9 +213,11 @@ type PayloadStoreServiceHandler interface {
 	// Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
 	// rationale in reverse: retained payloads can be large, so the wire must not
 	// impose a unary message-size ceiling on the way in either. The first frame
-	// MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
-	// subsequent frame carries a chunk. The server assembles the chunks and mints
-	// the content address itself — a caller-supplied address is never trusted.
+	// MUST carry metadata (owner_did, declared_size, content_address, and the
+	// wireauth proof, which covers the first three); every subsequent frame
+	// carries a chunk. The server assembles the chunks, computes their content
+	// address itself, and keeps them only when it is the declared
+	// content_address (InvalidArgument otherwise).
 	//
 	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
 	// decides whether the caller may retain payloads at all; the metadata frame

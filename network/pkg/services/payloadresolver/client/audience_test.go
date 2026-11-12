@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/keystore"
@@ -67,7 +68,7 @@ func TestRetainWithoutStoreAudienceFailsBeforeSending(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: srv.Client(), StoreEndpoint: srv.URL})
-	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7); !errors.Is(err, wireauth.ErrMalformedProof) {
+	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7, contentaddress.Of([]byte("payload"))); !errors.Is(err, wireauth.ErrMalformedProof) {
 		t.Fatalf("no store audience: %v, want ErrMalformedProof", err)
 	}
 	if n := requests.Load(); n != 0 {

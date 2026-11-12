@@ -27,6 +27,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `contentaddress.Hasher` (`NewHasher`, `Write`, `Address`): the address of
+  bytes written to it a part at a time, as `Of` makes it of bytes held at
+  once, for bytes that arrive in parts without holding them all. The zero
+  `Hasher` is ready to use. `Address`, `Of` and `Parse` do not change.
 - `decisionrecord.WritePanic`: what a call to a sink made here, or to a
   `Filter`, panics with when a write it waits for panics in a goroutine of
   its own: the value and the writer's stack, both in its text; `Unwrap`
@@ -152,6 +156,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- `network/pkg/services/payloadresolver`: the proof of a `RetainPayload` call
+  binds the payload's content address, and the store keeps the payload only
+  when the bytes it receives have that address (see Breaking changes).
 - `didregistry/store.DIDStore`'s contract says `Resolve` returns a non-nil
   document or a non-nil error, and `ResolveDelegation` a non-nil delegation
   or a non-nil error, never both nil; `yamlstore` keeps it, and so the
@@ -454,6 +461,25 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   network node and pipeline that talk to each other in one window
   (`docs/architecture/deployment.md`, "Upgrading to view version 2"). One
   network process serves a registry's L2 surfaces.
+- **Wire:** `PayloadStoreService.RetainPayload`'s first frame carries field 4
+  of `RetainPayloadMetadata`, `content_address`, the payload's address
+  (`sha256:` and 64 lowercase hex digits), and its proof's fields cover it
+  with `owner_did` and `declared_size`. The store refuses a first frame
+  without it, or with one not spelled as an address, and refuses bytes whose
+  address is not the declared one before it keeps them (`InvalidArgument`). A
+  store not yet upgraded refuses a client of this release, and this release's
+  store refuses an older client: they move together, in the window the view
+  version 2 entry above names. An older client, which sends no
+  `content_address`, is refused `InvalidArgument`, not the `Unauthenticated`
+  ("view version 0") of that entry.
+- **Go API:** `payloadresolver/client`'s `(*Resolver).Retain` takes the
+  payload's content address, `Retain(ctx, rd, ownerDID, size, addr)`, as the
+  caller declares its size, and refuses a zero one before it sends anything.
+  A store's answer naming another address than `addr` is an error.
+  `payloadresolver/wirecontract.RetainPayloadFields`, and its alias
+  `payloadresolver.RetainPayloadFields`, take the content address too. The
+  alias is a function, no longer a variable: it cannot be assigned, and its
+  address cannot be taken.
 - **Configuration:** a pipeline whose configuration names one
   `upstream-endpoint` for two registries (the loops at that endpoint derive,
   or override with `upstream-registry`, different audiences) does not start:

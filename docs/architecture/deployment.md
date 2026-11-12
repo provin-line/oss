@@ -51,8 +51,10 @@ output-subject identity for by-reference payload retain, because
 `PayloadStoreService.RetainPayload` enforces `owner_did == the
 wireauth-proven signer`; a client signing as one shared node identity could
 satisfy at most one loop's retains before every other loop's emission
-aborted. `cmd/pipeline` and `cmd/network` never import each other (AGENTS.md
-layer rule 2) — they interact over the wire only.
+aborted. `RetainPayload` also keeps the payload only when the bytes it
+receives have the content address the proof names. `cmd/pipeline` and
+`cmd/network` never import each other (AGENTS.md layer rule 2) — they
+interact over the wire only.
 
 Evidence writes land as ordinary wire RPCs (`AuditService.RegisterEvidence`,
 `PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`), so
@@ -195,7 +197,10 @@ other version. Upgrade every network node and every pipeline that talk to
 each other in one window. During the window, calls between upgraded and
 not-yet-upgraded processes are refused: an upgraded node answers a proof
 that carries no view version as `Unauthenticated` ("view version 0"), and
-a node not yet upgraded refuses a version 2 proof's signature. Subscriptions do not
+a node not yet upgraded refuses a version 2 proof's signature. An upgraded
+node refuses a not-yet-upgraded pipeline's `RetainPayload` as
+`InvalidArgument` instead, since its first frame carries no content address.
+Subscriptions do not
 establish in the window, and a by-reference fetch that fails rejects,
 errors or drops its event as any fetch failure does, so stop by-reference
 consumption before the window or accept those events' loss. Relationship

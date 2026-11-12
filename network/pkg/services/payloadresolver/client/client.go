@@ -35,6 +35,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
@@ -425,26 +426,36 @@ func (r *Resolver) proof(audience, op string, fields map[string]any) (*chainpb.A
 }
 
 // Retain streams rd's bytes to THIS node's own PayloadStoreService
-// (Config.StoreEndpoint) as ownerDID, declaring size bytes up front. It signs
-// the metadata frame (owner_did + declared_size) with wireauth via the SAME
-// op + field builder the storehandler verifies (wirecontract.OpRetainPayload
-// / RetainPayloadFields — the two derivations cannot drift), splits rd into
-// Config.RetainChunkSize frames, and returns the server-recomputed content
-// address.
+// (Config.StoreEndpoint) as ownerDID, declaring size bytes and their content
+// address addr up front. It signs the metadata frame (owner_did +
+// declared_size + content_address) with wireauth via the SAME op + field
+// builder the storehandler verifies (wirecontract.OpRetainPayload /
+// RetainPayloadFields — the two derivations cannot drift), splits rd into
+// Config.RetainChunkSize frames, and returns the content address the server
+// kept the bytes at, which is addr's spelling: a server answer naming any
+// other address is an error.
 //
-// size MUST equal the exact number of bytes rd yields: the server enforces
-// this as a commitment, not a hint — a short or long stream is rejected
-// (InvalidArgument / ResourceExhausted), never silently truncated or padded
-// (see storehandler). Any Connect error the server returns is returned as-is
+// size MUST equal the exact number of bytes rd yields, and addr MUST be their
+// address, known before Retain reads rd (the first frame carries it):
+// contentaddress.Of of the bytes, or the Address of a contentaddress.Hasher
+// they were written to as they were made. The server enforces both as a
+// commitment, not a hint — a short or long stream is rejected
+// (InvalidArgument / ResourceExhausted), never silently truncated or padded,
+// and bytes whose address is not addr are rejected (InvalidArgument) before
+// the store keeps them (see storehandler). A zero addr is refused before
+// anything is sent. Any Connect error the server returns is returned as-is
 // (no swallowing), mirroring auditor/client.RegisterEvidence: the caller sees
 // the real code (e.g. PermissionDenied for an owner_did that does not match
 // the signing identity, ResourceExhausted for a size beyond the server's
 // quota).
-func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string, size uint64) (string, error) {
+func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string, size uint64, addr contentaddress.Address) (string, error) {
 	if r.storeEndpoint == "" {
 		return "", fmt.Errorf("payloadresolver/client: Retain requires Config.StoreEndpoint")
 	}
-	ap, err := r.proof(r.storeAudience, wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size))
+	if addr.IsZero() {
+		return "", fmt.Errorf("payloadresolver/client: Retain requires the payload's content address")
+	}
+	ap, err := r.proof(r.storeAudience, wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size, addr))
 	if err != nil {
 		return "", err
 	}
@@ -462,9 +473,10 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	stream := r.retainClient.RetainPayload(ctx)
 	if err := stream.Send(&payloadpb.RetainPayloadRequest{
 		Frame: &payloadpb.RetainPayloadRequest_Metadata{Metadata: &payloadpb.RetainPayloadMetadata{
-			OwnerDid:     ownerDID,
-			DeclaredSize: size,
-			AuthProof:    ap,
+			OwnerDid:       ownerDID,
+			DeclaredSize:   size,
+			AuthProof:      ap,
+			ContentAddress: addr.String(),
 		}},
 	}); err != nil {
 		// Per connect's ClientStreamForClient.Send doc: if the server already
@@ -506,7 +518,10 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	if err != nil {
 		return "", err
 	}
-	return resp.Msg.GetContentAddress(), nil
+	if got := resp.Msg.GetContentAddress(); got != addr.String() {
+		return "", fmt.Errorf("payloadresolver/client: the store answered content address %q, not the declared %s", got, addr)
+	}
+	return addr.String(), nil
 }
 
 // mapRemoteErr maps a remote NotFound to ErrNotFound (a broken publisher

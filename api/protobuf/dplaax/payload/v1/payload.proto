@@ -67,9 +67,11 @@ service PayloadStoreService {
   // Client-streaming is deliberate, mirroring ResolvePayload's server-streaming
   // rationale in reverse: retained payloads can be large, so the wire must not
   // impose a unary message-size ceiling on the way in either. The first frame
-  // MUST carry metadata (owner_did, declared_size, and the wireauth proof); every
-  // subsequent frame carries a chunk. The server assembles the chunks and mints
-  // the content address itself — a caller-supplied address is never trusted.
+  // MUST carry metadata (owner_did, declared_size, content_address, and the
+  // wireauth proof, which covers the first three); every subsequent frame
+  // carries a chunk. The server assembles the chunks, computes their content
+  // address itself, and keeps them only when it is the declared
+  // content_address (InvalidArgument otherwise).
   //
   // Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
   // decides whether the caller may retain payloads at all; the metadata frame
@@ -104,9 +106,15 @@ message RetainPayloadMetadata {
   // auth_proof is the L2 wireauth token, verified in-handler — mirrors the
   // proof-carrying shape of ResolvePayloadRequest above, reusing
   // dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
-  // would be a drift source). The proof covers owner_did and declared_size:
-  // the proven signer_did is authoritative over owner_did.
+  // would be a drift source). The proof covers owner_did, declared_size and
+  // content_address: the proven signer_did is authoritative over owner_did.
   dplaax.chain.v1.AuthProof auth_proof = 3;
+  // content_address is the caller-declared address of the payload to
+  // follow, "sha256:" and the 64 lowercase hex digits of its SHA-256. The
+  // server computes the address of the bytes it receives and refuses them,
+  // keeping nothing, when it differs (InvalidArgument), as it does for
+  // declared_size.
+  string content_address = 4;
 }
 
 message RetainPayloadResponse {

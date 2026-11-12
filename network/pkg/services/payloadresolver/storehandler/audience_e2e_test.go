@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 )
 
@@ -17,11 +18,11 @@ import (
 func TestRetainProofNamesStoreAudience(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	payload := []byte("retained for this node")
-	if _, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload))); err != nil {
+	if _, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload)); err != nil {
 		t.Fatalf("configured for the store's audience: %v", err)
 	}
 	other := client.New(client.Config{Signer: h.signer, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url, StoreAudience: "other.example"})
-	_, err := other.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	_, err := other.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated || !strings.Contains(err.Error(), "audience") {
 		t.Fatalf("configured for another audience: %v (code %v), want Unauthenticated naming the audience", err, connect.CodeOf(err))
 	}

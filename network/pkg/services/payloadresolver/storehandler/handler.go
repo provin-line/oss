@@ -12,11 +12,19 @@
 // content-address derivation and durable persistence live in
 // payloadresolver.Store/PayloadWriter; this package only converts proto
 // frames to writer calls and Connect error codes (handler = proto↔domain +
-// error mapping only, AGENTS.md). One exception: it streams directly to
-// Store.StoreWriter rather than through payloadresolver.Service.Store (whose
-// signature takes a whole []byte, not a stream), so it re-enforces Service's
-// "no empty payload" invariant itself (errZeroDeclaredSize) — that check would
-// otherwise be silently bypassed on this path.
+// error mapping only, AGENTS.md). Two exceptions, both because it streams
+// directly to Store.StoreWriter rather than through
+// payloadresolver.Service.Store (whose signature takes a whole []byte, not a
+// stream):
+//   - it re-enforces Service's "no empty payload" invariant itself
+//     (errZeroDeclaredSize) — that check would otherwise be silently bypassed
+//     on this path;
+//   - it computes the address of the bytes it receives and Aborts the writer
+//     unless it is the content_address the proof covers
+//     (errContentAddressMismatch): a PayloadWriter commits whatever it was
+//     given under that bytes' own address, so the refusal must come before
+//     Commit. It moves to the store side once a PayloadWriter can commit only
+//     under an expected address, refusing and discarding the bytes otherwise.
 package storehandler
 
 import (
@@ -26,11 +34,13 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/did"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
@@ -76,6 +86,16 @@ var (
 	// empty-payload entry through this path. Mapped to InvalidArgument;
 	// rejected before any store interaction (no writer is ever opened).
 	errZeroDeclaredSize = errors.New("storehandler: declared_size must be non-zero (an empty payload is never valid)")
+	// errMalformedContentAddress is a metadata frame whose content_address is
+	// missing or not spelled as an address ("sha256:" and 64 lowercase hex
+	// digits), as from a client of an earlier release, which sends none.
+	// Mapped to InvalidArgument; rejected before the proof is verified (the
+	// proof covers the address) and before any writer is opened.
+	errMalformedContentAddress = errors.New("storehandler: content_address is missing or not an address")
+	// errContentAddressMismatch is a stream whose bytes are not the ones its
+	// declared content_address names: the store keeps nothing (InvalidArgument,
+	// as for a declared_size the bytes do not meet).
+	errContentAddressMismatch = errors.New("storehandler: the payload's bytes are not the ones its content_address names")
 	// errDeclaredSizeExceeded is a declared_size above the configured
 	// max-retain-payload-size quota. Mapped to ResourceExhausted; rejected
 	// before any store interaction (no writer is ever opened).
@@ -116,13 +136,17 @@ func New(store WriterStore, v Verifier, maxPayloadSize uint64) *Handler {
 	return &Handler{store: store, v: v, maxPayloadSize: maxPayloadSize}
 }
 
-// RetainPayload verifies the first frame (wireauth proof, owner_did == proven
-// signer, declared_size within quota), then streams subsequent chunk frames
-// to a Store.StoreWriter, enforcing the cumulative declared_size bound as it
-// goes. On ANY receive error, cancellation, or validation failure once a
-// writer is open, it Aborts before returning — the StoreWriter's ctx gates
-// creation only (payloadresolver.Store doc), so detecting and reacting to a
-// mid-stream failure is this handler's job, not the store's.
+// RetainPayload verifies the first frame (declared_size within quota, a
+// content_address spelled as one, then the wireauth proof over owner_did,
+// declared_size and content_address with owner_did == proven signer), then
+// streams subsequent chunk frames to a Store.StoreWriter, enforcing the
+// cumulative declared_size bound as it goes and computing the bytes' address
+// alongside. Before it commits, the bytes must meet declared_size and have the
+// declared content_address. On ANY receive error, cancellation, or validation
+// failure once a writer is open, it Aborts before returning — the
+// StoreWriter's ctx gates creation only (payloadresolver.Store doc), so
+// detecting and reacting to a mid-stream failure is this handler's job, not
+// the store's.
 func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStream[payloadpb.RetainPayloadRequest]) (*connect.Response[payloadpb.RetainPayloadResponse], error) {
 	if !stream.Receive() {
 		if err := stream.Err(); err != nil {
@@ -150,8 +174,13 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 			fmt.Errorf("%w: declared_size %d exceeds max %d", errDeclaredSizeExceeded, declaredSize, h.maxPayloadSize))
 	}
 
+	contentAddress, err := contentaddress.Parse(meta.GetContentAddress())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: %w", errMalformedContentAddress, err))
+	}
+
 	ownerDID := meta.GetOwnerDid()
-	fields := payloadresolver.RetainPayloadFields(ownerDID, declaredSize)
+	fields := wirecontract.RetainPayloadFields(ownerDID, declaredSize, contentAddress)
 	// Signer-to-actor binding: the proven signer must be the claimed owner.
 	authorize := func(signerDID string, _ *did.DIDDocument, f map[string]any) error {
 		if f["owner_did"] != signerDID {
@@ -159,7 +188,7 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 		}
 		return nil
 	}
-	if err := h.v.Verify(ctx, payloadresolver.OpRetainPayload, fields, proof, authorize); err != nil {
+	if err := h.v.Verify(ctx, wirecontract.OpRetainPayload, fields, proof, authorize); err != nil {
 		return nil, mapError(err)
 	}
 
@@ -169,6 +198,7 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 	}
 
 	var received uint64
+	bytesSeen := contentaddress.NewHasher()
 	for stream.Receive() {
 		switch f := stream.Msg().GetFrame().(type) {
 		case *payloadpb.RetainPayloadRequest_Metadata:
@@ -184,6 +214,7 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 				_ = w.Abort()
 				return nil, mapError(werr)
 			}
+			bytesSeen.Write(f.Chunk)
 		default:
 			_ = w.Abort()
 			return nil, connect.NewError(connect.CodeInvalidArgument, errMalformedFrame)
@@ -196,6 +227,10 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 	if received != declaredSize {
 		_ = w.Abort()
 		return nil, connect.NewError(connect.CodeInvalidArgument, errSizeMismatch)
+	}
+	if bytesSeen.Address() != contentAddress {
+		_ = w.Abort()
+		return nil, connect.NewError(connect.CodeInvalidArgument, errContentAddressMismatch)
 	}
 
 	addr, err := w.Commit()

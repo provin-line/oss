@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 	"github.com/provin-line/oss/internal/origin"
@@ -735,10 +736,11 @@ type wirePayloadStore struct {
 // (payloadresolver/client.Resolver.proof) — never a resent cached proof.
 func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID string) (string, error) {
 	client := s.factory.For(ownerDID)
+	addr := contentaddress.Of(payload)
 	var contentAddress string
 	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
-		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
+		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)), addr)
 		return attemptErr
 	})
 	return contentAddress, err

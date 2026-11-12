@@ -17,6 +17,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
@@ -406,7 +407,7 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	// forced to block on flow control until the stream is torn down — making
 	// it observe the server's RST deterministically instead of racing it.
 	hugeOwnerDID := clientDID + "?pad=" + string(bytes.Repeat([]byte("x"), 4<<20))
-	_, err = c.Retain(context.Background(), bytes.NewReader(nil), hugeOwnerDID, 0)
+	_, err = c.Retain(context.Background(), bytes.NewReader(nil), hugeOwnerDID, 0, contentaddress.Of(nil))
 	if err == nil {
 		t.Fatal("early rejection: want error, got nil")
 	}
@@ -445,7 +446,7 @@ func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL, StoreAudience: storeAudience, Bearer: "node-token"})
-	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7); err == nil {
+	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7, contentaddress.Of([]byte("payload"))); err == nil {
 		t.Error("a redirected retain succeeded")
 	}
 	if sawBearer.Load() {

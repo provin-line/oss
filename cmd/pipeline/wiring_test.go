@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/decisionrecord"
@@ -1041,8 +1041,9 @@ func assertDistinctNonces(t *testing.T, nonces []string) {
 
 // flakyRetainHandler simulates the boot-window barrier for RetainPayload: the
 // first `fail` calls return CodeUnavailable (recording the metadata frame's
-// nonce first); later calls drain the stream and succeed with a fake content
-// address. It never delegates to a real storehandler — the retry-recovery
+// nonce first); later calls drain the stream and succeed, answering the
+// declared content address as a store does. It never delegates to a real
+// storehandler — the retry-recovery
 // proof needs only the nonce sequence and an eventual success, not real
 // persistence (that's already covered by TestWirePayloadStore_* above).
 type flakyRetainHandler struct {
@@ -1072,14 +1073,12 @@ func (h *flakyRetainHandler) RetainPayload(ctx context.Context, stream *connect.
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
 	}
 
-	var size int
 	for stream.Receive() {
-		size += len(stream.Msg().GetChunk())
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: fmt.Sprintf("sha256:fake-%d", size)}), nil
+	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: meta.GetContentAddress()}), nil
 }
 
 // TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns is the plan's
@@ -1100,12 +1099,13 @@ func TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns(t *testing.T) {
 	factory := newPayloadClientFactory(ks, srv.URL, "reg", "", srv.Client(), 0, nil)
 	store := wirePayloadStore{factory: factory}
 
-	contentAddress, err := store.Store(context.Background(), []byte("payload racing the boot window"), payloadOwnerA)
+	payload := []byte("payload racing the boot window")
+	contentAddress, err := store.Store(context.Background(), payload, payloadOwnerA)
 	if err != nil {
 		t.Fatalf("Store: %v, want recovery via retry", err)
 	}
-	if contentAddress == "" {
-		t.Error("Store returned an empty content address")
+	if want := contentaddress.Of(payload).String(); contentAddress != want {
+		t.Errorf("Store = %q, want %q", contentAddress, want)
 	}
 	if len(handler.nonces) != 3 {
 		t.Fatalf("server saw %d RetainPayload attempts, want 3 (2 failures + 1 success)", len(handler.nonces))
