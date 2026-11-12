@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -212,6 +213,28 @@ func returnsWithin(t *testing.T, bound time.Duration, what string, call func()) 
 	}
 }
 
+// waitForWarning fails t unless warned soon holds a warning with each of
+// words: the runtime writes its warnings about a flush in a goroutine of
+// their own.
+func waitForWarning(t *testing.T, warned *warnBuffer, words ...string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		w := warned.String()
+		has := true
+		for _, word := range words {
+			has = has && strings.Contains(w, word)
+		}
+		if has {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("warnings %q, want one with %q", w, words)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // The last flush, behind a sink write that never ends, returns at its
 // deadline and warns that the counts not written are lost.
 func TestDecisionRecording_TheLastFlushReturnsByItsDeadlineBehindAStuckSink(t *testing.T) {
@@ -221,9 +244,7 @@ func TestDecisionRecording_TheLastFlushReturnsByItsDeadlineBehindAStuckSink(t *t
 		t.Fatal(err)
 	}
 	returnsWithin(t, 2*time.Second, "stopAndFlush", func() { d.stopAndFlush(context.Background()) })
-	if w := warned.String(); !strings.Contains(w, "deadline") || !strings.Contains(w, "lost") {
-		t.Errorf("warnings %q, want one saying the flush reached its deadline and counts were lost", w)
-	}
+	waitForWarning(t, warned, "deadline", "lost")
 }
 
 // A periodic flush behind a sink write that never ends returns at its
@@ -240,8 +261,168 @@ func TestDecisionRecording_APeriodicFlushReturnsByItsDeadlineBehindAStuckSink(t 
 		t.Fatal("no periodic flush started its write")
 	}
 	returnsWithin(t, 2*time.Second, "stopAndFlush", func() { d.stopAndFlush(context.Background()) })
-	if w := warned.String(); !strings.Contains(w, "deadline") || !strings.Contains(w, "lost") {
-		t.Errorf("warnings %q, want one saying the flush reached its deadline and counts were lost", w)
+	waitForWarning(t, warned, "deadline", "lost")
+}
+
+// msgHandler holds every Handle until release is closed, after passing the
+// record's message on msgs while it has room.
+type msgHandler struct {
+	release chan struct{}
+	msgs    chan string
+}
+
+func (h msgHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h msgHandler) Handle(_ context.Context, r slog.Record) error {
+	select {
+	case h.msgs <- r.Message:
+	default:
+	}
+	<-h.release
+	return nil
+}
+
+func (h msgHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h msgHandler) WithGroup(string) slog.Handler      { return h }
+
+// stuckDefaultLog makes a logger that never ends a write the default logger,
+// and so the log package's output, until t ends or release is called. t's
+// cleanup releases it first, then restores the default logger and the log
+// package's output and flags, so no write held by it outlives t.
+func stuckDefaultLog(t *testing.T) (h msgHandler, release func()) {
+	t.Helper()
+	h = msgHandler{release: make(chan struct{}), msgs: make(chan string, 64)}
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	var once sync.Once
+	release = func() { once.Do(func() { close(h.release) }) }
+	t.Cleanup(release)
+	return h, release
+}
+
+// waitForMessage fails t unless a record whose message begins with prefix
+// reaches h within 2 seconds; it passes the others by.
+func waitForMessage(t *testing.T, h msgHandler, prefix string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case m := <-h.msgs:
+			if strings.HasPrefix(m, prefix) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no message beginning %q reached the log", prefix)
+		}
+	}
+}
+
+// With one logger that never ends a write as both the default logger and the
+// decision sink's, as the node runs with slog.Default for both, shutdown
+// still returns within two flush deadlines: the runtime's own warnings about
+// a flush do not wait for the log either, whether the last flush or a
+// periodic one met the stuck write. Each subtest waits for its warning to
+// reach its own logger, which its cleanup then releases.
+func TestDecisionRecording_ShutdownReturnsBehindAStuckDefaultLogger(t *testing.T) {
+	for name, window := range map[string]time.Duration{"the last flush": time.Hour, "a periodic flush": 20 * time.Millisecond} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := stuckDefaultLog(t)
+			d, err := newDecisionRecording(DecisionRecordConfig{Level: decisionrecord.LevelSummary, Output: DecisionRecordOutputLog, SummaryWindow: window}, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.flushTimeout = 50 * time.Millisecond
+			d.start(context.Background())
+			if err := d.recorder().Record(context.Background(), testDecisionRecord()); err != nil {
+				t.Fatal(err)
+			}
+			returnsWithin(t, 2*time.Second, "stopAndFlush", func() { d.stopAndFlush(context.Background()) })
+			waitForMessage(t, h, "runtime: decision record summary flush reached its deadline")
+		})
+	}
+}
+
+// The runtime's warnings about a flush are written one at a time: while one
+// waits on a log that does not end a write, the next are dropped, so one of
+// them at most waits on it; once it ends, the next warning is written.
+func TestDecisionRecording_WarnsOneAtATime(t *testing.T) {
+	h, release := stuckDefaultLog(t)
+	d := &decisionRecording{warnTurn: make(chan struct{}, 1)}
+	for range 3 {
+		d.warnf("runtime: a warning")
+	}
+	waitForMessage(t, h, "runtime: a warning")
+	quiet := time.After(100 * time.Millisecond)
+	for waiting := true; waiting; {
+		select {
+		case m := <-h.msgs:
+			if m == "runtime: a warning" {
+				t.Fatal("a second warning reached the log while the first waited on it")
+			}
+		case <-quiet:
+			waiting = false
+		}
+	}
+	release()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		d.warnf("runtime: a warning")
+		select {
+		case m := <-h.msgs:
+			if m == "runtime: a warning" {
+				return
+			}
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no warning reached the log after the first ended")
+		}
+	}
+}
+
+// panickingHandler panics in every Handle, after a value on handled.
+type panickingHandler struct{ handled chan struct{} }
+
+func (h panickingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h panickingHandler) Handle(context.Context, slog.Record) error {
+	h.handled <- struct{}{}
+	panic("handler down")
+}
+func (h panickingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h panickingHandler) WithGroup(string) slog.Handler      { return h }
+
+// A log handler that panics as one of the runtime's warnings is written does
+// not end the process: the panic is dropped, and the next warning can be
+// written.
+func TestDecisionRecording_AWarningsPanicIsDropped(t *testing.T) {
+	h := panickingHandler{handled: make(chan struct{}, 4)}
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	d := &decisionRecording{warnTurn: make(chan struct{}, 1)}
+	d.warnf("runtime: a warning")
+	<-h.handled
+	deadline := time.Now().Add(2 * time.Second)
+	for len(d.warnTurn) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the turn did not come back after the handler panicked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	d.warnf("runtime: a warning")
+	select {
+	case <-h.handled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no warning reached the log after the panic")
 	}
 }
 

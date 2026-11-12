@@ -238,8 +238,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `pipeline/runtime`: at the summary level, each window's flush of the
   decision records and the last at shutdown wait at most 10 s for the sink,
   with a context the shutdown signal does not end; a flush that reaches that
-  bound warns that the counts not written by then are lost. Before, a sink
-  write that never ended held the flusher, and shutdown, for good.
+  bound warns that the counts not written by then are lost. The runtime writes
+  its own warnings about a flush one at a time, in a goroutine of their own,
+  and drops one that comes while another is being written, so a log that never
+  ends a write, which the node's log sink may share, holds them no longer
+  either: the decision records' flushes hold shutdown no longer than two flush
+  deadlines. Before, a sink write that never ended held the flusher, and
+  shutdown, for good.
 - `schema`: a JSON Schema `pattern` may name a Unicode general category by a
   long name or alias as well as by its short name, spelled as ECMA-262 spells
   them (`\p{Letter}`, `\p{Decimal_Number}`, `\p{digit}` …, read as `\p{L}`,
