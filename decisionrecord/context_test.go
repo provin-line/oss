@@ -453,9 +453,21 @@ func recovered(call func()) (p any) {
 	return nil
 }
 
-// A Write that panics while its caller waits panics in the caller, with a
-// context that cannot end as with one that can; the sink writes again after
-// it, the next line on a line of its own.
+// panickedWith reports whether p is the panic a call with ctx makes for a
+// write that panicked with v: v itself when the write ran in the caller's
+// goroutine (a context that cannot end), and a *WritePanic of v when it ran
+// in the sink's own.
+func panickedWith(ctx context.Context, p, v any) bool {
+	if ctx.Done() == nil {
+		return p == v
+	}
+	wp, ok := p.(*decisionrecord.WritePanic)
+	return ok && wp.Value == v
+}
+
+// A Write that panics while its caller waits panics in the caller: as
+// itself with a context that cannot end, and as a *WritePanic with one that
+// can; the sink writes again after it, the next line on a line of its own.
 func TestJSONLines_APanicReachesAWaitingCaller(t *testing.T) {
 	cancellable, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -463,7 +475,7 @@ func TestJSONLines_APanicReachesAWaitingCaller(t *testing.T) {
 		var b lockedBuffer
 		w := &switchWriter{to: panicWriter{}}
 		s := decisionrecord.NewJSONLines(w)
-		if p := recovered(func() { _ = s.Record(ctx, rec("d1", "p", decisionrecord.Accepted, "")) }); p != "writer down" {
+		if p := recovered(func() { _ = s.Record(ctx, rec("d1", "p", decisionrecord.Accepted, "")) }); !panickedWith(ctx, p, "writer down") {
 			t.Errorf("%s: Record panicked with %v, want the writer's panic", name, p)
 		}
 		w.set(&b)
@@ -526,15 +538,16 @@ func (panicHandler) Handle(context.Context, slog.Record) error { panic("handler 
 func (h panicHandler) WithAttrs([]slog.Attr) slog.Handler      { return h }
 func (h panicHandler) WithGroup(string) slog.Handler           { return h }
 
-// A handler that panics while its caller waits panics in the caller; the log
-// sink handles again after it.
+// A handler that panics while its caller waits panics in the caller (as
+// itself, or as a *WritePanic with a context that can end); the log sink
+// handles again after it.
 func TestLog_APanicReachesAWaitingCaller(t *testing.T) {
 	cancellable, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := decisionrecord.NewLog(slog.New(panicHandler{}))
 	for name, ctx := range map[string]context.Context{"Background": context.Background(), "cancellable": cancellable} {
 		for i := 0; i < 2; i++ {
-			if p := recovered(func() { _ = s.Record(ctx, rec("d", "p", decisionrecord.Accepted, "")) }); p != "handler down" {
+			if p := recovered(func() { _ = s.Record(ctx, rec("d", "p", decisionrecord.Accepted, "")) }); !panickedWith(ctx, p, "handler down") {
 				t.Errorf("%s, call %d: Record panicked with %v, want the handler's panic", name, i, p)
 			}
 		}

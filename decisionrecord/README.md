@@ -84,21 +84,29 @@ record is kept (an unbuffered or synced writer):
   one whose nil means kept. An entry carries the members of a JSON line as
   its attributes, `"v"` included.
 
-These sinks return as soon as the call's context ends, without waiting for
-a write to end: the error wraps `ctx.Err()` (so `errors.Is` matches
+These sinks return as soon as the call's context ends, without waiting for a
+write to end: the error wraps `ctx.Err()` (so `errors.Is` matches
 `context.DeadlineExceeded` or `context.Canceled`), names the sink, and says
 either that the write did not start or that it may have started. A record
-whose context ended before its write started is not written, then or later;
-a write that started cannot be stopped, and may end, and be kept, after the
-call returned. A write that does not end may hold back the sink's other
-writes until it ends, each of their calls still returning at its own
-context's end. A write that never ends (a writer or handler stuck for good)
-is not recovered, and each sink holds at most one. With a context that
-cannot end (`context.Background()`, or one from `context.WithoutCancel`) a
-call waits for its write, behind any write that does not end, as in 0.4.0;
-a nil context is `context.Background()`. A panic in the writer or the
-handler reaches the caller while it waits; after the caller has returned, it
-is dropped and the write counts as failed.
+whose context ended before its write started is not written, then or later; a
+write that started cannot be stopped, and may end, and be kept, after the call
+returned. A write that does not end may hold back the sink's other writes
+until it ends, each of their calls still returning at its own context's end. A
+write that never ends (a writer or handler stuck for good) is not recovered,
+and each sink holds at most one. With a context that cannot end
+(`context.Background()`, or one from `context.WithoutCancel`) a call waits for
+its write, behind any write that does not end, as in 0.4.0; a nil context is
+`context.Background()`. A panic in the writer or the handler reaches the
+caller. With a context that cannot end, the write runs in the caller's
+goroutine, and the panic reaches the caller as itself. With one that can, the
+write runs in a goroutine of its own, and the panic reaches the caller as a
+`*decisionrecord.WritePanic` holding the value and the writer's stack (its
+text has both; `Unwrap` gives the value when it is an error), unless the call
+has returned at its context's end before the sink handed the panic over; then
+the panic is dropped and the write counts as failed. A writer or handler that
+calls `runtime.Goexit` in the sink's own goroutine fails its write; in the
+caller's goroutine, `runtime.Goexit` ends that goroutine, as it does anywhere,
+and the call does not return. Either way, the sink writes again after it.
 
 At `all`, a record for which `Filter.Record` returned an error may still be
 kept: its write may have started and end after the call returned, and a
@@ -111,19 +119,22 @@ rule for a decision's records allows that refusal, through the `Filter` whose
 
 Below `all`, a `Filter`'s warning that a sink failed does not wait past the
 context either: when no warning is being written it is written, late if the
-context has ended; when one is, and the context ends first, it is not.
-`Filter.Flush` with a context that has already ended returns its error and
-keeps the window, counts and all, for the next `Flush`. When the context
-ends during a `Flush`, the window is not kept: a summary whose write has not
-started by then is lost, as any summary the sink fails to write is (a warning
-at most); one whose write had started may still be kept. So that no summary
-of the last window is lost to the shutdown signal, the last `Flush`, at
-shutdown, takes a context that the signal does not end and that has a
-deadline of its own, as
-`context.WithTimeout(context.WithoutCancel(ctx), d)`. Without a deadline it
-may wait for good behind a write that does not end. When the deadline passes
-first, the counts not written by then are lost, as above. A write that fails
-still loses its summary.
+context has ended; when one is, and the context ends first, it is not. The
+handler of the warnings is a handler as above. Its panic reaches the caller of
+`Filter.Record` or `Filter.Flush` in the same way. When it calls
+`runtime.Goexit` in the warning's own goroutine, the warning is lost; in the
+caller's goroutine, that goroutine ends. Either way, the `Filter` warns again
+after it. `Filter.Flush` with a context that has already ended returns its
+error and keeps the window, counts and all, for the next `Flush`. When the
+context ends during a `Flush`, the window is not kept: a summary whose write
+has not started by then is lost, as any summary the sink fails to write is (a
+warning at most); one whose write had started may still be kept. So that no
+summary of the last window is lost to the shutdown signal, the last `Flush`,
+at shutdown, takes a context that the signal does not end and that has a
+deadline of its own, as `context.WithTimeout(context.WithoutCancel(ctx), d)`.
+Without a deadline it may wait for good behind a write that does not end. When
+the deadline passes first, the counts not written by then are lost, as above.
+A write that fails still loses its summary.
 
 ## Format versions
 

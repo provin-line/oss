@@ -23,6 +23,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- `decisionrecord.WritePanic`: what a call to a sink made here, or to a
+  `Filter`, panics with when a write it waits for panics in a goroutine of
+  its own: the value and the writer's stack, both in its text; `Unwrap`
+  gives the value when it is an error.
 - `decisionrecord`: format v2 of records and summaries, beside format v1,
   which `NewJSONLines` and `NewLog` keep writing as 0.4.0 does: the same
   lines, byte for byte, and the same log entries.
@@ -172,9 +176,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
     have kept it and still returned an error. A deciding party that wants a
     reader to see the refusal records the decision again, `Refused`, with
     the same `DecisionID`, through the same `Filter`.
-  - A panic in the writer or the handler reaches the caller while it waits;
-    after the caller has returned, it is dropped and the write counts as
-    failed.
+  - A panic in the writer or the handler reaches the caller: as itself with
+    a context that cannot end (the write runs in the caller's goroutine),
+    and as a `*decisionrecord.WritePanic`, holding the value and the
+    writer's stack, with one that can, unless the call has returned at its
+    context's end before the sink handed the panic over. Then the panic is
+    dropped and the write counts as failed. A `Filter`'s warnings are
+    written the same way.
+  - A writer or handler that calls `runtime.Goexit` in the sink's own
+    goroutine (a context that can end) fails its write, and the sink writes
+    again after it; a `Filter`'s warning whose handler does so is lost, and
+    the `Filter` warns again after it. In the caller's goroutine,
+    `runtime.Goexit` ends that goroutine, as it does anywhere.
   - A nil context is `context.Background()`.
   - A `Filter`'s warning that a sink failed does not wait past the context:
     it is written late, or, when another warning is being written and the
@@ -384,6 +397,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   and started the next window. A caller's
   last `Flush` at shutdown passes a context the shutdown signal does not end,
   with a deadline of its own (see Changed).
+- **Go API:** with a context that can end, a panic in the writer or the
+  handler of a `decisionrecord` sink, or in a `Filter`'s warning handler,
+  reaches the caller as a `*decisionrecord.WritePanic` holding the value,
+  where 0.4.x panicked with the value itself. Code that recovers it and
+  compares the value (`==`, a type assertion) reads `WritePanic.Value`;
+  `errors.Is` and `errors.As` reach an error value through `Unwrap`. With a
+  context that cannot end, the panic is the value itself, as in 0.4.x.
 - **Go API:** `wireauth` moves from
   `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
   the RPCs of several services carry its proof, not the chain manager's

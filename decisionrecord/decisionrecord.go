@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -338,9 +339,16 @@ type SummaryRecorder interface {
 // With a context that cannot end (context.Background(), or one from
 // context.WithoutCancel), a call waits for its write, behind any write that
 // does not end, as in 0.4.0. A nil context is context.Background(). A panic
-// in the io.Writer or the handler reaches the caller while the caller waits;
-// after the caller has returned it is dropped, and the write counts as
-// failed.
+// in the io.Writer or the handler reaches the caller. With a context that
+// cannot end, the write runs in the caller's goroutine, and the panic reaches
+// the caller as itself. With one that can, the write runs in a goroutine of
+// its own, and the panic reaches the caller as a *WritePanic holding its
+// value and the writer's stack, unless the call has returned at its context's
+// end before the sink handed the panic over; then the panic is dropped, and
+// the write counts as failed. An io.Writer or handler that calls
+// runtime.Goexit in the sink's own goroutine fails its write; in the caller's
+// goroutine, runtime.Goexit ends that goroutine, as it does anywhere, and the
+// call does not return. Either way, the sink writes again after it.
 type Sink interface {
 	Recorder
 	SummaryRecorder
@@ -355,14 +363,16 @@ func newTurn() turn { return make(turn, 1) }
 // run runs write while holding t, and returns its error. A nil ctx is
 // context.Background(). With a context that cannot end (ctx.Done() is nil),
 // write runs in the caller's goroutine, as under a mutex. Otherwise it runs
-// in a goroutine; when ctx ends first, run returns ctx's error: as
-// notStarted when ctx ended before t was taken, or when the goroutine has
-// reported that it found ctx ended right before write; and as maybeStarted
-// when t was taken and the goroutine has not reported, since it may by then
-// have started write or, finding ctx ended, may never start it. A write that
-// started goes on, gives t back when it ends, and its result is dropped. A
-// panic in write reaches the caller while the caller waits; after the caller
-// has returned, it is dropped, a failed write.
+// in a goroutine; when ctx ends first, run returns ctx's error: as notStarted
+// when ctx ended before t was taken, or when the goroutine has reported that
+// it found ctx ended right before write; and as maybeStarted when t was taken
+// and the goroutine has not reported, since it may by then have started write
+// or, finding ctx ended, may never start it. A write that started goes on,
+// gives t back when it ends, and its result is dropped. A panic in write
+// reaches the caller, as a *WritePanic when write ran in the goroutine,
+// unless run has returned at ctx's end before the goroutine reported it; then
+// it is dropped, a failed write. A write that calls runtime.Goexit in the
+// goroutine fails (goexited) and still gives t back.
 func (t turn) run(ctx context.Context, who string, write func() error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -379,28 +389,32 @@ func (t turn) run(ctx context.Context, who string, write func() error) error {
 	}
 	done := make(chan writeResult, 1)
 	go func() {
+		var r writeResult
+		ended := false
+		// A write that calls runtime.Goexit ends this goroutine inside catch,
+		// so ended stays false: the deferred call reports the failure and
+		// still gives t back.
+		defer func() {
+			if !ended {
+				r = writeResult{err: goexited(who)}
+			}
+			<-t
+			done <- r
+		}()
 		// With t held, ctx is looked at once more right before write runs:
 		// a write whose context has ended by then does not start.
-		r := catch(func() error {
+		r = catch(func() error {
 			if err := ctx.Err(); err != nil {
 				return notStarted(who, err)
 			}
 			return write()
 		})
-		<-t
-		done <- r
+		ended = true
 	}()
-	select {
-	case r := <-done:
+	if r, ok := awaitResult(ctx, done); ok {
 		return r.result()
-	case <-ctx.Done():
-		select {
-		case r := <-done:
-			return r.result()
-		default:
-			return maybeStarted(who, ctx.Err())
-		}
 	}
+	return maybeStarted(who, ctx.Err())
 }
 
 // runLate runs write while holding t, for a write that may come late: when t
@@ -408,7 +422,8 @@ func (t turn) run(ctx context.Context, who string, write func() error) error {
 // cancellation, so it runs even after the caller has gone. Only when t is
 // held does runLate wait for it, and then no longer than ctx; it waits for
 // write no longer than ctx either. A nil ctx and one that cannot end are as
-// in run, and so is a panic in write.
+// in run, and so is a panic in write. A write that calls runtime.Goexit in
+// the goroutine is lost, and still gives t back.
 func (t turn) runLate(ctx context.Context, write func(context.Context)) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -430,43 +445,108 @@ func (t turn) runLate(ctx context.Context, write func(context.Context)) {
 	}
 	done := make(chan writeResult, 1)
 	go func() {
-		r := catch(func() error {
+		var r writeResult
+		defer func() {
+			<-t
+			done <- r
+		}()
+		r = catch(func() error {
 			write(context.WithoutCancel(ctx))
 			return nil
 		})
-		<-t
-		done <- r
 	}()
-	select {
-	case r := <-done:
+	if r, ok := awaitResult(ctx, done); ok {
 		_ = r.result()
-	case <-ctx.Done():
 	}
 }
 
-// writeResult is how a write in a goroutine ended: its error, or the value
-// it panicked with.
+// awaitResult waits for a write's result on done, no longer than ctx, and
+// reports whether it took one. A result that is there when ctx has ended is
+// taken: the wait ends without one only when the goroutine had not reported
+// by then.
+func awaitResult(ctx context.Context, done <-chan writeResult) (writeResult, bool) {
+	select {
+	case r := <-done:
+		return r, true
+	case <-ctx.Done():
+		select {
+		case r := <-done:
+			return r, true
+		default:
+			return writeResult{}, false
+		}
+	}
+}
+
+// WritePanic is what a call made here panics with when a write it waits for
+// panics in a goroutine of its own: a call to a sink made here (Record,
+// Summary), and a Filter's Record or Flush, through such a sink and for the
+// Filter's warnings. Value is what the io.Writer or the handler panicked with
+// (nil for panic(nil) under GODEBUG panicnil=1), and Stack that goroutine's
+// stack where it panicked, as runtime/debug.Stack writes it.
+//
+// A write runs in a goroutine of its own when the call's context can end. Its
+// panic reaches the call unless the call has returned at its context's end
+// before the panic was handed over; then the panic is dropped, and the write
+// counts as failed. With a context that cannot end (context.Background(), or
+// one from context.WithoutCancel), the write runs in the caller's goroutine,
+// and its panic reaches the caller as itself, with its own value and stack,
+// as in 0.4.0.
+type WritePanic struct {
+	Value any
+	Stack []byte
+}
+
+// Error writes the value the write panicked with and the writer's stack, so
+// a WritePanic nobody recovers shows where the write panicked.
+func (p *WritePanic) Error() string {
+	return fmt.Sprintf("decisionrecord: a write panicked: %v\n\n%s", p.Value, p.Stack)
+}
+
+// Unwrap is the value the write panicked with when it is an error, else nil.
+func (p *WritePanic) Unwrap() error {
+	err, _ := p.Value.(error)
+	return err
+}
+
+// goexited is the failure of a write that called runtime.Goexit in the
+// goroutine a sink writes in: it neither returned nor panicked.
+func goexited(who string) error {
+	return fmt.Errorf("decisionrecord: %s: the write called runtime.Goexit and failed", who)
+}
+
+// writeResult is how a write in a goroutine ended: its error, or the panic
+// it ended with.
 type writeResult struct {
 	err      error
-	panicked bool
-	value    any
+	panicked *WritePanic
 }
 
-// catch runs write and keeps a panic in it as a writeResult.
+// catch runs write and keeps how it ended as a writeResult: its error, or a
+// panic in it, with the stack of the goroutine it panicked in, taken while
+// that stack is still there. Whether write returned tells a panic from a
+// return, not the value recover gives, which is nil for panic(nil) under
+// GODEBUG panicnil=1. A write that calls runtime.Goexit ends the goroutine
+// inside catch, which then does not return.
 func catch(write func() error) (r writeResult) {
+	returned := false
 	defer func() {
-		if v := recover(); v != nil {
-			r = writeResult{panicked: true, value: v}
+		if !returned {
+			v := recover()
+			r = writeResult{panicked: &WritePanic{Value: v, Stack: debug.Stack()}}
 		}
 	}()
-	return writeResult{err: write()}
+	err := write()
+	returned = true
+	return writeResult{err: err}
 }
 
-// result is r's error; when write panicked, result panics again with its
-// value, in the caller's goroutine.
+// result is r's error; when write panicked, result panics again, in the
+// caller's goroutine, with the *WritePanic that holds the value and the
+// writer's stack.
 func (r writeResult) result() error {
-	if r.panicked {
-		panic(r.value)
+	if r.panicked != nil {
+		panic(r.panicked)
 	}
 	return r.err
 }
