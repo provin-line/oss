@@ -326,12 +326,13 @@ func assertExitStatus(t *testing.T, err error, wantCode int) {
 	}
 }
 
-// The resolver adapter enforces document identity (the resolver.Resolver
-// contract): a registry answering the resolution route with a DIFFERENT
-// identity's document is rejected before fingerprinting — a matching TXT
-// record must never yield a false `verified` (Codex P1). Per spec §7.6 the
-// rejected resolve then surfaces as the Unreachable VERDICT (exit 3), the
-// same fail-closed classification as any other document-retrieval failure.
+// The resolver adapter checks the document's id, which resolver.Resolver
+// does not promise, and so does orgverify: a registry answering the
+// resolution route with a DIFFERENT identity's document is rejected before
+// fingerprinting — a matching TXT record must never yield a false
+// `verified`. Per spec §7.6 the rejected resolve then surfaces as the
+// Unreachable VERDICT (exit 3), the same fail-closed classification as any
+// other document-retrieval failure.
 func TestOrgVerify_RegistryIdentityMismatch_FailsClosed(t *testing.T) {
 	pub := mustEd25519Key(t)
 	imposter := orgDoc("did:dplaax:"+registryID+":org:mallory.example", pub)

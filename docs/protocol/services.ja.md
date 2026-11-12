@@ -63,12 +63,12 @@ relying party が依存してよい構造的事実 2 つ:
 | `#vc-resolver` | `VCResolver` | この subject の発行 credential が解決できる場所（VCResolverService base URL） |
 | `#audit` | `AuditService` | この subject の emission に対する audit verdict / receipt の提供場所 |
 
-**マッチング規則（全 consumer 共有）**: service entry は、`type` が一致し**かつ** `id` が fragment そのもの（`#vc-resolver` / `#audit`）または `{subjectDID}{fragment}` に**完全一致**するときだけマッチする。fragment で*終わるだけ*の別 URI は他者の識別子 — capture としても ambiguity としても数えない。2 件以上のマッチ: **error**（ambiguity は fail-closed）。ちょうど 1 件で endpoint が空: **error**（存在する advertisement は使えなければならない — 黙って fallback しない）。
+**マッチング規則（全 consumer 共有）**: service entry は、`type` が一致し**かつ** `id` が fragment そのもの（`#vc-resolver` / `#audit`）または `{subjectDID}{fragment}` に**完全一致**するときだけマッチする。fragment で*終わるだけ*の別 URI は他者の識別子 — capture としても ambiguity としても数えない。2 件以上のマッチ: **error**（ambiguity は fail-closed）。ちょうど 1 件で endpoint が空: **error**（存在する advertisement は使えなければならない — 黙って fallback しない）。entry は subject 自身の document からだけ読む: 解決した document の `id` が subject DID でなければ、entry を読む前に断る（resolver は id を約束するとは限らないので、各 consumer がそれを確かにする）。
 
 **consumer 別の導出順:**
 
 - **Bundle export（`provin bundle export`）** — credential: `--vc-resolver-base <registry>=<url>` override → advertisement（**必須**: 0 件は error）。audit receipt: `--audit-base <registry>=<url>` override → advertisement → legacy fallback（`--did-base` map、無ければ `https://{registry}`）。非対称は意図的: receipt routing は advertisement より古く、advertisement 以前に発行された document も export し続けられなければならない。
-- **Batch chain assembly（node 内の predecessor 解決）** — 消費 credential の upstream hint が先。issuer の `#vc-resolver` advertisement（exactly-one 必須。CLI override も registry fallback も無い）へ進むのは**接続エラーのみ**。hint 先の store が NotFound を*答えた*場合は miss — entry は retry され、reroute されない。解決不能な issuer の hole は queue に残り、audit runner が bound する。
+- **Batch chain assembly（node 内の predecessor 解決）** — 消費 credential の upstream hint が先。issuer の `#vc-resolver` advertisement（exactly-one 必須。CLI override も registry fallback も無い）へ進むのは**接続エラーのみ**。hint 先の store が NotFound を*答えた*場合は miss — entry は retry され、reroute されない。issuer が解決できない場合と、解決した document が別の DID のものだった場合は endpoint が得られず、entry は retry の予算が残る間は retry され、尽きたら落とされる。その hole で止まる監査対象の chain は Indeterminate の判定のままで、audit runner は試行の上限を使い切った時にそれを abandoned として確定する。
 
 override は **split-horizon の seam**: advertised URL は emitting network 内で canonical であり、外からは到達不能でありうる（quickstart は `http://network:8443` を advertise し、host で走る CLI は `--vc-resolver-base` / `--audit-base` で `http://localhost:8443` に override する）。
 

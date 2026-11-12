@@ -154,6 +154,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `SavePipeline`, `SaveProcess`) refuse a nil DID, document or delegation
   with an error and store nothing, and `ListPipelines` and `ListProcesses` a
   nil DID: a nil reaching the store is a caller bug (see Fixed).
+- `didregistry.Service.ResolveDID` returns a non-nil document or a non-nil
+  error, never both nil, as the store's `Resolve` returns it, and
+  `ResolveDelegation` a non-nil delegation or a non-nil error, as the store's
+  `ResolveDelegation` returns it. `tlogservice/logident.DIDResolver` and
+  `didregistry/handler`'s `Resolver` and `Service` state the same.
 - `resolver.Resolver`'s contract says `Resolve` returns a non-nil document or
   a non-nil error, never both nil, so a caller that gets a nil error uses the
   document without checking it for nil. The module's resolvers keep it:
@@ -492,11 +497,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `nil`, or giving a variable their type and then assigning another error
   to it). Their messages are the same; compare an error with them by
   `errors.Is`.
-- **Go API:** an implementation of `resolver.Resolver`, or of the
-  `DIDResolver` that `wireauth`, `tlogservice`, `chainmanager` or
-  `vcresolver/batchresolver` declares, must return a non-nil document or a
-  non-nil error, never both nil (see Changed). One that answered with
-  neither must return an error instead.
+- **Go API:** an implementation of `resolver.Resolver`, of the
+  `DIDResolver` that `wireauth`, `tlogservice`, `chainmanager`,
+  `vcresolver/batchresolver` or `tlogservice/logident` declares, or of
+  `didregistry/handler`'s `Resolver` and `Service`, must return a non-nil
+  document (or delegation) or a non-nil error, never both nil (see
+  Changed). One that answered with neither must return an error instead.
 - **Go API:** an implementation of `didregistry/store.DIDStore` must return
   a non-nil value or a non-nil error from `Resolve` and `ResolveDelegation`,
   never both nil (see Changed). One that answered with neither must return
@@ -511,6 +517,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Documentation
 
+- `docs/protocol/services.md` (en/ja): the matching rule reads entries only
+  from the subject's own document, and batch chain assembly's account says
+  an issuer with no endpoint is retried while its retry budget remains, then
+  dropped, and how the audit runner finalizes a chain that stops at the hole.
 - `schema`: the README (en/ja) and `pattern`'s doc say that the Unicode
   general categories in a schema's regular expressions hold the code points
   the Go toolchain's `unicode` tables give them, and that their ranges count

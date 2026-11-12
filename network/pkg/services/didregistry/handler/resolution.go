@@ -13,6 +13,9 @@ import (
 
 // Resolver is the read view the raw-HTTP resolution endpoint needs.
 // *didregistry.Service satisfies it.
+//
+// ResolveDID returns a non-nil document or a non-nil error, never both nil,
+// as didregistry.Service's ResolveDID does.
 type Resolver interface {
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }

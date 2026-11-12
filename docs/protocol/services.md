@@ -112,7 +112,10 @@ that is some *other* URI merely ending in the fragment is someone else's
 identifier — it never matches, neither as a capture nor as ambiguity.
 Two or more matches: **error** (ambiguity fails closed). Exactly one
 match with an empty endpoint: **error** (a present advertisement must be
-usable — no silent fallback past it).
+usable — no silent fallback past it). Entries are read only from the
+subject's own document: a resolved document whose `id` is not the subject
+DID is refused before any entry is read (a resolver need not promise the
+id, so each consumer ensures it).
 
 **Derivation order per consumer:**
 
@@ -128,8 +131,11 @@ usable — no silent fallback past it).
   falls through to the issuer's `#vc-resolver` advertisement (exactly one
   required; no CLI override, no registry fallback); a hinted store that
   *answers* NotFound is a miss — the entry is retried, not rerouted. An
-  unresolvable issuer keeps the hole queued for the audit runner to
-  bound.
+  issuer that does not resolve, or whose resolved document is another
+  DID's, gives no endpoint: the entry is retried while its retry budget
+  remains, then dropped; an audited chain that stops at the hole keeps an
+  Indeterminate verdict, which the audit runner finalizes as abandoned once
+  its attempt limit is spent.
 
 The overrides are the **split-horizon seam**: an advertised URL is
 canonical inside the emitting network and may be unreachable from

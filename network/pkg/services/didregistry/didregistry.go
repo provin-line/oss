@@ -429,7 +429,9 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	return doc, dlg, nil
 }
 
-// ResolveDID returns the DID Document for didStr.
+// ResolveDID returns the DID Document for didStr: a non-nil document or a
+// non-nil error, never both nil, as the store's Resolve returns it
+// (store.DIDStore).
 func (s *Service) ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -445,7 +447,8 @@ func (s *Service) ResolveDID(ctx context.Context, didStr string) (*did.DIDDocume
 }
 
 // ResolveDelegation returns the owner-signed delegation that authorized a
-// Pipeline/Process DID.
+// Pipeline/Process DID: a non-nil delegation or a non-nil error, never both
+// nil, as the store's ResolveDelegation returns it (store.DIDStore).
 func (s *Service) ResolveDelegation(ctx context.Context, didStr string) (*delegation.DelegationCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

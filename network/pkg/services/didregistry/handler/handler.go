@@ -33,7 +33,11 @@ type Service interface {
 	RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwardSnapshot []byte) (*did.DIDDocument, error)
 	IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
 	IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
+	// ResolveDID returns a non-nil document or a non-nil error, never both
+	// nil, as didregistry.Service's ResolveDID does.
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
+	// ResolveDelegation returns a non-nil delegation or a non-nil error,
+	// never both nil, as didregistry.Service's ResolveDelegation does.
 	ResolveDelegation(ctx context.Context, didStr string) (*delegation.DelegationCredential, error)
 	UpdateStatus(ctx context.Context, didStr, status string) (*did.DIDDocument, error)
 	ListPipelines(ctx context.Context, ownerDID string) ([]store.DIDSummary, error)

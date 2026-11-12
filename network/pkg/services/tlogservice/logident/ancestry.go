@@ -33,6 +33,9 @@ type PipelineAncestry interface {
 // satisfies it (see didregistry/handler/resolution.go's identically-shaped
 // Resolver for the established precedent of declaring this narrow interface
 // locally rather than importing the concrete service type).
+//
+// ResolveDID returns a non-nil document or a non-nil error, never both nil,
+// as didregistry.Service's ResolveDID does.
 type DIDResolver interface {
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }
