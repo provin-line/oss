@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	o3coconnect "github.com/o3co/protobuf.interceptors/connectrpc"
@@ -39,14 +40,30 @@ type Verifier interface {
 	Verify(ctx context.Context, resource, action string) error
 }
 
+// streamRecheckInterval is how often, at most, an open stream is checked
+// again. A stream is checked when it opens; after that, a message sent or
+// received at least this long after the last check began is checked before it
+// goes through, so a revoked permission or an expired token ends a stream
+// within this interval of its next message, and a payload of many frames costs
+// a check per interval, not one per frame.
+const streamRecheckInterval = 5 * time.Second
+
 // Interceptors returns the ordered authorization interceptor chain for a
 // ConnectRPC handler: the policy-option interceptor (reads the proto option into
 // context) MUST precede the verification interceptor (reads the policy from
 // context and calls the verifier), and this constructor guarantees that order.
+// A unary RPC is checked once; a stream is checked when it opens and then at
+// most once every five seconds, on a message (see streamRecheckInterval).
 func Interceptors(verifier Verifier) []connect.Interceptor {
+	return interceptorsRecheckingEvery(verifier, streamRecheckInterval)
+}
+
+// interceptorsRecheckingEvery is Interceptors with a stream checked again at
+// most once per d.
+func interceptorsRecheckingEvery(verifier Verifier, d time.Duration) []connect.Interceptor {
 	return []connect.Interceptor{
 		o3coconnect.PolicyOptionInterceptor(),
-		o3coconnect.VerificationInterceptor(verifier),
+		o3coconnect.VerificationInterceptor(verifier, o3coconnect.WithStreamRecheckInterval(d)),
 	}
 }
 

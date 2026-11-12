@@ -27,6 +27,12 @@ Facts a deployment must internalize:
   method option). A descriptor test asserts every protected service
   annotates all its RPCs — an unprotected RPC fails the build, not the
   perimeter.
+- **A stream is checked when it opens, then at most every 5 seconds**: a
+  unary RPC is checked once. A stream with a policy (today `RetainPayload`)
+  is checked before its handler runs, and after that on a message sent or
+  received at least 5 seconds after the last check began, not on every
+  message. A permission withdrawn, or a token that expires, while a stream
+  is open ends it at the first such message.
 - **The locus of authentication varies by backend.** `o3co` verifies the
   JWT; `static` checks bearer *presence* only — it is an authorization
   allow-list, **not authentication**. Use `static` only where the

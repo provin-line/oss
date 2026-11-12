@@ -15,6 +15,7 @@ L1 の問い: *この呼び出し元はこの RPC を呼んでよいか？* 3 �
 デプロイが内面化すべき事実:
 
 - **policy は proto に per-RPC で宣言される**（`o3co.authz.v1.policy` method option）。descriptor test が「保護対象サービスは全 RPC に注釈を持つ」ことを assert する — 無防備な RPC は perimeter でなくビルドが落ちる。
+- **stream は開く時に確かめ、その後は高々 5 秒に 1 回**: unary の RPC は 1 回確かめる。policy を持つ stream（今は `RetainPayload`）は handler が走る前に確かめ、その後は、最後の確認が始まってから 5 秒以上たって送受信する message の時に確かめる（message ごとではない）。stream が開いている間に権限が取り消されたり token が期限切れになったりすると、そのような最初の message で stream は終わる。
 - **認証の所在は backend で変わる。** `o3co` は JWT を検証する。`static` は bearer の*存在*しか見ない — それは authorization の allow-list であって **authentication ではない**。`static` は perimeter が既に認証している場所でのみ使う。backend 表は network/README.ja.md。
 - **boot で fail-closed**: 外部 backend（`o3co` / `opa` / `cedar`）では PDP URL の欠落や scheme 無しは boot error であり、開いたままのサーバにはならない。`static` は意図的に PDP URL を要しない — allow-list は in-process で、空の allow-list は deny-all。
 - **PDP への平文呼び出しは明示の許可制**: loopback 以外への `http://` は、そのエンドポイントの `host:port` を `provin.network.auth.plain-internal`（既定は空）に列挙しない限り拒否される。列挙したエンドポイントは private address に解決される場合にのみ到達する。

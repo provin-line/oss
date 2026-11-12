@@ -159,6 +159,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `network/pkg/services/payloadresolver`: the proof of a `RetainPayload` call
   binds the payload's content address, and the store keeps the payload only
   when the bytes it receives have that address (see Breaking changes).
+- The L1 interceptors (`auth.Interceptors`) check a stream when it opens and
+  then on a message sent or received at least 5 seconds after the last check
+  began, not on every message; a unary RPC is checked once, as before. A
+  `RetainPayload` of many chunk frames is checked about once per 5 seconds
+  of its transfer, not once per frame. A permission withdrawn, or a token
+  that expires, while a stream is open ends it at the first such message.
 - `didregistry/store.DIDStore`'s contract says `Resolve` returns a non-nil
   document or a non-nil error, and `ResolveDelegation` a non-nil delegation
   or a non-nil error, never both nil; `yamlstore` keeps it, and so the
