@@ -359,6 +359,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   that the tables tie every reject vector of these families, and nothing
   else, and a `claims-coverage` view that does not decode fails its
   vector.
+- Dependencies, from 0.4.0: `golang.org/x/net` 0.61.0 → 0.62.0 and
+  `github.com/klauspost/compress` 1.20.1 → 1.20.2 (indirect), which carry
+  the fixes for GO-2026-6866 and GO-2026-6860 (`x/net/html`) and
+  GO-2026-6865.
 
 ### Fixed
 
