@@ -157,8 +157,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `resolver/local`, `network/pkg/didresolver`, the CLI's registry resolver
   and the bundle's archive and export resolvers by what they return, and
   `resolver/cache`, `appraisal/inputcapture.DIDResolver` and the registry's
-  own store resolver as long as what they pass through does. A resolver that
-  returns neither is outside the contract: some of the module's callers
+  own store resolver as long as what they pass through does. The DID
+  resolver interfaces that `wireauth`, `tlogservice`, `chainmanager` and
+  `vcresolver/batchresolver` declare state the same contract. A resolver
+  that returns neither is outside the contract: some of the module's callers
   panic on it, and `delegation` refuses it (see Fixed).
 - The network node answers an RPC that fails inside it, as `Internal`,
   `Unknown` or `DataLoss`, with that code and the fixed text `server error
@@ -455,9 +457,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `nil`, or giving a variable their type and then assigning another error
   to it). Their messages are the same; compare an error with them by
   `errors.Is`.
-- **Go API:** an implementation of `resolver.Resolver` must return a non-nil
-  document or a non-nil error, never both nil (see Changed). One that
-  answered with neither must return an error instead.
+- **Go API:** an implementation of `resolver.Resolver`, or of the
+  `DIDResolver` that `wireauth`, `tlogservice`, `chainmanager` or
+  `vcresolver/batchresolver` declares, must return a non-nil document or a
+  non-nil error, never both nil (see Changed). One that answered with
+  neither must return an error instead.
 - **Go API:** an implementation of `didregistry/store.DIDStore` must return
   a non-nil value or a non-nil error from `Resolve` and `ResolveDelegation`,
   never both nil (see Changed). One that answered with neither must return

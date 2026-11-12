@@ -39,6 +39,9 @@ const maxNonceLen = 256
 // DIDResolver resolves a peer DID to its DID Document — the source of the
 // signer's #auth key. Implementations may do network I/O (cross-registry
 // resolution), so Resolve takes a context.
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, did string) (*did.DIDDocument, error)
 }

@@ -50,6 +50,9 @@ var (
 // its #chain-manager service endpoint. It mirrors wireauth.DIDResolver's shape so
 // the single concrete resolver satisfies both without an adapter; it is
 // declared in the domain to keep the dependency pointing inward.
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, did string) (*did.DIDDocument, error)
 }

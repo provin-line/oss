@@ -88,6 +88,9 @@ type MirrorStore interface {
 // shape as wireauth.DIDResolver on purpose: the composition root passes the
 // SAME concrete resolver instance to both (*didresolver.Resolver satisfies
 // this interface directly).
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, did string) (*did.DIDDocument, error)
 }

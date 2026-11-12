@@ -311,10 +311,12 @@ func (r *registryDocResolver) Resolve(ctx context.Context, didStr string) (*did.
 	if err := doc.UnmarshalJSON(body); err != nil {
 		return nil, fmt.Errorf("resolve: parse document for %s: %w", didStr, err)
 	}
-	// The resolver.Resolver contract requires the returned document's id to
-	// equal the requested DID — without this, a registry answering with a
-	// DIFFERENT identity's document would have its key fingerprinted, and a
-	// matching TXT record would yield a false `verified`.
+	// This resolver refuses a document whose id is not the requested DID.
+	// resolver.Resolver does not promise the id, and its org-command callers
+	// rely on it: they fingerprint the document's own #signing key, so a
+	// registry answering with a DIFFERENT identity's document would have that
+	// key fingerprinted, and a matching TXT record would yield a false
+	// `verified`.
 	if got := doc.ID(); got != didStr {
 		return nil, fmt.Errorf("resolve: registry returned document for %q, requested %q", got, didStr)
 	}

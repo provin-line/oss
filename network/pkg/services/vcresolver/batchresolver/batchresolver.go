@@ -56,6 +56,9 @@ type Fetcher interface {
 
 // DIDResolver derives a peer endpoint from an empty-hint entry's ReferrerIssuer
 // (satisfied by *didresolver.Resolver).
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }
