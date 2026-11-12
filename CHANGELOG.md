@@ -205,6 +205,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   substituted document's id within the same bound and bounds the text of the
   error it wraps, and the Owner check names the issuer and both Owners within
   it.
+- `didregistry`: registering an Owner names what its document's checks refuse
+  (the proof's type, purpose, cryptosuite, created time, verificationMethod
+  and an unsigned member's name, a key reference, a verification method's
+  id) at most 128 bytes each, and the text of another package's error it
+  reports (reading the key, verifying the proof, parsing the created time)
+  within 1,024 bytes, quoted; `errors.Is` still reaches a key error it
+  wraps. `UpdateStatus` names a status it does not take within 128 bytes,
+  and says that only `revoked` is accepted.
 - `didregistry`: issuing a Pipeline or Process checks its delegation through
   `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
   (Connect `PermissionDenied`); the refusal's text, which clients see in that

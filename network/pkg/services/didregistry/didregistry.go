@@ -34,6 +34,7 @@ import (
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
@@ -457,7 +458,7 @@ func (s *Service) UpdateStatus(ctx context.Context, didStr, status string) (*did
 	}
 	st := store.DIDStatus(status)
 	if st != store.StatusRevoked {
-		return nil, fmt.Errorf("%w: unsupported status %q (slice-4 accepts %q)", ErrInvalidArgument, status, store.StatusRevoked)
+		return nil, fmt.Errorf("%w: unsupported status %s (only %q is accepted)", ErrInvalidArgument, netexcerpt.ValueText(status), store.StatusRevoked)
 	}
 	// Idempotent: re-revoking an already-revoked DID is a non-mutating success
 	// and appends no second revoke event.
@@ -596,29 +597,29 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 		return err
 	}
 	if proof.Type != "DataIntegrityProof" || proof.ProofPurpose != "assertionMethod" {
-		return fmt.Errorf("%w: proof type/purpose %q/%q not DataIntegrityProof/assertionMethod", ErrUnauthorized, proof.Type, proof.ProofPurpose)
+		return fmt.Errorf("%w: proof type/purpose %s/%s not DataIntegrityProof/assertionMethod", ErrUnauthorized, netexcerpt.ValueText(proof.Type), netexcerpt.ValueText(proof.ProofPurpose))
 	}
 	if proof.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
-		return fmt.Errorf("%w: unsupported cryptosuite %q", ErrUnauthorized, proof.Cryptosuite)
+		return fmt.Errorf("%w: unsupported cryptosuite %s", ErrUnauthorized, netexcerpt.ValueText(proof.Cryptosuite))
 	}
 	if _, err := time.Parse(time.RFC3339, proof.Created); err != nil {
-		return fmt.Errorf("%w: proof.created is not RFC3339: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: proof.created %s is not RFC3339: %s", ErrUnauthorized, netexcerpt.ValueText(proof.Created), netexcerpt.ErrorText(err))
 	}
 	vmDID, _, found := strings.Cut(proof.VerificationMethod, "#")
 	if !found || vmDID != doc.ID() {
-		return fmt.Errorf("%w: verificationMethod %q does not name the owner %q", ErrUnauthorized, proof.VerificationMethod, doc.ID())
+		return fmt.Errorf("%w: verificationMethod %s does not name the owner %s", ErrUnauthorized, netexcerpt.ValueText(proof.VerificationMethod), netexcerpt.ValueText(doc.ID()))
 	}
 	// Key and encoding from one resolution: the encoding selects the claim
 	// contract, and the contract selects the canonicalization.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %s", ErrUnauthorized, netexcerpt.ErrorText(err))
 	}
 	// Exact dispatch (signer.suite.exact-dispatch): a self-signed owner document
 	// whose proof shape matches no contract is unauthorized, not retried under
 	// the other canonicalizer.
 	if _, err := vc.VerifyProofWithContract(s.verifier, pub, encoding, proof, signing); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %s", ErrUnauthorized, netexcerpt.ErrorText(err))
 	}
 	return nil
 }
@@ -678,7 +679,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 	}
 	for _, vm := range doc.VerificationMethod() {
 		if _, err := did.AbsoluteKeyID(subject, vm.ID); err != nil {
-			return fmt.Errorf("%w: verification method id: %w", ErrInvalidArgument, err)
+			return fmt.Errorf("%w: verification method id: %w", ErrInvalidArgument, excerpt.OfError(err, netexcerpt.TextLimit))
 		}
 	}
 	for _, member := range relationshipMembers {
@@ -686,7 +687,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 		for i, ref := range refs {
 			if s, ok := ref.(string); ok {
 				if _, err := did.AbsoluteKeyID(subject, s); err != nil {
-					return fmt.Errorf("%w: %s entry %d: %w", ErrInvalidArgument, member, i, err)
+					return fmt.Errorf("%w: %s entry %d: %w", ErrInvalidArgument, member, i, excerpt.OfError(err, netexcerpt.TextLimit))
 				}
 			}
 		}
@@ -706,7 +707,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 				return fmt.Errorf("%w: %s entry %d is not a reference (an embedded method is not read here)", ErrInvalidArgument, rel, i)
 			}
 			if _, err := did.ExtractPublicKey(doc, s, rel); err != nil {
-				return fmt.Errorf("%w: %s %q: %w", ErrInvalidArgument, rel, s, err)
+				return fmt.Errorf("%w: %s %s: %w", ErrInvalidArgument, rel, netexcerpt.ValueText(s), excerpt.OfError(err, netexcerpt.TextLimit))
 			}
 		}
 	}
@@ -723,13 +724,13 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 		for _, rel := range keyRelationships {
 			if _, err := did.ExtractPublicKey(doc, vm.ID, rel); err != nil {
 				if errors.Is(err, did.ErrInvalidPublicKey) {
-					return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
+					return fmt.Errorf("%w: verification method %s: %w", ErrInvalidArgument, netexcerpt.ValueText(vm.ID), excerpt.OfError(err, netexcerpt.TextLimit))
 				}
-				failed = append(failed, fmt.Sprintf("%s: %v", rel, err))
+				failed = append(failed, fmt.Sprintf("%s: %s", rel, netexcerpt.ErrorText(err)))
 			}
 		}
 		if len(failed) == len(keyRelationships) {
-			return fmt.Errorf("%w: verification method %q: no reader can extract its key (%s)", ErrInvalidArgument, vm.ID, strings.Join(failed, "; "))
+			return fmt.Errorf("%w: verification method %s: no reader can extract its key (%s)", ErrInvalidArgument, netexcerpt.ValueText(vm.ID), strings.Join(failed, "; "))
 		}
 	}
 	return nil
@@ -759,7 +760,7 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 	}
 	for k := range pm {
 		if !proofMembers[k] {
-			return nil, nil, fmt.Errorf("%w: proof carries unsigned member %q", ErrUnauthorized, k)
+			return nil, nil, fmt.Errorf("%w: proof carries unsigned member %s", ErrUnauthorized, netexcerpt.ValueText(k))
 		}
 	}
 	signing := make(map[string]any, len(body)-1)

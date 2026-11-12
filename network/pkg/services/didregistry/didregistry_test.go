@@ -1240,3 +1240,151 @@ func TestWrongKindOfDIDIsNamedWithinABound(t *testing.T) {
 		}
 	}
 }
+
+// tamperedOwnerDoc is the signed owner document, its body and proof changed
+// by change after signing (signedOwnerDocWith changes it before).
+func tamperedOwnerDoc(t *testing.T, signer crypto.Signer, signPub []byte, change func(body, proof map[string]any)) *did.DIDDocument {
+	t.Helper()
+	raw, err := json.Marshal(signedOwnerDoc(t, signer, signPub, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	change(body, body["proof"].(map[string]any))
+	if raw, err = json.Marshal(body); err != nil {
+		t.Fatal(err)
+	}
+	var doc did.DIDDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return &doc
+}
+
+// The owner document's checks name what they refuse within a bound, however
+// long it is: a member of the proof, a key reference or a verification
+// method, and an error of another package's they report. A value is named
+// within a value's bound, with its length; another package's error is held
+// to the bound of a reported error.
+func TestRegisterOwner_NamesWhatItRefusesWithinABound(t *testing.T) {
+	const valueLimit, errorLimit = 512, 3 << 10
+	long := strings.Repeat("x", 64<<10)
+	// The cases that name a value and also report another package's error.
+	reportsAnError := map[string]bool{
+		"a long created time":                           true,
+		"a long key reference":                          true,
+		"a long verification method no reader extracts": true,
+	}
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		change func(body, proof map[string]any)
+		want   error
+		named  string
+	}{
+		"a long proof type":                                 {func(_, p map[string]any) { p["type"] = long }, didregistry.ErrUnauthorized, long},
+		"a long proof purpose":                              {func(_, p map[string]any) { p["proofPurpose"] = long }, didregistry.ErrUnauthorized, long},
+		"a long cryptosuite":                                {func(_, p map[string]any) { p["cryptosuite"] = long }, didregistry.ErrUnauthorized, long},
+		"a long created time":                               {func(_, p map[string]any) { p["created"] = long }, didregistry.ErrUnauthorized, long},
+		"a long verificationMethod of another DID":          {func(_, p map[string]any) { p["verificationMethod"] = "did:example:" + long + "#k" }, didregistry.ErrUnauthorized, "did:example:" + long + "#k"},
+		"a long verificationMethod of the owner, of no key": {func(_, p map[string]any) { p["verificationMethod"] = ownerDID + "#" + long }, didregistry.ErrUnauthorized, ""},
+		"a long proofValue":                                 {func(_, p map[string]any) { p["proofValue"] = "z" + long }, didregistry.ErrUnauthorized, ""},
+		"an unsigned proof member of a long name":           {func(_, p map[string]any) { p[long] = "v" }, didregistry.ErrUnauthorized, long},
+		"a long key reference": {func(b, _ map[string]any) {
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), ownerDID+"#"+long)
+		}, didregistry.ErrInvalidArgument, ownerDID + "#" + long},
+		"a long key reference of another DID": {func(b, _ map[string]any) {
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), "did:example:"+long+"#k")
+		}, didregistry.ErrInvalidArgument, ""},
+		"a long verification method id of another DID": {func(b, _ map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), map[string]any{
+				"id": "did:example:" + long + "#k", "type": "Multikey", "controller": ownerDID, "publicKeyMultibase": "z6Mk",
+			})
+		}, didregistry.ErrInvalidArgument, ""},
+		"a long verification method no reader extracts": {func(b, _ map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), map[string]any{
+				"id": ownerDID + "#" + long, "type": "Multikey", "controller": ownerDID, "publicKeyMultibase": "z" + long,
+			})
+		}, didregistry.ErrInvalidArgument, ownerDID + "#" + long},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, signer, signPub := newService(t)
+			_, err := svc.RegisterOwner(ctx, tamperedOwnerDoc(t, signer, signPub, c.change), nil)
+			if !errors.Is(err, c.want) {
+				t.Fatalf("%.200v, want %v", err, c.want)
+			}
+			limit := errorLimit
+			if c.named != "" && !reportsAnError[name] {
+				limit = valueLimit
+			}
+			if len(err.Error()) > limit {
+				t.Errorf("%.300v… (%d bytes), want at most %d", err, len(err.Error()), limit)
+			}
+			if c.named != "" && !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+				t.Errorf("%.300v, want it named with its length %d", err, len(c.named))
+			}
+		})
+	}
+}
+
+// An Owner of a long DID whose proof names another DID is named within a
+// value's bound.
+func TestRegisterOwner_NamesALongOwnerWithinABound(t *testing.T) {
+	svc, signer, signPub := newService(t)
+	longOwner := ownerDID + strings.Repeat("x", 64<<10)
+	raw, err := json.Marshal(signedOwnerDoc(t, signer, signPub, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(string(raw), ownerDID, longOwner)), &body); err != nil {
+		t.Fatal(err)
+	}
+	body["proof"].(map[string]any)["verificationMethod"] = "did:example:other#k"
+	if raw, err = json.Marshal(body); err != nil {
+		t.Fatal(err)
+	}
+	var doc did.DIDDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.RegisterOwner(context.Background(), &doc, nil)
+	if !errors.Is(err, didregistry.ErrUnauthorized) || len(err.Error()) > 512 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(longOwner))) {
+		t.Errorf("%.300v, want ErrUnauthorized naming the Owner with its length %d", err, len(longOwner))
+	}
+}
+
+// Bounding the text of a key error it wraps keeps the key error: a key
+// reference, or a verification method id, of another DID is still
+// did.ErrInvalidKeyReference.
+func TestRegisterOwner_KeepsTheKeyErrorItBounds(t *testing.T) {
+	long := strings.Repeat("x", 64<<10)
+	for name, change := range map[string]func(b, _ map[string]any){
+		"a key reference of another DID": func(b, _ map[string]any) {
+			b["assertionMethod"] = append(b["assertionMethod"].([]any), "did:example:"+long+"#k")
+		},
+		"a verification method id of another DID": func(b, _ map[string]any) {
+			b["verificationMethod"] = append(b["verificationMethod"].([]any), map[string]any{
+				"id": "did:example:" + long + "#k", "type": "Multikey", "controller": ownerDID, "publicKeyMultibase": "z6Mk",
+			})
+		},
+	} {
+		svc, signer, signPub := newService(t)
+		_, err := svc.RegisterOwner(context.Background(), tamperedOwnerDoc(t, signer, signPub, change), nil)
+		if !errors.Is(err, didregistry.ErrInvalidArgument) || !errors.Is(err, did.ErrInvalidKeyReference) {
+			t.Errorf("%s: %.200v, want ErrInvalidArgument and did.ErrInvalidKeyReference", name, err)
+		}
+	}
+}
+
+// A status UpdateStatus does not take is named within a bound, however long.
+func TestUpdateStatus_NamesTheStatusWithinABound(t *testing.T) {
+	svc, _, _ := newService(t)
+	long := strings.Repeat("x", 64<<10)
+	_, err := svc.UpdateStatus(context.Background(), ownerDID, long)
+	if !errors.Is(err, didregistry.ErrInvalidArgument) || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+		t.Errorf("%.200v, want ErrInvalidArgument naming the status's head and length", err)
+	}
+}
