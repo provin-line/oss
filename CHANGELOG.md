@@ -20,6 +20,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   node's verifier refuses a proof for another before it resolves the signer
   or records the nonce. Upgrading needs every node and pipeline that talk
   to each other to move together: read **Breaking changes**.
+- **Go 1.26.11**: the module's `toolchain` and the `verification` module's
+  are `go1.26.11`, and the `network`, `pipeline` and quickstart `provision`
+  images build on `golang:1.26.11-alpine`, which carry the standard
+  library's fix for GO-2026-6859 (`net/http`).
 
 ### Added
 
