@@ -155,11 +155,14 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, nil)
-	good, _ := jwt.Signed(sig).Claims(jwt.Claims{
+	accessToken := (&jose.SignerOptions{}).WithType("at+jwt")
+	claims := jwt.Claims{
 		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
 		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-	}).Serialize()
+		IssuedAt: jwt.NewNumericDate(time.Now()),
+	}
+	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, accessToken)
+	good, _ := jwt.Signed(sig).Claims(claims).Serialize()
 
 	if err := v.Verify(interceptors.WithBearerToken(context.Background(), good), "dids", "read"); err != nil {
 		t.Fatalf("verified token denied: %v", err)
@@ -168,11 +171,8 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 		t.Fatalf("agent hits = %d, want 1", agentHits.Load())
 	}
 	// Same claims, signed with a different key: the signature cannot verify.
-	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, nil)
-	forged, _ := jwt.Signed(otherSig).Claims(jwt.Claims{
-		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
-		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-	}).Serialize()
+	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, accessToken)
+	forged, _ := jwt.Signed(otherSig).Claims(claims).Serialize()
 	if forged == good {
 		t.Fatal("forged token equals the valid one")
 	}

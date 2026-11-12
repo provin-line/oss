@@ -537,6 +537,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   it registers it again at its start (`schema/local`'s `Add` compiles it):
   check those schemas before upgrading. Upgrade every process that compiles or
   validates against a schema before a schema uses one.
+- **Authentication:** the `cedar` backend accepts a caller's JWT only with
+  the `typ` RFC 9068 gives an access token, `at+jwt` or `application/at+jwt`
+  (in any ASCII case), and an `iat` claim, which may not be ahead of the
+  node's clock by more than the 30-second leeway. A token that lacks either,
+  one with a `typ` of `JWT` for instance, is refused as `Unauthenticated`, as
+  an invalid token is. 0.4.x checked neither: an issuer whose tokens lack them
+  must issue tokens of that form first.
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said

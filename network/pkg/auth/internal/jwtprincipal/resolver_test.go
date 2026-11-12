@@ -29,7 +29,7 @@ var testSecret = []byte("0123456789abcdef0123456789abcdef")
 
 func hsToken(t *testing.T, secret []byte, claims jwt.Claims) string {
 	t.Helper()
-	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: secret}, (&jose.SignerOptions{}).WithType("JWT"))
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: secret}, (&jose.SignerOptions{}).WithType("at+jwt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +78,8 @@ func TestHS256_Rejects(t *testing.T) {
 		"wrong secret":   hsToken(t, []byte("ffffffffffffffffffffffffffffffff"), validClaims(now)),
 		"expired":        mut(func(c *jwt.Claims) { c.Expiry = jwt.NewNumericDate(now.Add(-time.Hour)) }),
 		"no exp":         mut(func(c *jwt.Claims) { c.Expiry = nil }),
+		"no iat":         mut(func(c *jwt.Claims) { c.IssuedAt = nil }),
+		"iat ahead":      mut(func(c *jwt.Claims) { c.IssuedAt = jwt.NewNumericDate(now.Add(time.Hour)) }),
 		"not yet valid":  mut(func(c *jwt.Claims) { c.NotBefore = jwt.NewNumericDate(now.Add(time.Hour)) }),
 		"wrong issuer":   mut(func(c *jwt.Claims) { c.Issuer = "https://evil.example" }),
 		"wrong audience": mut(func(c *jwt.Claims) { c.Audience = jwt.Audience{"other"} }),
@@ -95,6 +97,48 @@ func TestHS256_Rejects(t *testing.T) {
 	}
 }
 
+// A token is accepted only as an access token: its typ header is at+jwt, in
+// either spelling RFC 9068 gives (at+jwt or application/at+jwt) and in any
+// case, a media type being case-insensitive. Any other typ, or none, is
+// refused.
+func TestPrincipal_RequiresTheAccessTokenType(t *testing.T) {
+	now := time.Now()
+	r := newHS(t, now)
+	signed := func(opts *jose.SignerOptions) string {
+		t.Helper()
+		sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: testSecret}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := jwt.Signed(sig).Claims(validClaims(now)).Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, typ := range []string{"at+jwt", "application/at+jwt", "AT+JWT", "Application/At+Jwt"} {
+		if _, err := r.Principal(context.Background(), signed((&jose.SignerOptions{}).WithType(jose.ContentType(typ)))); err != nil {
+			t.Errorf("typ %q: refused: %v", typ, err)
+		}
+	}
+	refused := map[string]*jose.SignerOptions{
+		"no typ":              {},
+		"typ JWT":             (&jose.SignerOptions{}).WithType("JWT"),
+		"typ jwt":             (&jose.SignerOptions{}).WithType("jwt"),
+		"typ application/jwt": (&jose.SignerOptions{}).WithType("application/jwt"),
+		"typ empty":           (&jose.SignerOptions{}).WithType(""),
+		"typ with parameters": (&jose.SignerOptions{}).WithType("at+jwt; v=1"),
+		"typ another +jwt":    (&jose.SignerOptions{}).WithType("dpop+jwt"),
+		"typ not ASCII":       (&jose.SignerOptions{}).WithType("appl\u0130cation/at+jwt"),
+		"typ not a string":    (&jose.SignerOptions{}).WithHeader(jose.HeaderType, 1),
+	}
+	for name, opts := range refused {
+		if got, err := r.Principal(context.Background(), signed(opts)); err == nil {
+			t.Errorf("%s: accepted, principal %q", name, got)
+		}
+	}
+}
+
 func TestHS256_Leeway(t *testing.T) {
 	now := time.Now()
 	r := newHS(t, now)
@@ -106,6 +150,11 @@ func TestHS256_Leeway(t *testing.T) {
 	c.Expiry = jwt.NewNumericDate(now.Add(-2 * leeway))
 	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err == nil {
 		t.Error("token expired beyond leeway accepted")
+	}
+	c = validClaims(now)
+	c.IssuedAt = jwt.NewNumericDate(now.Add(leeway / 2))
+	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err != nil {
+		t.Errorf("token issued ahead within leeway rejected: %v", err)
 	}
 }
 
@@ -224,7 +273,7 @@ func ecKey(t *testing.T, kid string) (*ecdsa.PrivateKey, jose.JSONWebKey) {
 
 func esToken(t *testing.T, k *ecdsa.PrivateKey, kid string, c jwt.Claims) string {
 	t.Helper()
-	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", kid))
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("at+jwt").WithHeader("kid", kid))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +302,29 @@ func newClock() *clock {
 	c := &clock{}
 	c.now.Store(time.Now())
 	return c
+}
+
+// A token that is not an access token is refused before its key is looked
+// up: it never makes the node fetch the issuer's key set.
+func TestJWKS_ATokenOfAnotherTypeFetchesNoKeys(t *testing.T) {
+	k, jwk := ecKey(t, "k1")
+	srv := newJWKSServer(t, jwk)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "k1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jwt.Signed(sig).Claims(validClaims(clk.Now())).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Principal(context.Background(), tok); err == nil {
+		t.Fatalf("accepted, principal %q", got)
+	}
+	if n := srv.hits.Load(); n != 0 {
+		t.Errorf("JWKS fetched %d times for a token of another type, want 0", n)
+	}
 }
 
 func TestJWKS_VerifiesAndCaches(t *testing.T) {

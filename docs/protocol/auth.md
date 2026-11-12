@@ -44,6 +44,10 @@ Facts a deployment must internalize:
   authenticates nothing, so `provin.network.auth.cedar.jwt.*` (issuer,
   audience, and exactly one of `jwks-url` / `secret`) is required, and the
   principal asked about is the verified token's `sub` (which must be non-empty).
+  The token's `typ` must be the one RFC 9068 gives an access token, `at+jwt`
+  or `application/at+jwt` (in any ASCII case), and it must carry `exp` and
+  `iat`, the latter not ahead of the node's clock beyond the 30-second leeway.
+  Other claims RFC 9068 lists, such as `jti` and `client_id`, are not required.
   The token must be a compact JWS in its one spelling, and its claims are read
   under the repository's strict JSON rules (no duplicate keys, valid Unicode,
   no keys of one object that differ only in case).

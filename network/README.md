@@ -99,9 +99,11 @@ backend is fail-closed (missing required config → the node does not boot):
 source — `cedar.jwt.jwks-url` (https; asymmetric algorithms) or `cedar.jwt.secret`
 (HS256, at least 32 bytes after decoding, written in `cedar.jwt.secret-encoding`:
 `utf8` (default) | `hex` | `base64`) — or the node does not boot. A token is
-accepted only with a valid signature, an unexpired `exp`, a passed-or-absent
-`nbf` (30 s leeway), the configured `iss`, an `aud` containing the configured
-audience and a non-empty `sub`.
+accepted only with the `typ` of an access token (`at+jwt` or
+`application/at+jwt`, RFC 9068, in any ASCII case), a valid signature, an
+unexpired `exp`, an `iat` not ahead of the node's clock, a passed-or-absent
+`nbf` (30 s leeway for all three), the configured `iss`, an `aud` containing
+the configured audience and a non-empty `sub`.
 
 With `jwks-url` the key set is cached for 10 minutes and refetched at most every
 30 seconds (also when a token names an unknown `kid`). While a refetch fails, the
