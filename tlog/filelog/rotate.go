@@ -309,7 +309,7 @@ func assembleSegment(dir string, seg uint64, m segmentManifest) error {
 	// the destructive live truncate durable. On the first rotation the archive/
 	// directory entry is newly created; without this fsync a crash could lose the
 	// whole segment (its link into dir) while the live log is already truncated —
-	// silent audit-record loss, the exact failure this slice exists to prevent.
+	// silent audit-record loss, the exact failure this fsync prevents.
 	return fsyncDir(dir)
 }
 

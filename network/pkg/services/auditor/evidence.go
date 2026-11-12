@@ -24,12 +24,12 @@ type Registrar interface {
 
 // ErrHeadNotAdmitted is returned by EvidenceService.Register when
 // headVariantID has not (yet) been admitted into the local VC store — the
-// arbitrary-hash amplification guard (D1): without it, a caller could enqueue
+// arbitrary-hash amplification guard: without it, a caller could enqueue
 // an audit and a receipt for content this node never received. The handler
 // maps it to connect.CodeFailedPrecondition.
 var ErrHeadNotAdmitted = errors.New("auditor: head is not admitted in the local VC store")
 
-// EvidenceService is the write half of the audit evidence substrate (D1,
+// EvidenceService is the write half of the audit evidence substrate (the
 // composite RegisterEvidence RPC): given the WIRE VARIANT id of an ADMITTED
 // head (the exact signed bytes StoreVC returned as StoreVCResult.WireVariantID
 // — see vc.WireVariantID's doc for what that id names and why it, not a body
@@ -47,12 +47,12 @@ var ErrHeadNotAdmitted = errors.New("auditor: head is not admitted in the local 
 // BODY address, parity with the in-process aggregate emission path
 // (pipeline/runtime's emissionRegistrar) and the audit Runner, both of which
 // already key every read/write by body address. This is a KNOWN, ACCEPTED gap
-// (the pre-existing verdict/variant partition trap, P0-1 slices B/C): a
+// (the verdict/variant partition trap, P0-1): a
 // verdict names the body it audited, not which variant proved admission for
 // THIS registration, so two registrations of the same body via two different
 // (but both valid) variants are indistinguishable in the recorded evidence.
 // Closing it means teaching the receipt store and audit queue to carry a
-// variant identity too, which neither can yet (P0-1 slices B/C).
+// variant identity too, which neither does.
 type EvidenceService struct {
 	receipts ReceiptWriter
 	queue    Registrar

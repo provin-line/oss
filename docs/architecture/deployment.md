@@ -66,7 +66,7 @@ read), which custodies and serves the verified prefix without ever
 re-signing it. **The shipper now rides `cmd/pipeline`**: that binary ships
 every durable custody log it opens — emission, sink-receipt, and sink-reject
 logs alike — each signed as that log's own checkpoint-signer identity, and
-tears down in a fixed order (tlog-custody spec D8): the data-plane loops
+tears down in a fixed order: the data-plane loops
 drain first, then each shipper gets ONE final flush attempt on a FRESH
 context (never the already-canceled shutdown signal's context) before the
 underlying log files close. A drain that cannot finish within its budget is

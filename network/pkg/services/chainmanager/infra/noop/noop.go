@@ -4,9 +4,8 @@
 //
 // It MUST NOT be wired into a production build — neither production binary
 // (cmd/network, cmd/pipeline) imports this package (the ChainPeerService prod
-// mount uses the nats operator, a later slice). All operations are
-// idempotent, which the domain's ref-counted export lifecycle relies on
-// (slice-11 D-p8).
+// mount uses the nats operator). All operations are idempotent, which the
+// domain's ref-counted export lifecycle relies on.
 package noop
 
 import "github.com/provin-line/oss/network/pkg/services/chainmanager/infra"

@@ -2,7 +2,7 @@
 // contract: the wireauth op name and signed-view field builder every
 // RetainPayload client and handler must derive IDENTICALLY.
 //
-// It is a LEAF (PR3b Task 2): it imports only stdlib — never the
+// It is a LEAF: it imports only stdlib — never the
 // payloadresolver service root, never gen/ — so a consumer that needs only
 // the wire contract (payloadresolver/client today; a future cmd/pipeline
 // binary tomorrow) can depend on it without dragging in the service root's

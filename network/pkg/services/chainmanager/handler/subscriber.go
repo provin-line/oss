@@ -10,7 +10,7 @@ import (
 
 // SubscriberService is the consumer-side view of the chainmanager domain's
 // outbound connection flow (the L1 Subscribe / Unsubscribe RPCs). It is declared
-// separately from Service (D-s9) so enabling the connection flow does not widen
+// separately from Service so enabling the connection flow does not widen
 // the exported Service interface — external fakes implementing Service keep
 // compiling. *chainmanager.Service satisfies it.
 type SubscriberService interface {

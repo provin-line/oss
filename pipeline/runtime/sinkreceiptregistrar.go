@@ -119,7 +119,7 @@ func (r *sinkReceiptRegistrar) IssueReceipt(ctx context.Context, consumed *vc.Pi
 	// 1. Local store — the head must be locally resolvable before the audit runner
 	// dequeues it. StoreVC returns the server-recomputed StoredHead; the queue is
 	// still body-keyed (see emissionregistrar.go on why the variant is not consumed
-	// by the queue yet — it travels through r.audit.Add(head) regardless, task-3).
+	// by the queue yet — it travels through r.audit.Add(head) regardless).
 	head, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("sinkReceiptRegistrar: local store receipt: %w", err)

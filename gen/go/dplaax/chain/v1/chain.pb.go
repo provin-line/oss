@@ -4,7 +4,7 @@
 // interceptor enforces). ChainPeerService is the internet-facing L2 surface: it
 // carries NO L1 policy option — each request instead presents an AuthProof the
 // handler verifies in-band via the wireauth library. The split is a tested
-// descriptor contract asserted in both directions (slice-9 D-c1): policy option
+// descriptor contract asserted in both directions: policy option
 // present on every operator RPC, absent on every peer RPC, and an auth_proof
 // field present on every peer request.
 
@@ -35,7 +35,7 @@ const (
 
 // AuthProof is the wireauth Proof on the wire — the L2 authentication token a
 // peer presents on every ChainPeerService request. It maps 1:1 to
-// wireauth.Proof (slice-9 D-c2).
+// wireauth.Proof.
 type AuthProof struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// signer_did is the DID whose #auth key signed this proof.
@@ -278,9 +278,8 @@ func (x *AllowRule) GetPattern() string {
 	return ""
 }
 
-// Subscribe/Unsubscribe carry the last-slice connection flow (the most
-// decision-heavy part); their messages are intentionally minimal here and grow
-// additively (proto3-safe) when that flow lands.
+// Subscribe/Unsubscribe carry the subscriber side of the connection flow; their
+// messages are intentionally minimal and grow additively (proto3-safe).
 type SubscribeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SubscriberDid string                 `protobuf:"bytes,1,opt,name=subscriber_did,json=subscriberDid,proto3" json:"subscriber_did,omitempty"`
@@ -729,7 +728,7 @@ func (x *GetAllowListResponse) GetRules() []*AllowRule {
 
 type GetPublisherInfoRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof     *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	PublisherDid  string     `protobuf:"bytes,2,opt,name=publisher_did,json=publisherDid,proto3" json:"publisher_did,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -837,7 +836,7 @@ func (x *GetPublisherInfoResponse) GetSupportedPayloadDelivery() []string {
 
 type RegisterSubscriptionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof     *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	SubscriberDid string     `protobuf:"bytes,2,opt,name=subscriber_did,json=subscriberDid,proto3" json:"subscriber_did,omitempty"`
 	PublisherDid  string     `protobuf:"bytes,3,opt,name=publisher_did,json=publisherDid,proto3" json:"publisher_did,omitempty"`
@@ -978,7 +977,7 @@ func (x *RegisterSubscriptionResponse) GetPayloadDelivery() string {
 
 type DisconnectRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof      *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	SubscriptionId string     `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields

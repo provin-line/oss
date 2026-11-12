@@ -1,10 +1,10 @@
 // dplaax.audit.v1 is the read surface for the async chain auditor's per-head
 // verdicts: a consumer fetches the latest recorded audit status for a consumed
-// chain head (by content address). The verdict-producing runner is slice-17h;
-// this is the read API (slice-17i).
+// chain head (by content address). The async audit runner produces the
+// verdicts; this is their read API.
 //
-// Coverage principle (load-bearing, slice-17i D-17i-2): the response carries a
-// per-scope verdict, never a bare "overall" and never a top-level axes block. A
+// Coverage principle (load-bearing): the response carries a per-scope
+// verdict, never a bare "overall" and never a top-level axes block. A
 // linear-chain-only verdict can therefore never be read as a full aggregate
 // (consumed-set) verdict — message presence of source_commitment IS the coverage
 // signal (absent == not evaluated). A conforming aggregate consumer computes

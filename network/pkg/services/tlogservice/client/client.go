@@ -1,5 +1,5 @@
 // Package client is the production network client for TlogService's mirror
-// surface (spec D-T2/D-T6): it ships checkpoint-aligned segments of a local
+// surface: it ships checkpoint-aligned segments of a local
 // tlog.Log to the registry via MirrorLogSegment, and reads the registry's
 // durable resume cursor via GetMirrorState.
 //
@@ -12,7 +12,7 @@
 //
 // It imports only the generated client, connect, crypto, and the
 // tlogservice service's wirecontract LEAF (op name + signed-view builders +
-// the record_payloads_framed codec; PR3b Task 2 moved these out of the
+// the record_payloads_framed codec; they live outside the
 // tlogservice service root so this client never pulls in the root's
 // mirrorstore/logident domain logic) — never the tlogservice service root
 // itself, and never pipeline/ (AGENTS.md layer rule: network and pipeline
@@ -40,14 +40,14 @@ import (
 // all required.
 type Config struct {
 	// Signer signs each MirrorLogSegment call's wireauth proof as SignerDID
-	// — the log's OWN writer identity (D-T3: the checkpoint's SignedBy base
+	// — the log's OWN writer identity (the checkpoint's SignedBy base
 	// must equal this proven signer_did). GetMirrorState needs no proof (it
 	// rides the L1 interceptor only, same posture as ListLogRecords), so
 	// Signer/SignerDID are unused for that call.
 	Signer crypto.Signer
 	// SignerDID is the identity MirrorLogSegment proves — the log's writer,
 	// not a separate "who is asking" actor (the handler threads the proven
-	// signer_did straight through to D-T3 enforcement; see
+	// signer_did straight through to identity enforcement; see
 	// tlogservice.MirrorSegmentInput.CallerDID).
 	SignerDID string
 	// BaseURL is the registry's ConnectRPC endpoint.
@@ -111,7 +111,8 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // MirrorLogSegment ships one checkpoint-aligned segment [fromIndex,
 // fromIndex+len(payloads)) to the registry: cp is the local log's signed
-// checkpoint covering EXACTLY this segment's end (D-T2 acceptance rule 1;
+// checkpoint covering EXACTLY this segment's end (the registry recomputes
+// the chain head from the segment and compares it with the checkpoint head;
 // callers — the tlogship shipper — obtain it from the live tlog.Log's own
 // Checkpoint(), never synthesized here). It:
 //
@@ -124,11 +125,11 @@ func bearerInterceptor(token string) connect.Interceptor {
 //  3. Returns any Connect error as-is (no swallowing) — the caller sees the
 //     real Connect code (e.g. FailedPrecondition for a gap/overlap/
 //     chain-head mismatch, ResourceExhausted for a cap violation,
-//     PermissionDenied for a D-T3 identity failure).
+//     PermissionDenied for an identity failure).
 //
 // A nil cp is rejected client-side before any signing or network call — a
-// MirrorLogSegment call always carries a checkpoint (D-T2 rule 1 requires
-// one), so a nil value here is a caller bug, not a wire condition.
+// MirrorLogSegment call always carries a checkpoint (the registry's chain-to-head
+// check requires one), so a nil value here is a caller bug, not a wire condition.
 func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex uint64, payloads [][]byte, cp *tlog.Checkpoint) (uint64, error) {
 	if cp == nil {
 		return 0, fmt.Errorf("tlogservice/client: MirrorLogSegment: nil checkpoint")
@@ -153,7 +154,7 @@ func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex u
 }
 
 // GetMirrorState reads the registry's durable mirror size for logID — the
-// shipper's resume cursor (D-T2 rule 6). No wireauth proof: it rides the L1
+// shipper's resume cursor. No wireauth proof: it rides the L1
 // interceptor only, matching the RPC's read-only posture (see
 // tlogservice.Service.MirrorState's own doc).
 func (c *Client) GetMirrorState(ctx context.Context, logID string) (uint64, error) {

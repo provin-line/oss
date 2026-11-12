@@ -1,11 +1,11 @@
 // Package wirecontract holds the auditor service's wire-level contract: the
 // wireauth op names and signed-view field builders every write RPC's client
-// and handler must derive IDENTICALLY (D7 — an evidence-write RPC carries an
+// and handler must derive IDENTICALLY (an evidence-write RPC carries an
 // L2-style wireauth proof signed by the acting pipeline/process DID), plus
 // the consumed-set canonicalization (consumedset.go) both the receipt stores
 // and the RPC handler enforce.
 //
-// It is a LEAF (PR3b Task 2): it imports at most stdlib and vc — never the
+// It is a LEAF: it imports at most stdlib and vc — never the
 // auditor service root, never gen/ — so a consumer that needs only the wire
 // contract (auditor/client today; a future cmd/pipeline binary tomorrow) can
 // depend on it without dragging in the service root's store/runner/handler
@@ -19,7 +19,7 @@ import "strings"
 
 // OpRegisterEvidence is the wireauth op name for the RegisterEvidence RPC — it
 // MUST match exactly between the client's signed view and the handler's
-// verification view (D7: every evidence-write RPC carries an L2-style
+// verification view (every evidence-write RPC carries an L2-style
 // wireauth proof signed by the acting pipeline/process DID). Unlike the peer
 // surface's short op names, this one carries the full RPC identity:
 // RegisterEvidence is reached through the L1-authorized AuditService mux
@@ -27,9 +27,7 @@ import "strings"
 // interceptor at all), so its op name is namespaced to avoid ever colliding
 // with another L1-authorized surface's short op name.
 //
-// Exported (moved out of the handler, slice pr2-evidence-wire D1 Task 6; moved
-// again out of the auditor service root into this leaf package, PR3b Task 2)
-// so the auditor/client package can sign the SAME op the auditor/handler
+// Exported so the auditor/client package can sign the SAME op the auditor/handler
 // package verifies — living in one place is what keeps the two from ever
 // drifting.
 const OpRegisterEvidence = "dplaax.audit.v1.AuditService/RegisterEvidence"
@@ -63,9 +61,7 @@ const registerEvidenceJoinSeparator = "\n"
 //
 // Both the auditor/handler package (verifying) and the auditor/client
 // package (signing) call this SAME builder — the one place that keeps the
-// two derivations from drifting (moved out of the handler in slice
-// pr2-evidence-wire D1 Task 6; moved again out of the auditor service root
-// into this leaf package, PR3b Task 2).
+// two derivations from drifting.
 func RegisterEvidenceFields(headVariantAddr string, canonicalConsumed []string) map[string]any {
 	return map[string]any{
 		"head_variant_address":      headVariantAddr,

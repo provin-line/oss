@@ -4,10 +4,9 @@
 // validation and lookup live in the auditor.StatusService (AGENTS.md: handler = proto↔
 // domain + error mapping only).
 //
-// Coverage projection (slice-17i D-17i-2): each audited scope is its own ScopeVerdict
-// message; 17h-era records only ever evaluate the linear chain, so source_commitment is
-// never emitted (its absence == not evaluated). A linear-only verdict can never be served
-// as a full aggregate one.
+// Coverage projection: each audited scope is its own ScopeVerdict message, and
+// source_commitment is emitted only when the consumed set was evaluated (its absence ==
+// not evaluated). A linear-only verdict can never be served as a full aggregate one.
 package handler
 
 import (
@@ -165,7 +164,7 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 	// linear_chain is present whenever the spine was verified. The runner always records
 	// a recorded audit with Scope.LinearChain true (it walks head→origin before
 	// VerifyChain), so this field is in practice always present — an empty response is
-	// structurally unreachable. Overall is, in the 17h era, exactly the linear verdict.
+	// structurally unreachable. Overall is exactly the linear verdict.
 	//
 	// Unresolvable overrides EVERY confidence in this scope (overall + all three axes) to
 	// CONFIDENCE_UNRESOLVABLE: chain assembly never obtained the head's own content, so
@@ -185,11 +184,11 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 			Notations: rec.Notations,
 		}
 	}
-	// source_commitment is emitted ONLY when the consumed-set was actually evaluated
-	// (slice-17o): its presence IS the coverage signal (17i D-17i-2), and the confidence maps
-	// the DISTINCT domain field (never Overall — that is the linear verdict). No axes:
-	// VerifySourceCommitment yields a single state outside the three axes. When the flag is
-	// false (17h-era or a downstream linear-only audit) the field stays absent.
+	// source_commitment is emitted ONLY when the consumed-set was actually evaluated: its
+	// presence IS the coverage signal, and the confidence maps the DISTINCT domain field
+	// (never Overall — that is the linear verdict). No axes: VerifySourceCommitment yields
+	// a single state outside the three axes. When the flag is false (a linear-only audit)
+	// the field stays absent.
 	if rec.Scope.SourceCommitmentEvaluated {
 		resp.SourceCommitment = &auditpb.ScopeVerdict{
 			Confidence: confidence(rec.SourceCommitment),
@@ -305,7 +304,7 @@ func mapError(err error) error {
 	}
 	switch {
 	// The head variant address is not (yet) admitted in the local VC store —
-	// the arbitrary-hash amplification guard (D1).
+	// the arbitrary-hash amplification guard.
 	case errors.Is(err, auditor.ErrHeadNotAdmitted):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	// A recorded receipt already pins a DIFFERENT canonical consumed set for

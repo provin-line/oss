@@ -16,8 +16,8 @@
 // configured /ingest/<loop>/... push routes — no ConnectRPC services of its
 // own.
 //
-// On SIGINT/SIGTERM this binary tears down in a FIXED order (tlog-custody
-// spec D8), never all at once: (1) the HTTP server stops accepting and
+// On SIGINT/SIGTERM this binary tears down in a FIXED order,
+// never all at once: (1) the HTTP server stops accepting and
 // drains in-flight requests; (2) the data-plane loops/aggregates are told to
 // stop and awaited; (3) the mirror shippers' and emit-health reporters'
 // periodic goroutines are told to stop and awaited; (4) each mirror shipper
@@ -61,7 +61,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// The CONFIG_FILE convention (T1): a short-lived, per-execution binary has
+	// The CONFIG_FILE convention: a short-lived, per-execution binary has
 	// no default location to fall back to, unlike cmd/network's
 	// CONFIG_OVERLAY-over-./config/application.conf layering.
 	cfg, err := hoconconfig.LoadFile("CONFIG_FILE")
@@ -134,7 +134,7 @@ func main() {
 	// constructible. Built unconditionally (not gated on a consuming loop
 	// being present) — pipeline/runtime.Build ALSO fails closed per-loop if
 	// Resolver is nil for a consuming role, but naming the failure here, before
-	// any side-effectful boot work, gives a clearer boot error (e.g. the F8
+	// any side-effectful boot work, gives a clearer boot error (e.g. the
 	// private-network posture requiring scoped registry resolution).
 	guard, didResolver, err := newDIDResolution(coreCfg, chainCfg)
 	if err != nil {
@@ -154,27 +154,27 @@ func main() {
 	// (source/chained/aggregate issuers, sink receipt issuers); the #auth key
 	// for the checkpoint-signer identity of every durable log (the SAME
 	// issuer/receipt keys above — the mirror shipper signs MirrorLogSegment
-	// as that same identity, tlog-custody spec D-T3); and the #auth key for
+	// as that same identity); and the #auth key for
 	// every producing loop's OWN pipeline DID (its OutputSubject, distinct
 	// from its issuer DID) — the identity BOTH the emit-health reporter
-	// signs ReportEmitHealth as (PR3b Task 7 — see emithealthwiring.go's
+	// signs ReportEmitHealth as (see emithealthwiring.go's
 	// package doc for why it must be the pipeline DID, not the issuer DID)
-	// AND, as of D9, the identity by-reference retain (wirePayloadStore's
+	// AND the identity by-reference retain (wirePayloadStore's
 	// payloadClientFactory, wiring.go) signs RetainPayload as — guard 5,
 	// below, checks the latter fails closed at boot rather than silently at
-	// first emit. Provisioning them is an operator/CLI concern, out of this
-	// task's scope.
+	// first emit. Provisioning them is an operator/CLI concern, not this
+	// binary's.
 	keyStore := filestore.New(filepath.Join(coreCfg.DataDir, "keys"))
 
-	// Boot guard 5 (fail-closed, named, D9): by-reference retain
+	// Boot guard 5 (fail-closed, named): by-reference retain
 	// (wirePayloadStore's payloadClientFactory, wiring.go) signs each
 	// RetainPayload call as the OWNING producing loop's output subject, never
 	// the node identity — network/pkg/services/payloadresolver/storehandler
-	// enforces owner_did == the proven signer (the PR2 signer-to-actor
+	// enforces owner_did == the proven signer (the signer-to-actor
 	// binding). A missing key here would otherwise only surface as a runtime
 	// retain failure that aborts the whole emission (dataplane.go's
-	// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits,
-	// D-6), so this is checked before any loop ever runs.
+	// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits),
+	// so this is checked before any loop ever runs.
 	if err := preflightPayloadRetainKeys(keyStore, pipeCfg.Loops); err != nil {
 		log.Fatalf("pipeline: %v", err)
 	}
@@ -197,10 +197,9 @@ func main() {
 		log.Fatalf("pipeline: build data plane: %v", err)
 	}
 
-	// Boot guard 6 (fail-closed, named, D9 extension — branch review,
-	// Important finding): nodeDID's own signing key (RegisterAuditHead /
+	// Boot guard 6 (fail-closed, named): nodeDID's own signing key (RegisterAuditHead /
 	// PayloadResolver) and every durable custody log's checkpoint-signer key
-	// — both previously discoverable only at first use, since filelog's own
+	// — both otherwise discoverable only at first use, since filelog's own
 	// checkpoint arming never probes the key at construction (see
 	// preflightWireOnlySignerKeys' own doc, wiring.go, for why this guard
 	// must run AFTER Build, unlike guard 5 above). dp.Close() releases the
@@ -211,7 +210,7 @@ func main() {
 		log.Fatalf("pipeline: %v", err)
 	}
 
-	// Mirror shippers (D-T6): one per durable custody log, signed as that
+	// Mirror shippers: one per durable custody log, signed as that
 	// log's own checkpoint-signer identity.
 	mirrorFactory := newMirrorClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	shippers, err := buildShippers(dp.CustodyLogs(), mirrorFactory.forClient, pipeCfg.TlogMirror)
@@ -220,13 +219,11 @@ func main() {
 		log.Fatalf("pipeline: %v", err)
 	}
 
-	// EmitHealth reporters (Task 10 D4): one per by-reference publisher
+	// EmitHealth reporters: one per by-reference publisher
 	// (every producing loop — buildDeps always wires a PayloadStore, so
-	// every producing loop dual-emits, D-6), signed/reported as that loop's
+	// every producing loop dual-emits), signed/reported as that loop's
 	// pipeline DID, each bound to ITS OWN producer's CURRENT stripped-publish
-	// health (P1 fix, branch review — every report used to hardcode
-	// healthy=true regardless of the producer's actual state; see
-	// emitHealthReporterSpecsFor's doc).
+	// health (see emitHealthReporterSpecsFor's doc).
 	reportFactory := newReportClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, origin.Confine(guard.HTTPClient()))
 	emitHealthSpecs := emitHealthReporterSpecsFor(pipeCfg.Loops, dp.Metrics())
 	reporters := buildEmitHealthReporters(emitHealthSpecs, reportFactory.forClient, emitHealthCadence(chainCfg.EmitHealth.TTL))
@@ -283,7 +280,7 @@ func main() {
 // readiness snapshot then reports no nats check rather than a
 // permanently-failing one.
 //
-// hasPushIngress (branch review, P2 Codex fix) gates an added PDP
+// hasPushIngress gates an additional PDP
 // reachability check: this binary mounts no ConnectRPC services of its own
 // to be ready FOR (unlike cmd/network, which unconditionally
 // probes the PDP whenever the backend is external — it always mounts
@@ -331,9 +328,9 @@ func outerRequestCapBytes(maxPushBodySize int) int {
 	return maxPushBodySize*2 + 64<<10
 }
 
-// DefaultDrainBudget bounds step 4's final mirror-shipper flush (tlog-custody
-// spec D8): each shipper gets this long, on a FRESH context independent of
-// the already-canceled signal context, to ship its local tail before this
+// DefaultDrainBudget bounds step 4's final mirror-shipper flush: each shipper
+// gets this long, on a FRESH context independent of the already-canceled signal
+// context, to ship its local tail before this
 // binary closes the underlying log/NATS handles. A shipper that cannot fully
 // catch up within the budget (registry down, or an unusually large backlog)
 // is NOT a shutdown failure — the unmirrored tail is still durable on the
@@ -346,7 +343,7 @@ const DefaultDrainBudget = 10 * time.Second
 // drains every loop/aggregate on ctx cancellation; Close (called only after
 // Run returns) releases the shared NATS connection and every durable custody
 // log's file handle — see pipeline/runtime.Runtime.Close's own doc for why
-// these are two separate calls as of PR3b Task 7. A local interface (rather
+// these are two separate calls. A local interface (rather
 // than the concrete *pipelineruntime.Runtime) lets the ordering test drive
 // run's shutdown sequence without booting a real NATS broker.
 type dataPlane interface {
@@ -354,15 +351,14 @@ type dataPlane interface {
 	Close() error
 }
 
-// run executes this binary's D8 ordered shutdown. Unlike the concurrent
-// single-shared-context shape this function used to have (every stage
-// cancelled at once), an ORDERED sequence needs a CONTEXT SPLIT: the
-// data-plane loops (loopCtx) and the mirror shippers/emit-health reporters
-// (shipCtx) each get their OWN cancellable context, independent of ctx (the
-// signal context) and of each other, so cancelling one stage never also
-// cancels a later stage that has not been told to stop yet. All three run
-// concurrently the whole time this binary is up — what is ordered is only
-// the SHUTDOWN, driven step by step below:
+// run executes this binary's ordered shutdown. Unlike a concurrent
+// single-shared-context shape (every stage cancelled at once), an ORDERED
+// sequence needs a CONTEXT SPLIT: the data-plane loops (loopCtx) and the mirror
+// shippers/emit-health reporters (shipCtx) each get their OWN cancellable
+// context, independent of ctx (the signal context) and of each other, so
+// cancelling one stage never also cancels a later stage that has not been told
+// to stop yet. All three run concurrently the whole time this binary is up —
+// what is ordered is only the SHUTDOWN, driven step by step below:
 //
 //  1. HTTP stops accepting and drains in-flight requests
 //     (httpserve.ServeHTTP already gives its own drain a fresh bounded
@@ -466,7 +462,7 @@ func run(ctx context.Context, srv *http.Server, listen func() error, dp dataPlan
 }
 
 // drainShippers gives every mirror shipper one FRESH, bounded (budget)
-// attempt to flush its local tail to the registry (D8 step 4) —
+// attempt to flush its local tail to the registry (step 4) —
 // concurrently, so N shippers cost at most ~budget total, not N×budget. A
 // shipper that cannot finish within budget is logged, never treated as a
 // shutdown failure: the tail stays durable on the local log and the next

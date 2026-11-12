@@ -4,7 +4,7 @@
 // interceptor enforces). ChainPeerService is the internet-facing L2 surface: it
 // carries NO L1 policy option — each request instead presents an AuthProof the
 // handler verifies in-band via the wireauth library. The split is a tested
-// descriptor contract asserted in both directions (slice-9 D-c1): policy option
+// descriptor contract asserted in both directions: policy option
 // present on every operator RPC, absent on every peer RPC, and an auth_proof
 // field present on every peer request.
 

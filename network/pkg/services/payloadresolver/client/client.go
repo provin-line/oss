@@ -14,7 +14,7 @@
 // service's wirecontract LEAF (for the RetainPayload op name + signed-view
 // builder shared with storehandler, so the two derivations cannot drift —
 // mirrors auditor/client importing auditor's wirecontract leaf for the same
-// reason; PR3b Task 2 moved these out of the payloadresolver service root so
+// reason; they live outside the payloadresolver service root so
 // this client never pulls in the root's store/handler domain logic) — never
 // the payloadresolver service root itself, and never pipeline/ (AGENTS.md
 // layer rule: network and pipeline interact only over the wire). *Resolver

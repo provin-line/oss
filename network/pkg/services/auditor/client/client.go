@@ -14,9 +14,9 @@
 // derivations cannot drift.
 //
 // It imports only the generated client, connect, crypto, and the auditor
-// service's wirecontract LEAF (op names + signed-view builders; PR3b Task 2
-// moved these out of the auditor service root so this client never pulls in
-// the root's store/runner/handler domain logic) — never the auditor service
+// service's wirecontract LEAF (op names + signed-view builders, kept out of
+// the auditor service root so this client never pulls in the root's
+// store/runner/handler domain logic) — never the auditor service
 // root itself, and never pipeline/ (AGENTS.md layer rule: network and
 // pipeline interact only over the wire).
 package client

@@ -33,7 +33,7 @@ type emissionRecord struct {
 // number, publish, advance the sequence ONLY after a successful publish, then
 // append the emission record to the transparency log under a detached context.
 // transport.Loop drives it for EventProcessor-based loops; the aggregate Source
-// Process runtime (slice-17l) drives it from its own timer Run — one
+// Process runtime drives it from its own timer Run — one
 // implementation, both callers, so the protocol-sensitive ordering lives in one
 // place.
 //
@@ -127,7 +127,7 @@ func WithPayloadRetainer(r PayloadRetainer) EmitterOption {
 
 // WithStrippedPublisher attaches the dual-emit capability the cross-org
 // export seam relies on to apply an agreed by-reference delivery mode
-// (export-seam-mode spec D-1/D-5/D-6): the seam cannot transform a NATS
+// (export-seam by-reference mode): the seam cannot transform a NATS
 // message in flight (account export/import is a routing grant, not a
 // transform), so a serving node's producing loop instead publishes TWICE —
 // the primary (full) form on its existing subject, and a STRIPPED form

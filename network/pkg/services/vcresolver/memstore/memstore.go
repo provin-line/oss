@@ -111,7 +111,7 @@ func (p *Pool) IncrementRetry(hash string) error {
 }
 
 // Has reports whether a hole is currently queued — the read-only liveness signal the audit
-// runner consults before finalizing an Indeterminate verdict (slice-17h, D-17h-4).
+// runner consults before finalizing an Indeterminate verdict.
 func (p *Pool) Has(hash string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

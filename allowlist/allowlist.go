@@ -1,11 +1,11 @@
 // Package allowlist matches a candidate DID against a trust pattern — the
 // admission decision behind a pipeline's allow-list. It is a distinct
-// responsibility from persistence (store): next-B's UpdateAllowList validation
-// and the last-slice connection-flow admission both consume it.
+// responsibility from persistence (store): the chain manager's UpdateAllowList
+// validation and its peer admission both consume it.
 //
-// A pattern is a dplaax DID glob, segment-aware over the ":"-delimited identifier
-// (D-c5): literal segments match exactly, "*" matches exactly one interior
-// segment, and a trailing "*" matches zero-or-more remaining segments (so
+// A pattern is a dplaax DID glob, segment-aware over the ":"-delimited identifier:
+// literal segments match exactly, "*" matches exactly one interior segment, and a
+// trailing "*" matches zero-or-more remaining segments (so
 // "did:dplaax:*:org:acme:*" matches the acme owner DID and everything beneath
 // it). The did:dplaax method prefix must be literal. path.Match is deliberately
 // not used: it treats ":" as an ordinary character, so its "*" would span

@@ -1,15 +1,16 @@
-// Package auditor is the verdict half of the async chain-audit path (slice-17h): a
-// background Runner drains a registry of consumed chain heads, assembles each chain from
-// the LOCAL store (the substrate slice-17g fills) by reusing chainwalk over a local-store
-// resolver, runs vc.VerifyChain (L1 proofs + chain structure + origin), and records a
-// per-head audit status (three-state + per-axis + coverage).
+// Package auditor is the verdict half of the async chain-audit path: a background
+// Runner drains a registry of consumed chain heads, assembles each chain from the LOCAL
+// store by reusing chainwalk over a local-store resolver, runs vc.VerifyChain (L1
+// proofs + chain structure + origin), and records a per-head audit status (three-state
+// + per-axis + coverage).
 //
 // It is purely additive: it verifies and records, mutating nothing the batch resolver
 // owns. A still-unfilled hole is an Indeterminate verdict (verdict-not-yet-computable, not
 // Failed); it is finalized only when the missing predecessor is in neither the store nor
 // the unresolved pool (the resolver has given up). Deep consumed-set (SourceCommitment)
-// verification is out of this slice — every record's Scope marks SourceCommitmentEvaluated
-// false, so a linear-only verdict can never be read as a full aggregate one.
+// verification runs only for an aggregate head with a local receipt (WithSourceCommitment);
+// every other record's Scope marks SourceCommitmentEvaluated false, so a linear-only
+// verdict can never be read as a full aggregate one.
 package auditor
 
 import (
@@ -22,13 +23,13 @@ import (
 )
 
 // AuditScope records what an AuditRecord's verdict actually covers, so a reader (the
-// slice-17i API) can never present a linear-only verdict as a full aggregate one. 17h
-// always sets SourceCommitmentEvaluated false (the consumed-set check is a later slice).
+// AuditService API) can never present a linear-only verdict as a full aggregate one.
 type AuditScope struct {
-	// LinearChain reports that the previousCredential spine was verified (always true in 17h).
+	// LinearChain reports that the record covers the previousCredential spine; the
+	// runner always sets it true.
 	LinearChain bool
 	// SourceCommitmentEvaluated reports that the consumed-set / SourceCommitment was deeply
-	// verified (always false in 17h — that is the aggregate-audit extension).
+	// verified, which the runner does only for an aggregate head with a local receipt.
 	SourceCommitmentEvaluated bool
 }
 
@@ -38,7 +39,7 @@ type AuditScope struct {
 // records); for an assembly hole they are a synthetic Indeterminate (all axes explicitly
 // Indeterminate — the AxisResult zero value is Failed, so it must be set).
 //
-// SourceCommitment is the DISTINCT consumed-set verdict (slice-17o): the VerifySourceCommitment
+// SourceCommitment is the DISTINCT consumed-set verdict: the VerifySourceCommitment
 // result, separate from Overall (the linear verdict), populated only when
 // Scope.SourceCommitmentEvaluated is true (an aggregate head with a local receipt). Its
 // notations are kept per-scope in SourceCommitmentNotations so the wire source_commitment.notations

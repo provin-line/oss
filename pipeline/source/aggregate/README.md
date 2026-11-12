@@ -51,7 +51,7 @@ accountability for non-federation inputs terminates at the ingesting owner.
 
 ## Status
 
-The **signer capability** (slice-17k) and the **pool/window runtime** (slice-17l) have landed.
+The **signer capability** and the **pool/window runtime** are implemented.
 `aggregate.Process` is a `contract.Process` that pools verified ingress (per-input adjacent verify →
 payload↔credential binding → `StoreIngressVC`, all fail-closed), and on each window tick folds the
 pool via a pluggable `Fold` seam (`ManifestFold` is the reference), strict-JSON-gates the output,

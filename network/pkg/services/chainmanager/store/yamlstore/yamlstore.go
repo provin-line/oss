@@ -6,7 +6,7 @@
 // {root}/allowlists/{registry}/{accountType}/{accountID}/{resourcePath…}.yaml —
 // because an AllowListStore carries no single-registry deployment context (unlike
 // the didregistry yamlstore, which omits the registry); omitting it would collide
-// two registries' identical accountType/accountID (slice-9 Codex Medium). Every
+// two registries' identical accountType/accountID. Every
 // DID-derived segment is safe-segment-validated before any path is built, so a
 // crafted segment can never escape root.
 //
@@ -15,8 +15,7 @@
 // contracts). Reads distinguish absent from corrupt: an absent subscription is
 // store.ErrNotFound and an absent allow-list is empty (default-distrust), but a
 // present-yet-unparseable file is a real error, never silently collapsed to
-// NotFound/empty — that would silently drop a subscription or trust config
-// (slice-9 Codex Medium).
+// NotFound/empty — that would silently drop a subscription or trust config.
 package yamlstore
 
 import (

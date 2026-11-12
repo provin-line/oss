@@ -36,7 +36,7 @@ type Service interface {
 // AllowListReader is the read half of the allow-list capability. It is wired
 // separately from Service (via WithAllowListReader) so adding allow-list read
 // does not widen the exported Service interface — external Service
-// implementations keep compiling (D-s9, mirroring WithSubscriber).
+// implementations keep compiling (mirroring WithSubscriber).
 // *chainmanager.Service satisfies it.
 type AllowListReader interface {
 	GetAllowList(ctx context.Context, pipelineDID string) ([]store.AllowRule, error)
@@ -74,7 +74,7 @@ var _ chainpbconnect.ChainServiceHandler = (*OperatorHandler)(nil)
 type OperatorOption func(*OperatorHandler)
 
 // WithSubscriber enables the connection-flow RPCs (Subscribe / Unsubscribe) by
-// supplying the subscriber-side service. Kept separate from Service (D-s9) so the
+// supplying the subscriber-side service. Kept separate from Service so the
 // exported Service interface is not widened — external fakes implementing Service
 // keep compiling.
 func WithSubscriber(sub SubscriberService) OperatorOption {
@@ -231,7 +231,7 @@ func mapError(err error) error {
 	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrDuplicateSubscription):
-		// D-4 mixed-mode invariant, subscriber-side (authoritative): a
+		// Mixed-mode invariant, subscriber-side (authoritative): a
 		// subscription to this publisher already exists — a create-conflict.
 		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, chainmanager.ErrNoChainManagerEndpoint):
@@ -239,7 +239,7 @@ func mapError(err error) error {
 	case errors.Is(err, chainmanager.ErrSubscriberUnconfigured):
 		return connect.NewError(connect.CodeInternal, err)
 	case errors.Is(err, chainmanager.ErrRemotePeer):
-		// Pass the remote ConnectRPC code through when present (D-s8): a remote
+		// Pass the remote ConnectRPC code through when present: a remote
 		// PermissionDenied/InvalidArgument/etc. is preserved in the error chain
 		// (%w), so the operator gets the right recoverability signal; an opaque
 		// failure (e.g. a resolver error) maps to Unavailable.

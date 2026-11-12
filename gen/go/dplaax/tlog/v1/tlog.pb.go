@@ -353,8 +353,8 @@ func (x *ListLogRecordsResponse) GetRecords() []*LogRecord {
 type MirrorLogSegmentRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// log_id is the emission log's identity — the same log_id as
-	// GetLogCheckpointRequest.log_id (see D-T3 for the registry-side signer
-	// binding this call additionally enforces at the handler).
+	// GetLogCheckpointRequest.log_id (the registry additionally requires the
+	// wireauth-proven caller to be this log's own checkpoint signer).
 	LogId string `protobuf:"bytes,1,opt,name=log_id,json=logId,proto3" json:"log_id,omitempty"`
 	// from_index is the segment's starting index. MUST equal the log's
 	// current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
@@ -382,8 +382,8 @@ type MirrorLogSegmentRequest struct {
 	// proof are checked, letting millions of zero-length elements amplify into
 	// ~100 MiB pre-auth. N is recovered by scanning the blob (it equals
 	// checkpoint.size - from_index); the registry recomputes the chain hash
-	// through these payloads and REQUIRES the result to equal checkpoint.head
-	// (D-T2 rule 1), and segment_digest in the wireauth proof binds the same
+	// through these payloads and REQUIRES the result to equal checkpoint.head,
+	// and segment_digest in the wireauth proof binds the same
 	// ordered list.
 	RecordPayloadsFramed []byte `protobuf:"bytes,6,opt,name=record_payloads_framed,json=recordPayloadsFramed,proto3" json:"record_payloads_framed,omitempty"`
 	unknownFields        protoimpl.UnknownFields

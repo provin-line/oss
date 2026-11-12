@@ -14,8 +14,8 @@ import (
 )
 
 // localChainResolver adapts the node's local *vcresolver.Service to chainwalk's
-// CredentialResolver: it resolves previousCredential links over the LOCAL store (the
-// substrate slice-17g filled in-process), so the audit assembly does no network fetch.
+// CredentialResolver: it resolves previousCredential links over the LOCAL store, which
+// the node fills in-process, so the audit assembly does no network fetch.
 type localChainResolver struct{ svc *vcresolver.Service }
 
 func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddress string) (*vc.PipelinePassCredential, error) {
@@ -24,10 +24,10 @@ func (l localChainResolver) ResolveCredential(ctx context.Context, contentAddres
 
 // BuildAuditRunner constructs the async audit runner unconditionally from its args.
 // Whether this node needs the runner at all — "does it have a consuming loop" — is a
-// composition-root concern, not this builder's (Task 9): cmd/network has no local
+// composition-root concern, not this builder's: cmd/network has no local
 // loops to gate on at all (pipeCfg.HasConsumingLoop() is always false there) and instead
 // always runs this runner. The audit chainwalk's MaxDepth equals the batch resolver's
-// max-depth (D-17h-4): neither component rejects a chain the other accepts.
+// max-depth: neither component rejects a chain the other accepts.
 func BuildAuditRunner(
 	queue auditor.AuditQueue,
 	status auditor.StatusStore,
@@ -50,7 +50,7 @@ func BuildAuditRunner(
 	if err != nil {
 		return nil, fmt.Errorf("netcompose: audit chain verifier: %w", err)
 	}
-	// WithSourceCommitment enables emit-locus consumed-set self-audit (slice-17o): for an
+	// WithSourceCommitment enables emit-locus consumed-set self-audit: for an
 	// aggregate head with a local receipt, the runner gathers the consumed sources from the
 	// local store and records a distinct source-commitment verdict via the same verifier.
 	return auditor.New(queue, vcSvc, cv, status, pool, auditor.Config{

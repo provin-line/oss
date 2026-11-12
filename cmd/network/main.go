@@ -6,8 +6,7 @@
 // (dependency-aware readiness). Every config value is validated at boot — a
 // misconfigured binary dies at startup, never on first request.
 //
-// It carries NO data plane (recomposition task 5: formerly cmd/standalone's
-// control plane half, extracted): it refuses to boot if its pipeline config
+// It carries NO data plane: it refuses to boot if its pipeline config
 // declares any transport loop (the guard right after LoadPipelineConfig,
 // below) — loops belong to the pipeline runtime (cmd/pipeline), never here.
 // TestProdDeps_NoPipelineInNetworkBinary
@@ -102,8 +101,8 @@ func main() {
 	if len(pipeCfg.Loops) > 0 {
 		log.Fatalf("network: %d pipeline loop(s) configured, but this binary runs no data plane — run loops with cmd/pipeline", len(pipeCfg.Loops))
 	}
-	// This binary always runs the peer-fetching batch resolver below (Task 9:
-	// BuildBatchResolver builds unconditionally from its args now). This
+	// This binary always runs the peer-fetching batch resolver below
+	// (BuildBatchResolver builds unconditionally from its args). This
 	// binary can never gate that runner on pipeCfg.HasConsumingLoop() — the
 	// guard above enforces zero loops here, so
 	// that predicate is always false — yet the resolver still runs, draining
@@ -152,7 +151,7 @@ func main() {
 	}
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(credBackend), pool)
 
-	// The audit substrate (slice-17h): a registry of consumed heads and a
+	// The audit substrate: a registry of consumed heads and a
 	// verdict store. With no consuming loop of its own, this node's audit
 	// substrate is fed only by whatever a peer's StoreVC / RegisterConsumed
 	// call registers over the wire.
@@ -164,7 +163,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("network: %v", err)
 	}
-	// The emit-time consumed-set receipt store (slice-17o), read by the audit
+	// The emit-time consumed-set receipt store, read by the audit
 	// runner's source-commitment step.
 	auditReceipts, err := auditfilestore.NewReceiptStore(filepath.Join(evidenceDir, "receipts"))
 	if err != nil {
@@ -206,10 +205,9 @@ func main() {
 		readiness = append(readiness, check)
 	}
 
-	// ReportEmitHealth's publisher-scoped by-reference advertisement gate
-	// (Task 10 D4): this report-mode node has no in-process by-reference
-	// producer of its own, so advertisement is instead gated per publisher by
-	// what that publisher has
+	// ReportEmitHealth's publisher-scoped by-reference advertisement gate:
+	// this report-mode node has no in-process by-reference producer of its own, so
+	// advertisement is instead gated per publisher by what that publisher has
 	// itself reported here. The store backs BOTH the ReportEmitHealth RPC
 	// (mounted via emitHealth below) and chainmanager.WithPublisherHealth's
 	// lookup (wired inside BuildHandler).
@@ -219,11 +217,11 @@ func main() {
 		AdvertiseWithoutReports: chainCfg.EmitHealth.AdvertiseWithoutReports,
 	}
 
-	// The D-T4 mirror-custody store (tlog-custody spec): this control-plane
+	// The mirror-custody store: this control-plane
 	// node runs no producing loops of its own (the guard above enforces
 	// zero pipeline loops), so its ENTIRE TlogService surface is served
 	// from mirrored copies — MirrorLogSegment's identity enforcement
-	// (D-T3), the batch caps, and GetMirrorState/GetLogCheckpoint/
+	// (each log's own checkpoint signer), the batch caps, and GetMirrorState/GetLogCheckpoint/
 	// ListLogRecords' second read source all go through this one store.
 	// BuildHandler wires the rest (the DID resolver + AncestorPipeline
 	// adapter over its own didregistry.Service + the wireauth verifier) —
@@ -251,7 +249,7 @@ func main() {
 
 	// The async chain-audit resolver drains the pool a peer's StoreVC
 	// populates, and the audit runner verifies assembled chains and records
-	// verdicts. Both builders build unconditionally now (Task 9), and both
+	// verdicts. Both builders build unconditionally, and both
 	// ALWAYS run on this binary: it has no local consuming loop to gate on
 	// (HasConsumingLoop is always false — it configures none), but a peer's
 	// StoreVC/RegisterConsumed call can populate this node's pool/audit-queue
@@ -320,9 +318,9 @@ func main() {
 // HTTP server is the sole primary service here (its return cancels the context so the
 // runners drain — there is no data plane whose failure could independently
 // need to bring the node down). Both background runners stay
-// degraded-tolerant (log-and-continue, D-17g-9 / D-17h-8): they never cancel
+// degraded-tolerant (log-and-continue): they never cancel
 // their siblings and return nil on shutdown. Both are always non-nil for this
-// binary (Task 9: main's bearer guard makes BuildBatchResolver/BuildAuditRunner
+// binary (main's bearer guard makes BuildBatchResolver/BuildAuditRunner
 // always succeed non-nil here); the nil checks below stay defensive so this
 // function's contract does not depend on that caller invariant.
 func runNetwork(ctx context.Context, srv *http.Server, listen func() error, batchRunner *batchresolver.Runner, auditRunner *auditor.Runner) error {

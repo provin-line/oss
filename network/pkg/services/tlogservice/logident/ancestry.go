@@ -16,7 +16,7 @@ import (
 var ErrInvalidProcessDID = errors.New("logident: invalid process DID")
 
 // PipelineAncestry answers "which pipeline DID issued this process DID" —
-// the check an emission log's writer binding needs (D-T3: the checkpoint
+// the check an emission log's writer binding needs (the checkpoint
 // signer is a process DID, but the log id names the pipeline; verifying the
 // signer belongs to that pipeline requires walking from process to
 // pipeline). Defined here as an interface, consumed by the writer-binding

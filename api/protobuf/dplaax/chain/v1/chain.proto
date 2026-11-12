@@ -4,7 +4,7 @@
 // interceptor enforces). ChainPeerService is the internet-facing L2 surface: it
 // carries NO L1 policy option — each request instead presents an AuthProof the
 // handler verifies in-band via the wireauth library. The split is a tested
-// descriptor contract asserted in both directions (slice-9 D-c1): policy option
+// descriptor contract asserted in both directions: policy option
 // present on every operator RPC, absent on every peer RPC, and an auth_proof
 // field present on every peer request.
 syntax = "proto3";
@@ -20,7 +20,7 @@ import "o3co/authz/v1/policy.proto";
 
 // AuthProof is the wireauth Proof on the wire — the L2 authentication token a
 // peer presents on every ChainPeerService request. It maps 1:1 to
-// wireauth.Proof (slice-9 D-c2).
+// wireauth.Proof.
 message AuthProof {
   // signer_did is the DID whose #auth key signed this proof.
   string signer_did = 1;
@@ -101,9 +101,8 @@ service ChainService {
   }
 }
 
-// Subscribe/Unsubscribe carry the last-slice connection flow (the most
-// decision-heavy part); their messages are intentionally minimal here and grow
-// additively (proto3-safe) when that flow lands.
+// Subscribe/Unsubscribe carry the subscriber side of the connection flow; their
+// messages are intentionally minimal and grow additively (proto3-safe).
 message SubscribeRequest {
   string subscriber_did = 1;
   string publisher_did = 2;
@@ -151,7 +150,7 @@ service ChainPeerService {
 }
 
 message GetPublisherInfoRequest {
-  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  // auth_proof is the L2 wireauth token, verified in-handler.
   AuthProof auth_proof = 1;
   string publisher_did = 2;
 }
@@ -164,7 +163,7 @@ message GetPublisherInfoResponse {
 }
 
 message RegisterSubscriptionRequest {
-  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  // auth_proof is the L2 wireauth token, verified in-handler.
   AuthProof auth_proof = 1;
   string subscriber_did = 2;
   string publisher_did = 3;
@@ -182,7 +181,7 @@ message RegisterSubscriptionResponse {
 }
 
 message DisconnectRequest {
-  // auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+  // auth_proof is the L2 wireauth token, verified in-handler.
   AuthProof auth_proof = 1;
   string subscription_id = 2;
 }

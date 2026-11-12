@@ -15,7 +15,7 @@ import (
 
 // checkpointFile holds the REMOTE loop-signed checkpoint, persisted
 // verbatim: the registry has no loop key and never synthesizes or
-// re-signs a checkpoint (D-T4), so every field the wire carries —
+// re-signs a checkpoint, so every field the wire carries —
 // including Signature and SignedBy — round-trips through this file.
 const checkpointFile = "checkpoint.json"
 
@@ -71,7 +71,7 @@ func readCheckpointFile(dir string) (*tlog.Checkpoint, error) {
 // fsync + rename + dir-fsync — writeAtomic). It is the LAST step of an
 // AppendVerified call so a crash between the records fsync and this
 // replace leaves the checkpoint at its PRIOR value and the excess records
-// get truncated on the next Open (D-T4 crash ordering).
+// get truncated on the next Open.
 //
 // It returns renamed=true once the checkpoint file already names the new
 // contents (writeAtomic's rename succeeded) even when the trailing dir-fsync

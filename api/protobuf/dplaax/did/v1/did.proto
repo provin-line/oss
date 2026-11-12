@@ -2,7 +2,7 @@
 // Pipeline/Process issuance under owner-signed delegation, resolution,
 // status/revoke, listing, and append-only lifecycle-event reads.
 //
-// Message-shape principle (slice-4 D-d2/D-d3): DID Documents, delegation
+// Message-shape principle: DID Documents, delegation
 // credentials, outward-identity snapshots, and lifecycle events are carried as
 // opaque bytes holding their canonical (JCS) JSON — the proto does not re-model
 // them. Their canonical round-trip is normative (the document hash is recorded
@@ -30,9 +30,9 @@ import "o3co/authz/v1/policy.proto";
 // LOCALLY-minted public keys (IssuePipelineRequest/IssueProcessRequest field
 // 3, ExternalPublicKeys) — in that mode the registry assembles and registers
 // the document over the supplied public halves and never mints or stores a
-// private key for the DID, matching the tlog-custody trust model's "the
-// registry has no loop key" for pipeline/process signing keys, not just the
-// owner's. Delegation/authorization semantics are identical in both modes.
+// private key for the DID, matching the custody rule that the registry holds
+// no loop key, for pipeline/process signing keys, not just the owner's.
+// Delegation/authorization semantics are identical in both modes.
 // Issuance authority is proven by an owner-signed DelegationCredential whose
 // subject is structurally under the owner on the did:dplaax issuance plane.
 service DIDService {
@@ -83,12 +83,12 @@ service DIDService {
   // authorized a Pipeline or Process DID. A verifier reconstructing the
   // issuer->Owner authorization chain reads it here; the Owner *name* is
   // derived by structurally parsing the issuer DID (no resolution), and this
-  // delegation supplies the cryptographic authorization (slice-4 D-d7).
+  // delegation supplies the cryptographic authorization.
   rpc ResolveDelegation(ResolveDelegationRequest) returns (ResolveDelegationResponse) {
     option (o3co.authz.v1.policy) = {resource: "dids", action: "read"};
   }
 
-  // UpdateStatus changes a DID's lifecycle status (slice-4 produces "revoked").
+  // UpdateStatus changes a DID's lifecycle status; it accepts only "revoked".
   // The change is recorded as a revoke lifecycle event; the updated DID
   // Document is returned.
   rpc UpdateStatus(UpdateStatusRequest) returns (UpdateStatusResponse) {
@@ -200,7 +200,7 @@ message ResolveDelegationResponse {
 
 message UpdateStatusRequest {
   string did = 1;
-  // status is the target lifecycle status; slice-4 accepts "revoked".
+  // status is the target lifecycle status; only "revoked" is accepted.
   string status = 2;
 }
 message UpdateStatusResponse {

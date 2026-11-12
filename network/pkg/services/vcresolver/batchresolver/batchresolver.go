@@ -3,8 +3,8 @@
 // peer's VCResolverService, verifies its content address, and re-submits it through the
 // local StoreVC seam — which fills the hole and enqueues the next-deeper predecessor.
 // Over successive ticks this assembles each consumed chain to its origin, so the local
-// store accumulates complete, resolvable chains for the async audit path (the auditor —
-// a later slice — verifies proofs and chain structure; this package only ASSEMBLES).
+// store accumulates complete, resolvable chains for the async audit path (the auditor
+// service verifies proofs and chain structure; this package only ASSEMBLES).
 //
 // Trust boundary: the Runner verifies ONLY that a fetched credential's content address
 // equals the requested hash (a peer cannot substitute a body); it does NOT verify L1
@@ -167,7 +167,7 @@ func (r *Runner) drainOnce(ctx context.Context) error {
 func (r *Runner) resolveEntry(ctx context.Context, e vcresolver.UnresolvedEntry) {
 	// Re-read the live entry: an earlier entry in this same drain snapshot may have resolved
 	// this hole (removed it) or lowered its AssemblyDepth via keep-min. Acting on the stale
-	// snapshot copy could wrongly drop a now-shallow hole or re-fetch a resolved one (Codex P2).
+	// snapshot copy could wrongly drop a now-shallow hole or re-fetch a resolved one.
 	live, ok := r.pool.Get(e.Hash)
 	if !ok {
 		return // already resolved/removed earlier this tick
@@ -215,7 +215,7 @@ func (r *Runner) resolveEntry(ctx context.Context, e vcresolver.UnresolvedEntry)
 // done=false only on a connection error, signalling the caller to try the next endpoint.
 func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, endpoint string) (done bool) {
 	if err := r.guard.CheckURL(ctx, endpoint); err != nil {
-		// An SSRF-unsafe endpoint is actively suspicious — terminal drop (D-17g-8).
+		// An SSRF-unsafe endpoint is actively suspicious — terminal drop.
 		r.logger.Printf("batchresolver: dropping %s: endpoint %s rejected by SSRF guard: %s", e.Hash, netexcerpt.ValueText(endpoint), netexcerpt.ErrorText(err))
 		r.remove(e.Hash)
 		return true
@@ -235,7 +235,7 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 			return false
 		}
 	}
-	// Never trust the peer: the fetched body must hash to the requested address (D-17g-11).
+	// Never trust the peer: the fetched body must hash to the requested address.
 	if got, herr := cred.Hash(); herr != nil || got != e.Hash {
 		r.logger.Printf("batchresolver: dropping %s: peer %s served a mismatched body (got %q, err %s)", e.Hash, netexcerpt.ValueText(endpoint), got, netexcerpt.ErrorText(herr))
 		r.remove(e.Hash)
@@ -249,7 +249,7 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 		return true
 	}
 	// Re-submit at this hole's depth: StoreVC fills the hole and enqueues the next-deeper
-	// predecessor at AssemblyDepth+1 (D-17g-5/D-17g-12).
+	// predecessor at AssemblyDepth+1.
 	if _, serr := r.sub.StoreVC(ctx, b, e.UpstreamEndpoint, e.AssemblyDepth); serr != nil {
 		r.logger.Printf("batchresolver: %s: store fetched predecessor: %s", e.Hash, netexcerpt.ErrorText(serr))
 		r.retryOrDrop(e)

@@ -13,12 +13,12 @@ import (
 // <dir>/<accountPub>.jwt — the unsharded file layout a nats-server directory
 // account resolver (DirAccResolver) loads on first lookup. It imports only
 // os/path/filepath/nkeys, so wiring it into the production graph does NOT pull in
-// the nats-server (slice-14 D-n7 boundary).
+// the nats-server.
 //
-// Scope (slice-15 D-m1): the directory store does NOT watch files, so this
+// Scope: the directory store does NOT watch files, so this
 // publisher gives first-lookup correctness for accounts looked up after the file
 // exists; it does not live-update an account a client has already connected under.
-// The live-propagation publisher ($SYS/Store/reload) is a sibling impl, deferred.
+// The live-propagation publisher is the sibling package livepublisher.
 type DirPublisher struct {
 	dir string
 }

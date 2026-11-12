@@ -28,8 +28,8 @@ var (
 	ErrInfraUnavailable = errors.New("chainmanager: infra operator not configured")
 	// ErrMixedModeSubscription is returned when RegisterSubscription is called
 	// for a (subscriberDID, publisherDID) pair that already has a
-	// publisher-direction subscription under a DIFFERENT payload-delivery mode
-	// (D-4). Both modes' remote subjects rename to the SAME local subject on
+	// publisher-direction subscription under a DIFFERENT payload-delivery mode.
+	// Both modes' remote subjects rename to the SAME local subject on
 	// the subscriber side (Subscribe), so a subscriber account holding both
 	// forms at once would receive duplicate/mixed delivery on one local
 	// subject. The subscriber-side Subscribe check (ErrDuplicateSubscription)
@@ -44,7 +44,7 @@ var (
 	// always populates from the infra.Operator's own AddExport return value.
 	// An empty value means the stored record is damaged; Disconnect fails
 	// closed (never guesses a subject to remove, never silently skips
-	// teardown) and requires manual cleanup (D-3).
+	// teardown) and requires manual cleanup.
 	ErrExportSubjectMissing = errors.New("chainmanager: subscription record has no exported subject on file")
 )
 
@@ -130,16 +130,16 @@ func (s *Service) PublisherInfo(ctx context.Context, publisherDID, callerDID str
 }
 
 // RegisterSubscription admits the subscriber, negotiates the payload mode,
-// maps the mode to its wire subject (subjectForMode — D-2/D-3), provisions
+// maps the mode to its wire subject (subjectForMode), provisions
 // the publisher export, and persists the subscription. The infra-touching
-// lifecycle is serialized (D-p8): the export is shared per EXPORTED SUBJECT
+// lifecycle is serialized: the export is shared per EXPORTED SUBJECT
 // (idempotent AddExport; ref-count key is the subject, not publisherDID — an
 // inline and a by-reference subscription of the same publisher export
 // different subjects), and a Save failure for the first subscription
 // compensates by removing the export it just created. A registration for a
 // (subscriberDID, publisherDID) pair that already holds a subscription under
-// a DIFFERENT mode is rejected (ErrMixedModeSubscription — D-4 defense in
-// depth).
+// a DIFFERENT mode is rejected (ErrMixedModeSubscription — defense in
+// depth for the mixed-mode invariant).
 func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publisherDID, requestedMode string) (*store.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -179,7 +179,7 @@ func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publi
 		return nil, fmt.Errorf("chainmanager: add export: %w", err)
 	}
 	// connInfo["subject"] is load-bearing: the ref-count and Disconnect key on
-	// the STORED subject (D-3), so a record persisted without it would never be
+	// the STORED subject, so a record persisted without it would never be
 	// counted and could only fail closed at teardown. Fail closed HERE instead
 	// (compensating the export we may have just created) — an Operator that
 	// omits the key violates the AddExport contract (infra.Operator doc).
@@ -211,10 +211,10 @@ func (s *Service) RegisterSubscription(ctx context.Context, subscriberDID, publi
 }
 
 // Disconnect removes a subscription the caller owns and, only when it was the
-// last subscription sharing that subject, tears down the export (D-p8
-// ref-count). The export torn down is the subject STORED at
+// last subscription sharing that subject, tears down the export
+// (ref-count). The export torn down is the subject STORED at
 // sub.ConnectionInfo["subject"] — the subject AddExport actually returned at
-// registration — NEVER recomputed from PayloadDelivery/subjectForMode (D-3).
+// registration — NEVER recomputed from PayloadDelivery/subjectForMode.
 // This is what makes teardown correct for a legacy record (pre-dual-emit: the
 // actual export was always the plain subject, regardless of the agreed mode
 // recorded in PayloadDelivery): it removes what was ACTUALLY exported, not
@@ -249,11 +249,10 @@ func (s *Service) Disconnect(ctx context.Context, subscriptionID, callerDID stri
 		return fmt.Errorf("%w: subscription %q", ErrExportSubjectMissing, subscriptionID)
 	}
 	// Tear down the export BEFORE the irreversible Delete, and only when this is
-	// the last subscription sharing subject. Ordering matters (Codex/Claude
-	// convergent): if RemoveExport ran after Delete and then failed, the
-	// subscription would be gone while the export lingered (a retry would hit
-	// NotFound and never clean it up). With RemoveExport first — and idempotent
-	// (D-p8) — a RemoveExport failure leaves the subscription intact (fully
+	// the last subscription sharing subject. Ordering matters: if RemoveExport ran
+	// after Delete and then failed, the subscription would be gone while the export
+	// lingered (a retry would hit NotFound and never clean it up). With RemoveExport
+	// first — and idempotent — a RemoveExport failure leaves the subscription intact (fully
 	// retryable, no orphan), and a Delete failure after a successful RemoveExport
 	// is recovered by a retry that re-runs the idempotent RemoveExport then Delete.
 	count, err := s.countForSubject(subject)
@@ -302,7 +301,7 @@ func (s *Service) admit(publisherDID, callerDID string) error {
 
 // isFirstForSubject reports whether no publisher-direction subscription yet
 // exports subject (so this RegisterSubscription is the one creating the
-// export). The ref-count KEY is the exported subject (D-3), not publisherDID:
+// export). The ref-count KEY is the exported subject, not publisherDID:
 // an inline and a by-reference registration of the same publisher export
 // DIFFERENT subjects (subjectForMode) and must ref-count independently.
 func (s *Service) isFirstForSubject(subject string) (bool, error) {
@@ -312,7 +311,7 @@ func (s *Service) isFirstForSubject(subject string) (bool, error) {
 
 // countForSubject counts publisher-direction subscriptions whose STORED
 // ConnectionInfo["subject"] equals subject — the export ref-count, keyed by
-// what was actually exported (matches Disconnect's teardown key, D-3).
+// what was actually exported (matches Disconnect's teardown key).
 func (s *Service) countForSubject(subject string) (int, error) {
 	all, err := s.subs.List()
 	if err != nil {
@@ -330,7 +329,7 @@ func (s *Service) countForSubject(subject string) (int, error) {
 }
 
 // rejectMixedMode enforces the publisher-side half of the mixed-mode
-// invariant (D-4 defense-in-depth): a (subscriberDID, publisherDID) pair that
+// invariant (defense-in-depth): a (subscriberDID, publisherDID) pair that
 // already has a publisher-direction subscription under a DIFFERENT
 // payload-delivery mode is rejected. The SAME mode registered again for the
 // same pair is not a conflict.

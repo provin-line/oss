@@ -15,11 +15,11 @@ type AllowList interface {
 }
 
 // ServingBoundary authorizes a caller against a payload's owner set and, ONLY on
-// admission, reads and returns the bytes. It is the authorize-before-read gate
-// (F9): a not-admitted or absent request never triggers a payload read or hash
+// admission, reads and returns the bytes. It is the authorize-before-read gate:
+// a not-admitted or absent request never triggers a payload read or hash
 // (removing the pre-authorization amplification), and BOTH denial outcomes
 // return the same ErrNotFound so the wire cannot distinguish "present but
-// forbidden" from "absent" (closing the existence oracle, F4). The real reason
+// forbidden" from "absent" (closing the existence oracle). The real reason
 // is recorded server-side only.
 //
 // It is the serving policy layer over the pure content-addressed Service: the

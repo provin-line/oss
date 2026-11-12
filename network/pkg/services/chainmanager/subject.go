@@ -9,7 +9,7 @@ import (
 )
 
 // ByReferenceSubjectPrefix is the wire subject prefix a by-reference-mode
-// export carries (D-2): "byref." + publisherDID. Prefix, not suffix, is the
+// export carries: "byref." + publisherDID. Prefix, not suffix, is the
 // structurally collision-free choice — a producing loop's output subject is
 // always a dplaax pipeline DID (config-loader enforced, always starts with
 // "did:"), and a dplaax DID's registry segment may itself contain dots
@@ -43,8 +43,8 @@ var ErrUnsafeSubject = errors.New("chainmanager: publisher DID is not a safe NAT
 // wire subject chainmanager exports (publisher side) / imports-then-renames
 // (subscriber side, see importTargets/Subscribe) for it: inline rides the
 // publisher's plain pipeline DID unchanged; by-reference rides the
-// ByReferenceSubjectPrefix-prefixed form (D-2). It doubles as the shared
-// NATS-subject-safety validator for publisherDID (D-3) — every caller that
+// ByReferenceSubjectPrefix-prefixed form. It doubles as the shared
+// NATS-subject-safety validator for publisherDID — every caller that
 // turns a publisher DID into an exported/imported subject goes through this
 // function, so a DID that is unsafe as a NATS subject fails closed with
 // ErrUnsafeSubject for EITHER mode, never silently exported.

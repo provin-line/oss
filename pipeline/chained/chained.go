@@ -4,7 +4,7 @@
 // ingress credential, transforms the payload, signs a chain-preserving output
 // credential, and notifies observers. It is the runtime embodiment of
 // contract.ChainPreserving + the VerificationAdjacent strategy (full-chain audit
-// is the async audit runner's job, slice-17h).
+// is the async audit runner's job).
 //
 // # Strategy constraint
 //
@@ -115,7 +115,7 @@ var ErrMissingPayloadResolver = errors.New("chained: PayloadResolver is required
 // event processor.
 type Config struct {
 	// Strategy must be VerificationAdjacent (the only ingress verification a chained
-	// process runs; full-chain audit is the async audit runner's job, slice-17h).
+	// process runs; full-chain audit is the async audit runner's job).
 	// VerificationNone and VerificationUnknown are rejected; see ErrInvalidStrategy.
 	Strategy contract.VerificationStrategy
 
@@ -271,7 +271,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 
 	// Stage 2 — Ingress VC verification (adjacent: the immediately-preceding credential).
 	// Fail-closed: only ConfidenceVerified proceeds. Full-chain audit is the async audit
-	// runner's job (slice-17h), not the real-time relay path.
+	// runner's job, not the real-time relay path.
 	verifyResult, err := p.cfg.Verifier.Verify(ctx, cred)
 	if err != nil {
 		if isCtxErr(err) {

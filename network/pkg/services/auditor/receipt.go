@@ -11,7 +11,7 @@ import (
 )
 
 // ReceiptStore records, per emitted aggregate head, the exact set of consumed source content
-// addresses that produced its SourceCommitment (slice-17o D-17o-2). The aggregate runtime
+// addresses that produced its SourceCommitment. The aggregate runtime
 // writes it at emit (from the pooled set that computed SourceRoot, before the pool is
 // cleared); the audit runner reads it to gather the consumed sources for
 // VerifySourceCommitment. The receipt is an untrusted discovery LOCATOR — a wrong receipt
@@ -56,7 +56,7 @@ type ReceiptStore interface {
 var ErrReceiptConflict = errors.New("auditor: receipt already recorded with a different consumed set")
 
 // CanonicalizeConsumedSet points at wirecontract.CanonicalizeConsumedSet —
-// moved into the leaf wirecontract package (PR3b Task 2) so a client-only
+// defined in the leaf wirecontract package so a client-only
 // consumer need not import this service root; this alias keeps existing
 // call sites (MemReceiptStore.Put below, filestore.ReceiptStore,
 // EvidenceService.Register, the handler) unchanged. See

@@ -1,7 +1,7 @@
-// Package tlogship is the background mirror shipper (tlog custody spec
-// D-T6): it replicates checkpoint-aligned segments of ONE local tlog.Log to
-// a registry's TlogService mirror surface (dplaax.tlog.v1
-// MirrorLogSegment/GetMirrorState), asynchronously and on a timer, so that
+// Package tlogship is the background mirror shipper: it replicates
+// checkpoint-aligned segments of ONE local tlog.Log to a registry's TlogService
+// mirror surface (dplaax.tlog.v1 MirrorLogSegment/GetMirrorState),
+// asynchronously and on a timer, so that
 // custody of the producing loop's durable log survives the pipeline
 // process's own lifetime.
 //
@@ -15,11 +15,11 @@
 // interface capturing exactly the two calls it needs;
 // network/pkg/services/tlogservice/client.Client satisfies it structurally
 // (Go's implicit interface satisfaction), and a composition root that is
-// free to import both network/ and pipeline/ (e.g. a future cmd/pipeline)
+// free to import both network/ and pipeline/ (e.g. cmd/pipeline)
 // wires the concrete client in. This package itself imports only tlog/ (a
 // pure domain library, AGENTS.md rule 1) and the standard library.
 //
-// Cap-bounded batching (D-T2 acceptance rule 1, task-6 controller decision):
+// Cap-bounded batching (the chain-to-head rule):
 // every MirrorLogSegment call's checkpoint must cover EXACTLY that call's
 // end (checkpoint.Size == fromIndex+len(payloads)). tlog.Log's own
 // Checkpoint(ctx) only ever signs the CURRENT head, which cannot bound a
@@ -28,8 +28,8 @@
 // capability (tlog/filelog), detected structurally via the unexported
 // checkpointAtLog interface below (mirrors pipeline/transport's own
 // intentLog precedent: a capability kept OUT of the tlog.Log contract
-// itself, since memlog cannot sign at all and the tlog-custody spec's v0
-// scope excludes merklelog). With CheckpointAt available, a backlog of any
+// itself, since memlog cannot sign at all and mirroring covers filelog only,
+// not merklelog). With CheckpointAt available, a backlog of any
 // size drains in successive, exactly-covering, cap-sized segments — there
 // is no "backlog exceeds the caps and can never be shipped" condition.
 package tlogship
@@ -46,7 +46,7 @@ import (
 	"github.com/provin-line/oss/tlog"
 )
 
-// DefaultFlushInterval is the D-T6 default ticking cadence
+// DefaultFlushInterval is the default ticking cadence
 // (tlog-mirror.flush-interval) when Config.FlushInterval is unset.
 const DefaultFlushInterval = 5 * time.Second
 
@@ -84,8 +84,8 @@ var (
 	ErrMissingClient = errors.New("tlogship: Client is required")
 	ErrBadConfig     = errors.New("tlogship: MaxBatchRecords and MaxBatchBytes must be positive")
 	// ErrLogLacksCheckpointAt is New's error when log does not provide the
-	// CheckpointAt capability (see checkpointAtLog) — the tlog-custody
-	// spec's v0 mirror scope is filelog-only, so a log that structurally
+	// CheckpointAt capability (see checkpointAtLog) — mirroring is
+	// filelog-only, so a log that structurally
 	// cannot produce an arbitrary-prefix checkpoint (memlog, merklelog)
 	// cannot be mirrored by this shipper. Fails at construction, not on
 	// the first tick.
@@ -105,8 +105,8 @@ var ErrRecordExceedsMaxBatchBytes = errors.New("tlogship: a single record's payl
 // required (positive); FlushInterval defaults to DefaultFlushInterval;
 // Logger defaults to slog.Default().
 type Config struct {
-	// MaxBatchRecords / MaxBatchBytes bound EACH segment shipped (D-T2 rule
-	// 5; must match — or be no larger than — the registry's own
+	// MaxBatchRecords / MaxBatchBytes bound EACH segment shipped (must match — or
+	// be no larger than — the registry's own
 	// tlog-mirror.max-batch-records/max-batch-bytes, or the registry
 	// rejects a batch this shipper thought was admissible).
 	MaxBatchRecords int
@@ -124,7 +124,7 @@ type Config struct {
 // shipper.Run(ctx)`, a separate goroutine — a flush attempt NEVER blocks or
 // errors the emission path it shares the log handle with); flush the tail
 // once more with Drain during graceful shutdown, BEFORE the log's own
-// closer runs (D-T6 shutdown ordering: loops drain → shipper drains → log
+// closer runs (shutdown ordering: loops drain → shipper drains → log
 // closers run).
 type Shipper struct {
 	log        tlog.Log
@@ -205,7 +205,7 @@ func (s *Shipper) Run(ctx context.Context) error {
 
 // Drain performs flush attempts, spaced by the configured flush interval,
 // until one succeeds (the log's current tail is fully mirrored) or ctx is
-// done — the D-T6 graceful-shutdown flush: call it AFTER the producing
+// done — the graceful-shutdown flush: call it AFTER the producing
 // loop has stopped appending and drained, BEFORE closing the log. Callers
 // bound how long Drain may retry by ctx's deadline; on ctx expiry it
 // returns ctx.Err() wrapping the last flush error observed. A single tick
@@ -237,8 +237,8 @@ func (s *Shipper) Drain(ctx context.Context) error {
 // records appended DURING the drain are picked up by the NEXT tick, not
 // chased within this one). Each segment's checkpoint is obtained via
 // CheckpointAt(ctx, batchEnd) — exactly covering that segment's own end,
-// never the log's current head — so every call satisfies D-T2 rule 1
-// regardless of how large the outstanding backlog is.
+// never the log's current head — so every call satisfies the chain-to-head
+// rule regardless of how large the outstanding backlog is.
 //
 // A registry-down (or any other) failure partway through a multi-segment
 // drain stops THIS tick's loop immediately, having durably shipped
@@ -257,7 +257,7 @@ func (s *Shipper) tick(ctx context.Context) error {
 	}
 	if head < acked {
 		// The registry claims MORE durable records than this log currently
-		// has. Under the log-identity model (D-T1/D-T3) this should never
+		// has. Under the log-identity model (fixed log identity, own checkpoint signer) this should never
 		// happen — the registry only ever accepts segments THIS log's
 		// signer shipped — so this is a serious inconsistency, not a
 		// transient condition. Fail loudly rather than silently doing

@@ -11,8 +11,8 @@
 // generated here at issuance (server-side mint); a caller may instead supply
 // its own LOCALLY-minted public keys (ExternalPublicKeys), in which case this
 // service never generates or holds a private key for that DID — matching the
-// tlog-custody trust model's "the registry has no loop key" for pipeline/
-// process signing keys, not just the owner's. Either way, the authority to
+// custody rule that the registry holds no loop key, for pipeline/process
+// signing keys, not just the owner's. Either way, the authority to
 // mint is an owner-signed delegation whose subject is structurally under the
 // owner on the did:dplaax plane — delegation verification is identical in
 // both modes.
@@ -56,8 +56,8 @@ var (
 const (
 	eventRegister = "register"
 	eventRevoke   = "revoke"
-	// witnessSelfAsserted is the witness source until registry-side outward
-	// resolution (D-d4 part A) lands.
+	// witnessSelfAsserted is the witness source: the registry records the
+	// outward binding as submitted by the caller, without registry-side resolution.
 	witnessSelfAsserted = "self-asserted"
 	jwkType             = "JsonWebKey2020"
 )
@@ -91,7 +91,7 @@ func WithServiceEndpoints(eps []did.ServiceEndpoint) Option {
 
 // New returns a Service backed by st. registry is this registry's canonical
 // identity (the did:dplaax {registry} segment it owns); every write rejects a
-// DID whose registry segment differs (cross-registry replay defense, D-d8).
+// DID whose registry segment differs (cross-registry replay defense).
 func New(st store.DIDStore, keys keystore.KeyStore, keygen crypto.KeyGenerator, verifier crypto.Verifier, registry string, opts ...Option) *Service {
 	s := &Service{store: st, keys: keys, keygen: keygen, verifier: verifier, registry: registry, clock: time.Now}
 	for _, o := range opts {
@@ -191,7 +191,7 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 
 	if err := s.store.SaveOwner(owner, doc); err != nil {
 		if errors.Is(err, store.ErrExists) {
-			// Idempotent insert (D-d8): an exact re-submission is non-mutating
+			// Idempotent insert: an exact re-submission is non-mutating
 			// success; a different document for an existing owner is rejected.
 			existing, gerr := s.store.Resolve(owner)
 			if gerr != nil {
@@ -229,8 +229,8 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 // target DID (no keystore write). nil selects today's server-side mint,
 // unchanged. Delegation verification and every other authorization check are
 // identical in both modes; only key custody differs — this is the loop-side
-// minting path the tlog-custody trust model requires ("the registry has no
-// loop key") extended from the owner to pipeline/process keys.
+// minting path that the custody rule (the registry holds no loop key)
+// requires, extended from the owner to pipeline/process keys.
 type ExternalPublicKeys struct {
 	// AuthPublicKey is the raw Ed25519 public key for the #auth verification
 	// method (authentication relationship).
@@ -444,7 +444,7 @@ func (s *Service) ResolveDelegation(ctx context.Context, didStr string) (*delega
 }
 
 // UpdateStatus changes a DID's lifecycle status and records the transition.
-// Slice-4 accepts only "revoked". The updated document is returned.
+// It accepts only "revoked". The updated document is returned.
 func (s *Service) UpdateStatus(ctx context.Context, didStr, status string) (*did.DIDDocument, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -793,7 +793,7 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 }
 
 // appendEvent stamps the witnessed-at clock, chains PrevEventHash to the current
-// tail, and appends. The hash chain is the service's responsibility (D-d6): on a
+// tail, and appends. The hash chain is the service's responsibility: on a
 // concurrent-append ErrConflict the tail moved, so it re-reads, recomputes the
 // chain, and retries.
 func (s *Service) appendEvent(d *dplaax.DID, ev store.LifecycleEvent) error {

@@ -70,7 +70,7 @@ type Config struct {
 	// NATS is populated when Transport == TransportNATS.
 	NATS NATSConfig
 	// EmitHealth configures the ReportEmitHealth publisher-scoped by-reference
-	// advertisement gate (Task 10 D4). Loaded unconditionally (it applies
+	// advertisement gate. Loaded unconditionally (it applies
 	// regardless of Transport): cmd/network's emithealth.Store and
 	// chainmanager.WithPublisherHealth read it.
 	EmitHealth EmitHealthConfig
@@ -254,8 +254,8 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 	}
 	// resolver-base-url is optional in MEANING (empty -> didresolver default) but
 	// reference.conf always defines the key, so a read error here is a type
-	// mismatch (e.g. a number) — fail closed naming the key, not silently ignore it
-	// (convergent review: Claude + Codex). NOTE: a non-empty value maps EVERY
+	// mismatch (e.g. a number) — fail closed naming the key, not silently ignore it.
+	// NOTE: a non-empty value maps EVERY
 	// registry to this one base URL (the override ignores the registry argument),
 	// so it is a single-registry / dev-and-single-tenant seam, not a multi-registry
 	// mapping; multi-registry deployments leave it empty (default https://{registry}).

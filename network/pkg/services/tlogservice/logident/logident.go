@@ -1,5 +1,5 @@
-// Package logident implements the log-identity predicate (tlog custody spec
-// D-T3): the single fail-closed definition of what a tlog log id means and
+// Package logident implements the log-identity predicate:
+// the single fail-closed definition of what a tlog log id means and
 // who signs it. Three log kinds share one grammar:
 //
 //   - emission:     log_id IS the pipeline DID the producing loop emits
@@ -32,7 +32,7 @@ import (
 	"github.com/provin-line/oss/internal/netexcerpt"
 )
 
-// LogKind is one of the three log identity shapes D-T3 defines.
+// LogKind is one of the three log identity shapes.
 type LogKind string
 
 const (
@@ -83,8 +83,8 @@ func OwnerDID(logID string) (string, error) {
 }
 
 // classify is the single parse Kind and OwnerDID both read, so the two can
-// never classify the same id differently (D-T3: "one definition, no
-// per-handler variants").
+// never classify the same id differently (one definition, no
+// per-handler variants).
 func classify(logID string) (LogKind, string, error) {
 	if logID == "" {
 		return "", "", fmt.Errorf("%w: empty log id", ErrInvalidLogID)
@@ -151,7 +151,7 @@ func parseValidDID(s string) (*dplaax.DID, error) {
 // SignerBase extracts the base DID from signedBy, a checkpoint's SignedBy
 // field — a DID-URL verification method (e.g. "did:dplaax:...#signing").
 //
-// Fail-closed decision (documented per the task brief): a fragmentless
+// Fail-closed decision: a fragmentless
 // value is REJECTED, not accepted as its own base. This mirrors every other
 // verification-method base-DID split in this codebase — didregistry's
 // verifyDocProof, delegation.Verify, and vc.Verifier all compute

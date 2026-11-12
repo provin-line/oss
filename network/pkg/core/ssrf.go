@@ -34,7 +34,7 @@ const (
 
 // blockedPrefixes is the authoritative deny list: all IANA special-purpose
 // ranges plus deprecated local-use — everything that is not public global
-// unicast ("public-internet-only", D1). Loopback (127/8, ::1) is handled by an
+// unicast (public-internet-only). Loopback (127/8, ::1) is handled by an
 // early IsLoopback check in checkAddr (gated by the dev opt-in) and so is NOT
 // listed here.
 var blockedPrefixes = mustPrefixes(

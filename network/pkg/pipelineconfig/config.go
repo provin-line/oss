@@ -5,9 +5,9 @@
 //
 // Loops are a keyed map (key = loop name) because a node runs zero or more loops of
 // potentially different roles — the layer's responsibility is a SET of loops, not one
-// fixed loop. All four roles are implemented: "source" (external ingestion, 17b),
-// "sink" (terminating subscriber that verifies and writes out-of-network, 17c),
-// "chained" (verify-and-relay, 17d), and "aggregate" (N-ary pool + window, 17m).
+// fixed loop. All four roles are implemented: "source" (external ingestion),
+// "sink" (terminating subscriber that verifies and writes out-of-network),
+// "chained" (verify-and-relay), and "aggregate" (N-ary pool + window).
 // An unknown role remains a fail-closed boot error.
 package pipelineconfig
 
@@ -37,8 +37,7 @@ func init() {
 	hoconconfig.RegisterPackageReference("network/pipeline", referenceConf)
 }
 
-// Loop roles. slice-17c implements RoleSource (17b) and RoleSink; RoleChained is a
-// recognized-but-unsupported role (typed boot error) until 17d.
+// Loop roles: a loop takes one of these, and any other role is a boot error.
 const (
 	RoleSource    = "source"
 	RoleSink      = "sink"
@@ -55,7 +54,7 @@ const (
 
 // StrategyAdjacent is the only verification strategy a non-source loop may declare: verify
 // the immediately preceding credential. Full-chain verification is the async audit runner's
-// job (slice-17h); the real-time "full" strategy was retired in slice-17j.
+// job, so there is no real-time "full" strategy.
 const StrategyAdjacent = "adjacent"
 
 const (
@@ -65,7 +64,7 @@ const (
 	nodeRegistryKey    = pipelineKey + ".node-registry"
 	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
 	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
-	// requirement — cmd/network boot-validates it unconditionally (Task 9),
+	// requirement — cmd/network boot-validates it unconditionally,
 	// since its batch resolver always runs a peer-fetching client regardless of
 	// pipeCfg.HasConsumingLoop(), which is always false for that binary — can
 	// name the exact key in its own fatal message without duplicating the
@@ -121,8 +120,8 @@ type Config struct {
 	Loops []LoopConfig
 	// VCStoreEndpoint is the node-level VCResolverService base URL where producing
 	// loops publish issued credentials. Empty when the node publishes nothing.
-	// (Full-chain coverage is the async audit runner's job — slice-17h — which resolves
-	// over the local store, not this endpoint; slice-17j retired real-time "full".)
+	// (Full-chain coverage is the async audit runner's job, which resolves over the
+	// local store, not this endpoint.)
 	VCStoreEndpoint string
 	// NodeRegistry is the registry ID of this pipeline's node, the node at
 	// VCStoreEndpoint: the audience of every wire proof the pipeline sends
@@ -173,14 +172,14 @@ type Config struct {
 	// from MaxRetainChunkSize (a single frame). Sourced from reference.conf (no Go
 	// default); a non-positive value fails startup.
 	MaxRetainPayloadSize int
-	// TlogMirror tunes the D-T2 caps MirrorLogSegment enforces (tlog-custody
-	// spec, rule 5). Sourced from reference.conf; a non-positive value fails
+	// TlogMirror tunes the batch caps MirrorLogSegment enforces.
+	// Sourced from reference.conf; a non-positive value fails
 	// startup.
 	TlogMirror TlogMirrorConfig
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
-	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
+	// AuditRunner tunes the async audit runner (it verifies assembled chains and
 	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
 	AuditRunner AuditRunnerConfig
 	// DecisionRecord is how this node records its delivery decisions. Sourced
@@ -217,7 +216,7 @@ func (c *Config) HasConsumingLoop() bool {
 	return false
 }
 
-// AuditRunnerConfig is the node-level tuning for the async audit runner (slice-17h). All
+// AuditRunnerConfig is the node-level tuning for the async audit runner. All
 // values come from reference.conf (no Go defaults) and must be positive; the runner runs
 // only on a node with a consuming loop (the population that registers audit heads).
 type AuditRunnerConfig struct {
@@ -230,9 +229,9 @@ type AuditRunnerConfig struct {
 	MaxAttempts int
 }
 
-// TlogMirrorConfig is the node-level tlog-mirror tuning (tlog-custody spec).
+// TlogMirrorConfig is the node-level tlog-mirror tuning.
 // All values come from reference.conf (no Go defaults) and must be positive.
-// The two caps are D-T2 rule 5: read by BOTH sides (the registry-side
+// The two batch caps are read by BOTH sides (the registry-side
 // MirrorLogSegment handler is the primary enforcer; the client-side shipper
 // bounds its batches to the same values). FlushInterval is client-side only —
 // the mirror shipper's ticking cadence; no handler reads it.
@@ -253,7 +252,7 @@ type TlogMirrorConfig struct {
 	FlushInterval time.Duration
 }
 
-// BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
+// BatchResolverConfig is the node-level tuning for the async batch resolver.
 // All values come from reference.conf (no Go-side defaults) and must be positive; the
 // Runner runs only on a node with a consuming loop (it is the population that accumulates
 // unresolved holes), but the tuning is always loaded.
@@ -282,7 +281,7 @@ type IssuerConfig struct {
 type LoopConfig struct {
 	// Name is the loop's config key.
 	Name string
-	// Role selects the processor wiring: RoleSource | RoleSink (RoleChained → 17d).
+	// Role selects the processor wiring: RoleSource | RoleSink | RoleChained | RoleAggregate.
 	Role string
 	// IngressSubject is the subject the loop subscribes to for inbound events. For a
 	// sink it is the GRANTED upstream subject (the upstream source's output-subject /
@@ -330,7 +329,7 @@ type SourceConfig struct {
 type SinkConfig struct {
 	// Kind is the verdict policy: SinkObservationOnly | SinkProduction | SinkArchival.
 	Kind string
-	// VerificationStrategy is the ingress-credential verification depth (17c: adjacent).
+	// VerificationStrategy is the ingress-credential verification depth (adjacent).
 	VerificationStrategy string
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
@@ -642,7 +641,7 @@ func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
 	return ar, nil
 }
 
-// loadTlogMirror reads the D-T2 MirrorLogSegment caps plus the client-side
+// loadTlogMirror reads the MirrorLogSegment batch caps plus the client-side
 // shipper's flush cadence from the (layered) config. All three values live in
 // reference.conf (always present); each must be positive — a non-positive
 // override fails startup (no Go-side defaults).
@@ -669,8 +668,7 @@ func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
 // validateTlogMirrorCap enforces a boot-time cross-key coherence invariant
 // between tlog-mirror.max-batch-bytes and max-credential-size: a single
 // mirrored record can be as large as max-credential-size (a sink-receipt
-// log entry carries a full credential — see the tlog-custody spec's D-T2
-// rule 5 doc), so a batch cap SMALLER than that could never ship such a
+// log entry carries a full credential), so a batch cap SMALLER than that could never ship such a
 // record, not even alone. Left unchecked, this would not surface as a
 // live-config drift but as a wedge on the very first boot that ever tries
 // to mirror a record near max-credential-size in size — the tlogship
@@ -875,7 +873,7 @@ func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
 // sourceKeys / sinkKeys / chainedKeys are the role-exclusive config keys. The loader
 // rejects keys from the OTHER roles' sets so a loop cannot silently carry fields it does
 // not use (e.g. an issuer block under a sink, or a sink block under a chained loop).
-// Source fields are top-level (17b shape); sink and chained fields nest under their block.
+// Source fields are top-level; sink and chained fields nest under their block.
 var (
 	sourceKeys    = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref", "push-ingress"}
 	sinkKeys      = []string{"sink"}
@@ -1268,7 +1266,7 @@ func loadClaim(cfg *hoconconfig.Config, key, name string) (vc.TransformationClai
 }
 
 // loadStrategy reads a verification-strategy that must be "adjacent"; anything else
-// (including the retired "full", slice-17j) is a typed boot error. Full-chain coverage is
+// (including "full") is a typed boot error. Full-chain coverage is
 // the async audit runner's job, not a real-time ingress strategy.
 func loadStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
 	s, err := requireString(cfg, key)

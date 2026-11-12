@@ -97,9 +97,9 @@ wire subject:
   modes to the same publisher freely — the invariant is scoped to one
   subscriber/publisher pair, not the publisher alone.
 - **Upgrade sequence for legacy stored by-reference subscriptions**: a
-  subscription registered before this slice, whose stored mode reads
-  by-reference (or empty — the pre-existing default), was actually exported
-  on the plain subject; the data path does not migrate automatically (mode
+  subscription registered before the export seam applied the delivery mode,
+  whose stored mode reads by-reference (or empty — the pre-existing
+  default), was actually exported on the plain subject; the data path does not migrate automatically (mode
   is per-subscription immutable — PoC posture). To pick up real by-reference
   delivery: `Unsubscribe` the old subscription from the subscriber side (it
   drives the publisher's `Disconnect`, which removes the plain export via the

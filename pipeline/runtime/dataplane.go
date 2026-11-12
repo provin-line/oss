@@ -72,14 +72,14 @@ type Deps struct {
 	SinkWriter sink.Writer
 	// VCStore is the node's local VC store (the local *vcresolver.Service StoreVC seam).
 	// Consuming loops (sink, chained) store every verified ingress credential through it,
-	// populating the unresolved pool for the async chain-audit path (D-17f-1, D-17f-7).
+	// populating the unresolved pool for the async chain-audit path.
 	// Nil is a boot error for any consuming loop; a source-only node needs none.
 	VCStore IngressStorer
-	// AuditQueue registers each consumed head for async audit (slice-17h, D-17h-2). Nil
+	// AuditQueue registers each consumed head for async audit. Nil
 	// disables registration (a node/test without the audit runner); main always wires it.
 	AuditQueue AuditRegistrar
-	// Receipts records the emit-time consumed-set receipt for an aggregate's own emission
-	// (slice-17o), enabling emit-locus source-commitment self-audit. Nil (with AuditQueue)
+	// Receipts records the emit-time consumed-set receipt for an aggregate's own emission,
+	// enabling emit-locus source-commitment self-audit. Nil (with AuditQueue)
 	// leaves an aggregate broadcast-only (no self-audit); main always wires it.
 	Receipts ReceiptWriter
 	// SchemaResolver refines the consuming loops' data-integrity axis with schema
@@ -149,9 +149,8 @@ func (r boundRetainer) Retain(ctx context.Context, payload []byte) (string, erro
 
 // strippedPublisherFor binds a producing loop's dual-emit stripped-form
 // publisher to conn's export-seam subject for the loop's output subject —
-// the sibling of retainerFor, and the wiring half of the export-seam-mode
-// spec's D-6 posture
-// ("serve ⇒ retain ⇒ dual-emit is one capability unit, no per-loop opt-out"):
+// the sibling of retainerFor, and the wiring half of the rule
+// "serve ⇒ retain ⇒ dual-emit is one capability unit, no per-loop opt-out":
 // returns nil when no PayloadStore is wired (an inline-only node, same
 // condition retainerFor gates on), else a Publisher bound to
 // wireprofile.ByReferenceSubjectPrefix+subject — the EXACT subject
@@ -189,13 +188,13 @@ func parseDelivery(s string) contract.PayloadDelivery {
 }
 
 // Runtime is the node's set of running pipeline loops over one shared nats
-// connection. It owns the connection's lifecycle, split across two calls
-// (PR3b Task 7): Run starts the loops, waits for them to drain on context
-// cancellation, and returns — it no longer closes anything itself. Close
+// connection. It owns the connection's lifecycle, split across two calls:
+// Run starts the loops, waits for them to drain on context
+// cancellation, and returns — it closes nothing itself. Close
 // (called ONLY after Run has returned) then releases the shared connection
-// and every durable custody log's file handle (the 17a Conn-owns-teardown
-// contract, realized at node level, now a caller-driven step instead of
-// Run's own tail).
+// and every durable custody log's file handle (the Conn-owns-teardown
+// contract, realized at node level as a caller-driven step rather than
+// part of Run).
 //
 // Why the split: a composition root that custodies durable logs to a
 // mirror registry (cmd/pipeline's shipper — see pipeline/transport/
@@ -216,12 +215,12 @@ type Runtime struct {
 	// tlogs is the emission-log registry (log id = producing output subject →
 	// log); a control-plane TlogService could mount it for a map-only
 	// (non-mirrored) posture, though no current binary does — the separated
-	// topology mirrors these logs (D-T4) rather than mounting them directly.
+	// topology mirrors these logs rather than mounting them directly.
 	tlogs map[string]tlog.Log
 	// tlogClosers releases the durable logs' file handles at teardown (the
 	// memlog fallback has nothing to close).
 	tlogClosers []io.Closer
-	// custodyLogs is the custody-log registry (D6): every DURABLE local log
+	// custodyLogs is the custody-log registry: every DURABLE local log
 	// this runtime opened (emission, sink-receipt, sink-reject), each labelled
 	// with its log id and the issuer identity whose key signs its checkpoints.
 	// Unlike tlogs (the TlogService READ surface), this INCLUDES sink-reject
@@ -243,14 +242,14 @@ type Runtime struct {
 
 // Tlogs returns the emission-log registry (log id = producing output subject
 // -> log). No current binary calls this: the separated topology mirrors
-// these logs to the registry (D-T4, CustodyLogs + the mirror shippers)
+// these logs to the registry (CustodyLogs + the mirror shippers)
 // rather than mounting a map-only TlogService directly over them.
 func (r *Runtime) Tlogs() map[string]tlog.Log { return r.tlogs }
 
 // CustodyLog is one durable local log the mirror shipper custodies to the
 // registry: the live handle, its log id, and the issuer identity whose key
 // signs its checkpoints (the shipper signs MirrorLogSegment wireauth proofs
-// as this SAME identity — D-T3: checkpoint signer == wireauth signer).
+// as this SAME identity: checkpoint signer == wireauth signer).
 type CustodyLog struct {
 	LogID  string
 	Log    tlog.Log
@@ -282,12 +281,12 @@ func (r *Runtime) Metrics() []LoopMetrics { return r.metrics }
 
 // Loops returns every constructed transport loop (source, sink, chained), in
 // construction order. cmd/pipeline wires these into its own by-reference
-// advertisement health reporting (Task 10 D4) alongside Aggregates.
+// advertisement health reporting alongside Aggregates.
 func (r *Runtime) Loops() []*transport.Loop { return r.loops }
 
 // Aggregates returns every constructed aggregate process, in construction
 // order. cmd/pipeline wires these into its own by-reference advertisement
-// health reporting (Task 10 D4) alongside Loops.
+// health reporting alongside Loops.
 func (r *Runtime) Aggregates() []*aggregate.Process { return r.aggregates }
 
 // Conn returns the runtime's shared NATS connection, or nil for a zero-loop
@@ -425,7 +424,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 	// In-memory when RejectLogDir is empty (unit-test seam; memlog cannot sign —
 	// Checkpoint stays ErrUnsignedLog there, unchanged).
 	//
-	// Identity (D-T3, DECIDED): archival sinks are already REQUIRED to carry a
+	// Identity: archival sinks are already REQUIRED to carry a
 	// receipt issuer (config.go's Kind==archival && !Receipt.Issue boot error), so
 	// the reject log is armed with that SAME signer — the sink's mandatory receipt
 	// issuer — giving its checkpoint the stable custody identity
@@ -437,13 +436,8 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 	// loop name. Identity and storage co-move — a same-DID restart resolves to
 	// the same directory (continuity preserved for the normal case), and a
 	// receipt-DID CHANGE resolves to a fresh directory (a new identity gets a
-	// fresh log, consistent with the spec's D-T1 identity-rollover principle),
+	// fresh log, consistent with the rule that a log's identity is fixed),
 	// so historical rejects are never silently re-signed under a new owner.
-	// (Previously the directory stayed keyed by loop NAME even after the
-	// identity above was signed: a receipt-DID change across a restart with
-	// the volume retained reopened the SAME directory under a NEW signer, and
-	// every subsequent checkpoint re-signed all prior rejects as the new
-	// DID's evidence — a P1 custody hole this rekeying closes.)
 	newRejectLog := func(loopName string, issuer IssuerConfig) (sink.RejectLog, error) {
 		if cfg.RejectLogDir == "" {
 			return &sinkRejectLog{log: memlog.New()}, nil
@@ -476,8 +470,8 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 	// Consuming loops (sink, chained) share one verifier (over the node's resolver) and one
 	// in-memory ingress store, built lazily on the first such loop so a source-only node
 	// needs no resolver. ensureConsumer builds them once and fails closed without a resolver.
-	// Full-chain verification is the async audit runner's job (slice-17h), not a real-time
-	// per-loop verifier (slice-17j retired "full").
+	// Full-chain verification is the async audit runner's job, not a real-time per-loop
+	// verifier.
 	var verifier *vc.Verifier
 	var ingressStore contract.IngressVCStore
 	captureRecorder := inputcapture.Recorder{}
@@ -536,7 +530,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 		var loop *transport.Loop
 		// lm collects this loop's metrics wiring; appended alongside the loop
 		// handle on success. dualEmits mirrors strippedPublisherFor's gate (a
-		// PayloadStore ⇒ every producing loop dual-emits, D-6).
+		// PayloadStore ⇒ every producing loop dual-emits).
 		lm := LoopMetrics{Name: lc.Name, Role: lc.Role}
 		dualEmits := pw.store != nil
 		switch lc.Role {
@@ -569,7 +563,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 			} else if w, err = sinkWriters.writerFor(lc.Sink.Output); err != nil {
 				err = fmt.Errorf("runtime: loop %q: %w", lc.Name, err)
 			} else if err = ensureConsumer(lc.Name); err == nil {
-				// Per-loop verify counting over the shared verifier (P1-2).
+				// Per-loop verify counting over the shared verifier.
 				vcnt := verifycount.New(verifier)
 				lm.Verify = vcnt
 				// A receipt-issuing sink (MAY production / MUST archival) registers each
@@ -581,7 +575,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 					receipts, err = buildSinkReceiptRegistrar(builder, deps.VCStore, deps.AuditQueue, publisher, newEmission, lc)
 				}
 				// Archival's reject-with-audit-log obligation: a durable reject log,
-				// armed with the SAME receipt issuer identity (D-T3) — archival's
+				// armed with the SAME receipt issuer identity — archival's
 				// config validation already guarantees lc.Sink.Receipt.Issuer is
 				// populated (Issue == true) whenever Kind == archival.
 				var rejectLog sink.RejectLog
@@ -645,7 +639,7 @@ func Build(ctx context.Context, cfg *Config, keyStore keystore.KeyStore, deps De
 			if err = ensureConsumer(lc.Name); err == nil {
 				vcnt := verifycount.New(verifier)
 				lm.Verify = vcnt
-				// Emit-locus self-audit (slice-17o): the aggregate registers each emitted head
+				// Emit-locus self-audit: the aggregate registers each emitted head
 				// (local store + receipt + queue + optional remote publish) BEFORE broadcasting.
 				// Wired only when the audit substrate is present; nil leaves it broadcast-only.
 				var registrar aggregate.EmissionRegistrar
@@ -724,7 +718,7 @@ func buildSourceLoop(sub transport.Subscriber, conn *natstransport.Conn, codec *
 		return nil, fmt.Errorf("runtime: loop %q: source signer: %w", lc.Name, err)
 	}
 	// When a VC store is configured, publish each FirstDrop (no predecessor, so no upstream
-	// hint) before it is emitted downstream — fail-closed (D-17e-3).
+	// hint) before it is emitted downstream — fail-closed.
 	var sourceSigner provenance.SourceSigner = signer
 	if publisher != nil {
 		sourceSigner = &publishingSigner{inner: signer, publisher: publisher}
@@ -874,7 +868,7 @@ func buildChainedLoop(conn *natstransport.Conn, codec *envelopecodec.Codec, buil
 	return loop, nil
 }
 
-// buildAggregateProcess assembles one aggregate Source Process (slice-17l): a stateful
+// buildAggregateProcess assembles one aggregate Source Process: a stateful
 // pool+window process that verifies+stores N ingress inputs and, on each window tick,
 // folds them into a provin:aggregate FirstDrop with a multi-source commitment. The claim
 // and source-root canonical (JCS) are fixed by the role; the reference ManifestFold is
@@ -906,9 +900,9 @@ func buildAggregateProcess(conn *natstransport.Conn, codec *envelopecodec.Codec,
 		Fold:      aggregate.ManifestFold{},
 		Window:    ac.Window,
 		// SelfAudit registers each emitted head (local store + receipt + queue + optional
-		// remote publish) BEFORE broadcast (slice-17o). It subsumes the issued-VC remote
+		// remote publish) BEFORE broadcast. It subsumes the issued-VC remote
 		// publish that source/chained loops do via publishingSigner — so the aggregate uses
-		// the PLAIN signer and does not wrap it (the publish must follow self-audit, D-17o-3).
+		// the PLAIN signer and does not wrap it (the publish must follow self-audit).
 		SelfAudit: registrar,
 		// The aggregate produces a FirstDrop head; retain its payload for by-reference
 		// subscribers (bound to its own output pipeline DID as the serving owner).
@@ -936,7 +930,7 @@ func buildAggregateProcess(conn *natstransport.Conn, codec *envelopecodec.Codec,
 
 // verificationStrategy maps a (config-validated) strategy token to its contract value.
 // "adjacent" verifies the immediately preceding credential — the only ingress strategy
-// (full-chain audit is the async audit runner's job, slice-17h; "full" was retired in 17j).
+// (full-chain audit is the async audit runner's job).
 func verificationStrategy(s string) (contract.VerificationStrategy, error) {
 	switch s {
 	case StrategyAdjacent:
@@ -964,10 +958,9 @@ func sinkKind(k string) (contract.SinkKind, error) {
 // drain and return. A zero-loop runner returns immediately. It returns the
 // first loop error, or nil on a clean drain — Run itself no longer touches
 // the shared connection or any log handle; see Close and the Runtime doc for
-// why that teardown moved out to a separate, caller-driven step (PR3b Task
-// 7). Every caller MUST call Close after Run returns (whether cleanly or
-// with an error) — Run's own drain is not a complete shutdown by itself
-// anymore.
+// why that teardown is a separate, caller-driven step. Every caller MUST
+// call Close after Run returns (whether cleanly or with an error) — Run's
+// own drain is not a complete shutdown by itself.
 //
 // Loops share a child context derived from ctx, so the first loop to fail (e.g. a
 // boot-time Subscribe error) cancels its siblings and Run returns promptly — it does

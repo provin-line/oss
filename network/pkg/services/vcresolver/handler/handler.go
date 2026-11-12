@@ -2,7 +2,7 @@
 // converts connect request/response messages to and from the vcresolver domain
 // and maps domain sentinel errors to Connect codes. It holds no business logic.
 //
-// The VC crosses the wire as opaque bytes carrying canonical JSON (D-v1): the
+// The VC crosses the wire as opaque bytes carrying canonical JSON: the
 // stored credential marshals through its own JCS MarshalJSON so a consumer can
 // recompute the content address from the bytes it receives.
 package handler

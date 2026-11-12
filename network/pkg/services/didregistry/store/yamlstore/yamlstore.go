@@ -4,7 +4,7 @@
 //
 // Layout (registry is the store's deployment context — one registry per store —
 // so it is not part of the path; the service enforces the registry-segment
-// binding, D-d8):
+// binding):
 //
 //	{accountType}/{accountId}/                      ← owner node
 //	    document.json                               ← DID Document (canonical JSON)

@@ -107,7 +107,7 @@ func WithPayloadServing() Option {
 // advertised only while fn returns true (in addition to WithPayloadServing).
 // The composition root derives fn from the producing loops' stripped-publish
 // health, so a node whose by-reference emission is failing stops advertising a
-// mode it can no longer honestly serve (export-seam D-5 degradation). Omitting
+// mode it can no longer honestly serve (export-seam degradation). Omitting
 // this option leaves advertising governed solely by WithPayloadServing.
 func WithByReferenceHealth(fn func() bool) Option {
 	return func(s *Service) { s.byRefHealthy = fn }
@@ -181,10 +181,9 @@ func requirePipelineDID(didStr string) error {
 }
 
 // ListSubscriptions returns the operator's own subscriptions — the
-// subscriber-direction records ("what am I subscribed to"; slice-12 D-s6 option
-// a). Publisher-direction records (who subscribed to a local pipeline) are a
-// separate concern and excluded. An empty result yields an empty slice, not an
-// error.
+// subscriber-direction records ("what am I subscribed to"). Publisher-direction
+// records (who subscribed to a local pipeline) are a separate concern and
+// excluded. An empty result yields an empty slice, not an error.
 func (s *Service) ListSubscriptions(ctx context.Context) ([]*store.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

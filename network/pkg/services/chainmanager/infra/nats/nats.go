@@ -1,7 +1,7 @@
 // Package nats is the production-shaped infra.Operator: a NATS decentralized-auth
 // control-plane that maintains one local NATS account's exports/imports as a
 // signed account-claims JWT, so the broker — independently of the peer-layer
-// admission (slice-11/12) — enforces cross-account isolation.
+// admission — enforces cross-account isolation.
 //
 // One Operator instance represents exactly ONE local account (infra.Operator's
 // AddExport takes no account parameter): the publisher node's operator exports its
@@ -42,9 +42,7 @@ var ErrNotPublished = errors.New("nats: account not yet published")
 // Load is the symmetric read of Publish — it lets the operator rehydrate its
 // in-memory claims on restart so removals work and re-publishes do not drop prior
 // grants. It returns ErrNotPublished when nothing has been published yet (first
-// boot). NOTE (slice-16 D-x2): adding Load to this exported interface is
-// source-breaking for any external implementer; all in-repo implementers are
-// updated, and the package is pre-1.0.
+// boot).
 type JWTPublisher interface {
 	Publish(accountPub, accountJWT string) error
 	Load(accountPub string) (accountJWT string, err error)
@@ -116,8 +114,8 @@ func New(cfg Config) (*Operator, error) {
 	return o, nil
 }
 
-// hydrate rebuilds the in-memory claims from the previously published account JWT
-// (slice-16 D-x1), so a restarted operator resumes with its full grant set —
+// hydrate rebuilds the in-memory claims from the previously published account JWT,
+// so a restarted operator resumes with its full grant set —
 // otherwise a Remove would no-op and the next Add would re-publish a JWT carrying
 // only the new grant, dropping prior grants. ErrNotPublished is first boot (fresh
 // claims).
@@ -127,8 +125,8 @@ func New(cfg Config) (*Operator, error) {
 // re-sign, are both worse than refusing to start. DecodeAccountClaims verifies the
 // token's own signature; we additionally require (a) the subject is this account
 // and (b) the issuer is THIS trust root (security: a JWT signed by a different
-// operator, or a stale/foreign resolver file, must not be absorbed and re-signed —
-// Codex review). Standard claim validation (expiry / not-before / structure) must
+// operator, or a stale/foreign resolver file, must not be absorbed and re-signed).
+// Standard claim validation (expiry / not-before / structure) must
 // also pass. A deliberate trust-root rotation that leaves an old-issuer file is a
 // one-time operator chore (clear or re-publish), correctly surfaced as a boot
 // error rather than silently laundered.

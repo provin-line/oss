@@ -134,7 +134,7 @@ func (d *DIDDocument) ID() string { return getString(d.body, keyID) }
 // owner may omit it).
 func (d *DIDDocument) Controller() string { return getString(d.body, keyController) }
 
-// AlsoKnownAs returns the outward-identity bindings (B7); empty when none. The
+// AlsoKnownAs returns the outward-identity bindings; empty when none. The
 // binding is self-asserted at registration unless registry-witnessed — see the
 // didregistry lifecycle log.
 func (d *DIDDocument) AlsoKnownAs() []string { return getStringSlice(d.body, keyAlsoKnownAs) }

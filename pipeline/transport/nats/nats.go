@@ -4,11 +4,10 @@
 // deployment swaps it for SQS/SNS etc. without touching pipeline process logic.
 //
 // A Conn owns one authenticated connection established as the node's NATS *account*:
-// Connect mints an ephemeral user JWT signed by the account key and dials with it
-// (the production form of the slice-16 capstone's natsClient helper). Publisher and
-// Subscriber are per-subject views that share that one connection — a node runs many
-// pipeline loops over one account connection, so connection teardown is owned by
-// Conn.Close(), never by a per-subject Publisher.Close().
+// Connect mints an ephemeral user JWT signed by the account key and dials with it.
+// Publisher and Subscriber are per-subject views that share that one connection — a
+// node runs many pipeline loops over one account connection, so connection teardown is
+// owned by Conn.Close(), never by a per-subject Publisher.Close().
 //
 // This package imports the nats.go client in production (the intended introduction
 // of nats.go into the production import graph). It must NOT import the embedded
@@ -245,7 +244,7 @@ func (p *Publisher) Healthy() bool {
 // Close flushes pending publishes so buffered messages reach the server, but does
 // NOT close the shared connection — sibling Publishers/Subscribers on the same Conn
 // keep using it. Connection teardown is Conn.Close's responsibility. Closing the
-// connection here would tear down every sibling loop's transport (D-17a-3). If the
+// connection here would tear down every sibling loop's transport. If the
 // connection is already closed (Conn.Close ran first) there is nothing to flush.
 func (p *Publisher) Close() error {
 	if p.nc.IsClosed() {
@@ -268,7 +267,7 @@ var _ transport.Subscriber = (*Subscriber)(nil)
 // Subscriber holds one subscription. The handler is invoked sequentially per
 // subscription (nats.go runs one dispatcher goroutine per async subscription); this
 // package adds no concurrency on the delivery path, preserving the ordering the
-// transport.Loop sequence discipline relies on (D-17a-8).
+// transport.Loop sequence discipline relies on.
 func (s *Subscriber) Subscribe(handler func(data []byte)) error {
 	if s.sub != nil {
 		return ErrAlreadySubscribed
@@ -293,7 +292,7 @@ func (s *Subscriber) Subscribe(handler func(data []byte)) error {
 // goroutine and the call returns before the in-flight handler finishes), so this
 // blocks until the subscription reaches the Closed state — which nats.go transitions
 // to only after pending messages, including the in-flight callback, have been
-// processed (D-17a-5). A direct passthrough of Subscription.Drain() would let a
+// processed. A direct passthrough of Subscription.Drain() would let a
 // caller tear down transport while a handler is still running.
 func (s *Subscriber) Drain() error {
 	if s.sub == nil {

@@ -15,7 +15,7 @@ var fsyncRootParent = fsyncDir
 
 // Open opens (creating if needed) the mirror store rooted at root, one
 // subdirectory per log. Every EXISTING log directory is replay-verified
-// and reconciled here (reopen recovery, D-T4): records beyond the
+// and reconciled here (reopen recovery): records beyond the
 // persisted checkpoint's Size are truncated (never acked, the shipper
 // resumes and reships them); a journal shorter than the checkpoint size,
 // or one whose recorded chain at the checkpoint's size does not match

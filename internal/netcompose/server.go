@@ -70,7 +70,7 @@ import (
 //
 // The credential class (StoreVC) keeps its own maxCredentialSize (a boot
 // config value). MirrorLogSegment (when a mirror store is wired) keeps its
-// OWN class too, derived from the D-T2 batch-bytes cap rather than borrowed
+// OWN class too, derived from the mirror's batch-bytes cap rather than borrowed
 // from maxCredentialSize — see mirrorReadCapBytes. No SEND cap is set: list
 // RPCs return unpaginated results that can exceed any request cap.
 const (
@@ -79,7 +79,7 @@ const (
 )
 
 // mirrorReadCapBytes derives MirrorLogSegment's own connect read cap from
-// maxBatchBytes (tlog-mirror.max-batch-bytes, D-T2 rule 5) plus
+// maxBatchBytes (tlog-mirror.max-batch-bytes) plus
 // maxProofRequestBytes as headroom for the OTHER fields one MirrorLogSegment
 // call carries alongside record_payloads_framed — the checkpoint (five
 // small, fixed-shape strings/bytes) and the AuthProof (the SAME shape
@@ -87,7 +87,7 @@ const (
 // max-batch-bytes (rather than reusing maxCredentialSize, a value chosen for
 // an unrelated class — the single-VC StoreVC/fetch path) makes the two
 // structurally coherent: they can never disagree, so no operator note is
-// needed to keep them in sync (Task 5 review, M-1).
+// needed to keep them in sync.
 //
 // connect.WithReadMaxBytes bounds the RAW request body, and a Connect JSON
 // client base64-encodes record_payloads_framed (~4/3 inflation, now a single
@@ -162,8 +162,8 @@ func OuterRequestCapBytes(maxCredentialSize, maxPushBodySize, maxRetainPayloadSi
 // without binding a port; main wraps the returned handler in h2c and serves it.
 // NewDIDResolution builds the SSRF guard and the cross-registry DID resolver shared by
 // the control plane (BuildHandler) and the data plane (sink-loop credential
-// verification, slice-17c). The base-URL seam lets a deployment (or the boot/capstone
-// e2e) override the default https://{registry} mapping (D-m6).
+// verification). The base-URL seam lets a deployment (or the boot/capstone
+// e2e) override the default https://{registry} mapping.
 //
 // The returned resolver is the node's cache posture: with the did-cache block
 // enabled it is resolver/cache wrapped around the HTTP resolver, so every
@@ -176,7 +176,7 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 		core.WithAllowLoopback(coreCfg.AllowLoopback),
 		core.WithAllowPrivateNetworks(coreCfg.AllowPrivateNetworks),
 	)
-	// F8: enabling private-network reachability closes DID resolution to the
+	// Enabling private-network reachability closes DID resolution to the
 	// configured registry set. The only pre-signature, attacker-driven outbound
 	// path is DID resolution, and the attacker controls the registry segment,
 	// which reaches private space ONLY via the open https://{registry} fallback.
@@ -200,7 +200,8 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 	}
 	if closeUnmapped && !scoped {
 		// Private mode with fully-open resolution (no map, no single base) is the
-		// exact F8 hole: any attacker-supplied registry would reach private space.
+		// exact hole the private-network posture closes: any attacker-supplied
+		// registry would reach private space.
 		// Fail closed and tell the operator to scope resolution.
 		return nil, nil, fmt.Errorf("core: allow-private-networks=true requires configured registry resolution (%s or %s) so an unmapped registry cannot reach private space", "provin.network.chain.nats.registry-base-urls", "provin.network.chain.nats.resolver-base-url")
 	}
@@ -226,7 +227,7 @@ func NewDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 // per-registry map. When closeUnmapped is false, an unmapped registry falls back
 // to the didresolver default (https://{registry}), so a partial map for
 // local/VPC peers composes with public registries. When closeUnmapped is true
-// (allow-private-networks mode, F8), an unmapped registry is REFUSED — the open
+// (allow-private-networks mode), an unmapped registry is REFUSED — the open
 // fallback would let an attacker-supplied registry name reach private space.
 func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
 	return func(registry string) (string, error) {
@@ -242,15 +243,15 @@ func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry s
 
 // The guard (SSRF policy) and resolver (cross-registry DID resolution) are built by
 // the composition root (main) and passed in, because the data plane's sink loops need
-// the SAME resolver to verify upstream credentials (slice-17c) — building it once in
+// the SAME resolver to verify upstream credentials — building it once in
 // main and sharing it keeps a single DID-resolution policy across both planes.
 // vcSvc is the node's local VC resolver service, built in main and shared with the
 // data plane's ingress store so consumed credentials are immediately resolvable over
-// the VCResolverService RPC (D-17f-5). main builds it once before calling BuildHandler.
-// maxCredentialSize bounds an inbound StoreVC body (D-17g-13): a peer must not OOM the
+// the VCResolverService RPC. main builds it once before calling BuildHandler.
+// maxCredentialSize bounds an inbound StoreVC body: a peer must not OOM the
 // node with a bloated credential.
-// auditStatus is the audit-verdict store the async runner writes (slice-17h) and the
-// AuditService reads (slice-17i, D-17i-7); main builds it once and shares the one instance
+// auditStatus is the audit-verdict store the async runner writes and the
+// AuditService reads; main builds it once and shares the one instance
 // across both. A read-only surface — the API never mutates it.
 // chainOp is the chain transport operator, built by main via ChainOperator BEFORE the
 // data plane (its construction publishes the node account's claims — a broker
@@ -282,7 +283,7 @@ func NodeDIDOf(chainCfg *chainconfig.Config) string {
 // []byte, not a stream — see payloadresolver.Store.StoreWriter's doc).
 // maxRetainChunkSize/maxRetainPayloadSize are the max-retain-chunk-size /
 // max-retain-payload-size config quotas (pipelineconfig).
-// mirror is the D-T4 mirror-custody wiring (see MirrorWiring's doc): nil
+// mirror is the mirror-custody wiring (see MirrorWiring's doc): nil
 // keeps the map-only TlogService behavior; cmd/network
 // opens a mirrorstore.Store and passes it here. When non-nil, MirrorLogSegment
 // additionally mounts under a CREDENTIAL-class read cap (sink-receipt
@@ -300,13 +301,13 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 		didregistry.WithServiceEndpoints(regCfg.Endpoints),
 	)
 	// Chain stores share a fixed chain/ subdir; each nests its own subscriptions/
-	// and allowlists/ tree under it. C2b-2a mounts BOTH chain surfaces (operator/L1
-	// and peer/L2) from one Service instance with the subscriber side fully wired.
+	// and allowlists/ tree under it. Both chain surfaces (operator/L1 and
+	// peer/L2) mount from one Service instance with the subscriber side fully wired.
 	chainRoot := filepath.Join(coreCfg.DataDir, "chain")
 
 	// The subscriber-side peer client signs as the node's DID with its keystore
-	// #auth key (composed here — the service layer stays proto-free, slice-13
-	// D-r5). nodeDID is empty for the noop/dev transport (no subscriber identity).
+	// #auth key (composed here, so the service layer stays proto-free).
+	// nodeDID is empty for the noop/dev transport (no subscriber identity).
 	nodeDID := NodeDIDOf(chainCfg)
 	peerCli := peerclient.New(keyStore, nodeDID, guard.HTTPClient())
 
@@ -320,7 +321,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	}
 	// The composition root supplies a runtime health gate (derived from the
 	// producing loops' stripped-publish health) so by-reference advertisement is
-	// dropped while emission is failing (export-seam D-5 degradation). Absent it,
+	// dropped while emission is failing. Absent it,
 	// advertising is governed solely by WithPayloadServing.
 	if byRefHealthy != nil {
 		chainOpts = append(chainOpts, chainmanager.WithByReferenceHealth(byRefHealthy))
@@ -328,7 +329,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// A report-mode network node (cmd/network) has no in-process by-reference
 	// producer of its own, so instead of the global byRefHealthy gate above it
 	// gates advertisement PER PUBLISHER by what that publisher has itself
-	// reported via ReportEmitHealth (Task 10 D4). The two are mutually
+	// reported via ReportEmitHealth. The two are mutually
 	// exclusive — chainmanager.New panics if both are wired — so a caller must
 	// never pass both a non-nil byRefHealthy AND a non-nil emitHealth.
 	if emitHealth != nil {
@@ -364,7 +365,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// answers, authz's included, is held to errorText's limit.
 	bound := errorText()
 
-	// RegisterEvidence's admission gate (D1): the head variant id (the exact
+	// RegisterEvidence's admission gate: the head variant id (the exact
 	// wire bytes StoreVC admitted — audit.proto's head_variant_address
 	// documents the WIRE variant, not a body content address, since a
 	// registering caller only ever holds StoreVCResult.WireVariantID, never a
@@ -417,9 +418,9 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// same posture as the credential class above).
 	retainChunkCap := connect.WithReadMaxBytes(maxRetainChunkSize)
 
-	// tlogSvc is the read (+ D-T4 mirror-custody, when wired) service behind
+	// tlogSvc is the read (+ mirror custody, when wired) service behind
 	// TlogService: the static map always, plus — when mirror is non-nil —
-	// the durable mirror store as a second read source and the D-T3
+	// the durable mirror store as a second read source and the
 	// identity-enforcement deps MirrorLogSegment needs, reusing the SAME
 	// resolver/DID-registry infra every other wireauth-checked RPC above
 	// shares (resolver, didSvc, ed25519.Verifier{}).
@@ -483,8 +484,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// config values govern unrelated classes (single-VC StoreVC/fetch vs.
 	// this batch), and pinning the mount to a plain maxCredentialSize would
 	// silently reject a legitimate batch whenever max-batch-bytes is
-	// configured above it (Task 5 review, M-1: this WAS a real gap against
-	// the repo's own shipped defaults — max-credential-size 1 MiB <
+	// configured above it (e.g. max-credential-size 1 MiB <
 	// max-batch-bytes 4 MiB). Rather than restructure
 	// NewTlogServiceHandler's uniform per-service option (it applies ONE
 	// set of connect.HandlerOptions to every RPC it mounts), this overrides
@@ -520,7 +520,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	evLog := evidence.New(evFilelog)
 
 	// ChainPeerService is the internet-facing L2 surface: mounted WITHOUT the L1
-	// authz interceptor (its trust is the per-RPC wireauth proof, slice-11). The
+	// authz interceptor (its trust is the per-RPC wireauth proof). The
 	// read cap matters MORE here than on L1 surfaces: there is no interceptor to
 	// bound the request first, and the requests are small proofs + fields.
 	peerPath, peerHandler := chainpbconnect.NewChainPeerServiceHandler(chainhandler.NewPeerWithEvidence(chainSvc, peerVerifier, evLog), bound, proofCap)
@@ -531,18 +531,18 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	// chain peer surface, likewise no L1 interceptor. A ResolvePayload REQUEST is
 	// just a content hash + proof (responses stream, unbounded by this). The
 	// ServingBoundary authorizes on owner metadata BEFORE reading the bytes and
-	// collapses a not-admitted caller to NotFound (F9/F4 — no existence oracle).
+	// collapses a not-admitted caller to NotFound (no existence oracle).
 	payloadServing := payloadresolver.NewServingBoundary(payloadSvc, chainSvc)
 	payloadPath, payloadHandler := payloadpbconnect.NewPayloadServiceHandler(payloadhandler.New(payloadServing, peerVerifier), bound, proofCap)
 	mux.Handle(payloadPath, payloadHandler)
 
-	// Public, unauthenticated routes: W3C DID resolution (open read, slice-4),
+	// Public, unauthenticated routes: W3C DID resolution (open read),
 	// liveness, and readiness. These deliberately carry no authz interceptor.
 	// /healthz stays STATIC (liveness: "restart me if this fails");
 	// /readyz is dependency-aware (readiness: "route no new work here") —
 	// the checks are assembled by main from what this node is configured with.
 	// Cached (ReadinessCacheTTL) so a /readyz flood cannot amplify into a
-	// per-request outbound PDP probe (adversarial-review F7).
+	// per-request outbound PDP probe.
 	mux.Handle("/did/", didhandler.NewResolutionHandler(didSvc, regCfg.ID))
 	mux.HandleFunc("/healthz", healthz)
 	mux.HandleFunc("/readyz", NewCachedReadiness(readiness, ReadinessCacheTTL).Handler())

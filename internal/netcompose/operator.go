@@ -19,9 +19,9 @@ import (
 // strict fail-fast meaning (one immediate attempt) on the push path too.
 //
 // Claim-state on restart: chainnats.New hydrates the operator's in-memory
-// claims from the previously published account JWT (slice-16), so restarts
+// claims from the previously published account JWT, so restarts
 // preserve live grants and the boot-time PublishClaims below never clobbers
-// them. RESIDUAL (C2b-2b): nothing replays the persisted subscription store —
+// them. RESIDUAL: nothing replays the persisted subscription store —
 // if the published JWT is gone (e.g. a wiped resolver dir) while subscriptions
 // persist, claims start empty and the next Add re-publishes only its own grant.
 func natsOperator(c *chainconfig.Config) (infra.Operator, error) {

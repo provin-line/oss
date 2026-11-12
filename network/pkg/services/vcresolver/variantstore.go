@@ -92,9 +92,9 @@ func NewVariantStore(backend VariantBackend) *VariantStore {
 // different bytes is ErrCorrupt (in a healthy store that is unreachable — the
 // id is the digest of the bytes — so it fires only for damage or tampering).
 //
-// A pre-existing body-only entry is materialized into the set FIRST, so the
-// bytes that were there before this slice existed become a variant like any
-// other rather than being displaced by the new one.
+// A pre-existing body-only entry is materialized into the set FIRST, so its
+// bytes become a variant like any other rather than being displaced by the new
+// one.
 func (s *VariantStore) PutVariant(cred *vc.PipelinePassCredential) (bodyAddress, wireVariantID string, err error) {
 	if cred == nil {
 		return "", "", fmt.Errorf("%w: nil credential", ErrInvalidArgument)
@@ -158,8 +158,8 @@ func (s *VariantStore) admit(bodyHex, variantHex string, wire []byte) error {
 }
 
 // flatSlot is the classified legacy body-only entry. A body's variant set is
-// ALWAYS the union of the variant names and this slot: a body written before
-// this slice existed, or written by an older binary after a rollback, holds
+// ALWAYS the union of the variant names and this slot: a body written as a
+// body-only entry, by a binary without variant sets or after a rollback, holds
 // bytes only here. Treating the slot as a candidate everywhere is what keeps
 // those bytes from reading as absent.
 type flatSlot struct {
@@ -447,8 +447,8 @@ func (s *VariantStore) readValidated(bodyHex, variantHex string) ([]byte, error)
 }
 
 // readFlatAs answers an exact fetch from the legacy slot — the union's other
-// half. A body written before this slice (or by an older binary after a
-// rollback) holds its bytes ONLY there, so a fetch of their id has to find
+// half. A body written as a body-only entry (by a binary without variant sets,
+// or after a rollback) holds its bytes ONLY there, so a fetch of their id has to find
 // them: otherwise migration would present as data loss, and every evidence
 // path would read a legacy body as one this node never had.
 //
@@ -500,7 +500,7 @@ func validateWire(wire []byte) (*vc.PipelinePassCredential, error) {
 // pages, sorting before the cursor, is not observed by that iteration. Every
 // page is exact as of its own call, and the set only grows, so a caller
 // needing a complete snapshot either re-lists until nothing new appears or
-// works from an evidence view that commits its spine (P0-1 slice B).
+// works from an evidence view that commits its spine (P0-1).
 func (s *VariantStore) ListVariantIDs(bodyAddress, fromExclusive string, limit int) ([]string, error) {
 	bodyHex, ok := contentAddressHex(bodyAddress)
 	if !ok {

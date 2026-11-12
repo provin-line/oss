@@ -10,7 +10,7 @@ import "errors"
 // record_payloads_framed blob (a length prefix that overruns the remaining
 // bytes, or a malformed varint).
 //
-// Defined here rather than in the tlogservice service root (PR3b Task 2)
+// Defined here rather than in the tlogservice service root
 // because UnframeRecordPayloads — the wire framing codec, a
 // client/handler-shared concern that must live in this leaf so a
 // client-only consumer need not import the service root — has to return the
@@ -21,7 +21,7 @@ import "errors"
 // var alias (see tlogservice.go) so existing call sites are unchanged.
 var ErrInvalidArgument = errors.New("tlogservice: invalid argument")
 
-// ErrCapExceeded is the D-T2 rule 5 cap failure: a MirrorLogSegment batch's
+// ErrCapExceeded is the batch-cap failure: a MirrorLogSegment batch's
 // record count or summed byte length exceeds the configured maximum —
 // raised by tlogservice.Service.CheckBatchCaps (the shared cap POLICY, owned
 // by the service root) AND by UnframeRecordPayloads in this leaf package

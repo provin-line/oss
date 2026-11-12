@@ -3,9 +3,8 @@
 // the reportclient (signing) and chainmanager/handler (verifying) packages
 // must derive IDENTICALLY.
 //
-// It is a LEAF (PR3b Task 8's depsguard fix, applying the T2 split
-// auditor/payloadresolver/tlogservice already have — see e.g.
-// auditor/wirecontract's own package doc): it imports nothing but this one
+// It is a LEAF (the same split auditor/payloadresolver/tlogservice already use —
+// see e.g. auditor/wirecontract's own package doc): it imports nothing but this one
 // file's own declarations, so a consumer that needs only the wire contract
 // (chainmanager/reportclient today; cmd/pipeline transitively) can depend on
 // it without dragging in the chainmanager service ROOT's Service
@@ -25,8 +24,7 @@ package wirecontract
 // another L1-authorized surface's short op name — mirrors
 // auditor.OpRegisterEvidence and payloadresolver.OpRetainPayload.
 //
-// Exported (moved out of the chainmanager service root into this leaf
-// package, PR3b Task 8 — the T2 split chainmanager never got) so the
+// Exported from this leaf package, not the chainmanager service root, so the
 // reportclient package can sign the SAME op the chainmanager/handler package
 // verifies — living in one place is what keeps the two from ever drifting.
 const OpReportEmitHealth = "dplaax.chain.v1.ChainService/ReportEmitHealth"
@@ -44,8 +42,8 @@ const OpReportEmitHealth = "dplaax.chain.v1.ChainService/ReportEmitHealth"
 // Both the chainmanager/handler package (verifying) and reportclient package
 // (signing) call this SAME builder — the one place that keeps the two
 // derivations from drifting, mirroring auditor.RegisterEvidenceFields /
-// payloadresolver.RetainPayloadFields. Moved out of the chainmanager service
-// root into this leaf package, PR3b Task 8.
+// payloadresolver.RetainPayloadFields. It lives in this leaf package, not the
+// chainmanager service root.
 func ReportEmitHealthFields(publisherDID string, healthy bool) map[string]any {
 	return map[string]any{
 		"publisher_did": publisherDID,

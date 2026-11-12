@@ -36,7 +36,7 @@ func FrameRecordPayloads(payloads [][]byte) []byte {
 }
 
 // UnframeRecordPayloads decodes a record_payloads_framed blob back into the
-// ordered payload list, enforcing the D-T2 caps DURING the scan: it never
+// ordered payload list, enforcing the batch caps DURING the scan: it never
 // accumulates more than maxRecords payloads or more than maxBytes summed
 // payload bytes — the moment either would be exceeded it returns ErrCapExceeded,
 // so a hostile blob can never force an unbounded [][]byte (the reshape's whole

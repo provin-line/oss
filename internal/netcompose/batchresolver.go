@@ -21,12 +21,12 @@ import (
 // by content address. A fresh client per call is cheap (it wraps the shared HTTP client)
 // and keeps the endpoint — which varies per pool entry — out of long-lived state.
 //
-// It presents the node's L1 bearer (D-17g-10) — the VCStoreBearer producing loops use to
-// publish (17e) — to a peer whose origin the operator named (pipelineconfig
+// It presents the node's L1 bearer — the VCStoreBearer producing loops use to
+// publish — to a peer whose origin the operator named (pipelineconfig
 // Config.PresentsCredentialTo): a peer of the realm mounts VCResolverService behind the auth
 // interceptor. An endpoint comes from a StoreVC caller's hint or an issuer's DID
 // document, so any other is fetched from without the bearer: the token would let its
-// holder act as this node. Per-peer and cross-realm audit authorization is a later slice.
+// holder act as this node. Per-peer and cross-realm audit authorization is not implemented.
 //
 // A peer is another organization's server, so a fetch accepts no compression, reads
 // at most maxBytes, and ends within the fetcher's timeout: the runner's context lives
@@ -35,7 +35,7 @@ type peerFetcher struct {
 	httpClient           *http.Client               // the SSRF-guarded client (guard.HTTPClient())
 	bearer               string                     // the node's L1 PDP token (pipeline vc-store-bearer)
 	presentsCredentialTo func(endpoint string) bool // whether endpoint may be shown the credential; nil: none may
-	maxBytes             int                        // per-credential read cap (D-17g-13)
+	maxBytes             int                        // per-credential read cap
 	timeout              time.Duration              // per-fetch bound; peerFetchTimeout when not positive
 }
 
@@ -86,7 +86,7 @@ func BearerInterceptor(token string) connect.Interceptor {
 
 // BuildBatchResolver constructs the async chain-audit runner unconditionally from its
 // args. Whether this node needs the runner at all — "does it have a consuming loop" — is
-// a composition-root concern, not this builder's (Task 9): cmd/network has no
+// a composition-root concern, not this builder's: cmd/network has no
 // local loops to gate on at all (pipeCfg.HasConsumingLoop() is always false there) and
 // instead always runs this runner, boot-validating pipeCfg.VCStoreBearer directly. pool
 // and submitter are the shared instances main threads into the VC resolver service, so

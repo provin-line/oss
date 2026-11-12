@@ -3,7 +3,7 @@
 // maps domain sentinel errors to Connect codes. It holds no business logic.
 //
 // DID Documents, delegations, and lifecycle events cross the wire as opaque
-// bytes carrying their canonical JSON (the proto does not re-model them, D-d2):
+// bytes carrying their canonical JSON (the proto does not re-model them):
 // documents and delegations marshal through their own JSON, and lifecycle events
 // marshal through the canonical map shared with the service's hash chain, so a
 // consumer can verify the chain from the bytes it receives.

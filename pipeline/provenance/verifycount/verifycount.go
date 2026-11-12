@@ -5,7 +5,7 @@
 // aggregate drops the input; this package deliberately measures the seam
 // below those policies).
 //
-// It is the metrics wiring point for per-credential verification (P1-2): the
+// It is the metrics wiring point for per-credential verification: the
 // composition root wraps the shared verifier once per consuming loop, so
 // per-loop attribution falls out of the wrapping, and polls Snapshot from a
 // metrics surface — the same poll-from-another-goroutine intent as

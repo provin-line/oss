@@ -27,7 +27,7 @@ import (
 	"github.com/provin-line/oss/schema"
 )
 
-// formatJSONSchema is the only schema_format this slice admits.
+// formatJSONSchema is the only schema_format the registry admits.
 const formatJSONSchema = "JsonSchema"
 
 // Sentinel errors. ErrNotFound / ErrExists from the store package surface
@@ -83,7 +83,7 @@ func (s *Service) Register(ctx context.Context, name, format string, body []byte
 	if format != formatJSONSchema {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedFormat, format)
 	}
-	// D2: the body must be a well-formed, self-contained JsonSchema, so the
+	// The body must be a well-formed, self-contained JsonSchema, so the
 	// registry never holds a schema a downstream validator would reject.
 	if err := schema.ValidateJSONSchema(body); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)

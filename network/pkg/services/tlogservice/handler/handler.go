@@ -32,7 +32,7 @@ type Service interface {
 	MirrorState(logID string) (uint64, error)
 	MirrorSegment(ctx context.Context, in tlogservice.MirrorSegmentInput) (uint64, error)
 	// DecodeSegment unframes the record_payloads_framed blob into the ordered
-	// payload list under the service's D-T2 caps — the bounded pre-auth guard
+	// payload list under the service's batch caps — the bounded pre-auth guard
 	// (rejects an over-cap or malformed blob DURING the unframe, before hashing
 	// or proof verification). ErrMirrorNotConfigured on a map-only node.
 	DecodeSegment(framed []byte) ([][]byte, error)
@@ -49,8 +49,8 @@ type Verifier interface {
 // compile-time completeness pin `var _ tlogpbconnect.TlogServiceHandler =
 // (*Handler)(nil)` below holds with all four methods present):
 // MirrorLogSegment verifies the caller's L2 wireauth proof in-band (mirrors
-// auditor/handler.RegisterEvidence) before delegating D-T2/D-T3 enforcement
-// to the domain Service; GetMirrorState needs no wireauth beyond the L1
+// auditor/handler.RegisterEvidence) before delegating the mirror-write rules
+// and identity enforcement to the domain Service; GetMirrorState needs no wireauth beyond the L1
 // interceptor (a read RPC, same posture as ListLogRecords).
 type Handler struct {
 	svc Service
@@ -115,13 +115,14 @@ func (h *Handler) ListLogRecords(ctx context.Context, req *connect.Request[tlogp
 // tlogservice.OpMirrorLogSegment; signed fields log_id, from_index,
 // checkpoint.head, segment_digest — tlogservice.MirrorLogSegmentFields /
 // SegmentDigest, the SAME builders a shipper client signs with), then
-// delegates D-T2 rules 2/4/5/6 and D-T3 identity enforcement to the domain
-// Service. No Authorizer: the wireauth-proven signer_did is threaded
-// straight through as MirrorSegmentInput.CallerDID — the domain method's
-// own D-T3 predicate (checkpoint-signer equality, ancestry, pinning) is a
+// delegates the mirror-write rules (replay, caps, resume, stale-checkpoint
+// no-regress) and identity enforcement to the domain Service. No Authorizer:
+// the wireauth-proven signer_did is threaded straight through as
+// MirrorSegmentInput.CallerDID — the domain method's
+// own identity predicate (checkpoint-signer equality, ancestry, pinning) is a
 // richer check than a single signer-to-actor callback can express here.
 func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlogpb.MirrorLogSegmentRequest]) (*connect.Response[tlogpb.MirrorLogSegmentResponse], error) {
-	// Pre-auth DoS guard (D-T2 rule 5): unframe under the service's caps at the
+	// Pre-auth DoS guard (the batch caps): unframe under the service's caps at the
 	// very top — before SegmentDigest hashes every record and before the
 	// wireauth proof is verified. UnframeRecordPayloads enforces the count/byte
 	// caps DURING the scan, so a hostile record_payloads_framed blob cannot
@@ -233,22 +234,23 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeCanceled, err)
 	}
 	// MirrorLogSegment's wireauth verification (structural, transient-
-	// resolver, and identity sentinels — D-T2 rule 1's proof half),
+	// resolver, and identity sentinels — the proof half of the chain-to-head
+	// rule),
 	// delegated to the shared classifier so this mapping cannot drift from
 	// the other 5 handlers. Distinct from tlogservice.ErrIdentityMismatch
-	// (D-T3's checkpoint/writer-binding half), which is PermissionDenied.
+	// (the checkpoint/writer-binding half), which is PermissionDenied.
 	if code, ok := wireautherr.Code(err); ok {
 		return connect.NewError(code, err)
 	}
 	switch {
-	// D-T3 identity/writer-binding failure (checkpoint signature, caller-vs-
+	// Identity/writer-binding failure (checkpoint signature, caller-vs-
 	// signer equality, ancestry, first-segment pinning).
 	case errors.Is(err, tlogservice.ErrIdentityMismatch):
 		return connect.NewError(connect.CodePermissionDenied, err)
-	// D-T2 rule 5 caps.
+	// Batch caps.
 	case errors.Is(err, tlogservice.ErrCapExceeded):
 		return connect.NewError(connect.CodeResourceExhausted, err)
-	// D-T2 rule 1/2: a gap, a partial overlap, or a chain-head mismatch —
+	// A gap, a partial overlap, or a chain-head mismatch —
 	// none of which is a malformed argument on their own (the request is
 	// well-formed; it just does not fit the log's current state).
 	case errors.Is(err, tlogservice.ErrMirrorConflict):

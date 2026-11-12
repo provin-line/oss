@@ -23,7 +23,7 @@
 
 ## ステータス
 
-**signer capability**（slice-17k）と **pool/window ランタイム**（slice-17l）は実装済み。
+**signer capability** と **pool/window ランタイム**は実装済み。
 `aggregate.Process` は `contract.Process` で、verified ingress を pool し（入力ごとに adjacent verify
 → payload↔credential binding → `StoreIngressVC`、いずれも fail-closed）、各 window tick で pluggable
 `Fold` seam（参照実装 `ManifestFold`）により fold → strict-JSON gate → `SignAggregateFirstDrop` +

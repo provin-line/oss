@@ -2,8 +2,8 @@ package auditor
 
 import "github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 
-// OpRegisterEvidence points at wirecontract.OpRegisterEvidence — moved into
-// the leaf wirecontract package (PR3b Task 2) so a client-only consumer need
+// OpRegisterEvidence points at wirecontract.OpRegisterEvidence — defined in
+// the leaf wirecontract package so a client-only consumer need
 // not import this service root; this alias keeps existing call sites
 // (auditor.OpRegisterEvidence, in the handler and elsewhere) unchanged. See
 // wirecontract.OpRegisterEvidence for the full doc.

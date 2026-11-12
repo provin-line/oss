@@ -199,7 +199,7 @@ func (v *Verifier) VerifySourceCommitment(ctx context.Context, cred *PipelinePas
 	// Misuse guards, checked before any traversal (uniqueIssuers dereferences
 	// each source): nil inputs are caller wiring errors — a gather loop with
 	// unfilled slots — and must surface as errors, never panics. Mirrors the
-	// construction-side hardening in ComputeSourceRoot (17k).
+	// construction-side hardening in ComputeSourceRoot.
 	if cred == nil {
 		return ConfidenceFailed, errors.New("vc: nil credential")
 	}

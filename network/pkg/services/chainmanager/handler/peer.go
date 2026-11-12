@@ -211,7 +211,7 @@ func (h *PeerHandler) recordEvidence(ctx context.Context, op string, proof wirea
 }
 
 // peerMapError maps codec, wireauth, and domain sentinels to connect codes
-// (errors.Is, never string matching) — slice-11 D-p9.
+// (errors.Is, never string matching).
 func peerMapError(err error) error {
 	switch {
 	// Malformed request (issued_at codec). Wireauth's own structural
@@ -242,7 +242,7 @@ func peerMapError(err error) error {
 		errors.Is(err, chainmanager.ErrInvalidPipelineDID),
 		errors.Is(err, chainmanager.ErrUnsafeSubject):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	// Conflicts with existing subscription state (D-4 mixed-mode invariant,
+	// Conflicts with existing subscription state (the mixed-mode invariant,
 	// publisher-side defense-in-depth): the system is not in a state that
 	// permits this registration.
 	case errors.Is(err, chainmanager.ErrMixedModeSubscription):

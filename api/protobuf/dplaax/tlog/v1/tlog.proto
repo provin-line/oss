@@ -54,8 +54,8 @@ service TlogService {
     option (o3co.authz.v1.policy) = {resource: "tlog", action: "read"};
   }
   // MirrorLogSegment ships one checkpoint-aligned segment of a producing
-  // loop's local emission log to the registry for durable custody (D-T1
-  // async mirror: sync-append stays rejected, so this call runs off the
+  // loop's local emission log to the registry for durable custody
+  // (an async mirror, not a synchronous append: this call runs off the
   // per-emission hot path, on a background shipper's own schedule).
   //
   // Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
@@ -97,7 +97,7 @@ service TlogService {
   // regresses — a valid but older checkpoint presented here is ignored and
   // never replaces the current head.
   //
-  // Caps (D-T2 rule 5): the segment is additionally bounded by
+  // Caps: the segment is additionally bounded by
   // tlog-mirror.max-batch-records (default 256) and
   // tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
   // interaction — a batch over either cap is ResourceExhausted. This RPC is
@@ -167,8 +167,8 @@ message ListLogRecordsResponse {
 
 message MirrorLogSegmentRequest {
   // log_id is the emission log's identity — the same log_id as
-  // GetLogCheckpointRequest.log_id (see D-T3 for the registry-side signer
-  // binding this call additionally enforces at the handler).
+  // GetLogCheckpointRequest.log_id (the registry additionally requires the
+  // wireauth-proven caller to be this log's own checkpoint signer).
   string log_id = 1;
   // from_index is the segment's starting index. MUST equal the log's
   // current GetMirrorState.acked_size — see MirrorLogSegment's own doc for
@@ -179,7 +179,7 @@ message MirrorLogSegmentRequest {
   // one slice header per element — before the caps or the wireauth proof run,
   // so millions of zero-length elements amplify into ~100 MiB pre-auth. The
   // framed blob decodes as ONE wire-sized allocation and is unframed under the
-  // D-T2 caps.
+  // batch caps.
   reserved 3;
   reserved "record_payloads";
   // checkpoint is the loop-signed head covering EXACTLY this segment's end
@@ -204,8 +204,8 @@ message MirrorLogSegmentRequest {
   // proof are checked, letting millions of zero-length elements amplify into
   // ~100 MiB pre-auth. N is recovered by scanning the blob (it equals
   // checkpoint.size - from_index); the registry recomputes the chain hash
-  // through these payloads and REQUIRES the result to equal checkpoint.head
-  // (D-T2 rule 1), and segment_digest in the wireauth proof binds the same
+  // through these payloads and REQUIRES the result to equal checkpoint.head,
+  // and segment_digest in the wireauth proof binds the same
   // ordered list.
   bytes record_payloads_framed = 6;
 }

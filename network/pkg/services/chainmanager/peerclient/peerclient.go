@@ -20,8 +20,8 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
-// op names — these MUST match the publisher verifier's per-op signed view
-// (slice-11 D-p4); the bytes are reproduced via wireauth.Sign.
+// op names — these MUST match the publisher verifier's per-op signed view; the
+// bytes are reproduced via wireauth.Sign.
 const (
 	opGetPublisherInfo     = "GetPublisherInfo"
 	opRegisterSubscription = "RegisterSubscription"
