@@ -1,9 +1,9 @@
 diff --git a/budget.go b/budget.go
 new file mode 100644
-index 0000000..01387b2
+index 0000000..5af6454
 --- /dev/null
 +++ b/budget.go
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,349 @@
 +package jsonschema
 +
 +// Work budget: a patch to v6.0.3. This file and the lines marked "work
@@ -11,6 +11,7 @@ index 0000000..01387b2
 +// schema.go are not upstream code (README.md, patches/work-budget.patch).
 +
 +import (
++	"errors"
 +	"fmt"
 +	"math"
 +	"math/big"
@@ -61,7 +62,10 @@ index 0000000..01387b2
 +// PatternCompileStepsPerInstruction steps per instruction of the program
 +// compiled, whose size is known only then: once the budget is spent, at
 +// most this one compile has run past it, within the engine's own bounds. A
-+// value the engine refuses spends only the steps of its bytes.
++// value the engine refuses spends the steps of its bytes, and, when the
++// engine's error says the size of what it compiled before it refused (a
++// Size() int method), PatternCompileStepsPerInstruction steps per
++// instruction of that too.
 +func (vd *validator) compileRegexFormat(engine RegexpEngine, v any) error {
 +	str, ok := v.(string)
 +	if !ok {
@@ -72,6 +76,10 @@ index 0000000..01387b2
 +	}
 +	re, err := engine(str)
 +	if err != nil {
++		var sized interface{ Size() int }
++		if errors.As(err, &sized) {
++			vd.budget.spendSteps(product(PatternCompileStepsPerInstruction, int64(max(sized.Size(), 0))))
++		}
 +		return err
 +	}
 +	vd.budget.spendSteps(product(PatternCompileStepsPerInstruction, int64(patternSize(re))))
@@ -218,7 +226,8 @@ index 0000000..01387b2
 +//     Size() int method): n/PatternInstructionsPerStep more per position (each
 +//     byte, and the end) of a string a pattern or a patternProperties
 +//     pattern is matched against, and PatternCompileStepsPerInstruction × n
-+//     for each value it compiles as format "regex";
++//     for each value it compiles as format "regex" (or refuses, when its
++//     error says the size n of what it compiled first);
 +//   - reading a number, for a bound, for type integer, or to compare or
 +//     hash it: one step per byte of its text and one per unit of its
 +//     exponent; and comparing it with each bound or dividing it by
@@ -432,10 +441,10 @@ index 0000000..3c41198
 +}
 diff --git a/budget_test.go b/budget_test.go
 new file mode 100644
-index 0000000..f878d1d
+index 0000000..b1d8ef4
 --- /dev/null
 +++ b/budget_test.go
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,685 @@
 +package jsonschema_test
 +
 +// Work budget: tests of the local patch to v6.0.3 (see budget.go).
@@ -1021,6 +1030,49 @@ index 0000000..f878d1d
 +	big := least(t, compileSized(t, `{"format":"regex"}`, 500, true), v)
 +	if big-none != want {
 +		t.Errorf("size 0: %d steps; size 500: %d steps; want %d more", none, big, want)
++	}
++}
++
++// sizedRefusal is an engine's refusal that says the size of what it
++// compiled before it refused.
++type sizedRefusal struct{ size int }
++
++func (e sizedRefusal) Error() string { return "refused" }
++func (e sizedRefusal) Size() int     { return e.size }
++
++// A value checked as format "regex" that the engine refuses, saying the size
++// of what it compiled before it did (a Size() int method on its error),
++// costs PatternCompileStepsPerInstruction steps per instruction of it too; a
++// refusal that says none costs only the value's bytes.
++func TestValidateWithBudget_ChargesARegexFormatRefusalBySize(t *testing.T) {
++	refusing := func(err error) *jsonschema.Schema {
++		doc, derr := jsonschema.UnmarshalJSON(strings.NewReader(`{"format":"regex"}`))
++		if derr != nil {
++			t.Fatal(derr)
++		}
++		c := jsonschema.NewCompiler()
++		c.UseRegexpEngine(func(s string) (jsonschema.Regexp, error) {
++			if s == "a+" {
++				return nil, err
++			}
++			return regexp.Compile(s)
++		})
++		c.AssertFormat()
++		if aerr := c.AddResource("refusing.json", doc); aerr != nil {
++			t.Fatal(aerr)
++		}
++		sch, cerr := c.Compile("refusing.json")
++		if cerr != nil {
++			t.Fatal(cerr)
++		}
++		return sch
++	}
++	v := instance(t, `"a+"`)
++	none := least(t, refusing(errors.New("refused")), v)
++	small := least(t, refusing(sizedRefusal{0}), v)
++	big := least(t, refusing(sizedRefusal{500}), v)
++	if small != none || big-none != int64(500*jsonschema.PatternCompileStepsPerInstruction) {
++		t.Errorf("no size: %d steps; size 0: %d; size 500: %d; want 0 and %d more", none, small, big, 500*jsonschema.PatternCompileStepsPerInstruction)
 +	}
 +}
 +

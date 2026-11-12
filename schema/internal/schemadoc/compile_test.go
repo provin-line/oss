@@ -332,3 +332,79 @@ func TestCompile_EscapesWhatItQuotesInAnError(t *testing.T) {
 		}
 	}
 }
+
+// A schema's Unicode classes are Unicode 15.0.0's on every toolchain: the
+// same schemas are admitted and refused (eleven \p{C} within the bound,
+// twelve past it), and the same payloads accepted (U+1C89, a letter from
+// Unicode 16.0 on, is unassigned).
+func TestCompile_ReadsUnicodeClassesAsUnicode15(t *testing.T) {
+	pattern := func(expr string) []byte {
+		return []byte(`{"type": "string", "pattern": "` + strings.ReplaceAll(expr, `\`, `\\`) + `"}`)
+	}
+	if _, err := schemadoc.Compile(pattern(strings.Repeat(`\p{C}`, 11))); err != nil {
+		t.Errorf(`eleven \p{C} refused: %v`, err)
+	}
+	if _, err := schemadoc.Compile(pattern(strings.Repeat(`\p{C}`, 12))); err == nil {
+		t.Error(`twelve \p{C} admitted`)
+	}
+	for expr, valid := range map[string]bool{`^\p{Cn}$`: true, `^\p{L}$`: false, `^[\p{Letter}\p{Nd}]$`: false} {
+		s, err := schemadoc.Compile(pattern(expr))
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if err := s.Validate([]byte(`"` + "Ᲊ" + `"`)); (err == nil) != valid {
+			t.Errorf("%s validates U+1C89: %v, want valid %v", expr, err, valid)
+		}
+	}
+}
+
+// Unicode classes that cancel in a class cost the table ranges read: one
+// pattern of them fits a small schema's total (2^14 and one per 4 bytes,
+// each pattern compiled twice, once as format "regex" for the metaschema),
+// and two do not, refused with the total's text, the text verification/vectors
+// matches to classify a refusal as a bound's.
+func TestCompile_ChargesUnicodeClassesThatCancel(t *testing.T) {
+	cancel := `[` + strings.Repeat(`\\p{C}\\P{C}`, 5) + `]`
+	one := `{"properties": {"a": {"pattern": "` + cancel + `"}}}`
+	two := `{"properties": {"a": {"pattern": "` + cancel + `"}, "b": {"pattern": "` + cancel + `x"}}}`
+	if _, err := schemadoc.Compile([]byte(one)); err != nil {
+		t.Errorf("one pattern refused: %v", err)
+	}
+	if _, err := schemadoc.Compile([]byte(two)); err == nil || !strings.Contains(err.Error(), "regexp: the schema's regular expressions, together, have more instructions than it is allowed") {
+		t.Errorf("two patterns: %v, want the total refused", err)
+	}
+}
+
+// Matching a pattern is charged by its program, whatever the Unicode tables
+// read for it: a class of the five letter categories matches a string of
+// 12,000 letters within the payload's budget, as \p{L} does.
+func TestValidate_MatchesAPatternByItsProgram(t *testing.T) {
+	letters := []byte(`"` + strings.Repeat("A", 12000) + `"`)
+	for _, pattern := range []string{`^[\\p{Lu}\\p{Ll}\\p{Lt}\\p{Lm}\\p{Lo}]+$`, `^\\p{L}+$`} {
+		s, err := schemadoc.Compile([]byte(`{"type": "string", "pattern": "` + pattern + `"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", pattern, err)
+		}
+		if err := s.Validate(letters); err != nil {
+			t.Errorf("%s against 12,000 letters: %v", pattern, err)
+		}
+	}
+}
+
+// Values checked as format "regex" that are refused once their Unicode
+// classes were read are charged what reading them cost: a payload of a
+// hundred such values is past its budget, where their bytes alone are not.
+func TestValidate_ChargesRefusedRegexValuesTheirCost(t *testing.T) {
+	s, err := schemadoc.Compile([]byte(`{"$schema": "http://json-schema.org/draft-07/schema#", "type": "array", "items": {"type": "string", "format": "regex"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, 100)
+	for i := range values {
+		values[i] = fmt.Sprintf(`"%s.{200}%d"`, strings.Repeat(`\\p{C}`, 11), i)
+	}
+	err = s.Validate([]byte(`[` + strings.Join(values, ",") + `]`))
+	if err == nil || !strings.Contains(err.Error(), "work budget") {
+		t.Errorf("%.200v, want the payload past its work budget", err)
+	}
+}

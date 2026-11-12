@@ -28,16 +28,28 @@ integer keyword beyond the range of `int` read at that range's end, and a
 compile error for an integer keyword whose value is not an integer (its
 README). Each refusal names the bound it hit.
 
-The Unicode general categories in a schema's regular expressions
-(`pattern`, the names of `patternProperties`; `\p{L}`, `\p{Letter}` …) hold
-the code points the Go toolchain's `unicode` tables give them, and their
-ranges count toward the bound on a regular expression (8,192). So the
-toolchain decides both which strings a schema accepts and whether the schema
-is admitted at all: a toolchain that carries a later Unicode version can
-accept or refuse other strings with the same schema, and can refuse a schema
-an earlier one admitted. The `toolchain` line in go.mod is the least version
-this module builds with, not a pin: go1.26.10 carries Unicode 15.0.0, and
-go1.27 Unicode 17.0.0 (`unicode.Version`).
+The Unicode general categories in a schema's regular expressions (`pattern`,
+the names of `patternProperties`, and a value checked as format `"regex"`;
+`\p{L}`, `\p{Letter}` …) hold the code points Unicode 15.0.0 gives them,
+whatever Unicode version the Go toolchain's `unicode` package carries: the
+module reads them from tables it pins (`internal/ucd`, generated from the
+Unicode Character Database 15.0.0 itself). Their ranges, joined where they
+touch, count toward the bound on a regular expression (8,192): `\p{C}`
+counts 712, so eleven are admitted and twelve refused. So a schema accepts
+the same strings, and is admitted or refused alike, with every toolchain.
+Compiling an expression costs the size of its program or, where they are
+more, the ranges of the Unicode tables read for it (as when its Unicode
+classes cancel within a class), and one refused after its Unicode classes
+were read costs the ranges read; a schema's regular expressions together,
+and a payload's work budget for its values checked as format `"regex"`, are
+charged that cost. Matching a string against a pattern is charged by its
+program's size. Of the shapes measured with Unicode classes (outside a
+class, within one, cancelling, in alternation, in groups nested 32 deep, and
+refused once read for a program too large or a nesting Go refuses), a schema
+of 1 MiB is compiled or refused in at most about 0.4 s, and a payload of 1
+MiB of such values checked as format `"regex"` is validated in at most about
+2.5 s, the nested ones the costliest: Go's parser sorts a class again at
+each group around it, which their cost counts once (darwin/arm64, go1.27.1).
 
 This package does not bound a schema's size: its caller does, as the
 network's schema registration does at 1 MiB (the bound of a document request).
@@ -85,16 +97,18 @@ measured are compiled or refused in at most about 0.8 s (below).
 Nor does this package bound a payload's size: its caller does. A payload's
 work budget grows with its size, and so does what a validation costs
 (darwin/arm64, go1.27.1). Of the shapes measured, an ordinary schema accepts
-a payload of 1 MiB in about 30 ms and one of 64 MiB in about 2 s; the
-costliest, a pattern of about 8,192 instructions matched against each string
-of an array, is refused at the budget in about 0.8 s for 1 MiB and 51 s for
-64 MiB. A step takes at most about 112 ns (a step of matching such a
-pattern; `schema/internal/schemadoc`), so the budget bounds the validation
-itself at about 2 s for 1 MiB and 2 minutes for 64 MiB. Decoding the
-payload, before the budget applies, takes time and memory that grow with its
-size too: the heaviest shapes measured, a dense array of empty objects or of
-zeros, take about 70 ms and hold about 40 MB at their peak for 1 MiB, and
-about 5 s and 2.5 GB for 64 MiB.
+a payload of 1 MiB in about 30 ms and one of 64 MiB in about 2 s; a pattern
+of about 8,192 instructions matched against each string of an array is
+refused at the budget in about 0.8 s for 1 MiB and 51 s for 64 MiB; and the
+costliest, values checked as format `"regex"` whose Unicode classes sit in
+groups nested 32 deep (Go's parser sorts a class again at each group around
+it), take about 2.5 s for 1 MiB. A step takes at most about 200 ns (a step
+of compiling such a value; `schema/internal/schemadoc`), so the budget
+bounds the validation itself at about 3.5 s for 1 MiB and 3.5 minutes for 64
+MiB. Decoding the payload, before the budget applies, takes time and memory
+that grow with its size too: the heaviest shapes measured, a dense array of
+empty objects or of zeros, take about 70 ms and hold about 40 MB at their
+peak for 1 MiB, and about 5 s and 2.5 GB for 64 MiB.
 
 None of the shipped binaries sets a `Validator` (`cmd/pipeline` builds its
 loops through `pipeline/runtime`, which sets none): only a caller composing

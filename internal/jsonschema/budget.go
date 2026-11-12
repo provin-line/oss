@@ -8,6 +8,7 @@ package jsonschema
 // schema.go are not upstream code (README.md, patches/work-budget.patch).
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -58,7 +59,10 @@ func product(a, b int64) int64 {
 // PatternCompileStepsPerInstruction steps per instruction of the program
 // compiled, whose size is known only then: once the budget is spent, at
 // most this one compile has run past it, within the engine's own bounds. A
-// value the engine refuses spends only the steps of its bytes.
+// value the engine refuses spends the steps of its bytes, and, when the
+// engine's error says the size of what it compiled before it refused (a
+// Size() int method), PatternCompileStepsPerInstruction steps per
+// instruction of that too.
 func (vd *validator) compileRegexFormat(engine RegexpEngine, v any) error {
 	str, ok := v.(string)
 	if !ok {
@@ -69,6 +73,10 @@ func (vd *validator) compileRegexFormat(engine RegexpEngine, v any) error {
 	}
 	re, err := engine(str)
 	if err != nil {
+		var sized interface{ Size() int }
+		if errors.As(err, &sized) {
+			vd.budget.spendSteps(product(PatternCompileStepsPerInstruction, int64(max(sized.Size(), 0))))
+		}
 		return err
 	}
 	vd.budget.spendSteps(product(PatternCompileStepsPerInstruction, int64(patternSize(re))))
@@ -216,7 +224,8 @@ func (e *BudgetExceededError) Error() string {
 //     Size() int method): n/PatternInstructionsPerStep more per position (each
 //     byte, and the end) of a string a pattern or a patternProperties
 //     pattern is matched against, and PatternCompileStepsPerInstruction × n
-//     for each value it compiles as format "regex";
+//     for each value it compiles as format "regex" (or refuses, when its
+//     error says the size n of what it compiled first);
 //   - reading a number, for a bound, for type integer, or to compare or
 //     hash it: one step per byte of its text and one per unit of its
 //     exponent; and comparing it with each bound or dividing it by

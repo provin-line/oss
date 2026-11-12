@@ -198,26 +198,33 @@ type Schema struct {
 // A regular expression is parsed here only when it is written in the forms
 // ECMA-262 and Go's regexp read alike (but for . and \s, which Go reads its
 // own way), its groups nested at most 32 deep (prescan, which reads it
-// once), so Go parses it in at most about 240 ns per byte (measured, below;
-// alternations sharing prefixes grow a little faster than linearly, up to
-// about 72 ns per byte, Go's parser refusing one past about 256 KB);
-// compiled only within a size n of maxPatternSize (8,192, an upper bound of
-// its instructions; compileRegexpWithin); and charged by its length and n.
-// Matching one position of a string (each byte, and the end) against it
-// costs n/16 steps besides the byte's own (16 being
-// jsonschema.PatternInstructionsPerStep).
-// Compiling a payload value as format "regex" costs 4 steps per byte before
-// (jsonschema.PatternParseStepsPerByte) and 4n after
-// (jsonschema.PatternCompileStepsPerInstruction). Go's regexp matches a
+// once), so Go parses it in at most about 240 ns per byte, besides the
+// ranges its Unicode classes are written out as, which its cost counts once
+// though Go sorts a class again at each group around it (compileRegexpWithin;
+// measured, below; alternations sharing prefixes grow
+// a little faster than linearly, up to about 72 ns per byte, Go's parser
+// refusing one past about 256 KB); compiled only within a program size n of
+// maxPatternSize (8,192, an upper bound of its instructions); and charged by
+// its length, by n, and by its cost c, n or, where they are more, the ranges
+// of the Unicode tables read for it (compileCosting). Matching one position
+// of a string (each byte, and the end) against it costs n/16 steps besides
+// the byte's own (16 being jsonschema.PatternInstructionsPerStep). Compiling
+// a payload value as format "regex" costs 4 steps per byte before
+// (jsonschema.PatternParseStepsPerByte) and 4c after, refused or not once
+// prescan has accepted it (jsonschema.PatternCompileStepsPerInstruction;
+// compileValue). Go's regexp matches a
 // position in at most about 7 ns × n (measured: every NFA thread alive),
 // parses and compiles an expression in at most about 240 ns per byte
 // (measured: groups 31 deep in a body repeated {0} times, parsed twice), and
 // compiles an instruction in at most about 150 ns, never analysing a program
-// as one-pass here (onePassGuard; measured). So a step of matching takes at
-// most about 16 × 7 ns ≈ 112 ns, one of parsing about 60 ns and one of
-// compiling about 40 ns; other steps take 9–50 ns (the most where a schema
-// is applied through $ref). The time of a validation is at most about
-// 112 ns × its budget. SchemaStore's 1,298 valid examples, against the
+// as one-pass here (onePassGuard; measured). Go's parser sorts a class again
+// at each group around it, so a class in groups nested deep takes more than
+// its cost counts. So a step of matching takes at most about
+// 16 × 7 ns ≈ 112 ns, one of parsing about 60 ns, and one of compiling up to
+// about 200 ns (measured: Unicode classes in groups nested 32 deep, about
+// 40 ns in a shallow expression); other steps take 9–50 ns (the most where a
+// schema is applied through $ref). The time of a validation is at most about
+// 200 ns × its budget. SchemaStore's 1,298 valid examples, against the
 // schemas that compile here, need at most 98 steps per byte, and none more
 // than its budget.
 const (

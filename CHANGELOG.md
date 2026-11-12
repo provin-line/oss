@@ -237,6 +237,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `\p{Nd}`). Another spelling (`\p{letter}`, `\p{Uppercase Letter}`), a
   property other than a general category (`\p{Greek}`, `\p{Any}`) and the
   `\p{gc=…}` and `\p{General_Category=…}` forms are still refused.
+- `schema`: the Unicode general categories in a JSON Schema `pattern`, in the
+  names of `patternProperties` and in a value checked as format `"regex"` hold
+  the code points Unicode 15.0.0 gives them, from tables generated from the
+  Unicode Character Database 15.0.0 itself (`internal/ucd`), whatever Unicode
+  version the Go toolchain carries. Before, the toolchain's `unicode` tables
+  decided them (go1.26.10: Unicode 15.0.0; go1.27: Unicode 17.0.0). So a
+  schema accepts the same strings, and is admitted or refused alike, with
+  every toolchain. Their ranges count toward the bound on a regular expression
+  (8,192) as the pinned table holds them, joined where they touch: `\p{C}`
+  counts 712, where 0.4.x counted the entries of the toolchain's table (805
+  with go1.26.10, 832 with go1.27). A pattern near the bound may be admitted
+  here and refused by 0.4.x (see Breaking changes).
 - `keybinding`: `Issue` names the dplaax key-binding branch context
   (`https://dplaax.dev/vc/branches/v1/keybinding/202611101543`) in a
   binding's `@context`, after credentials v2 and dplaax v1. `VerifyBinding`
@@ -351,6 +363,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `ListPipelines` and `ListProcesses` refuse a nil DID with an error, as its
   other methods do, where they panicked. The DID service passes none of
   these, so it is not affected.
+- `schema`: compiling a regular expression costs the size of its program or,
+  where they are more, the ranges of the Unicode tables read for its Unicode
+  classes; one refused after its Unicode classes were read (its program too
+  large, or a form Go refuses) costs the ranges read. A schema's regular
+  expressions together are charged that cost, and so is a payload's work
+  budget for each value checked as format `"regex"`. Before, only the program
+  was charged, and an expression refused after its Unicode classes were read
+  was charged nothing. Matching a string against a pattern is charged by its
+  program, as before. Once the ranges read pass what is left of a schema's
+  total, the tables are no longer read.
 - `delegation.Verify` and `VerifyFor` refuse, with
   `delegation.ErrSignatureUnestablished`, a resolver that returns neither a
   document nor an error for the issuer. Before, they panicked.
@@ -440,11 +462,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `PermissionDenied`. A client may retry
   `Unavailable`; a delegation the registry refuses is still
   `PermissionDenied`.
-- **Schema:** a JSON Schema `pattern` may name a Unicode general category by
-  a long name or alias (`\p{Letter}`), which 0.4.x refuses: a schema that
-  does is accepted here and refused by a 0.4.x process. Upgrade every
-  process that compiles or validates against a schema before a schema uses
-  one.
+- **Schema:** a JSON Schema `pattern` may name a Unicode general category by a
+  long name or alias (`\p{Letter}`), which 0.4.x refuses: a schema that does
+  is accepted here and refused by a 0.4.x process. Likewise, a pattern's
+  Unicode classes count toward the bound on a regular expression (8,192) by
+  the ranges of the pinned Unicode 15.0.0 tables, joined where they touch
+  (`\p{C}`: 712), where 0.4.x counts the entries of the toolchain's tables
+  (805 with go1.26.10): a pattern near the bound may be accepted here and
+  refused by a 0.4.x process. And a 0.4.x process built with a toolchain of a
+  later Unicode version (go1.27: Unicode 17.0.0) reads categories by that
+  version: a pattern there may accept a string this release refuses (U+1C89, a
+  letter from Unicode 16.0 on, is unassigned here), or refuse one it accepts.
+  And an expression's Unicode classes cost the ranges of the tables read for
+  them where those are more than its program, so a schema with many Unicode
+  classes uses more of its regular expressions' total: a few schemas a 0.4.x
+  process accepts are refused here, among them a schema a process holds when
+  it registers it again at its start (`schema/local`'s `Add` compiles it):
+  check those schemas before upgrading. Upgrade every process that compiles or
+  validates against a schema before a schema uses one.
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said
@@ -521,14 +556,6 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   from the subject's own document, and batch chain assembly's account says
   an issuer with no endpoint is retried while its retry budget remains, then
   dropped, and how the audit runner finalizes a chain that stops at the hole.
-- `schema`: the README (en/ja) and `pattern`'s doc say that the Unicode
-  general categories in a schema's regular expressions hold the code points
-  the Go toolchain's `unicode` tables give them, and that their ranges count
-  toward the bound on a regular expression, so a toolchain that carries a
-  later Unicode version can change which strings the same schema accepts
-  and can refuse a schema an earlier one admitted. go.mod's `toolchain` is
-  the least version, not a pin (go1.26.10: Unicode 15.0.0; go1.27: Unicode
-  17.0.0).
 - `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
   view binds the signer DID), D-w10 (nonces per signer), D-w11 (the fields'
   value grammar) and D-w12 (the view binds the audience), which the code

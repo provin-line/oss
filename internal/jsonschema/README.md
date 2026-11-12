@@ -48,16 +48,17 @@ offered upstream on its own.
    `Size() int` method) has each position of a string matched against it,
    and each value it compiles as format `regex`, charged by that size
    (`PatternInstructionsPerStep`, `PatternCompileStepsPerInstruction`); a
-   value checked as format `regex` is also charged by its length before it is
-   compiled (`PatternParseStepsPerByte`). Reading a number is charged by its
-   length and its exponent, and comparing it with a bound by the size of
-   both; two objects are compared by their names in order, so a validation
-   takes the same steps each time. New files: `budget.go`, `budget_test.go`,
-   `budget_internal_test.go`.
-   Changed lines in `validator.go`, `util.go`, `vocab.go`, `roots.go`,
-   `objcompiler.go` and `schema.go`.
-   [patches/work-budget.patch](patches/work-budget.patch) is this change as a
-   diff against upstream v6.0.3, with upstream's import path.
+   value checked as format `regex` is also charged by its length before it
+   is compiled (`PatternParseStepsPerByte`), and a value the engine refuses
+   by the size its error says it compiled first, when it says one (a
+   `Size() int` method). Reading a number is charged by its length and its
+   exponent, and comparing it with a bound by the size of both; two objects
+   are compared by their names in order, so a validation takes the same
+   steps each time. New files: `budget.go`, `budget_test.go`,
+   `budget_internal_test.go`. Changed lines in `validator.go`, `util.go`,
+   `vocab.go`, `roots.go`, `objcompiler.go` and `schema.go`.
+   [patches/work-budget.patch](patches/work-budget.patch) is this change as
+   a diff against upstream v6.0.3, with upstream's import path.
 3. **Large number.** A number `big.Rat` cannot read (such as `1e1000001`) is
    reported as a `kind.LargeNumber` error where upstream v6.0.3 reads a nil
    `big.Rat` and panics, or takes the number as unequal to every number:

@@ -1,8 +1,8 @@
 diff --git a/budget.go b/budget.go
-index 01387b2..b32dec9 100644
+index 5af6454..16f0510 100644
 --- a/budget.go
 +++ b/budget.go
-@@ -183,7 +183,8 @@ const PatternCompileStepsPerInstruction = 4
+@@ -191,7 +191,8 @@ const PatternCompileStepsPerInstruction = 4
  
  // BudgetExceededError is returned by ValidateWithBudget when validating a
  // value would take more work than the budget it was given, or would nest
@@ -12,7 +12,7 @@ index 01387b2..b32dec9 100644
  type BudgetExceededError struct {
  	// Budget is the number of steps the validation was given.
  	Budget int64
-@@ -252,8 +253,9 @@ func (e *BudgetExceededError) Error() string {
+@@ -261,8 +262,9 @@ func (e *BudgetExceededError) Error() string {
  //     check (format "regex" compiles the string; format is asserted where a
  //     schema's draft or the compiler asks for it).
  //

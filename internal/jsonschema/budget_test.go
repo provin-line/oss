@@ -589,6 +589,49 @@ func TestValidateWithBudget_ChargesARegexFormatBySize(t *testing.T) {
 	}
 }
 
+// sizedRefusal is an engine's refusal that says the size of what it
+// compiled before it refused.
+type sizedRefusal struct{ size int }
+
+func (e sizedRefusal) Error() string { return "refused" }
+func (e sizedRefusal) Size() int     { return e.size }
+
+// A value checked as format "regex" that the engine refuses, saying the size
+// of what it compiled before it did (a Size() int method on its error),
+// costs PatternCompileStepsPerInstruction steps per instruction of it too; a
+// refusal that says none costs only the value's bytes.
+func TestValidateWithBudget_ChargesARegexFormatRefusalBySize(t *testing.T) {
+	refusing := func(err error) *jsonschema.Schema {
+		doc, derr := jsonschema.UnmarshalJSON(strings.NewReader(`{"format":"regex"}`))
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		c := jsonschema.NewCompiler()
+		c.UseRegexpEngine(func(s string) (jsonschema.Regexp, error) {
+			if s == "a+" {
+				return nil, err
+			}
+			return regexp.Compile(s)
+		})
+		c.AssertFormat()
+		if aerr := c.AddResource("refusing.json", doc); aerr != nil {
+			t.Fatal(aerr)
+		}
+		sch, cerr := c.Compile("refusing.json")
+		if cerr != nil {
+			t.Fatal(cerr)
+		}
+		return sch
+	}
+	v := instance(t, `"a+"`)
+	none := least(t, refusing(errors.New("refused")), v)
+	small := least(t, refusing(sizedRefusal{0}), v)
+	big := least(t, refusing(sizedRefusal{500}), v)
+	if small != none || big-none != int64(500*jsonschema.PatternCompileStepsPerInstruction) {
+		t.Errorf("no size: %d steps; size 0: %d; size 500: %d; want 0 and %d more", none, small, big, 500*jsonschema.PatternCompileStepsPerInstruction)
+	}
+}
+
 // Checking format "regex" costs, before the value is compiled,
 // PatternParseStepsPerByte steps per byte of it, whatever the size of the
 // program it compiles to: parsing takes time in its length. A budget that
