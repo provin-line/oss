@@ -18,6 +18,7 @@ import (
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
+	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 	"github.com/provin-line/oss/tlog"
@@ -113,7 +114,7 @@ func (h *Handler) ListLogRecords(ctx context.Context, req *connect.Request[tlogp
 
 // MirrorLogSegment verifies the caller's in-band wireauth proof (op
 // tlogservice.OpMirrorLogSegment; signed fields log_id, from_index,
-// checkpoint.head, segment_digest — tlogservice.MirrorLogSegmentFields /
+// checkpoint.head, segment_digest — wirecontract.MirrorLogSegmentFields /
 // SegmentDigest, the SAME builders a shipper client signs with), then
 // delegates the mirror-write rules (replay, caps, resume, stale-checkpoint
 // no-regress) and identity enforcement to the domain Service. No Authorizer:
@@ -143,8 +144,8 @@ func (h *Handler) MirrorLogSegment(ctx context.Context, req *connect.Request[tlo
 	if err != nil {
 		return nil, mapError(err)
 	}
-	digest := tlogservice.SegmentDigest(payloads)
-	fields := tlogservice.MirrorLogSegmentFields(req.Msg.GetLogId(), req.Msg.GetFromIndex(), cp.Head, digest)
+	digest := wirecontract.SegmentDigest(payloads)
+	fields := wirecontract.MirrorLogSegmentFields(req.Msg.GetLogId(), req.Msg.GetFromIndex(), cp.Head, digest)
 	if err := h.v.Verify(ctx, tlogservice.OpMirrorLogSegment, fields, proof, nil); err != nil {
 		return nil, mapError(err)
 	}

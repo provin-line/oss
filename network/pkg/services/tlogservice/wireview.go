@@ -9,21 +9,29 @@ import "github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract
 // See wirecontract.OpMirrorLogSegment for the full doc.
 const OpMirrorLogSegment = wirecontract.OpMirrorLogSegment
 
-// MirrorLogSegmentFields points at wirecontract.MirrorLogSegmentFields — see
-// OpMirrorLogSegment's alias doc.
-var MirrorLogSegmentFields = wirecontract.MirrorLogSegmentFields
+// MirrorLogSegmentFields calls wirecontract.MirrorLogSegmentFields — see
+// OpMirrorLogSegment's doc.
+func MirrorLogSegmentFields(logID string, fromIndex uint64, checkpointHead, segmentDigest string) map[string]any {
+	return wirecontract.MirrorLogSegmentFields(logID, fromIndex, checkpointHead, segmentDigest)
+}
 
-// SegmentDigest points at wirecontract.SegmentDigest — see
-// OpMirrorLogSegment's alias doc.
-var SegmentDigest = wirecontract.SegmentDigest
+// SegmentDigest calls wirecontract.SegmentDigest — see
+// OpMirrorLogSegment's doc.
+func SegmentDigest(payloads [][]byte) string {
+	return wirecontract.SegmentDigest(payloads)
+}
 
-// FrameRecordPayloads points at wirecontract.FrameRecordPayloads — defined
+// FrameRecordPayloads calls wirecontract.FrameRecordPayloads — defined
 // in the leaf wirecontract package together with the rest of
 // the record_payloads_framed wire codec;
-// this alias keeps existing call sites unchanged.
-var FrameRecordPayloads = wirecontract.FrameRecordPayloads
+// this keeps existing call sites unchanged.
+func FrameRecordPayloads(payloads [][]byte) []byte {
+	return wirecontract.FrameRecordPayloads(payloads)
+}
 
-// UnframeRecordPayloads points at wirecontract.UnframeRecordPayloads — see
-// FrameRecordPayloads' alias doc. Used by Service.DecodeSegment (see
+// UnframeRecordPayloads calls wirecontract.UnframeRecordPayloads — see
+// FrameRecordPayloads' doc. Used by Service.DecodeSegment (see
 // tlogservice.go).
-var UnframeRecordPayloads = wirecontract.UnframeRecordPayloads
+func UnframeRecordPayloads(data []byte, maxRecords, maxBytes int) ([][]byte, error) {
+	return wirecontract.UnframeRecordPayloads(data, maxRecords, maxBytes)
+}

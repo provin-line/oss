@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
@@ -159,7 +160,7 @@ func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Req
 	if err != nil {
 		return nil, mapError(err)
 	}
-	fields := chainmanager.ReportEmitHealthFields(req.Msg.GetPublisherDid(), req.Msg.GetHealthy())
+	fields := wirecontract.ReportEmitHealthFields(req.Msg.GetPublisherDid(), req.Msg.GetHealthy())
 	// Signer-to-actor binding: the proven signer must be the claimed publisher.
 	bind := func(signerDID string, _ *did.DIDDocument, f map[string]any) error {
 		if f["publisher_did"] != signerDID {

@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
+	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 	"github.com/provin-line/oss/vc"
@@ -104,11 +105,11 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 	if err != nil {
 		return nil, mapError(err)
 	}
-	canonical, err := auditor.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
+	canonical, err := wirecontract.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	fields := auditor.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
+	fields := wirecontract.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
 	// No separate actor field: the proven signer_did is who gets recorded as
 	// the registering party (the querying actor IS the signer, nil authorizer).
 	if err := h.v.Verify(ctx, auditor.OpRegisterEvidence, fields, proof, nil); err != nil {
@@ -122,7 +123,7 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 
 // RegisterAuditHead verifies the L2 wireauth proof over head_variant_address
 // — RegisterEvidence's exact proof-then-delegate shape, minus the consumed
-// set this RPC never carries (auditor.RegisterAuditHeadFields signs only
+// set this RPC never carries (wirecontract.RegisterAuditHeadFields signs only
 // head_variant_address) — then delegates to the SAME write-path service's
 // receiptless RegisterHead (contrast RegisterEvidence, which delegates to
 // Register; see EvidenceRegistrar's own doc for how the two differ).
@@ -131,7 +132,7 @@ func (h *Handler) RegisterAuditHead(ctx context.Context, req *connect.Request[au
 	if err != nil {
 		return nil, mapError(err)
 	}
-	fields := auditor.RegisterAuditHeadFields(req.Msg.GetHeadVariantAddress())
+	fields := wirecontract.RegisterAuditHeadFields(req.Msg.GetHeadVariantAddress())
 	// No separate actor field, same posture as RegisterEvidence: the
 	// querying actor IS the proven signer, nil authorizer.
 	if err := h.v.Verify(ctx, auditor.OpRegisterAuditHead, fields, proof, nil); err != nil {

@@ -55,13 +55,15 @@ type ReceiptStore interface {
 // reported as a conflict rather than applied as a silent overwrite.
 var ErrReceiptConflict = errors.New("auditor: receipt already recorded with a different consumed set")
 
-// CanonicalizeConsumedSet points at wirecontract.CanonicalizeConsumedSet —
-// defined in the leaf wirecontract package so a client-only
-// consumer need not import this service root; this alias keeps existing
-// call sites (MemReceiptStore.Put below, filestore.ReceiptStore,
-// EvidenceService.Register, the handler) unchanged. See
-// wirecontract.CanonicalizeConsumedSet for the full doc.
-var CanonicalizeConsumedSet = wirecontract.CanonicalizeConsumedSet
+// CanonicalizeConsumedSet calls wirecontract.CanonicalizeConsumedSet —
+// defined in the leaf wirecontract package so a client-only consumer need
+// not import this service root — for this package's own call sites
+// (MemReceiptStore.Put below, EvidenceService.Register) and
+// filestore.ReceiptStore. See wirecontract.CanonicalizeConsumedSet for the
+// full doc.
+func CanonicalizeConsumedSet(hashes []string) ([]string, error) {
+	return wirecontract.CanonicalizeConsumedSet(hashes)
+}
 
 // isContentAddress delegates to the exported grammar predicate (vc.IsContentAddress) — the ONE
 // definition every content-address check in this package converges on (headHash validation in

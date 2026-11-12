@@ -563,6 +563,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   that sends each request as it is, as net/http's does. A caller that passed
   another `connect.HTTPClient` passes an `*http.Client` whose `Transport`
   does not follow redirects itself.
+- **Go API:** `auditor.RegisterEvidenceFields`,
+  `auditor.RegisterAuditHeadFields`, `auditor.CanonicalizeConsumedSet`,
+  `tlogservice.MirrorLogSegmentFields`, `tlogservice.SegmentDigest`,
+  `tlogservice.FrameRecordPayloads`, `tlogservice.UnframeRecordPayloads` and
+  `chainmanager.ReportEmitHealthFields` are functions that call their
+  `wirecontract` package's function of the same name; in 0.4.x they were
+  variables holding it. A call, and passing one as a function value, read as
+  before; assigning one, taking its address, or comparing it with `nil` no
+  longer compiles. Each is a function of its own, so its value is not the
+  `wirecontract` function's (`reflect` and `runtime.FuncForPC` tell them
+  apart).
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said

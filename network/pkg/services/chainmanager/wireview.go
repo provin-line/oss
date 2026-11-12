@@ -10,6 +10,8 @@ import "github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontrac
 // wirecontract.OpReportEmitHealth for the full doc.
 const OpReportEmitHealth = wirecontract.OpReportEmitHealth
 
-// ReportEmitHealthFields points at wirecontract.ReportEmitHealthFields — see
-// OpReportEmitHealth's alias doc.
-var ReportEmitHealthFields = wirecontract.ReportEmitHealthFields
+// ReportEmitHealthFields calls wirecontract.ReportEmitHealthFields — see
+// OpReportEmitHealth's doc.
+func ReportEmitHealthFields(publisherDID string, healthy bool) map[string]any {
+	return wirecontract.ReportEmitHealthFields(publisherDID, healthy)
+}

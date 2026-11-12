@@ -9,14 +9,18 @@ import "github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 // wirecontract.OpRegisterEvidence for the full doc.
 const OpRegisterEvidence = wirecontract.OpRegisterEvidence
 
-// RegisterEvidenceFields points at wirecontract.RegisterEvidenceFields — see
-// OpRegisterEvidence's alias doc.
-var RegisterEvidenceFields = wirecontract.RegisterEvidenceFields
+// RegisterEvidenceFields calls wirecontract.RegisterEvidenceFields — see
+// OpRegisterEvidence's doc.
+func RegisterEvidenceFields(headVariantAddr string, canonicalConsumed []string) map[string]any {
+	return wirecontract.RegisterEvidenceFields(headVariantAddr, canonicalConsumed)
+}
 
 // OpRegisterAuditHead points at wirecontract.OpRegisterAuditHead — see
-// OpRegisterEvidence's alias doc.
+// OpRegisterEvidence's doc.
 const OpRegisterAuditHead = wirecontract.OpRegisterAuditHead
 
-// RegisterAuditHeadFields points at wirecontract.RegisterAuditHeadFields —
-// see OpRegisterEvidence's alias doc.
-var RegisterAuditHeadFields = wirecontract.RegisterAuditHeadFields
+// RegisterAuditHeadFields calls wirecontract.RegisterAuditHeadFields —
+// see OpRegisterEvidence's doc.
+func RegisterAuditHeadFields(headVariantAddr string) map[string]any {
+	return wirecontract.RegisterAuditHeadFields(headVariantAddr)
+}
