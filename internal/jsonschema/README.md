@@ -22,7 +22,7 @@ when this module is the main module.
 | Module | `github.com/santhosh-tekuri/jsonschema/v6` |
 | Version | `v6.0.3` |
 | Commit | `b0fc661f4939578bc429f408c18202573dbafcc4` |
-| Module zip | `h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=` (go.sum) |
+| Module zip | `h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=` (the Go checksum database, sum.golang.org) |
 | License | Apache License 2.0: [LICENSE](LICENSE), copied unchanged from the module. The module has no NOTICE file. |
 
 Copied: the library's non-test Go files, package `kind`, and the embedded
