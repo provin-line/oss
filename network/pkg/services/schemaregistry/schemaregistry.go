@@ -84,7 +84,8 @@ func (s *Service) Register(ctx context.Context, name, format string, body []byte
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedFormat, format)
 	}
 	// The body must be a well-formed, self-contained JsonSchema, so the
-	// registry never holds a schema a downstream validator would reject.
+	// registry never holds a schema a downstream validator with the same
+	// PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH (schema's README) would reject.
 	if err := schema.ValidateJSONSchema(body); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}

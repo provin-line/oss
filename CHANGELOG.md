@@ -27,6 +27,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Added
 
+- **Configuration:** `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH`, the bound on how
+  deep a schema's regular expressions' groups nest (`pattern`, the names of
+  `patternProperties`, a value checked as format `"regex"`): a decimal
+  integer from 1 to 32, 8 when unset or empty. It is read once, as a program
+  that imports `schema` or `schema/local` starts, directly or through another
+  package of the module (`pipeline/chained`, `pipeline/runtime`,
+  `network/pkg/services/schemaregistry`; `cmd/network` and `cmd/pipeline`),
+  and a value it does not accept stops the program there with a panic naming
+  the variable. Keep the default and change it only on an
+  inquiry: the bound drives the worst-case time of compiling a schema and of
+  validating a payload (`schema/README.md`), and processes with different
+  settings can disagree on the same schema.
 - `contentaddress.Hasher` (`NewHasher`, `Write`, `Address`): the address of
   bytes written to it a part at a time, as `Of` makes it of bytes held at
   once, for bytes that arrive in parts without holding them all. The zero
@@ -592,6 +604,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   orders reports by `madeAt` and measures freshness from `receivedAt`. A
   caller passes both, and another implementation of `EmitHealthReporter`
   takes both.
+- **Schema:** a regular expression whose groups nest more than 8 deep is
+  refused, where 0.4.x accepts them up to 32 deep
+  (`PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH` sets the bound, up to 32). A schema
+  a 0.4.x process accepts with such a pattern is refused here, among them a
+  schema a process holds when it registers it again at its start
+  (`schema/local`'s `Add` compiles it), and so is a payload value checked as
+  format `"regex"` that nests so deep: check registered schemas and those
+  inputs before upgrading, or set the variable to the depth they need on
+  every process that compiles or validates against them.
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said

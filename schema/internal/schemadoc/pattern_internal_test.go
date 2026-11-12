@@ -278,8 +278,10 @@ func TestPrescan_BoundsTheNestingOfGroups(t *testing.T) {
 // Parsing and compiling an expression, refused or not, allocates memory
 // linear in its length, however its groups nest and however small the
 // program it compiles to: groups nested deep, and a body repeated {0} times,
-// which compiles to almost nothing but is parsed twice.
+// which compiles to almost nothing but is parsed twice. It holds at the
+// deepest bound the setting allows, maxGroupDepthCeiling.
 func TestCompileRegexpWithin_AllocatesLinearlyInTheLength(t *testing.T) {
+	atMaxGroupDepth(t, maxGroupDepthCeiling)
 	deep := func(depth int) string { return strings.Repeat("(?:a*", depth) + strings.Repeat(")", depth) }
 	for name, expr := range map[string]string{
 		"4,000 groups nested, repeated {0} times":       deep(4000) + "{0}",

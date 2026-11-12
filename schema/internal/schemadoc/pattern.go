@@ -3,6 +3,7 @@ package schemadoc
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"regexp/syntax"
 	"slices"
@@ -27,17 +28,60 @@ import (
 // SchemaStore hold no pattern above 5,415.
 const maxPatternSize = 8192
 
-// maxGroupDepth bounds how deep an expression's groups nest. Go's parser
-// copies what a non-capturing group holds into the concatenation around it,
-// at each level, so parsing takes time and memory in the expression's length
-// times that depth: at 32, at most about 120 ns and 110 bytes per byte
-// (measured), two to three times an expression without groups. The 8,237
-// patterns of SchemaStore nest at most 7 deep.
-const maxGroupDepth = 32
+// maxGroupDepth bounds how deep an expression's groups nest, capturing or
+// not. Go's parser copies what a non-capturing group holds into the
+// concatenation around it, at each level, and sorts a class again at each
+// group around it, so parsing takes time and memory in the expression's
+// length times that depth: at 8, at most about 80 ns and 95 bytes per byte,
+// and at 32, about 120 ns and 110 bytes per byte (measured), two to three
+// times an expression without groups. The 8,237 patterns of SchemaStore nest
+// at most 7 deep (one of them; the others at most 4). It is
+// defaultMaxGroupDepth unless maxGroupDepthEnv sets it, read once, as the
+// package is initialized (parseMaxGroupDepth); a setting it does not accept
+// panics there, so no program that imports the package starts with one.
+var maxGroupDepth = mustMaxGroupDepth()
+
+const (
+	// defaultMaxGroupDepth is maxGroupDepth when maxGroupDepthEnv is unset
+	// or empty.
+	defaultMaxGroupDepth = 8
+	// maxGroupDepthCeiling is the most maxGroupDepthEnv may set
+	// maxGroupDepth to: the depth at which the steps charged for parsing an
+	// expression are measured (jsonschema.PatternParseStepsPerByte).
+	maxGroupDepthCeiling = 32
+	// maxGroupDepthEnv is the environment variable that sets maxGroupDepth.
+	maxGroupDepthEnv = "PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH"
+)
+
+// mustMaxGroupDepth returns the bound maxGroupDepthEnv sets, panicking on a
+// setting parseMaxGroupDepth does not accept.
+func mustMaxGroupDepth() int {
+	v, set := os.LookupEnv(maxGroupDepthEnv)
+	d, err := parseMaxGroupDepth(v, set)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// parseMaxGroupDepth reads maxGroupDepthEnv's value v: unset or empty is
+// defaultMaxGroupDepth, and anything else must be a decimal integer from 1
+// to maxGroupDepthCeiling.
+func parseMaxGroupDepth(v string, set bool) (int, error) {
+	if !set || v == "" {
+		return defaultMaxGroupDepth, nil
+	}
+	d, err := strconv.Atoi(v)
+	if err != nil || strings.TrimLeft(v, "0123456789") != "" || d < 1 || d > maxGroupDepthCeiling {
+		return 0, fmt.Errorf("schema: %s=%q: want a decimal integer from 1 to %d, or unset or empty for %d", maxGroupDepthEnv, v, maxGroupDepthCeiling, defaultMaxGroupDepth)
+	}
+	return d, nil
+}
 
 // compileRegexpWithin compiles expr with Go's regexp, as prescan writes it
 // for Go, refusing, before it parses it, what would make parsing it take more
-// than about 240 ns per byte, or per range of its Unicode classes for each
+// than about 150 ns per byte with groups nested at most 8 deep and 240 ns at
+// 32 (maxGroupDepth), or per range of its Unicode classes for each
 // group around them (Go's parser sorts a class again at each), or memory more
 // than linear in its length and maxPatternSize (prescan), and before it
 // compiles it, a program larger than maxPatternSize. When left is not nil, it

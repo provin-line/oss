@@ -45,6 +45,10 @@ NATS operator mode は account の接続時（または JWT 失効時）に acco
 
 push が無い時の症状: `chain subscribe` は成功する（コントロールプレーンの record は書かれる）のにイベントが流れない — broker は grant されていない subject を黙って落とす。何もエラーにならない。負系 capstone テストがまさにこの挙動を**セキュリティ**姿勢として pin しているからこそ、運用側にはこの注意書きが要る。
 
+### 3. `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH`（すべての process で同じに）
+
+schema の正規表現（`pattern`、`patternProperties` の名前、format `"regex"` で確かめる値）の group の入れ子は 8 段まで。この環境変数で 1 から 32 の別の限りにできる（`schema/README.ja.md`）。`cmd/network` と `cmd/pipeline` は始まるときに 1 度だけ読み、受け付けない値ならそこで止まる。値の違う process は、同じ schema について食い違いうる: network node が登録する schema を pipeline が断る、またはその逆。どこでも設定しないか、すべての network node と pipeline で同じ値にする。既定のままにし、問い合わせに応じるときだけ変える: この限りは schema の compile と payload の確かめの最悪の時間を左右する。
+
 ## wire 証明の audience
 
 L2 の wire 証明はどれも **audience**（送り先の node の registry ID）を名指す（[auth.ja.md § L2](../protocol/auth.ja.md)、D-w12）。node は、自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。node にこのための設定は他に要らない。

@@ -146,6 +146,19 @@ drops the ungranted subject. Nothing errors; the negative capstone tests pin
 exactly this behavior as the *security* posture, which is why the
 operational side needs this note.
 
+### 3. `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH` (the same in every process)
+
+A schema's regular expressions (`pattern`, the names of
+`patternProperties`, a value checked as format `"regex"`) nest their groups
+at most 8 deep; this environment variable sets another bound, from 1 to 32
+(`schema/README.md`). `cmd/network` and `cmd/pipeline` read it once at their
+start, and a value they do not accept stops them there. Processes with
+different values can disagree on the same schema: a network node registers
+a schema that a pipeline refuses, or the other way round. Leave it unset
+everywhere, or set the same value on every network node and pipeline. Keep
+the default and change it only on an inquiry: the bound drives the
+worst-case time of compiling a schema and of validating a payload.
+
 ## Wire proof audience
 
 Every L2 wire proof names its **audience**: the registry ID of the node it

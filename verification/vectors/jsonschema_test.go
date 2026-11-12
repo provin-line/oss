@@ -143,6 +143,7 @@ var (
 		{"schema-budget", metaschemaHead, "regexp: its program has more than ", inPatternReason},
 		{"schema-budget", metaschemaHead, "regexp: the schema's regular expressions, together, have more instructions than it is allowed", inPatternReason},
 		{"schema-budget", metaschemaHead, "regexp: its Unicode classes hold more than ", inPatternReason},
+		{"schema-budget", metaschemaHead, "regexp: its groups nest more than ", inPatternReason},
 		{"refused-pattern-dialect", metaschemaHead, "", inPatternReason},
 		{"schema-invalid", metaschemaHead, "", notPattern},
 		{"refused-external-ref", "schemadoc: compile: ", "schemadoc: external $ref is not allowed: ", inRest},
@@ -231,8 +232,13 @@ func TestClassifyUnknownErrorFails(t *testing.T) {
 
 // Every class is checked against the refusal that names it, through the
 // local.Validator the suite runs. A refusal that is costly to reach is the
-// text schemadoc writes, under the wrapper schema/local puts around it.
+// text schemadoc writes, under the wrapper schema/local puts around it. A
+// pattern's groups nest 33 deep, past every bound
+// PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH may set (1 to 32).
 func TestClassifyProductRefusals(t *testing.T) {
+	// schemadoc reads the setting as it is initialized, before go test
+	// records what a test reads; reading it here keys go test's cache on it.
+	os.LookupEnv("PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH")
 	nested := func(open, inner, close string, n int) string {
 		return strings.Repeat(open, n) + inner + strings.Repeat(close, n)
 	}
@@ -248,6 +254,7 @@ func TestClassifyProductRefusals(t *testing.T) {
 		{"pattern Go's parser refuses", `{"pattern":"(?:a{1000}){1000}"}`, "", "refused-pattern-dialect"},
 		{"pattern program", `{"pattern":"` + strings.Repeat(`a{1000}`, 9) + `"}`, "", "schema-budget"},
 		{"pattern Unicode classes", `{"pattern":"` + strings.Repeat(`\\p{L}`, 30) + `"}`, "", "schema-budget"},
+		{"pattern groups nested", `{"pattern":"` + nested(`(`, `a`, `)`, 33) + `"}`, "", "schema-budget"},
 		{"patterns together", `{"allOf":[` + strings.Repeat(`{"pattern":"a{900}"},`, 60) + `{}]}`, "", "schema-budget"},
 		{"a pattern quoting a bound's text", `{"pattern":"(?i)' is not valid regex: regexp: its program has more than "}`, "", "refused-pattern-dialect"},
 		{"a category name quoting a bound's text", `{"pattern":"\\p{' is not valid regex: regexp: its program has more than }"}`, "", "refused-pattern-dialect"},

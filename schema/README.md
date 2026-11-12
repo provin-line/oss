@@ -44,12 +44,31 @@ were read costs the ranges read; a schema's regular expressions together,
 and a payload's work budget for its values checked as format `"regex"`, are
 charged that cost. Matching a string against a pattern is charged by its
 program's size. Of the shapes measured with Unicode classes (outside a
-class, within one, cancelling, in alternation, in groups nested 32 deep, and
-refused once read for a program too large or a nesting Go refuses), a schema
-of 1 MiB is compiled or refused in at most about 0.4 s, and a payload of 1
-MiB of such values checked as format `"regex"` is validated in at most about
-2.5 s, the nested ones the costliest: Go's parser sorts a class again at
-each group around it, which their cost counts once (darwin/arm64, go1.27.1).
+class, within one, cancelling, in alternation, in groups nested as deep as
+the bound below allows, and refused once read for a program too large or a
+nesting Go refuses), a schema of 1 MiB is compiled or refused in at most
+about 0.15 s, and a payload of 1 MiB of such values checked as format
+`"regex"` is validated in at most about 1.5 s, the nested ones the
+costliest: Go's parser sorts a class again at each group around it, which
+their cost counts once. With the bound at 32, those are about 0.4 s and
+2.5 s (darwin/arm64, go1.27.1).
+
+A regular expression's groups, capturing or not, nest at most 8 deep: one
+nested deeper is refused. SchemaStore's 8,237 patterns nest at most 7 deep.
+The environment variable `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH` sets
+another bound, a decimal integer from 1 to 32 (unset or empty: 8). It is
+read once, as a program that imports `schema` or `schema/local` starts; a
+value it does not accept stops the program there, with a panic that names
+the variable, the value and the range. The bound drives the worst-case time
+of compiling a schema and of validating a payload (the figures here, at 8
+and at 32), so keep the default and change it only on an inquiry. Processes
+with different settings can disagree on the same schema: one accepts a
+schema, or a payload with a value checked as format `"regex"`, that another
+refuses. These packages are a library, so the variable takes effect in
+every program that imports them, directly or through another package of
+this module (`pipeline/chained`, `pipeline/runtime` and
+`network/pkg/services/schemaregistry` among them), not only in the module's
+own binaries (`cmd/network` and `cmd/pipeline`).
 
 This package does not bound a schema's size: its caller does, as the
 network's schema registration does at 1 MiB (the bound of a document request).
@@ -101,11 +120,14 @@ a payload of 1 MiB in about 30 ms and one of 64 MiB in about 2 s; a pattern
 of about 8,192 instructions matched against each string of an array is
 refused at the budget in about 0.8 s for 1 MiB and 51 s for 64 MiB; and the
 costliest, values checked as format `"regex"` whose Unicode classes sit in
-groups nested 32 deep (Go's parser sorts a class again at each group around
-it), take about 2.5 s for 1 MiB. A step takes at most about 200 ns (a step
-of compiling such a value; `schema/internal/schemadoc`), so the budget
-bounds the validation itself at about 3.5 s for 1 MiB and 3.5 minutes for 64
-MiB. Decoding the payload, before the budget applies, takes time and memory
+groups nested 8 deep (Go's parser sorts a class again at each group around
+it), take about 1.5 s for 1 MiB. A step takes at most about 110 ns (a step
+of matching; one of compiling such a value takes about 90 ns;
+`schema/internal/schemadoc`), so the budget bounds the validation itself at
+about 2 s for 1 MiB and 2 minutes for 64 MiB. With the group bound at 32, a
+step of compiling such a value takes up to about 200 ns, the costliest
+values about 2.5 s for 1 MiB, and the budget's bounds about 3.5 s and 3.5
+minutes. Decoding the payload, before the budget applies, takes time and memory
 that grow with its size too: the heaviest shapes measured, a dense array of
 empty objects or of zeros, take about 70 ms and hold about 40 MB at their
 peak for 1 MiB, and about 5 s and 2.5 GB for 64 MiB.
