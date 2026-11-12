@@ -174,9 +174,10 @@ func releaseOnCleanup(t *testing.T, release chan struct{}) {
 }
 
 // A JSON lines sink returns when the context ends, without waiting for a
-// Write that does not end, saying the write goes on; a call after it returns
-// at its own context's end, saying its write did not start, and is never
-// written; once the Write ends, the sink writes again.
+// Write that does not end, saying the write may have started and may still
+// be kept; a call after it returns at its own context's end, saying its
+// write did not start, and is never written; once the Write ends, the sink
+// writes again.
 func TestJSONLines_ReturnsWhenTheContextEnds(t *testing.T) {
 	w := newBlockingWriter()
 	releaseOnCleanup(t, w.release)
@@ -184,8 +185,8 @@ func TestJSONLines_ReturnsWhenTheContextEnds(t *testing.T) {
 	err := stuckCall(t, w.started, func(ctx context.Context) error {
 		return s.Record(ctx, rec("d1", "p", decisionrecord.Accepted, ""))
 	})
-	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "JSON lines") || !strings.Contains(err.Error(), "may still be kept") {
-		t.Errorf("Record on a stuck writer: %v, want the context's end, naming the JSON lines sink and a write that goes on", err)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "JSON lines") || !strings.Contains(err.Error(), "may have started") || !strings.Contains(err.Error(), "may still be kept") {
+		t.Errorf("Record on a stuck writer: %v, want the context's end, naming the JSON lines sink and a write that may have started and may still be kept", err)
 	}
 	err = returnsBy(t, func(ctx context.Context) error { return s.Record(ctx, rec("d2", "p", decisionrecord.Accepted, "")) })
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "before the write started") {
@@ -201,6 +202,67 @@ func TestJSONLines_ReturnsWhenTheContextEnds(t *testing.T) {
 	out, writes := w.written()
 	if writes != 2 || !strings.Contains(out, `"d1"`) || strings.Contains(out, `"d2"`) || !strings.Contains(out, `"d3"`) || strings.Contains(out, "summary") {
 		t.Errorf("%d writes of %q, want d1 and d3 only", writes, out)
+	}
+}
+
+// overlapWriter holds the first Write until release is closed, and counts the
+// most Writes it has seen at once.
+type overlapWriter struct {
+	release chan struct{}
+	started chan struct{}
+	mu      sync.Mutex
+	now     int
+	most    int
+	lines   int
+}
+
+func (w *overlapWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.now++
+	w.most = max(w.most, w.now)
+	first := w.lines == 0 && w.now == 1
+	w.lines++
+	w.mu.Unlock()
+	if first {
+		w.started <- struct{}{}
+		<-w.release
+	}
+	w.mu.Lock()
+	w.now--
+	w.mu.Unlock()
+	return len(p), nil
+}
+
+// A JSON lines sink gives w one Write at a time: the calls behind a Write
+// whose caller has gone wait for it to end, whatever their contexts.
+func TestJSONLines_GivesTheWriterOneWriteAtATime(t *testing.T) {
+	w := &overlapWriter{release: make(chan struct{}), started: make(chan struct{}, 1)}
+	releaseOnCleanup(t, w.release)
+	s := decisionrecord.NewJSONLines(w)
+	if err := stuckCall(t, w.started, func(ctx context.Context) error {
+		return s.Record(ctx, rec("d1", "p", decisionrecord.Accepted, ""))
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Record on a stuck writer: %v, want context.Canceled", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, c := range []context.Context{context.Background(), ctx, context.Background(), ctx} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.Record(c, rec("d", "p", decisionrecord.Accepted, "")); err != nil {
+				t.Errorf("Record behind the stuck write: %v", err)
+			}
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(w.release)
+	wg.Wait()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.most != 1 || w.lines != 5 {
+		t.Errorf("%d Writes at once at most, %d lines; want 1 at once and 5 lines", w.most, w.lines)
 	}
 }
 
@@ -232,6 +294,33 @@ func TestJSONLines_NilContext(t *testing.T) {
 	//lint:ignore SA1012 a nil context is what this tests
 	if err := decisionrecord.NewJSONLines(&b).Record(nil, rec("d", "p", decisionrecord.Accepted, "")); err != nil || b.Len() == 0 { //nolint:staticcheck
 		t.Errorf("Record with a nil context: %v, wrote %q", err, b.String())
+	}
+}
+
+// A nil context is context.Background() for the log sink too, for records
+// and summaries.
+func TestLog_NilContext(t *testing.T) {
+	for name, call := range map[string]func(decisionrecord.Sink) error{
+		"Record": func(s decisionrecord.Sink) error {
+			//lint:ignore SA1012 a nil context is what this tests
+			return s.Record(nil, rec("d", "p", decisionrecord.Accepted, "")) //nolint:staticcheck
+		},
+		"Summary": func(s decisionrecord.Sink) error {
+			//lint:ignore SA1012 a nil context is what this tests
+			return s.Summary(nil, goldenSummary()) //nolint:staticcheck
+		},
+	} {
+		func() {
+			defer func() {
+				if v := recover(); v != nil {
+					t.Errorf("%s with a nil context panicked: %v", name, v)
+				}
+			}()
+			var b bytes.Buffer
+			if err := call(decisionrecord.NewLog(slog.New(slog.NewJSONHandler(&b, nil)))); err != nil || b.Len() == 0 {
+				t.Errorf("%s with a nil context: %v, wrote %q", name, err, b.String())
+			}
+		}()
 	}
 }
 
@@ -289,8 +378,8 @@ func TestLog_ReturnsWhenTheContextEnds(t *testing.T) {
 		releaseOnCleanup(t, h.release)
 		s := decisionrecord.NewLog(slog.New(h))
 		err := stuckCall(t, h.started, func(ctx context.Context) error { return s.Record(ctx, rec("d1", "p", decisionrecord.Accepted, "")) })
-		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "log sink") {
-			t.Errorf("Enabled blocks %v: %v, want the context's end, naming the log sink", c.enabledBlocks, err)
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "log sink") || !strings.Contains(err.Error(), "may have started") {
+			t.Errorf("Enabled blocks %v: %v, want the context's end, naming the log sink and a write that may have started", c.enabledBlocks, err)
 		}
 		if err := returnsBy(t, func(ctx context.Context) error { return s.Record(ctx, rec("d2", "p", decisionrecord.Accepted, "")) }); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("Enabled blocks %v, behind the stuck one: %v, want the context's end", c.enabledBlocks, err)

@@ -66,7 +66,7 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
 | `keybinding/` | 鍵の結び付け（発行者が、受け手のために鍵を主体に結ぶ）と、発行者の失効の一覧（W3C の Bitstring Status List） |
-| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・拒否だけ・要約・なし） |
+| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・受け入れ以外・要約・なし） |
 | `contentaddress/` | 中身の番地（`sha256:` と 64 字の小文字 hex）。自分の関数だけが作る型 |
 
 ライブラリ層内部の依存 DAG:

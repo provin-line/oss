@@ -2,7 +2,7 @@
 
 A deciding party (a gate, a boundary stage, a delivery decision) writes one
 `Record` per decision: its id, the deciding party, the time, its outcome,
-the check that refused and why, whom the decision is attributed to,
+the check that refused or deferred and why, whom the decision is attributed to,
 the content addresses of what was decided on, and the party's own fields. A
 record never holds a payload.
 
@@ -74,8 +74,10 @@ record is kept (an unbuffered or synced writer):
 
 - `NewJSONLines`: one RFC 8785 JSON object per line, with `"v"` (the format
   version) and `"kind"`; times in UTC with nine fraction digits, so they sort
-  as text. Split on `"\n"` only (U+2028 and U+2029 are written as is). After a
-  failed write the next line starts on a line of its own.
+  as text. Split on `"\n"` only (U+2028 and U+2029 are written as is). The
+  writer gets one `Write` at a time, even after a call has returned before
+  its `Write` ended. After a failed write the next line starts on a line of
+  its own.
 - `NewLog`: one structured log entry per record or summary, through the
   handler, so a logger that drops info entries or fails is an error. A handler
   that returns nil without keeping the entry cannot be detected; at `all`, use
@@ -85,24 +87,43 @@ record is kept (an unbuffered or synced writer):
 These sinks return as soon as the call's context ends, without waiting for
 a write to end: the error wraps `ctx.Err()` (so `errors.Is` matches
 `context.DeadlineExceeded` or `context.Canceled`), names the sink, and says
-whether the write had started. A record whose context ended before its write
-started is not written, then or later; a write that started cannot be
-stopped, and may end, and be kept, after the call returned. A sink makes one
-write at a time (the log sink calls its handler one entry at a time): a
-call behind a write that does not end returns at its own context's end, and
-the sink writes again once that write ends. A write that never ends (a
-writer or handler stuck for good) is not recovered, so each sink holds at
-most one. With a context that cannot end (`context.Background()`, or one
-from `context.WithoutCancel`) a call waits for its write, as in 0.4.0; a nil
-context is `context.Background()`. A panic in the writer or the handler
-reaches the caller while it waits; after the caller has returned, it is
-dropped and the write counts as failed.
+either that the write did not start or that it may have started. A record
+whose context ended before its write started is not written, then or later;
+a write that started cannot be stopped, and may end, and be kept, after the
+call returned. A write that does not end may hold back the sink's other
+writes until it ends, each of their calls still returning at its own
+context's end. A write that never ends (a writer or handler stuck for good)
+is not recovered, and each sink holds at most one. With a context that
+cannot end (`context.Background()`, or one from `context.WithoutCancel`) a
+call waits for its write, behind any write that does not end, as in 0.4.0;
+a nil context is `context.Background()`. A panic in the writer or the
+handler reaches the caller while it waits; after the caller has returned, it
+is dropped and the write counts as failed.
+
+At `all`, a record for which `Filter.Record` returned an error may still be
+kept: its write may have started and end after the call returned, and a
+writer or handler may keep a record and still return an error. A deciding
+party that refuses the decision then, and wants a reader to see the refusal,
+records the decision again, refused, with the same `DecisionID`, through the
+same `Filter`: the decision has the strongest outcome among its records. The
+rule for a decision's records allows that refusal, through the `Filter` whose
+`Record` returned the error.
 
 Below `all`, a `Filter`'s warning that a sink failed does not wait past the
 context either: when no warning is being written it is written, late if the
 context has ended; when one is, and the context ends first, it is not.
 `Filter.Flush` with a context that has already ended returns its error and
-keeps the window, counts and all, for the next `Flush`.
+keeps the window, counts and all, for the next `Flush`. When the context
+ends during a `Flush`, the window is not kept: a summary whose write has not
+started by then is lost, as any summary the sink fails to write is (a warning
+at most); one whose write had started may still be kept. So that no summary
+of the last window is lost to the shutdown signal, the last `Flush`, at
+shutdown, takes a context that the signal does not end and that has a
+deadline of its own, as
+`context.WithTimeout(context.WithoutCancel(ctx), d)`. Without a deadline it
+may wait for good behind a write that does not end. When the deadline passes
+first, the counts not written by then are lost, as above. A write that fails
+still loses its summary.
 
 ## Format versions
 
@@ -118,15 +139,23 @@ A sink writes one format version, the `"v"` of every line and entry.
 
 In format v2, a record may carry:
 
-- `"refusedAt"`: where a decision that is not accepted is diagnosed, a hop
-  of what was decided on — one step it came through, in the deciding
-  party's terms, as an actor is. `{"hop": "…", "confidence": "…"}`, the
+- `"refusedAt"`: on a refused or unenforced decision only, where its
+  refusal is diagnosed, a hop of what was decided on — one step it came
+  through, in the deciding party's terms, as an actor is. A held decision
+  was not refused and has none. `{"hop": "…", "confidence": "…"}`, the
   confidence one of `claimed` (the hop is named by what was decided on,
   before its signature was verified), `verified` (named after its signature
   was verified) and `unknown` (the check concerns a hop the deciding party
   cannot name; then there is no `"hop"`).
 - `"verifiedHops"`: the hops whose signatures the deciding party verified,
   in order, on a record of any outcome. None is written as no member.
+
+The confidence grades the position only: how far the hop's name is
+established. It is not the verdict of a verification (in `vc`, a
+`ConfidenceState` of failed, indeterminate or verified): `verified` does not
+say that what was decided on, or any verification of it, is verified.
+`"refusedAt"` and `"verifiedHops"` are independent: a `"refusedAt"` of
+confidence `verified` need not name one of the `"verifiedHops"`.
 
 A format v1 sink given what format v1 cannot express — a held outcome, a
 `RefusedAt`, verified hops, a count of held decisions — returns an error
@@ -137,11 +166,13 @@ that deciding party's whole summary of the window, every count in it, and
 the `Filter` warns. A deciding party that holds decisions writes format v2.
 `Record.Validate` checks the format v2 members whatever the version.
 
-The version changes whenever a member changes, or the values of `"kind"`,
-`"outcome"` or `"confidence"`; within a version neither changes. A reader
-that refuses members it does not know can read every line of the versions
-it knows. The values of `"check"` and the names in `"attributes"` are the
-deciding party's, and grow whatever the version.
+The version changes whenever any of these changes: a member, the form or
+the meaning of a member's value, the set of values of `"kind"`, `"outcome"`
+or `"confidence"`, and, in the log sink, an entry's message or level. Within
+a version none of them changes. A reader that refuses members it does not
+know can read every line of the versions it knows. The values of `"check"`
+and the names in `"attributes"` are the deciding party's, and grow whatever
+the version.
 
 A `Filter` not made by `NewFilter` refuses every call. This package is not the
 record of used nonces a gate keeps against replays.

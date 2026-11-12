@@ -34,6 +34,10 @@ type DecisionRecordConfig struct {
 	SummaryWindow time.Duration
 }
 
+// summaryFlushTimeout is how long a flush of the summary level waits for the
+// sink, each window's and the last at shutdown alike.
+const summaryFlushTimeout = 10 * time.Second
+
 // decisionRecording is the node's delivery decision recorder: a Filter over
 // the configured sink, the file the sink writes to, and the flusher the
 // summary level needs.
@@ -42,6 +46,8 @@ type decisionRecording struct {
 	file   io.Closer
 	level  decisionrecord.Level
 	window time.Duration
+	// flushTimeout bounds each flush (summaryFlushTimeout).
+	flushTimeout time.Duration
 
 	quit chan struct{}
 	done chan struct{}
@@ -66,7 +72,7 @@ func newDecisionRecording(cfg DecisionRecordConfig, logger *slog.Logger) (*decis
 	if cfg.Level == decisionrecord.LevelSummary && cfg.SummaryWindow <= 0 {
 		return nil, fmt.Errorf("runtime: decision record: summary window must be positive, got %s", cfg.SummaryWindow)
 	}
-	d := &decisionRecording{level: cfg.Level, window: cfg.SummaryWindow}
+	d := &decisionRecording{level: cfg.Level, window: cfg.SummaryWindow, flushTimeout: summaryFlushTimeout}
 	var sk decisionrecord.Sink
 	if cfg.Level != decisionrecord.LevelNone {
 		switch cfg.Output {
@@ -121,7 +127,9 @@ func (d *decisionRecording) start(ctx context.Context) {
 }
 
 // stopAndFlush stops the flusher and writes the last window. Call it after
-// every loop has drained, so no record follows the final flush.
+// every loop has drained, so no record follows the final flush. Behind a sink
+// write that never ends it returns within two flush deadlines: the flusher's
+// flush under way, then the last.
 func (d *decisionRecording) stopAndFlush(ctx context.Context) {
 	if d.level != decisionrecord.LevelSummary || d.quit == nil {
 		return
@@ -133,9 +141,21 @@ func (d *decisionRecording) stopAndFlush(ctx context.Context) {
 	})
 }
 
+// flush writes the window with a context that the shutdown signal does not
+// end and that has a deadline of flushTimeout, so that a sink write that
+// never ends holds neither the flusher nor shutdown for good. A flush that
+// reaches its deadline loses the counts not written by then (see
+// decisionrecord.Filter.Flush). The flusher's flush may run past the next
+// tick: the ticker then drops that tick, and the next window is longer.
 func (d *decisionRecording) flush(ctx context.Context) {
-	if err := d.filter.Flush(context.WithoutCancel(ctx), time.Now().UTC()); err != nil {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.flushTimeout)
+	defer cancel()
+	if err := d.filter.Flush(fctx, time.Now().UTC()); err != nil {
 		slog.Warn("runtime: decision record summary not flushed", "err", pipeexcerpt.ErrorText(err))
+		return
+	}
+	if fctx.Err() != nil {
+		slog.Warn("runtime: decision record summary flush reached its deadline; the counts not written by then are lost", "deadline", d.flushTimeout)
 	}
 }
 

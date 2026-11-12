@@ -29,10 +29,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `NewJSONLinesFormat` and `NewLogFormat` take the version (`FormatVersion`,
   `FormatV1`, `FormatV2`). Format v2 adds the outcome `Held` (a check the
   deciding party enforces deferred the decision; it ranks above accepted and
-  below unenforced and refused, and `LevelRefusals` writes it), and a
-  record's `RefusedAt` (a `Position`: the hop a refusal is diagnosed at, with
-  its `Confidence`) and `VerifiedHops` (the hops whose signatures were
-  verified). A format v1 sink refuses what format v1 cannot express with
+  below unenforced and refused, and `LevelRefusals` writes it), a refused or
+  unenforced record's `RefusedAt` (a `Position`: the hop its refusal is
+  diagnosed at, with its `Confidence`, how far that hop is established), and
+  a record's `VerifiedHops` (the hops whose signatures were verified). A
+  format v1 sink refuses what format v1 cannot express with
   `ErrNotInFormat`, a constant of the new type `decisionrecord.Error`, and
   writes nothing of it. The README states when the version changes.
 - `delegation.VerifyFor` checks a delegation as authority for one identity:
@@ -92,13 +93,18 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `decisionrecord`: the sinks `NewJSONLines`, `NewLog` and their `Format`
   forms return as soon as the call's context ends, without waiting for a
   write to end, with an error wrapping `ctx.Err()` that names the sink and
-  says whether the write had started. Before, a writer or handler that did
-  not return held the call, and every call after it. A record whose context
-  ended before its write started is not written, then or later; a write that
-  started may end, and be kept, after the call returned. A write that never
-  ends is not recovered: each sink holds at most one. With a context that
-  cannot end, a call waits for its write as before.
-  - The log sink calls its handler one entry at a time.
+  says either that the write did not start or that it may have started.
+  Before, a writer or handler that did not return held the call, and every
+  call after it. A record whose context ended before its write started is
+  not written, then or later; a write that started may end, and be kept,
+  after the call returned. A write that never ends is not recovered: each
+  sink holds at most one. With a context that cannot end, a call waits for
+  its write as before.
+  - At `LevelAll`, a record for which `Filter.Record` returned an error may
+    still be kept: its write may have started, or the writer or handler may
+    have kept it and still returned an error. A deciding party that wants a
+    reader to see the refusal records the decision again, `Refused`, with
+    the same `DecisionID`, through the same `Filter`.
   - A panic in the writer or the handler reaches the caller while it waits;
     after the caller has returned, it is dropped and the write counts as
     failed.
@@ -108,7 +114,20 @@ change. The first frozen *API* surface is declared at the `1.0` line.
     context ends first, not at all.
   - `Filter.Flush` with a context that has already ended returns its error
     and keeps the window for the next `Flush`; before, it wrote the
-    window's summaries whatever the context said.
+    window's summaries whatever the context said. When the context ends
+    during a `Flush`, a summary whose write has not started is lost, with a
+    warning at most; so that none of the last window is lost to the
+    shutdown signal, the last `Flush` at shutdown takes a context that the
+    signal does not end and that has a deadline of its own, as
+    `context.WithTimeout(context.WithoutCancel(ctx), d)`. Without a
+    deadline it may wait for good behind a write that does not end.
+  - `NewJSONLines` gives its writer one `Write` at a time, even after a call
+    has returned before its `Write` ended.
+- `pipeline/runtime`: at the summary level, each window's flush of the
+  decision records and the last at shutdown wait at most 10 s for the sink,
+  with a context the shutdown signal does not end; a flush that reaches that
+  bound warns that the counts not written by then are lost. Before, a sink
+  write that never ended held the flusher, and shutdown, for good.
 - `schema`: a JSON Schema `pattern` may name a Unicode general category by a
   long name or alias as well as by its short name, spelled as ECMA-262 spells
   them (`\p{Letter}`, `\p{Decimal_Number}`, `\p{digit}` …, read as `\p{L}`,

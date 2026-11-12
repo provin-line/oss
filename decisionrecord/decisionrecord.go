@@ -52,7 +52,8 @@ const (
 	Unenforced Outcome = "unenforced"
 	// Held: a check the deciding party enforces deferred the decision; what
 	// was decided on has not gone ahead, and may later be decided again under
-	// another DecisionID. Only format v2 writes it (see FormatVersion).
+	// another DecisionID. It was not refused, so its record has no RefusedAt.
+	// Only format v2 writes it (see FormatVersion).
 	Held Outcome = "held"
 )
 
@@ -77,7 +78,13 @@ func rank(o Outcome) int {
 	return 0
 }
 
-// Confidence is how far the hop a refusal is diagnosed at is established.
+// Confidence is how far the hop a refusal is diagnosed at is established:
+// whether the deciding party named it before or after it verified the hop's
+// signature, or cannot name it. It grades the position only. It is another
+// scale from vc's ConfidenceState (failed, indeterminate, verified), the
+// verdict of a verification: ConfidenceVerified says that the hop's name is
+// established, not that what was decided on, or any verification of it, is
+// verified.
 type Confidence string
 
 const (
@@ -91,9 +98,10 @@ const (
 	ConfidenceUnknown Confidence = "unknown"
 )
 
-// Position is where a refusal is diagnosed: a hop of what was decided on, one
-// step it came through, in the deciding party's terms. This package does not
-// read Hop; as with Actors, its meaning is the deciding party's.
+// Position is where the refusal of a refused or unenforced decision is
+// diagnosed: a hop of what was decided on, one step it came through, in the
+// deciding party's terms. This package does not read Hop; as with Actors,
+// its meaning is the deciding party's.
 type Position struct {
 	Hop        string // the hop's ID; empty exactly when Confidence is ConfidenceUnknown
 	Confidence Confidence
@@ -127,11 +135,13 @@ type Evidence struct {
 // DecisionID. The writer knows the outcome when it writes: refused when an
 // enforced check refused, held when an enforced check deferred, unenforced
 // when only checks it records without enforcing refused. Recording a decision
-// accepted again changes nothing. A
-// writer that breaks the rule makes the summary level count the decision
-// more than once, or under the check of the first of its records of that
-// outcome, never under a weaker outcome than its strongest record; nothing
-// else changes: no decision's outcome, and no record.
+// accepted again changes nothing. A record that a Filter's Record returned an
+// error for does not count under the rule for that Filter: through that
+// Filter, the writer may then record the decision Refused (see Filter). A
+// writer that breaks the rule makes the summary level count the decision more
+// than once, or under the check of the first of its records of that outcome,
+// never under a weaker outcome than its strongest record; nothing else
+// changes: no decision's outcome, and no record.
 type Record struct {
 	DecisionID string    // unique per decision; made by the deciding party (128 random bits, say)
 	Point      string    // the deciding party's ID: a gate's, a boundary's
@@ -143,12 +153,17 @@ type Record struct {
 	Evidence   []Evidence        // what was decided on, in order
 	Attributes map[string]string // the deciding party's own fields
 
-	// RefusedAt is where the refusal is diagnosed, when the deciding party
-	// can say: only with an outcome other than Accepted. Format v2 only.
+	// RefusedAt is where the refusal of a refused or unenforced decision is
+	// diagnosed, when the deciding party can say: only with the outcome
+	// Refused or Unenforced. Format v2 only.
 	RefusedAt *Position
 	// VerifiedHops are the hops whose signatures the deciding party
 	// verified, in order, whatever the outcome. Format v2 only: of length 0
 	// (nil included), every format takes it and writes no member.
+	//
+	// RefusedAt and VerifiedHops are independent: a RefusedAt of
+	// ConfidenceVerified need not name one of the VerifiedHops, and this
+	// package does not relate the two.
 	VerifiedHops []string
 }
 
@@ -157,7 +172,7 @@ type Record struct {
 // text), an outcome with a Check exactly when a check refused or deferred
 // (every outcome but Accepted), each Evidence a role and an address, each
 // Actor and attribute name valid UTF-8 and not empty; a RefusedAt only with
-// an outcome other than Accepted, its Confidence one of the three, its Hop
+// the outcome Refused or Unenforced, its Confidence one of the three, its Hop
 // empty exactly when the Confidence is ConfidenceUnknown and otherwise valid
 // UTF-8; each of the VerifiedHops valid UTF-8 and not empty. It checks them
 // whatever the format version. Filter.Record and every Sink here check it,
@@ -200,8 +215,8 @@ func (r Record) Validate() error {
 	}
 	if p := r.RefusedAt; p != nil {
 		switch {
-		case r.Outcome == Accepted:
-			return errors.New("decisionrecord: an acceptance with the position of a refusal")
+		case r.Outcome != Refused && r.Outcome != Unenforced:
+			return fmt.Errorf("decisionrecord: a record with outcome %s and the position of a refusal", r.Outcome)
 		case p.Confidence != ConfidenceClaimed && p.Confidence != ConfidenceVerified && p.Confidence != ConfidenceUnknown:
 			return fmt.Errorf("decisionrecord: a position with confidence %s", excerpt.Quoted(string(p.Confidence), quoteLimit))
 		case p.Confidence == ConfidenceUnknown && p.Hop != "":
@@ -311,15 +326,14 @@ type SummaryRecorder interface {
 // The sinks here return as soon as the call's context ends, without waiting
 // for a write to end: the error wraps ctx.Err(), so errors.Is matches
 // context.DeadlineExceeded or context.Canceled, and its text names the sink
-// and says whether the write had started. A record or summary whose context
-// ended before its write started is not written, then or later. A write that
-// started cannot be stopped: it may end, and be kept, after the call
-// returned. A sink here makes one write at a time (the log sink, one call of
-// its handler at a time); a call behind a write that does not end returns at
-// its own context's end, and once the write ends the sink writes again. A
-// write that never ends (an io.Writer or a handler stuck for good) is not
-// recovered: it keeps the sink's turn, so each sink holds at most one such
-// write.
+// and says either that the write did not start or that it may have started.
+// A record or summary whose context ended before its write started is not
+// written, then or later. A write that started cannot be stopped: it may
+// end, and be kept, after the call returned. A write that does not end may
+// hold back the sink's other writes until it ends; each of their calls still
+// returns at its own context's end. A write that never ends (an io.Writer or
+// a handler stuck for good) is not recovered, and each sink holds at most one
+// such write.
 //
 // With a context that cannot end (context.Background(), or one from
 // context.WithoutCancel), a call waits for its write, behind any write that
@@ -342,11 +356,13 @@ func newTurn() turn { return make(turn, 1) }
 // context.Background(). With a context that cannot end (ctx.Done() is nil),
 // write runs in the caller's goroutine, as under a mutex. Otherwise it runs
 // in a goroutine; when ctx ends first, run returns ctx's error: as
-// notStarted when the write did not start (ctx ended before t was taken, or
-// by the time write was about to run), and as unfinished when it started:
-// write goes on, gives t back when it ends, and its result is dropped. A
-// panic in write reaches the caller while the caller waits; after the
-// caller has returned, it is dropped, a failed write.
+// notStarted when ctx ended before t was taken, or when the goroutine has
+// reported that it found ctx ended right before write; and as maybeStarted
+// when t was taken and the goroutine has not reported, since it may by then
+// have started write or, finding ctx ended, may never start it. A write that
+// started goes on, gives t back when it ends, and its result is dropped. A
+// panic in write reaches the caller while the caller waits; after the caller
+// has returned, it is dropped, a failed write.
 func (t turn) run(ctx context.Context, who string, write func() error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -382,7 +398,7 @@ func (t turn) run(ctx context.Context, who string, write func() error) error {
 		case r := <-done:
 			return r.result()
 		default:
-			return unfinished(who, ctx.Err())
+			return maybeStarted(who, ctx.Err())
 		}
 	}
 }
@@ -461,10 +477,11 @@ func notStarted(who string, err error) error {
 	return fmt.Errorf("decisionrecord: %s: not written, the context ended before the write started: %w", who, err)
 }
 
-// unfinished is the error of a write that who started and that had not ended
-// when the context ended with err: it goes on, and may still be kept.
-func unfinished(who string, err error) error {
-	return fmt.Errorf("decisionrecord: %s: the context ended before the write did, which goes on and may still be kept: %w", who, err)
+// maybeStarted is the error of a write that who may have started, and that
+// had not ended when the context ended with err: if it started, it goes on,
+// and may still be kept.
+func maybeStarted(who string, err error) error {
+	return fmt.Errorf("decisionrecord: %s: the context ended before the write was known to end; it may have started, and if so it goes on and may still be kept: %w", who, err)
 }
 
 // Level is how much a Filter writes.
@@ -508,11 +525,18 @@ var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 // NewFilter returns an error from every call.
 //
 // Record and Flush return when the sink does once the context ends (see
-// Sink). A warning does not wait past the context either: when no warning is
-// being written, it is written, late if the context has ended; when one is,
-// and the context ends first, it is not written. A warning logger that does
-// not end holds back only the warnings after it, as a sink's write that does
-// not end holds back its writes.
+// Sink). At LevelAll, a record for which Record returned an error may still
+// be kept: its write may have started and end after the call returned, and a
+// writer or handler may keep a record and still return an error. A deciding
+// party that refuses the decision then, and wants a reader to see the
+// refusal, records the decision again, Refused, with the same DecisionID,
+// through the same Filter: a decision has the strongest outcome among its
+// records (see Record).
+//
+// A warning does not wait past the context either: when no warning is being
+// written, it is written, late if the context has ended; when one is, and
+// the context ends first, it is not written. A warning logger that does not
+// end holds back only the warnings after it, not the records.
 type Filter struct {
 	level    Level
 	sink     Sink
@@ -633,6 +657,17 @@ func (f *Filter) count(r Record) {
 // nothing. A sink's failure is a warning; the decisions do not change. A
 // context that has ended when Flush is called is an error wrapping its
 // ctx.Err(), and the window is kept, counts and all, for the next Flush.
+// When the context ends during a Flush, the window is not kept: a new one has
+// started. A summary whose write the sinks here have not started by then is
+// lost, as any summary a sink fails to write is (a warning at most, see
+// Filter); one whose write had started may still be kept. A sink not made
+// here keeps to its own behaviour. So that no summary of the last window is
+// lost to the shutdown signal, the last Flush, at shutdown, takes a context
+// that the signal does not end and that has a deadline of its own, as
+// context.WithTimeout(context.WithoutCancel(ctx), d). Without a deadline it
+// may wait for good behind a write that does not end. When the deadline
+// passes first, the counts not written by then are lost, as above. A write
+// that fails still loses its summary.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	if f == nil || f.level == "" {
 		return errNotMade
@@ -693,10 +728,11 @@ func (f *Filter) warnf(ctx context.Context, msg string, args ...any) {
 
 // FormatVersion is the version of the form in which the sinks here write
 // records and summaries: the "v" member of every line and log entry. The
-// version changes whenever a member changes, or the values of "kind",
-// "outcome" or "confidence"; within a version neither changes. The values of
-// "check" and the names in "attributes" are the deciding party's, and grow
-// whatever the version.
+// version changes whenever any of these changes: a member, the form or the
+// meaning of a member's value, the set of values of "kind", "outcome" or
+// "confidence", and, in the log sink, an entry's message or level. Within a
+// version none of them changes. The values of "check" and the names in
+// "attributes" are the deciding party's, and grow whatever the version.
 type FormatVersion int
 
 const (
@@ -761,10 +797,12 @@ const timeLayout = "2006-01-02T15:04:05.000000000Z"
 // v1 as one line of RFC 8785 JSON, with "v" (the format version) and "kind"
 // ("record" or "summary"). Line breaks inside values are escaped, but U+2028
 // and U+2029 are written as is (RFC 8785): a reader splits on "\n" only. A
-// line is written with one Write; after a failed Write, the next line starts
-// with "\n", so a partial line stays one unreadable line and the lines after
-// it stay whole. A nil w makes every write fail. What format v1 cannot express
-// is ErrNotInFormat. NewJSONLines(w) is NewJSONLinesFormat(w, FormatV1).
+// line is written with one Write, and w gets one Write at a time: a Write
+// waits for the one before it to end, even when that one's call has
+// returned. After a failed Write, the next line starts with "\n", so a
+// partial line stays one unreadable line and the lines after it stay whole. A
+// nil w makes every write fail. What format v1 cannot express is
+// ErrNotInFormat. NewJSONLines(w) is NewJSONLinesFormat(w, FormatV1).
 func NewJSONLines(w io.Writer) Sink {
 	return &jsonLines{turn: newTurn(), w: w, v: FormatV1}
 }
@@ -892,6 +930,9 @@ func (s logSink) Summary(ctx context.Context, sum Summary) error {
 func (s logSink) emit(ctx context.Context, msg string, m map[string]any) error {
 	if s.l == nil {
 		return errors.New("decisionrecord: no logger")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	h := s.l.Handler()
 	rec := slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0)

@@ -12,10 +12,19 @@ import (
 	"github.com/provin-line/oss/decisionrecord"
 )
 
-// heldRecord is a decision a check deferred, diagnosed at a hop named before
-// its signature was verified, with the hops verified before it.
+// heldRecord is a decision a check deferred, with the hops verified before
+// it. A held decision was not refused, so it has no RefusedAt.
 func heldRecord() decisionrecord.Record {
 	r := rec("d-held", "gate-a", decisionrecord.Held, "approval.pending")
+	r.VerifiedHops = []string{"hop-0", "hop-1"}
+	return r
+}
+
+// positionedRecord is a decision whose refusal was not enforced, diagnosed
+// at a hop named before its signature was verified, with the hops verified
+// before it.
+func positionedRecord() decisionrecord.Record {
+	r := rec("d-positioned", "gate-a", decisionrecord.Unenforced, "signer.unknown")
 	r.RefusedAt = &decisionrecord.Position{Hop: "hop-2", Confidence: decisionrecord.ConfidenceClaimed}
 	r.VerifiedHops = []string{"hop-0", "hop-1"}
 	return r
@@ -126,7 +135,7 @@ func TestFormatV2_WritesHeldAndHops(t *testing.T) {
 	}
 	unknown := rec("d-unknown", "gate-a", decisionrecord.Refused, "hop.unnamed")
 	unknown.RefusedAt = &decisionrecord.Position{Confidence: decisionrecord.ConfidenceUnknown}
-	for _, r := range append(goldenRecords(t), heldRecord(), unknown) {
+	for _, r := range append(goldenRecords(t), heldRecord(), positionedRecord(), unknown) {
 		if err := s.Record(context.Background(), r); err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +152,8 @@ func TestFormatV2_WritesHeldAndHops(t *testing.T) {
 		}
 	}
 	for i, want := range []string{
-		`{"at":"2026-11-06T12:00:00.000000000Z","check":"approval.pending","decisionId":"d-held","kind":"record","outcome":"held","point":"gate-a","refusedAt":{"confidence":"claimed","hop":"hop-2"},"v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n",
+		`{"at":"2026-11-06T12:00:00.000000000Z","check":"approval.pending","decisionId":"d-held","kind":"record","outcome":"held","point":"gate-a","v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n",
+		`{"at":"2026-11-06T12:00:00.000000000Z","check":"signer.unknown","decisionId":"d-positioned","kind":"record","outcome":"unenforced","point":"gate-a","refusedAt":{"confidence":"claimed","hop":"hop-2"},"v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n",
 		`{"at":"2026-11-06T12:00:00.000000000Z","check":"hop.unnamed","decisionId":"d-unknown","kind":"record","outcome":"refused","point":"gate-a","refusedAt":{"confidence":"unknown"},"v":2}` + "\n",
 		`{"counts":[{"n":3,"outcome":"accepted"},{"check":"approval.pending","n":1,"outcome":"held"}],"from":"2026-11-06T12:00:00.000000000Z","kind":"summary","point":"gate-a","until":"2026-11-06T12:01:00.000000000Z","v":2}` + "\n",
 	} {
@@ -160,19 +170,22 @@ func TestFormatV2_Log(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Record(context.Background(), heldRecord()); err != nil {
-		t.Fatal(err)
+	for _, r := range []decisionrecord.Record{heldRecord(), positionedRecord()} {
+		if err := s.Record(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
 	}
-	want := `{"level":"INFO","msg":"decision record","at":"2026-11-06T12:00:00.000000000Z","check":"approval.pending","decisionId":"d-held","kind":"record","outcome":"held","point":"gate-a","refusedAt":{"confidence":"claimed","hop":"hop-2"},"v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n"
+	want := `{"level":"INFO","msg":"decision record","at":"2026-11-06T12:00:00.000000000Z","check":"approval.pending","decisionId":"d-held","kind":"record","outcome":"held","point":"gate-a","v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n" +
+		`{"level":"INFO","msg":"decision record","at":"2026-11-06T12:00:00.000000000Z","check":"signer.unknown","decisionId":"d-positioned","kind":"record","outcome":"unenforced","point":"gate-a","refusedAt":{"confidence":"claimed","hop":"hop-2"},"v":2,"verifiedHops":["hop-0","hop-1"]}` + "\n"
 	if got := b.String(); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
 // Validate checks v2's members whatever the version: a held decision has its
-// check; a position only on a decision that is not accepted, with one of the
-// three confidences, and a hop exactly when the confidence is not unknown;
-// each verified hop a non-empty UTF-8 string.
+// check; a position only on a refused or unenforced decision, with one of
+// the three confidences, and a hop exactly when the confidence is not
+// unknown; each verified hop a non-empty UTF-8 string.
 func TestRecord_ValidatesV2Members(t *testing.T) {
 	at := func(hop string, c decisionrecord.Confidence) *decisionrecord.Position {
 		return &decisionrecord.Position{Hop: hop, Confidence: c}
@@ -181,6 +194,11 @@ func TestRecord_ValidatesV2Members(t *testing.T) {
 		"held without its check": rec("d", "p", decisionrecord.Held, ""),
 		"a position on an acceptance": func() decisionrecord.Record {
 			r := rec("d", "p", decisionrecord.Accepted, "")
+			r.RefusedAt = at("h", decisionrecord.ConfidenceVerified)
+			return r
+		}(),
+		"a position on a held decision": func() decisionrecord.Record {
+			r := rec("d", "p", decisionrecord.Held, "c")
 			r.RefusedAt = at("h", decisionrecord.ConfidenceVerified)
 			return r
 		}(),
@@ -205,7 +223,7 @@ func TestRecord_ValidatesV2Members(t *testing.T) {
 			return r
 		}(),
 		"a hop that is not UTF-8": func() decisionrecord.Record {
-			r := rec("d", "p", decisionrecord.Held, "c")
+			r := rec("d", "p", decisionrecord.Refused, "c")
 			r.RefusedAt = at("h\xff", decisionrecord.ConfidenceVerified)
 			return r
 		}(),
@@ -225,7 +243,15 @@ func TestRecord_ValidatesV2Members(t *testing.T) {
 		}
 	}
 	if err := heldRecord().Validate(); err != nil {
-		t.Errorf("a held record with its position and hops: %v", err)
+		t.Errorf("a held record with its hops: %v", err)
+	}
+	if err := positionedRecord().Validate(); err != nil {
+		t.Errorf("an unenforced record with its position and hops: %v", err)
+	}
+	refusedAt := rec("d", "p", decisionrecord.Refused, "c")
+	refusedAt.RefusedAt = at("h", decisionrecord.ConfidenceVerified)
+	if err := refusedAt.Validate(); err != nil {
+		t.Errorf("a refused record with its position: %v", err)
 	}
 	refusedWithHops := rec("d", "p", decisionrecord.Refused, "c")
 	refusedWithHops.VerifiedHops = []string{"h0"}
