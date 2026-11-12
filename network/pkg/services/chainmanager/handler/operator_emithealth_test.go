@@ -10,6 +10,7 @@ import (
 
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 )
@@ -22,14 +23,76 @@ type spyEmitHealth struct {
 	called          bool
 	gotPublisherDID string
 	gotHealthy      bool
-	gotAt           time.Time
+	gotMadeAt       time.Time
+	gotReceivedAt   time.Time
 }
 
-func (s *spyEmitHealth) Report(publisherDID string, healthy bool, now time.Time) {
+func (s *spyEmitHealth) Report(publisherDID string, healthy bool, madeAt, receivedAt time.Time) {
 	s.called = true
 	s.gotPublisherDID = publisherDID
 	s.gotHealthy = healthy
-	s.gotAt = now
+	s.gotMadeAt = madeAt
+	s.gotReceivedAt = receivedAt
+}
+
+// The report is recorded as made at its verified proof's issued_at and as
+// received when the handler took it in, each in its own argument.
+func TestOperatorHandler_ReportEmitHealth_RecordsWhenMadeAndWhenReceived(t *testing.T) {
+	reporter := &spyEmitHealth{}
+	h := handler.NewOperator(nil, handler.WithEmitHealth(reporter, &spyVerifier{}, ttl90s))
+	pub := "did:dplaax:reg:org:acme:pipeline:p1"
+
+	before := time.Now()
+	if _, err := h.ReportEmitHealth(context.Background(), connect.NewRequest(&chainpb.ReportEmitHealthRequest{
+		PublisherDid: pub,
+		Healthy:      true,
+		AuthProof:    proofMsg(pub, goodIssuedAt),
+	})); err != nil {
+		t.Fatalf("ReportEmitHealth: %v", err)
+	}
+	after := time.Now()
+	want, err := time.Parse(time.RFC3339, goodIssuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reporter.gotMadeAt.Equal(want) {
+		t.Errorf("madeAt = %v, want the proof's issued_at %v", reporter.gotMadeAt, want)
+	}
+	if reporter.gotReceivedAt.Before(before) || reporter.gotReceivedAt.After(after) {
+		t.Errorf("receivedAt = %v, want the handler's clock during the call [%v, %v]", reporter.gotReceivedAt, before, after)
+	}
+}
+
+// A report made before the one on record still succeeds, with the server's
+// TTL, and leaves the recorded report in place.
+func TestOperatorHandler_ReportEmitHealth_AnEarlierMadeReportSucceedsAndIsDropped(t *testing.T) {
+	const (
+		later   = "2026-06-17T12:00:10Z"
+		earlier = "2026-06-17T12:00:00Z"
+	)
+	store := emithealth.New(ttl90s)
+	h := handler.NewOperator(nil, handler.WithEmitHealth(store, &spyVerifier{}, ttl90s))
+	pub := "did:dplaax:reg:org:acme:pipeline:p1"
+	report := func(healthy bool, issuedAt string) *connect.Response[chainpb.ReportEmitHealthResponse] {
+		t.Helper()
+		resp, err := h.ReportEmitHealth(context.Background(), connect.NewRequest(&chainpb.ReportEmitHealthRequest{
+			PublisherDid: pub,
+			Healthy:      healthy,
+			AuthProof:    proofMsg(pub, issuedAt),
+		}))
+		if err != nil {
+			t.Fatalf("ReportEmitHealth(issued_at %s): %v", issuedAt, err)
+		}
+		return resp
+	}
+
+	report(false, later)
+	if got := report(true, earlier).Msg.GetTtl().AsDuration(); got != ttl90s {
+		t.Errorf("ttl for the earlier-made report = %v, want %v", got, ttl90s)
+	}
+	if got := store.State(pub, time.Now()); got != emithealth.UnhealthyReported {
+		t.Errorf("state = %v, want UnhealthyReported (the later-made report)", got)
+	}
 }
 
 // TestOperatorHandler_ReportEmitHealth_VerifyContract pins the wireauth view:

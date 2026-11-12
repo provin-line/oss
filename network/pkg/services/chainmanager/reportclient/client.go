@@ -1,7 +1,7 @@
 // Package reportclient is the production network client for ChainService's
 // ReportEmitHealth RPC: a publisher self-reports its stripped-publish health
-// with a single wireauth-signed call and receives back the TTL that report
-// stays fresh for.
+// with a single wireauth-signed call and receives back the server's
+// configured TTL, how long a report the server keeps stays fresh.
 //
 // It reproduces the EXACT signed view the handler verifies by calling the
 // SAME shared builder the handler does — wirecontract.OpReportEmitHealth and
@@ -115,11 +115,13 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // ReportEmitHealth reports healthy for publisherDID (the handler enforces
 // that this equals the configured SignerDID — see Config's doc) and returns
-// the TTL the server says this report stays fresh for. Any Connect error the
-// server returns is returned as-is (no swallowing), mirroring
-// auditclient.RegisterEvidence: the caller sees the real code (e.g.
-// PermissionDenied for a publisherDID that does not match the signing
-// identity).
+// the server's configured TTL: how long a report stays fresh from when the
+// server receives it. The server keeps the report made latest; a report made
+// before the one it holds still succeeds with the TTL but is not kept and
+// refreshes nothing. Any Connect error the server returns is returned as-is
+// (no swallowing), mirroring auditclient.RegisterEvidence: the caller sees
+// the real code (e.g. PermissionDenied for a publisherDID that does not match
+// the signing identity).
 func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, healthy bool) (time.Duration, error) {
 	ap, err := c.proof(wirecontract.ReportEmitHealthFields(publisherDID, healthy))
 	if err != nil {

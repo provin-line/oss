@@ -165,6 +165,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `RetainPayload` of many chunk frames is checked about once per 5 seconds
   of its transfer, not once per frame. A permission withdrawn, or a token
   that expires, while a stream is open ends it at the first such message.
+- `ReportEmitHealth`: a node keeps, for each publisher, the report made
+  latest by its proof's `issued_at`, whatever order reports arrive in;
+  before, it kept the report that arrived last. A report made before the one
+  on record is ignored and gives no freshness, and the call still succeeds
+  with the TTL; one made at the same second replaces it. A report stays
+  fresh for `provin.network.chain.emit-health.ttl` from when the node
+  received it, as before.
 - `didregistry/store.DIDStore`'s contract says `Resolve` returns a non-nil
   document or a non-nil error, and `ResolveDelegation` a non-nil delegation
   or a non-nil error, never both nil; `yamlstore` keeps it, and so the
@@ -578,6 +585,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   longer compiles. Each is a function of its own, so its value is not the
   `wirecontract` function's (`reflect` and `runtime.FuncForPC` tell them
   apart).
+- **Go API:** `emithealth.Store.Report` and `handler.EmitHealthReporter`'s
+  `Report` take when the report was made and when it was received,
+  `Report(publisherDID string, healthy bool, madeAt, receivedAt time.Time)`;
+  in 0.4.x they took one time, when the report was recorded. The store
+  orders reports by `madeAt` and measures freshness from `receivedAt`. A
+  caller passes both, and another implementation of `EmitHealthReporter`
+  takes both.
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said

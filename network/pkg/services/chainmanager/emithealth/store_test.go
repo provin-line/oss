@@ -22,7 +22,7 @@ func TestState_NeverReported(t *testing.T) {
 func TestState_HealthyReported(t *testing.T) {
 	s := emithealth.New(90 * time.Second)
 	now := time.Now()
-	s.Report(pub1, true, now)
+	s.Report(pub1, true, now, now)
 	if got := s.State(pub1, now); got != emithealth.HealthyReported {
 		t.Errorf("state = %v, want HealthyReported", got)
 	}
@@ -31,7 +31,7 @@ func TestState_HealthyReported(t *testing.T) {
 func TestState_UnhealthyReported(t *testing.T) {
 	s := emithealth.New(90 * time.Second)
 	now := time.Now()
-	s.Report(pub1, false, now)
+	s.Report(pub1, false, now, now)
 	if got := s.State(pub1, now); got != emithealth.UnhealthyReported {
 		t.Errorf("state = %v, want UnhealthyReported", got)
 	}
@@ -44,7 +44,7 @@ func TestState_TTLBoundary(t *testing.T) {
 	const ttl = 90 * time.Second
 	s := emithealth.New(ttl)
 	base := time.Now()
-	s.Report(pub1, true, base)
+	s.Report(pub1, true, base, base)
 
 	cases := []struct {
 		name string
@@ -65,15 +65,79 @@ func TestState_TTLBoundary(t *testing.T) {
 	}
 }
 
-// A report is a point-in-time snapshot: a later Report call replaces the
+// A report is a point-in-time snapshot: a report made later replaces the
 // prior one for that publisher rather than aggregating.
 func TestReport_OverwritesPriorReport(t *testing.T) {
 	s := emithealth.New(90 * time.Second)
 	now := time.Now()
-	s.Report(pub1, false, now)
-	s.Report(pub1, true, now.Add(time.Second))
+	s.Report(pub1, false, now, now)
+	s.Report(pub1, true, now.Add(time.Second), now.Add(time.Second))
 	if got := s.State(pub1, now.Add(time.Second)); got != emithealth.HealthyReported {
 		t.Errorf("state after overwrite = %v, want HealthyReported", got)
+	}
+}
+
+// A report stays fresh for ttl from when this node received it, not from
+// when it was made.
+func TestState_FreshnessRunsFromReceipt(t *testing.T) {
+	const ttl = 90 * time.Second
+	s := emithealth.New(ttl)
+	received := time.Now()
+	s.Report(pub1, true, received.Add(-50*time.Second), received)
+	if got := s.State(pub1, received.Add(ttl-time.Nanosecond)); got != emithealth.HealthyReported {
+		t.Errorf("state just before ttl after receipt = %v, want HealthyReported", got)
+	}
+	if got := s.State(pub1, received.Add(ttl)); got != emithealth.Expired {
+		t.Errorf("state ttl after receipt = %v, want Expired", got)
+	}
+}
+
+// A report made before the one on record is dropped when it arrives after it
+// (the other order is TestReport_OverwritesPriorReport): the recorded report's
+// value stands, and its freshness still runs from when it was received.
+func TestReport_DropsAReportMadeBeforeTheRecordedOne(t *testing.T) {
+	const ttl = 90 * time.Second
+	s := emithealth.New(ttl)
+	made, received := time.Now(), time.Now()
+	s.Report(pub1, true, made, received)
+	s.Report(pub1, false, made.Add(-time.Second), received.Add(30*time.Second))
+	if got := s.State(pub1, received.Add(30*time.Second)); got != emithealth.HealthyReported {
+		t.Errorf("state after an earlier-made report = %v, want HealthyReported", got)
+	}
+	if got := s.State(pub1, received.Add(ttl-time.Nanosecond)); got != emithealth.HealthyReported {
+		t.Errorf("state just before ttl after the recorded report's receipt = %v, want HealthyReported", got)
+	}
+	if got := s.State(pub1, received.Add(ttl)); got != emithealth.Expired {
+		t.Errorf("state ttl after the recorded report's receipt = %v, want Expired (a dropped report gives no freshness)", got)
+	}
+}
+
+// Reports are ordered by when they were made, compared with when the recorded
+// one was made, not with when it was received: a publisher whose clock runs
+// behind the node's makes each report earlier than the node received the last,
+// and its next report, made later, still replaces it.
+func TestReport_OrdersByWhenTheRecordedReportWasMade(t *testing.T) {
+	s := emithealth.New(90 * time.Second)
+	made := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	received := made.Add(40 * time.Second)
+	s.Report(pub1, false, made, received)
+	s.Report(pub1, true, made.Add(10*time.Second), received.Add(10*time.Second))
+	if got := s.State(pub1, received.Add(10*time.Second)); got != emithealth.HealthyReported {
+		t.Errorf("state after a later-made report = %v, want HealthyReported", got)
+	}
+}
+
+// Two reports made at the same instant (issued_at has second precision) are
+// taken in the order Report is called: the later call replaces the earlier,
+// and its freshness runs from its own receipt.
+func TestReport_ReplacesAReportMadeAtTheSameInstant(t *testing.T) {
+	const ttl = 90 * time.Second
+	s := emithealth.New(ttl)
+	made := time.Now()
+	s.Report(pub1, true, made, made)
+	s.Report(pub1, false, made, made.Add(30*time.Second))
+	if got := s.State(pub1, made.Add(ttl)); got != emithealth.UnhealthyReported {
+		t.Errorf("state ttl after the first receipt = %v, want UnhealthyReported (fresh from the second)", got)
 	}
 }
 
@@ -82,7 +146,7 @@ func TestReport_OverwritesPriorReport(t *testing.T) {
 func TestState_PerPublisherIndependent(t *testing.T) {
 	s := emithealth.New(90 * time.Second)
 	now := time.Now()
-	s.Report(pub1, true, now)
+	s.Report(pub1, true, now, now)
 	if got := s.State(pub2, now); got != emithealth.NeverReported {
 		t.Errorf("unreported publisher state = %v, want NeverReported", got)
 	}

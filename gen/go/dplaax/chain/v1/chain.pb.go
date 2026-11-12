@@ -1135,8 +1135,11 @@ func (x *ReportEmitHealthRequest) GetAuthProof() *AuthProof {
 
 type ReportEmitHealthResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// ttl is how long this health report remains valid before a consumer must
-	// treat it as stale.
+	// ttl is how long a health report remains valid, from when the node
+	// received it, before a consumer must treat it as stale. The node keeps,
+	// for each publisher, the report with the latest auth_proof issued_at: a
+	// report made before the one it holds still succeeds and is not kept, and
+	// one made at the same second replaces it.
 	Ttl           *durationpb.Duration `protobuf:"bytes,1,opt,name=ttl,proto3" json:"ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -103,10 +103,10 @@ type DIDCacheConfig struct {
 // EmitHealthConfig is the ReportEmitHealth TTL-store / advertisement-policy
 // knobs (provin.network.chain.emit-health).
 type EmitHealthConfig struct {
-	// TTL is how long a ReportEmitHealth report stays fresh before
-	// emithealth.Store.State reports it Expired — also the value echoed back
-	// as ReportEmitHealthResponse.ttl, so a reporting publisher knows when to
-	// re-report. Must be positive.
+	// TTL is how long a ReportEmitHealth report stays fresh, from when this
+	// node received it, before emithealth.Store.State reports it Expired —
+	// also the value echoed back as ReportEmitHealthResponse.ttl, so a
+	// reporting publisher knows when to re-report. Must be positive.
 	TTL time.Duration
 	// AdvertiseWithoutReports is whether by-reference is advertised for a
 	// publisher this node has NEVER received a report for

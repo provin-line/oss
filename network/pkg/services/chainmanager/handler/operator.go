@@ -46,9 +46,13 @@ type AllowListReader interface {
 // EmitHealthReporter is the consumer-side view of the emit-health store the
 // handler depends on (defined here, not in the emithealth package, to keep
 // the dependency pointing inward — mirrors Service/AllowListReader above).
-// *emithealth.Store satisfies it structurally.
+// *emithealth.Store satisfies it structurally. madeAt is when the report was
+// made: the issued_at of the request's verified proof, on the publisher's
+// clock, to the second, and within the verifier's window of the node's clock;
+// two reports may share one. receivedAt is when the handler, having verified
+// the request, records it, on the node's clock.
 type EmitHealthReporter interface {
-	Report(publisherDID string, healthy bool, now time.Time)
+	Report(publisherDID string, healthy bool, madeAt, receivedAt time.Time)
 }
 
 // OperatorHandler adapts a Service to the generated ChainServiceHandler. It
@@ -150,8 +154,10 @@ var errPublisherMismatch = errors.New("chainmanager: signer is not the claimed p
 // ReportEmitHealth verifies the caller's in-band wireauth proof (L1 +
 // wireauth, per ReportEmitHealthRequest's own doc), rejects a publisher_did
 // that does not equal the proven signer DID (PermissionDenied — a caller may
-// only report health for itself), then records the report and returns the
-// server's configured TTL.
+// only report health for itself), then records the report as made at the
+// proof's issued_at and received now, and returns the server's configured
+// TTL, whether or not the reporter keeps the report (an *emithealth.Store
+// keeps, per publisher, the report made latest, fresh from its receipt).
 func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Request[chainpb.ReportEmitHealthRequest]) (*connect.Response[chainpb.ReportEmitHealthResponse], error) {
 	if h.emitHealth == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chainmanager: ReportEmitHealth not wired (WithEmitHealth)"))
@@ -171,7 +177,7 @@ func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Req
 	if err := h.emitHealthVerifier.Verify(ctx, chainmanager.OpReportEmitHealth, fields, proof, bind); err != nil {
 		return nil, mapError(err)
 	}
-	h.emitHealth.Report(req.Msg.GetPublisherDid(), req.Msg.GetHealthy(), time.Now())
+	h.emitHealth.Report(req.Msg.GetPublisherDid(), req.Msg.GetHealthy(), proof.IssuedAt, time.Now())
 	return connect.NewResponse(&chainpb.ReportEmitHealthResponse{Ttl: durationpb.New(h.emitHealthTTL)}), nil
 }
 
