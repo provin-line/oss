@@ -2,7 +2,6 @@ package vc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/provin-line/oss/internal/excerpt"
@@ -37,10 +36,11 @@ const (
 // ChainSingleOwnerDerived when every issuer resolves to one owner, otherwise
 // ChainMultiOwnerDerived. Classification is orthogonal to confidence, but it
 // shares the Owner check: an Owner that cannot be established is an error
-// (the owner cannot be attributed), not a class.
+// (the owner cannot be attributed), not a class. An empty chain, or a nil
+// credential in it, is an error that is ErrChainEmpty.
 func (v *Verifier) ClassifyChain(ctx context.Context, chain []*PipelinePassCredential) (ChainClass, error) {
-	if len(chain) == 0 {
-		return ChainClassUnknown, errors.New("vc: empty chain")
+	if err := checkChainEntries(chain); err != nil {
+		return ChainClassUnknown, err
 	}
 	if len(chain) == 1 {
 		return ChainOrigin, nil

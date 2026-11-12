@@ -163,3 +163,46 @@ func TestOfError(t *testing.T) {
 		t.Errorf("Error(long) = %q", got)
 	}
 }
+
+// longFormatting's text is short, but its formatting is long, as an error that
+// implements fmt.Formatter may be.
+type longFormatting struct{}
+
+func (longFormatting) Error() string { return "short" }
+func (longFormatting) Format(f fmt.State, _ rune) {
+	_, _ = f.Write([]byte(strings.Repeat("f", 64<<10)))
+}
+
+// Wrap reads "<prefix>: <err's text within limit>" and wraps each of also and
+// err, so errors.Is and errors.As find them. Its text is taken once, when it
+// is made: no formatting of err lengthens it.
+func TestWrap(t *testing.T) {
+	sentinel := errors.New("sentinel")
+	inner := &fs.PathError{Op: "open", Path: strings.Repeat("p", 64<<10), Err: fs.ErrNotExist}
+	w := excerpt.Wrap("pkg: doing", inner, 64, sentinel)
+	if text := w.Error(); !strings.HasPrefix(text, "pkg: doing: open ") || len(text) > len("pkg: doing: ")+64 || !strings.HasSuffix(text, fmt.Sprintf("(%d bytes)", len(inner.Error()))) {
+		t.Errorf("text = %.200q (%d bytes), want the prefix and the head and length of err's text within 64 bytes", text, len(text))
+	}
+	if !errors.Is(w, sentinel) || !errors.Is(w, fs.ErrNotExist) {
+		t.Errorf("errors.Is does not find also and what err wraps")
+	}
+	var pe *fs.PathError
+	if !errors.As(w, &pe) || pe != inner {
+		t.Errorf("errors.As does not find err")
+	}
+	for _, s := range []string{fmt.Sprintf("%v", w), fmt.Sprintf("%+v", w), fmt.Errorf("outer: %w", w).Error()} {
+		if len(s) > len("outer: pkg: doing: ")+64 {
+			t.Errorf("formatted: %d bytes, want within the bound", len(s))
+		}
+	}
+
+	f := excerpt.Wrap("p", longFormatting{}, 64)
+	for _, s := range []string{f.Error(), fmt.Sprintf("%v", f), fmt.Errorf("outer: %w", f).Error()} {
+		if !strings.HasSuffix(s, "p: short") {
+			t.Errorf("an error whose formatting is long: %.100q (%d bytes), want its text", s, len(s))
+		}
+	}
+	if got := excerpt.Wrap("p", errors.New("whole"), 64).Error(); got != "p: whole" {
+		t.Errorf("a short error: %q, want it whole", got)
+	}
+}

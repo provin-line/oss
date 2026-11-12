@@ -61,8 +61,11 @@ func IsContentAddress(s string) bool {
 // strings) and schema (an object of the strings id, type and contentHash).
 // The source commitment's three members are all present or all absent, and
 // derived_from is strictly ascending. Any other member or form is refused.
-// The links (ValidateChainLinks) and VerifySourceCommitment hold such a
-// credential to the same form. eddsa-jcs-2022 credentials are not affected.
+// The members allowed are the ones dplaax's PipelinePassCredential JSON
+// Schema defines, and the ids credential.field.id lets a credential carry: a
+// member that schema adds is added to this form too. The links
+// (ValidateChainLinks) and VerifySourceCommitment hold such a credential to
+// the same form. eddsa-jcs-2022 credentials are not affected.
 //
 // This is the single implementation of the wire-form verdict: the verifier's
 // data-integrity axis delegates to it as the resolution-free prerequisite it

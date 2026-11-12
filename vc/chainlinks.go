@@ -24,7 +24,7 @@ func (e *ChainLinkError) Error() string {
 }
 
 // Is reports whether target is ErrChainLinkBroken: a broken link is told from
-// a chain with nothing to link (ErrChainMalformed) without reading text.
+// a chain with nothing to link (ErrChainEmpty) without reading text.
 func (e *ChainLinkError) Is(target error) bool { return target == ErrChainLinkBroken }
 
 // ValidateChainLinks checks that chain (origin first) is linked, reading no
@@ -42,7 +42,7 @@ func (e *ChainLinkError) Is(target error) bool { return target == ErrChainLinkBr
 //
 // These are the links VerifyChain checks, through the same implementation. A
 // broken link is a *ChainLinkError, and errors.Is ErrChainLinkBroken. An empty
-// chain or a nil credential is ErrChainMalformed, an error of another kind:
+// chain or a nil credential is ErrChainEmpty, an error of another kind:
 // there is nothing to link.
 //
 // It detects a gap, a reordering, a credential from another chain, and an
@@ -65,12 +65,12 @@ func ValidateChainLinks(chain []*PipelinePassCredential) error {
 
 // ValidateChainFrom checks that chain is linked (ValidateChainLinks) and that
 // it starts from originInput: the origin's inputHash is originInput. It is for
-// a party that knows the input the chain must start from — a stage that
-// extends only a chain started from the request it carries, say. Its errors
+// a party that knows the input the chain must start from — one that extends
+// only a chain started from the request it carries, say. Its errors
 // are ValidateChainLinks', and an origin from another input is a
 // *ChainLinkError at 0. An empty originInput is an error, not a match for an
 // origin without inputHash, and neither ErrChainLinkBroken nor
-// ErrChainMalformed: it is the caller's argument, not the chain.
+// ErrChainEmpty: it is the caller's argument, not the chain.
 func ValidateChainFrom(chain []*PipelinePassCredential, originInput string) error {
 	if err := checkChainEntries(chain); err != nil {
 		return err
@@ -95,25 +95,25 @@ func ValidateChainFrom(chain []*PipelinePassCredential, originInput string) erro
 }
 
 // checkChainEntries refuses an empty chain and a nil credential, with an
-// error that is ErrChainMalformed.
+// error that is ErrChainEmpty: there is nothing at that position to link.
 func checkChainEntries(chain []*PipelinePassCredential) error {
 	if len(chain) == 0 {
-		return chainMalformedError("vc: empty chain")
+		return chainEmptyError("vc: empty chain")
 	}
 	for i, c := range chain {
 		if c == nil {
-			return chainMalformedError(fmt.Sprintf("vc: chain credential %d is nil", i))
+			return chainEmptyError(fmt.Sprintf("vc: chain credential %d is nil", i))
 		}
 	}
 	return nil
 }
 
-// chainMalformedError is the error of a chain with nothing to link: its text
-// says what is missing, and it is ErrChainMalformed (errors.Is).
-type chainMalformedError string
+// chainEmptyError is the error of a chain with nothing to link: its text
+// says what is missing, and it is ErrChainEmpty (errors.Is).
+type chainEmptyError string
 
-func (e chainMalformedError) Error() string        { return string(e) }
-func (e chainMalformedError) Is(target error) bool { return target == ErrChainMalformed }
+func (e chainEmptyError) Error() string        { return string(e) }
+func (e chainEmptyError) Is(target error) bool { return target == ErrChainEmpty }
 
 // firstBrokenLink returns the first credential of chain (origin first,
 // non-empty, no nil entries) whose link to its predecessor does not hold, or

@@ -59,6 +59,9 @@ import (
 
 // Error is the type of this package's constant sentinel errors: each names the
 // check a binding or a status list failed.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }

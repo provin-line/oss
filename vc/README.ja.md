@@ -18,7 +18,7 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 
 暗号スイート: `eddsa-jcs-2022`（Phase 1、MUST）・`eddsa-rdfc-2022`（Phase 2、MAY）。`eddsa-jcs-2022` は init で登録し、発行の既定。`eddsa-rdfc-2022` は、process が `vc.RegisterEdDSARDFC2022` を、`main` か、main package の `init` 関数から 1 度呼んだ時だけ登録する。確かめると、信用できない文書に、署名を確かめる前に JSON-LD の処理が走るので、それを負うのは verifier が選んだ時だけにする（手間の上限と、断る文書の形は、関数の doc に書いてある）。文書の `@context` に置けるのは、`vc` が埋め込む 3 つの context の IRI だけ。文書に書いた context を、どの深さでも持つ文書は、正規化の前に断る。だから、文書が使う term はすべて、埋め込みの context が定める。呼ぶまでは、どの関数もどの `Verifier` も、この suite の proof を断る。関数は `vc.ErrCryptosuiteNotRegistered` を包み、`vc.RegisterEdDSARDFC2022` の名前を出した誤りを返し、`Verifier` は issuer を引く前に、署名者の真正性を failed とし、同じ誤りを `SignerAuthenticityResult.Err` に入れる。呼んだ後は、発行者が `CreateProof` か `WithCryptosuite` にこの suite を渡した時に使う。この module の package はどれも呼ばない（`scripts/check-rdfc-registration.sh`）。その canonicalizer は、登録の時に **IRI 展開プローブ**をパスしなければならない — 壊れた正規化を提供するより process がパニックする。
 
-`eddsa-rdfc-2022` で署名した `PipelinePassCredential` は、`vc` が読む項目を決まった名と形で持ち、ほかの項目を持たない。そうでないものは、`ValidateWireForm`・結び付きの検査・`VerifySourceCommitment` が断る（閉じた形は `ValidateWireForm` の doc にある）。その `Hash` は受け取った JSON の番地で、この suite では、同じ展開になる JSON の形ごとに番地が違う。だから `Hash` は、署名された credential の同一性ではない。`eddsa-jcs-2022` の credential は影響を受けない。
+`eddsa-rdfc-2022` で署名した `PipelinePassCredential` は、`vc` が読む項目を決まった名と形で持ち、ほかの項目を持たない。そうでないものは、`ValidateWireForm`・結び付きの検査・`VerifySourceCommitment` が断る（閉じた形は `ValidateWireForm` の doc にあり、dplaax の `PipelinePassCredential` の JSON Schema が定める項目を持つ。schema が項目を足せば、この形にも足す）。その `Hash` と `WireVariantID` は受け取った JSON のもので、この suite では、同じ展開になる JSON の形ごとに違う。だからどちらも、署名された credential の同一性ではない。`eddsa-jcs-2022` の credential は影響を受けない。
 
 ## チェーントポロジー — 線形不変
 
@@ -35,8 +35,8 @@ proofValue = base58btc("z" multibase) Ed25519 signature over hashData
 - チェーン分類（confidence と直交）: `ChainOrigin` / `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — 誰が署名し、いくつの信頼境界を跨いだか。データがどう作られたかではない。
 - ライフサイクルフェーズ: Unknown → Active → Deprecated → Sunset、`proof.created` をキーに評価。**ゼロ値はフェイルクローズ。** ライフサイクルポリシーの公開形（append-only な registry artifact かサービスか）は仕様層で確定待ち。
 - no-op 識別子の禁止（`""`・`"none"`・`"null"`・`"identity"`）は登録時と検証時の両方で適用（JOSE `alg:none` クラス防御）。
-- 署名を見ない結び付きだけの検査: `ValidateChainLinks` はクレデンシャルの間の結び付き（と、起点が前を持たないこと）を確かめ、`ValidateChainFrom` は加えて起点の `inputHash` を与えた入力に結び付ける。`VerifyChain` と同じ結び付きの検査を使う。結び付いた連鎖の前の部分も結び付いているので、末尾が欠けたことは分からない。結び付きの壊れは `ErrChainLinkBroken`（クレデンシャルの位置を持つ `*ChainLinkError`）、結び付けるものが無い連鎖は `ErrChainMalformed`。
-- 鍵だけで連鎖を確かめる: `Verifier.VerifyChainSigners` は `IssuerKeys`（`IssuerVerifier` の鍵の半分。どの `IssuerVerifier` も `IssuerKeys` である）を受け取り、連鎖の結び付き、proof の created の順（`ErrChainOrder`、後ろのクレデンシャルの位置を持つ `*ChainOrderError`）、各クレデンシャルの署名者の判定（契約を含む）を返す。Owner を確かめないので、発行者が Process DID でない段に合う。呼ぶ側は、各段に求める契約・発行者・鍵だけを受け入れ、メソッドの説明が「確かめない」と挙げることは自分で確かめる。
+- 署名を見ない結び付きだけの検査: `ValidateChainLinks` はクレデンシャルの間の結び付き（と、起点が前を持たないこと）を確かめ、`ValidateChainFrom` は加えて起点の `inputHash` を与えた入力に結び付ける。`VerifyChain` と同じ結び付きの検査を使う。結び付いた連鎖の前の部分も結び付いているので、末尾が欠けたことは分からない。結び付きの壊れは `ErrChainLinkBroken`（クレデンシャルの位置を持つ `*ChainLinkError`）、結び付けるものが無い連鎖（空、または nil のクレデンシャルを持つもの）は `ErrChainEmpty` で、`VerifyChain` と `ClassifyChain` も同じ。
+- 鍵だけで連鎖を確かめる: `Verifier.VerifyChainSigners` は `IssuerKeys`（`IssuerVerifier` の鍵の半分。どの `IssuerVerifier` も `IssuerKeys` である）を受け取り、連鎖の結び付き、proof の created の順（`ErrChainOrder`、後ろのクレデンシャルの位置を持つ `*ChainOrderError`）、各クレデンシャルの署名者の判定（契約を含む）を返し、`State` がそれらを 1 つの判定にまとめる。Owner を確かめないので、発行者が Process DID でないクレデンシャルに合う。呼ぶ側は、各クレデンシャルに求める契約・発行者・鍵だけを受け入れ、メソッドの説明が「確かめない」と挙げることは自分で確かめる。
 - ソースコミットメント検証（`VerifySourceCommitment`）は意図的に **3 規範軸の外**・イベント毎経路の外に置く: オンデマンドの監査操作である。source クレデンシャルは非同期に収集し（VC リゾルバー・取引相手のストア）、claim された集合が揃うまで verdict は `indeterminate` — ホットパスは境界あたり O(1) のまま。コミットメントが証明するのは claim の完全性ではなく**改竄不能性**（発行後の tamper-evidence）— 申告漏れの検出はイングレス VC ストアとの突合という監査層の作業。
 
 ## contexts/

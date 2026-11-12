@@ -30,9 +30,27 @@ const Method = "dplaax"
 const quoteLimit = 128
 
 // MaxRegistryLen is the most octets a DID's registry segment holds (dplaax
-// did.dplaax.syntax): the registry is a DNS name, of at most 253 octets in its
-// text form. Parse refuses a DID whose registry segment is longer.
+// did.dplaax.syntax). The bound comes from DNS: a registry names a host, and a
+// DNS name is at most 253 octets in its text form. The registry is not checked
+// as a DNS name: ValidateRegistry holds it to the safe-segment rule and this
+// length, and nothing more.
 const MaxRegistryLen = 253
+
+// ValidateRegistry reports whether id can be the registry segment of a
+// did:dplaax DID (did.dplaax.syntax): a safe segment (IsSafeSegment) of at most
+// MaxRegistryLen octets. It is the check Parse applies to a DID's registry,
+// for a registry ID that comes on its own, such as from configuration. It is
+// not a DNS-name check: a segment with an underscore, or with a label longer
+// than DNS allows, passes it.
+func ValidateRegistry(id string) error {
+	if !IsSafeSegment(id) {
+		return fmt.Errorf("did:%s registry %s violates the safe-segment rule ([A-Za-z0-9._-], not all dots)", Method, excerpt.Quoted(id, quoteLimit))
+	}
+	if len(id) > MaxRegistryLen {
+		return fmt.Errorf("did:%s registry of %d octets, beyond %d", Method, len(id), MaxRegistryLen)
+	}
+	return nil
+}
 
 // DID is a parsed did:dplaax identifier.
 //
@@ -50,7 +68,7 @@ type DID struct {
 // Parse parses s as a did:dplaax identifier, by the dplaax rule
 // did.dplaax.syntax. Every segment is validated against the safe-segment rule
 // so parsed segments can participate in storage paths without traversal risk,
-// and the registry against MaxRegistryLen. Parse performs no semantic
+// and the registry against ValidateRegistry. Parse performs no semantic
 // classification — see the Is* methods and validate.go.
 func Parse(s string) (*DID, error) {
 	rest, ok := strings.CutPrefix(s, "did:"+Method+":")
@@ -66,8 +84,8 @@ func Parse(s string) (*DID, error) {
 			return nil, fmt.Errorf("did:%s segment %s violates the safe-segment rule", Method, excerpt.Quoted(seg, quoteLimit))
 		}
 	}
-	if len(segs[0]) > MaxRegistryLen {
-		return nil, fmt.Errorf("did:%s registry of %d octets, beyond %d", Method, len(segs[0]), MaxRegistryLen)
+	if err := ValidateRegistry(segs[0]); err != nil {
+		return nil, err
 	}
 	d := &DID{
 		Method:      Method,
@@ -132,11 +150,22 @@ func (d *DID) OwnerDID() *DID {
 	return &c
 }
 
-// PipelineDID returns a copy of d truncated to pipeline level, or nil when d
-// carries no pipeline segment. Only a Process has a Pipeline (dplaax
-// did.dplaax.hierarchy): for a Process this is its Pipeline; for another DID
-// whose resource path begins with pipeline it is that truncation, not a
-// Pipeline the DID belongs to.
+// Pipeline returns a copy of the Pipeline DID of d, a Process, and true; for
+// any other DID, and for nil, nil and false. Only a Process has a Pipeline
+// (dplaax did.dplaax.hierarchy). It reads the shape of d's resource path and
+// validates nothing: for a DID Parse returned, the result parses too.
+func (d *DID) Pipeline() (*DID, bool) {
+	if d == nil || !d.IsProcess() {
+		return nil, false
+	}
+	return d.PipelineDID(), true
+}
+
+// PipelineDID returns a copy of d with its resource path truncated to its
+// first two segments, or nil when the path does not begin with pipeline. It is
+// a truncation, not the hierarchy: for a DID that is not a Process, the result
+// is not a Pipeline the DID belongs to. Pipeline answers which Pipeline a
+// Process has.
 func (d *DID) PipelineDID() *DID {
 	if len(d.ResourcePath) < 2 || d.ResourcePath[0] != "pipeline" {
 		return nil

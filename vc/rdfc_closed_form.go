@@ -26,8 +26,12 @@ func (f memberForm) String() string {
 }
 
 // The closed form of an eddsa-rdfc-2022 PipelinePassCredential: the members
-// each object may hold, and the form of each. They are the members vc reads
-// and vc.New writes, and the ids credential.field.id lets a credential carry.
+// each object may hold, and the form of each. They are the members dplaax's
+// PipelinePassCredential JSON Schema
+// (https://dplaax.dev/schemas/pipeline-pass-credential.json) defines, which vc
+// reads and vc.New writes, and the ids credential.field.id lets a credential
+// carry. A member that schema adds is added here too. Under eddsa-jcs-2022
+// nothing here applies.
 var (
 	closedCredentialForm = map[string]memberForm{
 		keyContext:   formStrings,

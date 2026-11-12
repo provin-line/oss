@@ -26,6 +26,9 @@ const Algorithm = "ES256"
 
 // Error is the type of this package's sentinel errors. Being a constant string
 // type, a sentinel cannot be reassigned by another package.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }

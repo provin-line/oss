@@ -39,10 +39,17 @@ const (
 // of the FULL wire document, proof included (spec: identity.wire-variant-id).
 //
 // The digest is over the canonical PROJECTION, not the octets a submission
-// arrived in: two peers that spell the same document differently (key order,
-// whitespace, escape forms) admit it under one id, and re-spelling cannot
-// mint a second identity for one signed form. That is also why the id is
-// derived rather than accepted from a caller — the bytes decide it.
+// arrived in: two peers that spell the same JSON differently (key order,
+// whitespace, escape forms) admit it under one id, and re-spelling the JSON
+// cannot mint a second id for it. That is also why the id is derived rather
+// than accepted from a caller — the bytes decide it.
+//
+// As with Hash, the id is of the JSON. Under eddsa-jcs-2022 the signature
+// covers that JSON, so a signed form has one id. Under eddsa-rdfc-2022 the
+// signature covers the RDF dataset the document expands to, and JSON forms
+// that expand alike (the order of an array's entries, an IRI written compact
+// or in full) have different ids: there the id is not the identity of the
+// signed form, and a caller that needs one does not take it from this id.
 //
 // The type does not preclude a future independent proof-envelope id
 // (identity.proof-envelope.not-claimed): that would be its own id space, not

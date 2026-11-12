@@ -187,10 +187,15 @@ type SignerAuthenticityResult struct {
 	//
 	// So an established failure decided before the key is asked for wins over
 	// a transient key lookup, and one decided with the key wins over a
-	// lifecycle lookup that could not answer. An error of an IssuerVerifier or
-	// a LifecycleRegistry is wrapped as it is, so errors.Is also reaches what
-	// it wraps: decide on State, and read Err for why. Its text is bounded,
-	// whatever the credential or the wrapped error holds.
+	// lifecycle lookup that could not answer. Each condition's sentinel is its
+	// own, not its place in this order: were the checks made in another
+	// order, each would keep its sentinel, and the order would decide only
+	// which one a credential that meets several is reported under.
+	//
+	// An error of an IssuerVerifier or a LifecycleRegistry is wrapped as it is,
+	// so errors.Is also reaches what it wraps: decide on State, and read Err
+	// for why. Its text is bounded, whatever the credential or the wrapped
+	// error holds.
 	Err error
 }
 
@@ -212,10 +217,12 @@ type SignerAuthenticityResult struct {
 //     not). ContractLegacyProvinEdDSAJCSInt64 keeps integers verbatim, so they
 //     are not alike there.
 //   - Under ContractW3CEdDSARDFC2022 the signature covers the RDF dataset the
-//     body expands to, not its JSON shape. Array order, duplicate entries, a
-//     single value or a one-element array, "id" or "@id", an IRI string or an
-//     object with that id, a compact or an expanded term, and a member whose
-//     value is an empty array all verify alike.
+//     body expands to, not its JSON shape. Array order, a single value or a
+//     one-element array, "id" or "@id", an IRI string or an object with that
+//     id, a compact or an expanded term, and a member whose value is an empty
+//     array all verify alike. A property that holds one value twice does not
+//     canonicalize (canon/urdna2015 refuses it), so a proof over it does not
+//     verify.
 //
 // It checks nothing else: not the credential's type, wire form, content,
 // validity period, status, or any chain it belongs to. A caller accepts only
@@ -473,24 +480,10 @@ const (
 // errQuote is s quoted within errQuoteLimit.
 func errQuote(s string) string { return excerpt.Quoted(s, errQuoteLimit) }
 
-// boundedError is an error whose text is fixed when it is made, and which
-// unwraps to errs. Its text is taken from each wrapped error's Error, once:
-// no wrapped error's formatting (a fmt.Formatter) can lengthen it.
-type boundedError struct {
-	text string
-	errs []error
-}
-
-func (e *boundedError) Error() string   { return e.text }
-func (e *boundedError) Unwrap() []error { return e.errs }
-
 // wrapBounded returns an error reading "<prefix>: <err's text within
-// errWrapLimit>" that unwraps to each of also and to err.
+// errWrapLimit>" that unwraps to each of also and to err (excerpt.Wrap).
 func wrapBounded(prefix string, err error, also ...error) error {
-	text, _ := excerpt.Of(excerpt.ErrorText(err), errWrapLimit)
-	errs := make([]error, 0, len(also)+1)
-	errs = append(errs, also...)
-	return &boundedError{text: prefix + ": " + text, errs: append(errs, err)}
+	return excerpt.Wrap(prefix, err, errWrapLimit, also...)
 }
 
 // firstMemberOutside returns the member of rawProof outside
@@ -526,10 +519,11 @@ func (v *Verifier) evalChainConsistency(ctx context.Context, cred *PipelinePassC
 // monotonicity is ordering → ChainConsistency.
 //
 // chain MUST be in origin-first order (chain[0] is the origin, chain[len-1] the
-// head) — the order chainwalk produces before delegating here.
+// head) — the order chainwalk produces before delegating here. An empty chain,
+// or a nil credential in it, is an error that is ErrChainEmpty.
 func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredential) (*VerifyResult, error) {
 	if len(chain) == 0 {
-		return nil, errors.New("vc: empty chain")
+		return nil, chainEmptyError("vc: empty chain")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -541,6 +535,9 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	var notations []string
 	var headContract SuiteContract
 	for i, cred := range chain {
+		if cred == nil {
+			return nil, chainEmptyError("vc: nil credential")
+		}
 		r, err := v.Verify(ctx, cred)
 		if err != nil {
 			return nil, err

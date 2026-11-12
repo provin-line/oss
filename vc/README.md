@@ -46,10 +46,12 @@ broken canonicalization.
 A `PipelinePassCredential` signed under `eddsa-rdfc-2022` holds the members
 `vc` reads under their names and in their forms, and no others.
 `ValidateWireForm`, the chain links and `VerifySourceCommitment` refuse one
-that does not; the closed form is in `ValidateWireForm`'s documentation. Its
-`Hash` is the address of the JSON as received: under this suite, JSON forms
-that expand alike have different addresses, so `Hash` is not the signed
-credential's identity. `eddsa-jcs-2022` credentials are not affected.
+that does not; the closed form is in `ValidateWireForm`'s documentation, and
+holds the members dplaax's `PipelinePassCredential` JSON Schema defines (a
+member the schema adds is added to it). Its `Hash` and `WireVariantID` are
+of the JSON as received: under this suite, JSON forms that expand alike have
+different ones, so neither is the signed credential's identity.
+`eddsa-jcs-2022` credentials are not affected.
 
 ## Chain topology — linear invariant
 
@@ -115,16 +117,17 @@ credential's identity. `eddsa-jcs-2022` credentials are not affected.
   run the same link checks as `VerifyChain`. A prefix of a linked chain is
   linked, so they do not detect a missing tail. A broken link is
   `ErrChainLinkBroken` (a `*ChainLinkError` with the credential's index), and
-  a chain with nothing to link `ErrChainMalformed`.
+  a chain with nothing to link (empty, or with a nil credential)
+  `ErrChainEmpty`, as from `VerifyChain` and `ClassifyChain`.
 - A chain by its keys alone: `Verifier.VerifyChainSigners` takes an
   `IssuerKeys` (the key half of `IssuerVerifier`; any `IssuerVerifier` is
   one) and returns the chain's links, the order of its proofs' created times
   (`ErrChainOrder`, a `*ChainOrderError` with the later credential's index)
-  and each credential's signer verdict, contract included. It establishes no
-  Owner, so it fits stages whose issuers are not Process DIDs; the caller
-  accepts only the contract and the issuers and keys it requires of each
-  stage, and checks what the method's documentation lists as not
-  established.
+  and each credential's signer verdict, contract included, with `State`
+  folding them into one verdict. It establishes no Owner, so it fits
+  credentials whose issuers are not Process DIDs; the caller accepts only the
+  contract and the issuers and keys it requires of each credential, and checks
+  what the method's documentation lists as not established.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'

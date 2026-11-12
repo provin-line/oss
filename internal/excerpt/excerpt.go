@@ -168,3 +168,24 @@ func check(limit int) {
 		panic(fmt.Sprintf("excerpt: limit %d is under MinLimit (%d)", limit, MinLimit))
 	}
 }
+
+// Wrap is an error reading "<prefix>: <err's text within limit>" that wraps
+// each of also and then err, so errors.Is and errors.As find them. Its text is
+// taken once, when it is made, from ErrorText: no formatting of err (a
+// fmt.Formatter) lengthens it, and Error returns it each time. prefix is
+// written as it is: a caller bounds what it puts there.
+func Wrap(prefix string, err error, limit int, also ...error) error {
+	check(limit)
+	text, _ := Of(ErrorText(err), limit)
+	errs := make([]error, 0, len(also)+1)
+	errs = append(errs, also...)
+	return &wrapError{text: prefix + ": " + text, errs: append(errs, err)}
+}
+
+type wrapError struct {
+	text string
+	errs []error
+}
+
+func (e *wrapError) Error() string   { return e.text }
+func (e *wrapError) Unwrap() []error { return e.errs }

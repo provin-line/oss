@@ -8,10 +8,13 @@ import (
 )
 
 // ChainSignersResult is VerifyChainSigners' verdict on a chain: its links, the
-// order of its proofs' created times, and each credential's signer. It
-// establishes no Owner and not the chain-consistency axis (Order is one part
-// of that axis), and it has no overall state: a caller decides from its three
-// parts.
+// order of its proofs' created times, and each credential's signer, with State
+// folding the three. It establishes no Owner and not the chain-consistency
+// axis (Order is one part of that axis).
+//
+// A check VerifyChainSigners comes to make later is folded into State and
+// into these fields: a caller that decides on State reads no new field to
+// keep deciding on all of it.
 type ChainSignersResult struct {
 	// Links is nil when the chain is linked as ValidateChainLinks says, else
 	// the *ChainLinkError of the first credential whose link does not hold
@@ -28,6 +31,36 @@ type ChainSignersResult struct {
 	// PipelinePassCredential.Issuer reads it: a string, so an issuer written
 	// in another form names none.
 	Signers []SignerAuthenticityResult
+}
+
+// State is the verdict of the whole result, on the lattice VerifyResult.Overall
+// uses: failed when Links or Order is set or a Signers entry is failed; else
+// indeterminate when an entry is indeterminate; else verified. Verified is
+// exactly the condition under which VerifyChainSigners' documentation says
+// what the chain establishes, for a result as VerifyChainSigners returned it:
+// State reads the fields and verifies nothing again. A result with no Signers
+// (none VerifyChainSigners returns), a nil result, and an entry whose State is
+// none of the three are failed.
+//
+// State does not read an entry's SuiteContract, Issuer or VerificationMethod:
+// verified does not say the chain is one to accept. A caller still accepts
+// only the contract, the issuers and the keys it requires, as
+// VerifyChainSigners says.
+func (r *ChainSignersResult) State() ConfidenceState {
+	if r == nil || r.Links != nil || r.Order != nil || len(r.Signers) == 0 {
+		return ConfidenceFailed
+	}
+	state := ConfidenceVerified
+	for _, s := range r.Signers {
+		switch s.State {
+		case ConfidenceVerified:
+		case ConfidenceIndeterminate:
+			state = ConfidenceIndeterminate
+		default:
+			return ConfidenceFailed
+		}
+	}
+	return state
 }
 
 // ChainOrderError reports the first pair of a chain (origin first) whose
@@ -54,21 +87,22 @@ func (e *ChainOrderError) Is(target error) bool { return target == ErrChainOrder
 // it is linked (ValidateChainLinks' rules), that its proofs' created times do
 // not decrease along it, and each credential's signer authenticity under the
 // key keys establishes for it, with the Verifier's proof policy and
-// cryptosuite lifecycle. It is for a caller whose stage issuers are not
-// Process DIDs under an Owner, which VerifyChain requires.
+// cryptosuite lifecycle. It is for a caller whose credentials' issuers are
+// not Process DIDs under an Owner, which VerifyChain requires.
 //
 // The verdict is in the result, not the error. The error is for a chain it
-// cannot evaluate: an empty chain or a nil credential (ErrChainMalformed), a
+// cannot evaluate: an empty chain or a nil credential (ErrChainEmpty), a
 // nil keys, or ctx done when a credential is about to be evaluated. A key
 // lookup ctx ends inside is that credential's indeterminate entry, its Err
 // wrapping the context's error. A result has all three parts evaluated: no
 // part stops the others.
 //
-// With a nil error, a nil Links, a nil Order and every Signers entry
-// verified, the chain's credentials are linked as ValidateChainLinks says,
-// their created times as written do not decrease, and each credential's proof
-// verifies, under the key keys established for it, over a document
-// equivalent to its body under that entry's SuiteContract (see
+// With a nil error and State verified (a nil Links, a nil Order and every
+// Signers entry verified), the chain's credentials are linked as
+// ValidateChainLinks says, their created times as written do not decrease,
+// and each credential's proof verifies, under the key keys established for
+// it, over a document equivalent to its body under that entry's
+// SuiteContract (see
 // VerifySignerAuthenticity for what equivalent means). Links reads the
 // chain's JSON as received. For an entry whose signer is verified, the
 // members the links read are then members of what was signed, up to that
@@ -80,7 +114,7 @@ func (e *ChainOrderError) Is(target error) bool { return target == ErrChainOrder
 //
 // A caller accepts the chain only with all of that, only the SuiteContract its
 // credential type requires on every entry, and only the issuers and keys
-// (each entry's Issuer and VerificationMethod) it lets sign each stage.
+// (each entry's Issuer and VerificationMethod) it lets sign each credential.
 //
 // It does not establish, and a caller does not read into the result:
 //

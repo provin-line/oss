@@ -3,6 +3,9 @@ package canon
 // Error is the type of the errors this package reports by value. This
 // package's functions wrap them with the detail of each failure; match them
 // with errors.Is.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }

@@ -61,18 +61,28 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `vc`: the chain-link checks tell their failures apart without reading
   text. `ValidateChainLinks` and `ValidateChainFrom` return an error that is
   `vc.ErrChainLinkBroken` for a broken link (a `*ChainLinkError`, which now
-  matches it under `errors.Is`) and `vc.ErrChainMalformed` for an empty chain
-  or a nil credential; the errors' texts are unchanged. `VerifyChain` is
-  unchanged: a broken link is a failed data-integrity verdict, not an error.
+  matches it under `errors.Is`) and `vc.ErrChainEmpty` for an empty chain
+  or a nil credential. `VerifyChain`'s, `ClassifyChain`'s and
+  `VerifyChainSigners`' errors for an empty chain or a nil credential match
+  `vc.ErrChainEmpty` too. The texts these calls gave before are kept;
+  `ClassifyChain`'s for a nil credential is new (see Fixed). A broken link is
+  still a failed data-integrity verdict of `VerifyChain`, not an error.
 - `vc`: `Verifier.VerifyChainSigners` verifies a chain by its keys alone, for
-  a consumer whose stage issuers are not Process DIDs under an Owner. It
-  takes an `IssuerKeys`, the key half of `IssuerVerifier` (which now embeds
-  it, with the same methods), and returns a `ChainSignersResult`: the links
-  (as `ValidateChainLinks` checks them), the order of the proofs' created
-  times (`vc.ErrChainOrder`, a `*ChainOrderError` naming the later credential
-  of the first pair out of order) and each credential's signer verdict, its
-  suite contract included. It establishes no Owner; its documentation lists
-  what a caller still checks. `VerifyChain` is unchanged.
+  a consumer whose credentials' issuers are not Process DIDs under an
+  Owner. It takes an `IssuerKeys`, the key half of `IssuerVerifier` (which
+  now embeds it, with the same methods), and returns a `ChainSignersResult`:
+  the links (as `ValidateChainLinks` checks them), the order of the proofs'
+  created times (`vc.ErrChainOrder`, a `*ChainOrderError` naming the later
+  credential of the first pair out of order) and each credential's signer
+  verdict, its suite contract included, with `State` folding the three into
+  one verdict (a check added later is folded into it). It establishes no
+  Owner; its documentation lists what a caller still checks. `VerifyChain` is
+  unchanged.
+- `did/dplaax`: `ValidateRegistry` checks a registry ID as `Parse` checks a
+  DID's registry segment (the safe-segment rule and `MaxRegistryLen`); it is
+  not a DNS-name check. `(*DID).Pipeline` returns a Process's Pipeline, and
+  false for any other DID (dplaax `did.dplaax.hierarchy`); `PipelineDID`
+  stays a truncation of the resource path.
 - `verification/`: a test-only Go module, outside the root module, with
   Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
   shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
@@ -156,8 +166,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `did.dplaax.syntax`). The registry server's `provin.network.registry.id`,
   the pipeline's `vc-store-registry` and `upstream-registry`, and the chain's
   `registry-base-urls` keys are refused at boot past that bound, and so is an
-  allowlist pattern's literal registry, so no node names or derives an
-  audience a verifier would refuse. A handler that receives
+  allowlist pattern's literal registry, each through
+  `dplaax.ValidateRegistry` (the configuration loaders' refusals carry its
+  text; the allowlist's is still `ErrInvalidPattern`), so no node names or
+  derives an audience a verifier would refuse. A handler that receives
   such a DID (the registry's DID service among them) answers
   `InvalidArgument`, where it answered `PermissionDenied` for a registry
   that is not its own.
@@ -170,6 +182,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   its account type or resource path) quotes at most 128 bytes of that DID,
   with the length of a longer one, in the CLI, the pipeline and network
   configuration, the network services, `bundle`, `delegation` and `vc`.
+- `delegation.Verify` quotes the delegatedBy, issuer, subject,
+  verificationMethod and resolved document id it refuses, and the proof's
+  type, purpose, cryptosuite and created time and the credential's type, at
+  most 128 bytes each, and the text of another package's error it wraps (the
+  resolver's, the DID document's, the proof's) within 512 bytes; `errors.Is`
+  and `errors.As` still reach the wrapped error. `vc`'s default
+  `IssuerVerifier` (`NewDIDDocumentIssuers`) names the issuer and a
+  substituted document's id within the same bound and bounds the text of the
+  error it wraps, and the Owner check names the issuer and both Owners within
+  it.
 - `didregistry`: issuing a Pipeline or Process checks its delegation through
   `delegation.VerifyFor`. The decision is the same, still `ErrUnauthorized`
   (Connect `PermissionDenied`); the refusal's text, which clients see in that
@@ -180,12 +202,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   run through `keybinding.Verifier` and `StatusListContentHash`.
 - Conformance: `did-001`..`did-031` run. Whether `did/dplaax.Parse` accepts
   each DID (dplaax `did.dplaax.syntax`), and, for one it accepts, the level
-  `IsOwner`, `IsPipeline` and `IsProcess` give it, its `OwnerDID`, and a
-  Process's `PipelineDID` (`did.dplaax.hierarchy`). `PipelineDID`'s doc says
-  that only for a Process is it the Pipeline the DID belongs to.
+  `IsOwner`, `IsPipeline` and `IsProcess` give it, its `OwnerDID`, and its
+  `Pipeline`, which a Process alone has (`did.dplaax.hierarchy`).
 
 ### Fixed
 
+- `vc.ClassifyChain` refuses a nil credential with an error that is
+  `vc.ErrChainEmpty`. Before, it classified a chain of one nil credential as
+  an origin, and a nil credential in a longer chain panicked.
 - `internal/jsonschema` fails the compile of a schema whose `minimum`,
   `maximum`, `exclusiveMinimum` or `exclusiveMaximum` holds a number `big.Rat`
   cannot read (such as `1e1000001`), under every draft; it compiled such a
@@ -244,6 +268,24 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - `vc`: `PipelinePassCredential.Hash` says it is the address of the JSON body
   as received. Under `eddsa-rdfc-2022`, JSON forms that expand alike have
   different addresses, so there it is not the signed credential's identity.
+- `vc`: `WireVariantID`, as `Hash`, is of the JSON: under `eddsa-rdfc-2022`
+  it is not the identity of the signed form. The `eddsa-rdfc-2022` closed
+  form holds the members dplaax's `PipelinePassCredential` JSON Schema
+  defines, and a member the schema adds is added to it.
+- `vc`: `IssuerKeys` and `IssuerVerifier` say that when a key's
+  authorization holds is the implementation's to establish:
+  `NewDIDDocumentIssuers` reads the documents as they are now and does not
+  check that a key was authorized when its proof was made. A caller that
+  needs that supplies its own.
+- `vc`: `ErrProofPolicy` and `ErrSignatureInvalid` are defined by what they
+  mean, and each condition `SignerAuthenticityResult.Err` lists keeps its
+  sentinel whatever order the checks run in. `VerifySignerAuthenticity` no
+  longer says that duplicate entries verify alike under `eddsa-rdfc-2022`: a
+  property that holds one value twice does not canonicalize.
+- The `Error` type of `vc`, `keybinding`, `did`, `delegation`,
+  `decisionrecord`, `canon`, `canon/urdna2015` and
+  `crypto/{ed25519,es256,rs256}`: an error is compared with a sentinel by
+  `errors.Is` alone; `errors.As` to `Error` and `==` are not promised.
 
 ## [0.4.0] - 2026-11-09
 

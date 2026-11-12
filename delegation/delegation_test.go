@@ -461,3 +461,87 @@ func TestVerify_NamesASubjectOfTheWrongKindWithinABound(t *testing.T) {
 		t.Errorf("Verify(an Owner as subject): %.200v (%d bytes), want an error naming the subject's head and length", err, len(fmt.Sprint(err)))
 	}
 }
+
+// substitutingResolver returns one document whatever is asked.
+type substitutingResolver struct{ doc *did.DIDDocument }
+
+func (s substitutingResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	return s.doc, nil
+}
+
+// Verify names the DIDs it refuses within a bound, however long they are: a
+// delegatedBy that is not the issuer (either side), a subject under another
+// Owner, a verificationMethod naming another DID, and the document of
+// another DID.
+func TestVerify_NamesTheDIDsItRefusesWithinABound(t *testing.T) {
+	long := "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 64<<10)
+	signer, r := fixture(t, ownerDID)
+	other, _ := (ed25519.Generator{}).Generate()
+	for name, c := range map[string]struct {
+		mutate func(*delegation.DelegationCredential)
+		r      *local.Resolver
+		sub    *did.DIDDocument
+		named  string
+	}{
+		"a long delegatedBy": {mutate: func(c *delegation.DelegationCredential) { c.CredentialSubject.DelegatedBy = long }, named: long},
+		"a long issuer":      {mutate: func(c *delegation.DelegationCredential) { c.Issuer = long }, named: long},
+		"a subject under another, long Owner": {
+			mutate: func(c *delegation.DelegationCredential) { c.CredentialSubject.ID = long + ":pipeline:p1" },
+			named:  long + ":pipeline:p1",
+		},
+		"a verificationMethod of another, long DID": {
+			mutate: func(c *delegation.DelegationCredential) { c.Proof.VerificationMethod = long + "#signing" },
+			named:  long + "#signing",
+		},
+		"the document of another, long DID": {sub: signingDocAs(long, ownerDID, other.PublicKey), named: long},
+		"a long proof type":                 {mutate: func(c *delegation.DelegationCredential) { c.Proof.Type = long }, named: long},
+		"a long proof purpose":              {mutate: func(c *delegation.DelegationCredential) { c.Proof.ProofPurpose = long }, named: long},
+		"a long cryptosuite":                {mutate: func(c *delegation.DelegationCredential) { c.Proof.Cryptosuite = long }, named: long},
+		"a long created time":               {mutate: func(c *delegation.DelegationCredential) { c.Proof.Created = long }, named: long},
+		"a long type":                       {mutate: func(c *delegation.DelegationCredential) { c.Type = []string{long} }, named: long},
+		// What another package's error quotes is bounded with that error's
+		// text: named is empty, as the length written is that text's.
+		"a long issuer with no document": {mutate: func(c *delegation.DelegationCredential) {
+			c.Issuer, c.CredentialSubject.DelegatedBy = long, long
+			c.CredentialSubject.ID = long + ":pipeline:p1"
+			c.Proof.VerificationMethod = long + "#signing"
+		}},
+		"a long fragment": {mutate: func(c *delegation.DelegationCredential) {
+			c.Proof.VerificationMethod = ownerDID + "#" + strings.Repeat("f", 64<<10)
+		}},
+	} {
+		cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		if c.mutate != nil {
+			c.mutate(cred)
+		}
+		var res interface {
+			Resolve(context.Context, string) (*did.DIDDocument, error)
+		} = r
+		if c.sub != nil {
+			res = substitutingResolver{c.sub}
+		}
+		err = delegation.Verify(context.Background(), ed25519.Verifier{}, res, cred)
+		if err == nil || len(err.Error()) > 1024 || (c.named != "" && !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(c.named)))) {
+			t.Errorf("%s: %.300v (%d bytes), want an error naming the DID's head and length", name, err, len(fmt.Sprint(err)))
+		}
+	}
+}
+
+// A created time that does not parse is named within a bound, and the parse
+// error stays reachable.
+func TestVerify_KeepsTheCreatedTimesParseError(t *testing.T) {
+	signer, r := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	cred.Proof.Created = strings.Repeat("c", 64<<10)
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	var pe *time.ParseError
+	if !errors.As(err, &pe) || len(err.Error()) > 1024 {
+		t.Errorf("err = %.200v (%d bytes), want a bounded error wrapping a *time.ParseError", err, len(fmt.Sprint(err)))
+	}
+}

@@ -14,7 +14,6 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
-	"github.com/provin-line/oss/internal/excerpt"
 )
 
 //go:embed reference.conf
@@ -93,22 +92,14 @@ func loadEndpoints(cfg *hoconconfig.Config) ([]did.ServiceEndpoint, error) {
 	return out, nil
 }
 
-// validateRegistryID requires a value that is a valid did:dplaax registry by
-// the SAME grammar dplaax.Parse applies ([A-Za-z0-9._-], not all-dots, at most
-// dplaax.MaxRegistryLen octets): the id is the {registry} segment of every DID
-// this server mints and resolves, so an id dplaax.Parse would later reject
-// must fail at boot, not at request time.
+// validateRegistryID requires a value dplaax.ValidateRegistry takes: the id is
+// the {registry} segment of every DID this server mints and resolves, so an id
+// dplaax.Parse would later reject must fail at boot, not at request time.
 func validateRegistryID(id string) error {
 	if id == "" {
 		return fmt.Errorf("must not be empty")
 	}
-	if !dplaax.IsSafeSegment(id) {
-		return fmt.Errorf("must be a valid did:dplaax segment ([A-Za-z0-9._-], not all dots): %s", excerpt.Quoted(id, 128))
-	}
-	if len(id) > dplaax.MaxRegistryLen {
-		return fmt.Errorf("must be at most %d octets, a DID's registry: %d", dplaax.MaxRegistryLen, len(id))
-	}
-	return nil
+	return dplaax.ValidateRegistry(id)
 }
 
 // validateEndpointID requires a non-empty fragment-safe id (it becomes the

@@ -68,8 +68,8 @@ func ValidatePattern(pattern string) error {
 
 // parsePattern splits and validates a pattern into its segments. The method
 // prefix must be the literal "did:dplaax"; every remaining segment must be either
-// a bare "*" or a dplaax safe-segment literal, a registry literal within
-// dplaax.MaxRegistryLen; and a fixed pattern (one with no
+// a bare "*" or a dplaax safe-segment literal, a registry literal one
+// dplaax.ValidateRegistry takes; and a fixed pattern (one with no
 // trailing "*") must have a length that matches a dplaax DID arity, so it can
 // actually name a DID.
 func parsePattern(pattern string) ([]string, error) {
@@ -95,8 +95,8 @@ func parsePattern(pattern string) ([]string, error) {
 			return nil, ErrInvalidPattern
 		}
 	}
-	// A literal registry longer than a DID's registry may be names no DID.
-	if reg := segs[len(methodPrefix)]; reg != "*" && len(reg) > dplaax.MaxRegistryLen {
+	// A literal registry that dplaax.ValidateRegistry refuses names no DID.
+	if reg := segs[len(methodPrefix)]; reg != "*" && dplaax.ValidateRegistry(reg) != nil {
 		return nil, ErrInvalidPattern
 	}
 	// A pattern with no trailing "*" matches only candidates of exactly its own

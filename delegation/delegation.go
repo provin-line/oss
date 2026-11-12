@@ -114,6 +114,9 @@ func Build(signer crypto.Signer, ownerDID string, subject DelegationSubject) (*D
 // Error is the type of this package's sentinel errors. The sentinels are
 // constants, so no importer can reassign them; errors.Is matches them as it
 // matches any comparable error.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }
@@ -156,17 +159,17 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 	// must be a DataIntegrityProof for assertionMethod, and the cryptosuite is
 	// constrained to the one delegation emits — no suite downgrade.
 	if cred.Proof.Type != proofType || cred.Proof.ProofPurpose != proofPurpose {
-		return fmt.Errorf("delegation: proof type/purpose %q/%q not %q/%q", cred.Proof.Type, cred.Proof.ProofPurpose, proofType, proofPurpose)
+		return fmt.Errorf("delegation: proof type/purpose %s/%s not %q/%q", excerpt.Quoted(cred.Proof.Type, 128), excerpt.Quoted(cred.Proof.ProofPurpose, 128), proofType, proofPurpose)
 	}
 	if cred.Proof.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
-		return fmt.Errorf("delegation: unsupported cryptosuite %q (want %q)", cred.Proof.Cryptosuite, vc.CryptosuiteEdDSAJCS2022)
+		return fmt.Errorf("delegation: unsupported cryptosuite %s (want %q)", excerpt.Quoted(cred.Proof.Cryptosuite, 128), vc.CryptosuiteEdDSAJCS2022)
 	}
 	if _, err := time.Parse(time.RFC3339, cred.Proof.Created); err != nil {
-		return fmt.Errorf("delegation: proof.created is not RFC3339: %w", err)
+		return excerpt.Wrap("delegation: proof.created "+excerpt.Quoted(cred.Proof.Created, 128)+" is not RFC3339", err, wrapLimit)
 	}
 	// VC type must carry both the base and the profile token.
 	if !contains(cred.Type, "VerifiableCredential") || !contains(cred.Type, delegationType) {
-		return fmt.Errorf("delegation: type %v missing VerifiableCredential / %s", cred.Type, delegationType)
+		return fmt.Errorf("delegation: type %s missing VerifiableCredential / %s", excerpt.Quoted(strings.Join(cred.Type, ", "), 128), delegationType)
 	}
 	// provin does not use scope and does not sign it. A scope on inbound wire is
 	// rejected fail-closed: provin cannot verify it (it is outside the signed
@@ -175,7 +178,7 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 		return fmt.Errorf("delegation: credentialSubject.scope is present (%d token(s)); the provin profile does not accept scoped delegations", len(cred.CredentialSubject.Scope))
 	}
 	if cred.CredentialSubject.DelegatedBy != cred.Issuer {
-		return fmt.Errorf("delegation: delegatedBy %q != issuer %q", cred.CredentialSubject.DelegatedBy, cred.Issuer)
+		return fmt.Errorf("delegation: delegatedBy %s != issuer %s", excerpt.Quoted(cred.CredentialSubject.DelegatedBy, 128), excerpt.Quoted(cred.Issuer, 128))
 	}
 	// Delegations are owner-signed: the issuer MUST be a deployment-valid Owner DID.
 	issuer, err := dplaax.Parse(cred.Issuer)
@@ -199,39 +202,43 @@ func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, 
 		return fmt.Errorf("delegation: subject %s is neither a pipeline nor a process DID", excerpt.Quoted(cred.CredentialSubject.ID, 128))
 	}
 	if subj.OwnerDID().String() != cred.Issuer {
-		return fmt.Errorf("delegation: subject %q is not under the issuing owner %q", cred.CredentialSubject.ID, cred.Issuer)
+		return fmt.Errorf("delegation: subject %s is not under the issuing owner %s", excerpt.Quoted(cred.CredentialSubject.ID, 128), excerpt.Quoted(cred.Issuer, 128))
 	}
 	// The verificationMethod MUST name the issuer.
 	vmDID, _, found := strings.Cut(cred.Proof.VerificationMethod, "#")
 	if !found || vmDID != cred.Issuer {
-		return fmt.Errorf("delegation: verificationMethod %q does not name the issuer %q", cred.Proof.VerificationMethod, cred.Issuer)
+		return fmt.Errorf("delegation: verificationMethod %s does not name the issuer %s", excerpt.Quoted(cred.Proof.VerificationMethod, 128), excerpt.Quoted(cred.Issuer, 128))
 	}
 	// A proofValue that does not decode verifies under no key, so it is
 	// refused before the issuer is resolved.
 	if _, err := cred.Proof.ProofValueBytes(); err != nil {
-		return fmt.Errorf("delegation: %w", err)
+		return excerpt.Wrap("delegation", err, wrapLimit)
 	}
 	doc, err := r.Resolve(ctx, cred.Issuer)
 	if err != nil {
-		return fmt.Errorf("delegation: resolve issuer: %w", err)
+		return excerpt.Wrap("delegation: resolve issuer", err, wrapLimit)
 	}
 	if doc.ID() != cred.Issuer {
-		return fmt.Errorf("delegation: resolved document id %q != issuer %q (registry-substitution defense)", doc.ID(), cred.Issuer)
+		return fmt.Errorf("delegation: resolved document id %s != issuer %s (registry-substitution defense)", excerpt.Quoted(doc.ID(), 128), excerpt.Quoted(cred.Issuer, 128))
 	}
 	// Key and encoding from one resolution: the encoding selects the claim
 	// contract, and the contract selects the canonicalization.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, cred.Proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return fmt.Errorf("delegation: extract owner key: %w", err)
+		return excerpt.Wrap("delegation: extract owner key", err, wrapLimit)
 	}
 	// Exact dispatch (signer.suite.exact-dispatch): a delegation whose proof
 	// shape matches no contract fails here rather than being retried under the
 	// other canonicalizer to see which one accepts it.
 	if _, err := vc.VerifyProofWithContract(verifier, pub, encoding, cred.Proof, cred.signingBody()); err != nil {
-		return fmt.Errorf("delegation: %w", err)
+		return excerpt.Wrap("delegation", err, wrapLimit)
 	}
 	return nil
 }
+
+// wrapLimit is the most bytes of another package's error text Verify writes
+// into its own: that text may quote what the credential holds, at any length.
+const wrapLimit = 512
 
 // signingBody renders the canonicalization input — the credential body without
 // its proof — as a map. Build and Verify both derive the hashed bytes through

@@ -29,8 +29,10 @@ type IssuerKey struct {
 // IssuerVerifier establishes a credential's issuer: the key its proof must
 // verify under (the signer-authenticity axis) and the Owner DID responsible for
 // the issuer (the chain-consistency axis, AttributeOwner, ClassifyChain). The
-// default, NewDIDDocumentIssuers, reads both from DID documents; a deployment
-// that registers its issuers elsewhere supplies its own.
+// default, NewDIDDocumentIssuers, reads both from DID documents as they are
+// now, so it does not establish that a key was authorized when its proof was
+// made (IssuerKeys says who does); a deployment that registers its issuers
+// elsewhere, or needs past authorization, supplies its own.
 //
 // The Verifier keeps the rest of each axis to itself: the proof policy (the
 // checks ErrProofPolicy lists: proof type and purpose, members, a
@@ -60,11 +62,17 @@ type IssuerVerifier interface {
 // Errors: one wrapping ErrIssuerNotFound is an established negative (failed);
 // any other is transient (indeterminate).
 type IssuerKeys interface {
-	// IssuerKey returns the key that cred's proof verificationMethod names,
-	// one the issuer authorizes for assertion at the proof's created time, with
-	// ID set to that verificationMethod. A verificationMethod the issuer has no
-	// such key for is ErrIssuerNotFound. cred has not been verified when this
-	// is asked: it is the credential as received.
+	// IssuerKey returns the key that cred's proof verificationMethod names, one
+	// the issuer authorizes for assertion, with ID set to that
+	// verificationMethod. A verificationMethod the issuer has no such key for
+	// is ErrIssuerNotFound. cred has not been verified when this is asked: it
+	// is the credential as received.
+	//
+	// When the authorization holds is the implementation's to establish. The
+	// default, NewDIDDocumentIssuers, reads the issuer's document as it is
+	// now and does not check that the key was authorized when the proof was
+	// made. A caller that needs the key authorized at a past time, such as
+	// the proof's created time, supplies an IssuerKeys that checks it.
 	IssuerKey(ctx context.Context, cred *Credential) (IssuerKey, error)
 }
 
@@ -86,6 +94,12 @@ func WithIssuerVerifier(iv IssuerVerifier) VerifierOption {
 // ancestry. A definitive not-found (resolver.ErrNotFound), a key that does not
 // extract, and a broken controller chain are ErrIssuerNotFound; a transient
 // resolution failure or a substituted document is not.
+//
+// It reads each document as r returns it now. It does not establish that the
+// key was authorized when the proof was made: a key the issuer authorizes now
+// is taken, and one it no longer authorizes is refused, whatever the proof's
+// created time. A caller that needs authorization at a past time supplies its
+// own IssuerKeys or IssuerVerifier.
 func NewDIDDocumentIssuers(r resolver.Resolver) IssuerVerifier {
 	return didDocumentIssuers{resolver: r}
 }
@@ -98,26 +112,26 @@ func (d didDocumentIssuers) IssuerKey(ctx context.Context, cred *Credential) (Is
 	issuer := cred.Issuer()
 	proof := cred.Proof()
 	if proof == nil {
-		return IssuerKey{}, fmt.Errorf("vc: %s: unsigned: %w", issuer, ErrIssuerNotFound)
+		return IssuerKey{}, fmt.Errorf("vc: %s: unsigned: %w", excerpt.Quoted(issuer, 128), ErrIssuerNotFound)
 	}
 	doc, err := d.resolver.Resolve(ctx, issuer)
 	switch {
 	case errors.Is(err, resolver.ErrNotFound):
-		return IssuerKey{}, fmt.Errorf("vc: %s: %w: %w", issuer, err, ErrIssuerNotFound)
+		return IssuerKey{}, wrapBounded("vc: "+errQuote(issuer), err, ErrIssuerNotFound)
 	case err != nil:
-		return IssuerKey{}, fmt.Errorf("vc: resolve %s: %w", issuer, err)
+		return IssuerKey{}, wrapBounded("vc: resolve "+errQuote(issuer), err)
 	}
 	if doc.ID() != issuer {
 		// Misconfiguration and attack are indistinguishable here: never
 		// honoured, but not an established negative either.
-		return IssuerKey{}, fmt.Errorf("vc: resolving %s returned the document of %s", issuer, doc.ID())
+		return IssuerKey{}, fmt.Errorf("vc: resolving %s returned the document of %s", excerpt.Quoted(issuer, 128), excerpt.Quoted(doc.ID(), 128))
 	}
 	// Key and encoding come from one resolution: the encoding decides which
 	// claim contract the proof is checked under, so reading it separately would
 	// let the dispatch and the key disagree about which method they mean.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return IssuerKey{}, fmt.Errorf("vc: %s: %w: %w", issuer, err, ErrIssuerNotFound)
+		return IssuerKey{}, wrapBounded("vc: "+errQuote(issuer), err, ErrIssuerNotFound)
 	}
 	return IssuerKey{ID: proof.VerificationMethod, PublicKey: pub, Encoding: encoding}, nil
 }
@@ -153,7 +167,7 @@ func (v *Verifier) ownerOf(ctx context.Context, issuer string) (string, error) {
 		return "", err
 	}
 	if want := d.OwnerDID().String(); owner != want {
-		return "", fmt.Errorf("vc: the Owner established for %q is %q, not %q, the one its DID names: %w", issuer, owner, want, ErrIssuerNotFound)
+		return "", fmt.Errorf("vc: the Owner established for %s is %s, not %s, the one its DID names: %w", excerpt.Quoted(issuer, 128), excerpt.Quoted(owner, 128), excerpt.Quoted(want, 128), ErrIssuerNotFound)
 	}
 	return owner, nil
 }

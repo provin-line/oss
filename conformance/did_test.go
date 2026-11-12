@@ -53,8 +53,12 @@ func runDID(t *testing.T, v dplaaxVector) {
 			t.Errorf("OwnerDID of %q: %s, want %s", input.DID, got, want.Owner)
 		}
 		var pipeline string
-		if d.IsProcess() {
-			pipeline = d.PipelineDID().String()
+		p, ok := d.Pipeline()
+		if ok != (p != nil) {
+			t.Errorf("Pipeline of %q: %v, %t: a Pipeline exactly when true", input.DID, p, ok)
+		}
+		if ok {
+			pipeline = p.String()
 		}
 		switch {
 		case want.Pipeline == nil && pipeline != "":

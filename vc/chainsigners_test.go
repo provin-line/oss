@@ -14,20 +14,20 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// Stage issuers that are not Process DIDs: their keys come from a table.
+// Issuers that are not Process DIDs: their keys come from a table.
 const (
-	stageA = "did:example:stage-a"
-	stageB = "did:example:stage-b"
+	issuerA = "did:example:issuer-a"
+	issuerB = "did:example:issuer-b"
 )
 
 var (
 	_ vc.IssuerKeys = vc.NewDIDDocumentIssuers(nil)
-	_ vc.IssuerKeys = (*stageIssuers)(nil)
+	_ vc.IssuerKeys = (*tableIssuers)(nil)
 )
 
-// stageKeysChain issues an origin and a successor by stageA and stageB, under
+// keysChain issues an origin and a successor by issuerA and issuerB, under
 // suite each (eddsa-jcs-2022 when empty), with the table of their keys.
-func stageKeysChain(t *testing.T, originSuite, childSuite string) (origin, child *vc.PipelinePassCredential, keys *stageIssuers) {
+func keysChain(t *testing.T, originSuite, childSuite string) (origin, child *vc.PipelinePassCredential, keys *tableIssuers) {
 	t.Helper()
 	kpA, err := (ed25519.Generator{}).Generate()
 	if err != nil {
@@ -38,10 +38,10 @@ func stageKeysChain(t *testing.T, originSuite, childSuite string) (origin, child
 		t.Fatal(err)
 	}
 	ks := newMemKeyStore()
-	if err := ks.SaveKeyPair(stageA, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpA}); err != nil {
+	if err := ks.SaveKeyPair(issuerA, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpA}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ks.SaveKeyPair(stageB, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpB}); err != nil {
+	if err := ks.SaveKeyPair(issuerB, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDSigning: kpB}); err != nil {
 		t.Fatal(err)
 	}
 	builder := func(suite string) *vc.Builder {
@@ -50,33 +50,33 @@ func stageKeysChain(t *testing.T, originSuite, childSuite string) (origin, child
 		}
 		return vc.NewBuilder(ks, vc.WithCryptosuite(suite))
 	}
-	origin, err = builder(originSuite).BuildFirstDrop(stageA, string(keystore.KeyIDSigning), stageA+"#signing", vc.CredentialSubjectFields{
+	origin, err = builder(originSuite).BuildFirstDrop(issuerA, string(keystore.KeyIDSigning), issuerA+"#signing", vc.CredentialSubjectFields{
 		PipelineID: "p1", ProcessID: "a", TransformationClaim: vc.ClaimConvert,
 		InputHash: chainFixtureInput, OutputHash: "sha256:" + repeatHex("22"),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err = builder(childSuite).BuildChainPreserving(stageB, string(keystore.KeyIDSigning), stageB+"#signing", vc.CredentialSubjectFields{
+	child, err = builder(childSuite).BuildChainPreserving(issuerB, string(keystore.KeyIDSigning), issuerB+"#signing", vc.CredentialSubjectFields{
 		PipelineID: "p1", ProcessID: "b", TransformationClaim: vc.ClaimConvert,
 		InputHash: "sha256:" + repeatHex("22"), OutputHash: "sha256:" + repeatHex("33"),
 	}, origin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys = &stageIssuers{
-		keys:   map[string][]byte{stageA + "#signing": kpA.PublicKey, stageB + "#signing": kpB.PublicKey},
+	keys = &tableIssuers{
+		keys:   map[string][]byte{issuerA + "#signing": kpA.PublicKey, issuerB + "#signing": kpB.PublicKey},
 		owners: map[string]string{},
 	}
 	return origin, child, keys
 }
 
-// A chain whose stages are not Process DIDs verifies by its keys: linked, in
+// A chain whose issuers are not Process DIDs verifies by its keys: linked, in
 // order, every signer verified, each under its contract and key. VerifyChain,
 // which establishes Owners, does not verify it, and the Verifier's own issuer
 // verifier is neither used nor changed.
-func TestVerifyChainSigners_StagesByTheirKeys(t *testing.T) {
-	origin, child, keys := stageKeysChain(t, "", "")
+func TestVerifyChainSigners_IssuersByTheirKeys(t *testing.T) {
+	origin, child, keys := keysChain(t, "", "")
 	v := vc.NewVerifier(local.New(), ed25519Verifier())
 	chain := []*vc.PipelinePassCredential{origin, child}
 	res, err := v.VerifyChainSigners(context.Background(), keys, chain)
@@ -86,7 +86,7 @@ func TestVerifyChainSigners_StagesByTheirKeys(t *testing.T) {
 	if res.Links != nil || res.Order != nil || len(res.Signers) != 2 {
 		t.Fatalf("Links, Order, len(Signers) = %v, %v, %d; want nil, nil, 2", res.Links, res.Order, len(res.Signers))
 	}
-	for i, issuer := range []string{stageA, stageB} {
+	for i, issuer := range []string{issuerA, issuerB} {
 		s := res.Signers[i]
 		if s.State != vc.ConfidenceVerified || s.Err != nil || s.SuiteContract != vc.ContractW3CEdDSAJCS2022 ||
 			s.Issuer != issuer || s.VerificationMethod != issuer+"#signing" {
@@ -98,20 +98,20 @@ func TestVerifyChainSigners_StagesByTheirKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if whole.Overall == vc.ConfidenceVerified || whole.Axes.ChainConsistency == vc.ConfidenceVerified {
-		t.Errorf("VerifyChain = %v (%+v), want chain consistency not verified for stages with no Owner", whole.Overall, whole.Axes)
+		t.Errorf("VerifyChain = %v (%+v), want chain consistency not verified for issuers with no Owner", whole.Overall, whole.Axes)
 	}
 	own, err := v.VerifySignerAuthenticity(context.Background(), asCredential(t, child))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if own.State == vc.ConfidenceVerified {
-		t.Error("the Verifier's own issuer verifier verified the stage: keys leaked into it")
+		t.Error("the Verifier's own issuer verifier verified the credential: keys leaked into it")
 	}
 }
 
 // Each entry of a chain under several contracts names its own.
 func TestVerifyChainSigners_EachEntryNamesItsContract(t *testing.T) {
-	origin, child, keys := stageKeysChain(t, vc.CryptosuiteEdDSARDFC2022, "")
+	origin, child, keys := keysChain(t, vc.CryptosuiteEdDSARDFC2022, "")
 	res, err := vc.NewVerifier(local.New(), ed25519Verifier()).VerifyChainSigners(context.Background(), keys, []*vc.PipelinePassCredential{origin, child})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestVerifyChainSigners_EachEntryNamesItsContract(t *testing.T) {
 // chain.
 func TestVerifyChainSigners_RDFCEntriesInTheirClosedForm(t *testing.T) {
 	origin, child, r := rdfcChain(t, "procB")
-	keys := &stageIssuers{keys: map[string][]byte{
+	keys := &tableIssuers{keys: map[string][]byte{
 		procAOrigin + "#signing":  signedPubOf(t, r, procAOrigin),
 		procBSameOrg + "#signing": signedPubOf(t, r, procBSameOrg),
 	}}
@@ -163,7 +163,7 @@ func TestVerifyChainSigners_RDFCEntriesInTheirClosedForm(t *testing.T) {
 // Links is ValidateChainLinks' verdict on the chain, and the signers are
 // evaluated whatever it is.
 func TestVerifyChainSigners_LinksAreValidateChainLinks(t *testing.T) {
-	origin, child, keys := stageKeysChain(t, "", "")
+	origin, child, keys := keysChain(t, "", "")
 	v := vc.NewVerifier(local.New(), ed25519Verifier())
 	for name, chain := range map[string][]*vc.PipelinePassCredential{
 		"linked":                         {origin, child},
@@ -217,7 +217,7 @@ func TestVerifyChainSigners_Order(t *testing.T) {
 		{"one credential, unreadable", []*vc.PipelinePassCredential{created(origin, "yesterday")}, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := vc.NewVerifier(local.New(), ed25519Verifier()).VerifyChainSigners(context.Background(), &stageIssuers{}, tc.chain)
+			res, err := vc.NewVerifier(local.New(), ed25519Verifier()).VerifyChainSigners(context.Background(), &tableIssuers{}, tc.chain)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,24 +250,24 @@ func TestVerifyChainSigners_SignersAreVerifySignerAuthenticity(t *testing.T) {
 	_, otherPub := exampleCredential(t, issuerDID, nil)
 	for _, tc := range []struct {
 		name      string
-		stage     func(s *stageIssuers)
+		setup     func(s *tableIssuers)
 		lifecycle vc.LifecycleRegistry
 		notations bool
 	}{
 		{name: "every key"},
-		{name: "no key for the successor", stage: func(s *stageIssuers) { delete(s.keys, stageB+"#signing") }},
-		{name: "another key for the origin", stage: func(s *stageIssuers) { s.keys[stageA+"#signing"] = otherPub }},
-		{name: "a key of another method", stage: func(s *stageIssuers) {
-			s.answer = &vc.IssuerKey{ID: stageA + "#other", PublicKey: s.keys[stageA+"#signing"], Encoding: did.EncodingMultikey}
+		{name: "no key for the successor", setup: func(s *tableIssuers) { delete(s.keys, issuerB+"#signing") }},
+		{name: "another key for the origin", setup: func(s *tableIssuers) { s.keys[issuerA+"#signing"] = otherPub }},
+		{name: "a key of another method", setup: func(s *tableIssuers) {
+			s.answer = &vc.IssuerKey{ID: issuerA + "#other", PublicKey: s.keys[issuerA+"#signing"], Encoding: did.EncodingMultikey}
 		}},
-		{name: "a lookup that cannot answer", stage: func(s *stageIssuers) { s.keyErr = transient }},
+		{name: "a lookup that cannot answer", setup: func(s *tableIssuers) { s.keyErr = transient }},
 		{name: "a Deprecated suite", lifecycle: phaseLifecycle{phase: vc.PhaseDeprecated}, notations: true},
 		{name: "a Sunset suite", lifecycle: phaseLifecycle{phase: vc.PhaseSunset}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			origin, child, keys := stageKeysChain(t, "", "")
-			if tc.stage != nil {
-				tc.stage(keys)
+			origin, child, keys := keysChain(t, "", "")
+			if tc.setup != nil {
+				tc.setup(keys)
 			}
 			var opts []vc.VerifierOption
 			if tc.lifecycle != nil {
@@ -311,7 +311,7 @@ func TestVerifyChainSigners_TheIssuerIsAString(t *testing.T) {
 	if err := pass.UnmarshalJSON(raw); err != nil {
 		t.Fatal(err)
 	}
-	keys := &stageIssuers{keys: map[string][]byte{vmID: pub}}
+	keys := &tableIssuers{keys: map[string][]byte{vmID: pub}}
 	res, err := vc.NewVerifier(local.New(), ed25519Verifier()).VerifyChainSigners(context.Background(), keys, []*vc.PipelinePassCredential{&pass})
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func TestVerifyChainSigners_TheIssuerIsAString(t *testing.T) {
 // No part stops the others: a chain whose links and order both break has
 // both, and every signer.
 func TestVerifyChainSigners_EveryPartIsEvaluated(t *testing.T) {
-	origin, child, keys := stageKeysChain(t, "", "")
+	origin, child, keys := keysChain(t, "", "")
 	created := func(c *vc.PipelinePassCredential, at string) *vc.PipelinePassCredential {
 		return reUnmarshal(t, c, func(m map[string]any) { m["proof"].(map[string]any)["created"] = at })
 	}
@@ -343,7 +343,7 @@ func TestVerifyChainSigners_EveryPartIsEvaluated(t *testing.T) {
 // cancellingKeys cancels its context on its call number at, and then answers
 // with the context's error.
 type cancellingKeys struct {
-	inner  *stageIssuers
+	inner  *tableIssuers
 	cancel context.CancelFunc
 	at     int
 	calls  int
@@ -362,7 +362,7 @@ func (k *cancellingKeys) IssuerKey(ctx context.Context, cred *vc.Credential) (vc
 // keys, or a context done before a credential is evaluated. A lookup
 // cancelled inside the key source is that credential's indeterminate entry.
 func TestVerifyChainSigners_WhatItCannotEvaluate(t *testing.T) {
-	origin, child, keys := stageKeysChain(t, "", "")
+	origin, child, keys := keysChain(t, "", "")
 	v := vc.NewVerifier(local.New(), ed25519Verifier())
 	ctx := context.Background()
 	for name, c := range map[string]struct {
@@ -370,8 +370,8 @@ func TestVerifyChainSigners_WhatItCannotEvaluate(t *testing.T) {
 		chain []*vc.PipelinePassCredential
 		want  error
 	}{
-		"no credential":    {keys, nil, vc.ErrChainMalformed},
-		"a nil credential": {keys, []*vc.PipelinePassCredential{origin, nil}, vc.ErrChainMalformed},
+		"no credential":    {keys, nil, vc.ErrChainEmpty},
+		"a nil credential": {keys, []*vc.PipelinePassCredential{origin, nil}, vc.ErrChainEmpty},
 	} {
 		if res, err := v.VerifyChainSigners(ctx, c.keys, c.chain); res != nil || !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, %v; want nil and %v", name, res, err, c.want)
@@ -405,11 +405,69 @@ func TestVerifyChainSigners_WhatItCannotEvaluate(t *testing.T) {
 // credential.
 func TestChainOrderError(t *testing.T) {
 	e := &vc.ChainOrderError{Index: 2, Reason: "proof created is before its predecessor's"}
-	wrapped := fmt.Errorf("stage s3: %w", e)
+	wrapped := fmt.Errorf("wrapped: %w", e)
 	if !errors.Is(wrapped, vc.ErrChainOrder) || errors.Is(wrapped, vc.ErrChainLinkBroken) {
 		t.Errorf("errors.Is(%v): ErrChainOrder %t, ErrChainLinkBroken %t; want true, false", wrapped, errors.Is(wrapped, vc.ErrChainOrder), errors.Is(wrapped, vc.ErrChainLinkBroken))
 	}
 	if got, want := e.Error(), "vc: chain credential 2: proof created is before its predecessor's"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// State folds the three parts: a broken link, an order break or a failed
+// signer is failed; else an indeterminate signer is indeterminate; else
+// verified. A result with no signer, nil, and a signer whose State is none
+// of the three are failed.
+func TestChainSignersResult_State(t *testing.T) {
+	ok := vc.SignerAuthenticityResult{State: vc.ConfidenceVerified}
+	open := vc.SignerAuthenticityResult{State: vc.ConfidenceIndeterminate}
+	bad := vc.SignerAuthenticityResult{State: vc.ConfidenceFailed}
+	odd := vc.SignerAuthenticityResult{State: vc.ConfidenceState(99)}
+	negative := vc.SignerAuthenticityResult{State: vc.ConfidenceState(-1)}
+	link := &vc.ChainLinkError{Index: 1, Reason: "a broken link"}
+	order := &vc.ChainOrderError{Index: 1, Reason: "out of order"}
+	signers := func(s ...vc.SignerAuthenticityResult) []vc.SignerAuthenticityResult { return s }
+	for name, c := range map[string]struct {
+		r    *vc.ChainSignersResult
+		want vc.ConfidenceState
+	}{
+		"every signer verified":            {&vc.ChainSignersResult{Signers: signers(ok, ok)}, vc.ConfidenceVerified},
+		"one signer verified":              {&vc.ChainSignersResult{Signers: signers(ok)}, vc.ConfidenceVerified},
+		"one indeterminate":                {&vc.ChainSignersResult{Signers: signers(ok, open)}, vc.ConfidenceIndeterminate},
+		"one failed":                       {&vc.ChainSignersResult{Signers: signers(ok, bad)}, vc.ConfidenceFailed},
+		"failed after indeterminate":       {&vc.ChainSignersResult{Signers: signers(open, bad)}, vc.ConfidenceFailed},
+		"indeterminate after failed":       {&vc.ChainSignersResult{Signers: signers(bad, open)}, vc.ConfidenceFailed},
+		"a broken link":                    {&vc.ChainSignersResult{Links: link, Signers: signers(ok, ok)}, vc.ConfidenceFailed},
+		"out of order":                     {&vc.ChainSignersResult{Order: order, Signers: signers(ok, ok)}, vc.ConfidenceFailed},
+		"a broken link, one indeterminate": {&vc.ChainSignersResult{Links: link, Signers: signers(ok, open)}, vc.ConfidenceFailed},
+		"a state none of the three":        {&vc.ChainSignersResult{Signers: signers(ok, odd)}, vc.ConfidenceFailed},
+		"a negative state":                 {&vc.ChainSignersResult{Signers: signers(open, negative)}, vc.ConfidenceFailed},
+		"no signer":                        {&vc.ChainSignersResult{}, vc.ConfidenceFailed},
+		"nil":                              {nil, vc.ConfidenceFailed},
+	} {
+		if got := c.r.State(); got != c.want {
+			t.Errorf("%s: State = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// State agrees with the parts of what VerifyChainSigners returns.
+func TestChainSignersResult_StateOfWhatItReturns(t *testing.T) {
+	origin, child, keys := keysChain(t, "", "")
+	v := vc.NewVerifier(local.New(), ed25519Verifier())
+	ctx := context.Background()
+	res, err := v.VerifyChainSigners(ctx, keys, []*vc.PipelinePassCredential{origin, child})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State() != vc.ConfidenceVerified {
+		t.Errorf("a linked chain in order, every signer verified: State = %v, want verified", res.State())
+	}
+	delete(keys.keys, issuerB+"#signing")
+	if res, err = v.VerifyChainSigners(ctx, keys, []*vc.PipelinePassCredential{origin, child}); err != nil || res.State() != vc.ConfidenceFailed {
+		t.Errorf("no key for the successor: %v, %v; want failed", res.State(), err)
+	}
+	if res, err = v.VerifyChainSigners(ctx, keys, []*vc.PipelinePassCredential{child}); err != nil || res.Links == nil || res.State() != vc.ConfidenceFailed {
+		t.Errorf("the successor alone: %+v, %v; want a broken link and failed", res, err)
 	}
 }

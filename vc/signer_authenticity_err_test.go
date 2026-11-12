@@ -84,7 +84,7 @@ func TestVerifySignerAuthenticity_ErrTellsTheCause(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		mutate    func(map[string]any)
-		stage     func(s *stageIssuers, pub []byte)
+		setup     func(s *tableIssuers, pub []byte)
 		lifecycle vc.LifecycleRegistry
 		state     vc.ConfidenceState
 		want      error
@@ -123,20 +123,20 @@ func TestVerifySignerAuthenticity_ErrTellsTheCause(t *testing.T) {
 		{name: "a suite in no phase", lifecycle: phaseLifecycle{phase: vc.PhaseUnknown},
 			state: vc.ConfidenceFailed, want: vc.ErrProofPolicy, noKeyCall: true},
 
-		{name: "no key under the verificationMethod", stage: func(s *stageIssuers, _ []byte) { delete(s.keys, vmID) },
+		{name: "no key under the verificationMethod", setup: func(s *tableIssuers, _ []byte) { delete(s.keys, vmID) },
 			state: vc.ConfidenceFailed, want: vc.ErrIssuerNotFound},
-		{name: "a key of another method", stage: func(s *stageIssuers, pub []byte) {
+		{name: "a key of another method", setup: func(s *tableIssuers, pub []byte) {
 			s.answer = &vc.IssuerKey{ID: issuerDID + "#other", PublicKey: pub, Encoding: did.EncodingMultikey}
 		}, state: vc.ConfidenceFailed, want: vc.ErrIssuerNotFound},
-		{name: "a key lookup that cannot answer", stage: func(s *stageIssuers, _ []byte) { s.keyErr = transient },
+		{name: "a key lookup that cannot answer", setup: func(s *tableIssuers, _ []byte) { s.keyErr = transient },
 			state: vc.ConfidenceIndeterminate, want: transient},
 
-		{name: "a key that did not sign", stage: func(s *stageIssuers, _ []byte) { s.keys[vmID] = otherPub },
+		{name: "a key that did not sign", setup: func(s *tableIssuers, _ []byte) { s.keys[vmID] = otherPub },
 			state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
 		{name: "a body changed after signing", mutate: func(m map[string]any) {
 			m["credentialSubject"].(map[string]any)["role"] = "approver"
 		}, state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
-		{name: "a key encoding no contract takes with the proof's shape", stage: func(s *stageIssuers, pub []byte) {
+		{name: "a key encoding no contract takes with the proof's shape", setup: func(s *tableIssuers, pub []byte) {
 			s.answer = &vc.IssuerKey{ID: vmID, PublicKey: pub, Encoding: did.EncodingJWK}
 		}, state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
 
@@ -145,23 +145,23 @@ func TestVerifySignerAuthenticity_ErrTellsTheCause(t *testing.T) {
 
 		// An established failure wins over a transient one.
 		{name: "a policy failure and a key lookup that cannot answer", mutate: setProof("verificationMethod", "did:example:other#signing"),
-			stage: func(s *stageIssuers, _ []byte) { s.keyErr = transient },
+			setup: func(s *tableIssuers, _ []byte) { s.keyErr = transient },
 			state: vc.ConfidenceFailed, want: vc.ErrProofPolicy, noKeyCall: true},
 		{name: "a Sunset suite and a key lookup that cannot answer", lifecycle: phaseLifecycle{phase: vc.PhaseSunset},
-			stage: func(s *stageIssuers, _ []byte) { s.keyErr = transient },
+			setup: func(s *tableIssuers, _ []byte) { s.keyErr = transient },
 			state: vc.ConfidenceFailed, want: vc.ErrProofPolicy, noKeyCall: true},
 		{name: "a key that did not sign and a lifecycle lookup that cannot answer", lifecycle: phaseLifecycle{err: registryDown},
-			stage: func(s *stageIssuers, _ []byte) { s.keys[vmID] = otherPub },
+			setup: func(s *tableIssuers, _ []byte) { s.keys[vmID] = otherPub },
 			state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
 		{name: "no key and a lifecycle lookup that cannot answer", lifecycle: phaseLifecycle{err: registryDown},
-			stage: func(s *stageIssuers, _ []byte) { delete(s.keys, vmID) },
+			setup: func(s *tableIssuers, _ []byte) { delete(s.keys, vmID) },
 			state: vc.ConfidenceFailed, want: vc.ErrIssuerNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cred, pub := exampleCredential(t, issuerDID, tc.mutate)
-			s := &stageIssuers{keys: map[string][]byte{vmID: pub}}
-			if tc.stage != nil {
-				tc.stage(s, pub)
+			s := &tableIssuers{keys: map[string][]byte{vmID: pub}}
+			if tc.setup != nil {
+				tc.setup(s, pub)
 			}
 			opts := []vc.VerifierOption{vc.WithIssuerVerifier(s)}
 			if tc.lifecycle != nil {
@@ -186,7 +186,7 @@ func TestVerifySignerAuthenticity_ErrTellsTheCause(t *testing.T) {
 // result itself: the proof verified, so the signer's fields stay set.
 func TestVerifySignerAuthenticity_ErrLeavesTheSignerFields(t *testing.T) {
 	cred, pub := exampleCredential(t, issuerDID, nil)
-	s := &stageIssuers{keys: map[string][]byte{vmID: pub}}
+	s := &tableIssuers{keys: map[string][]byte{vmID: pub}}
 	registryDown := errors.New("lifecycle registry unreachable")
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s), vc.WithLifecycleRegistry(phaseLifecycle{err: registryDown}))
 	res, err := v.VerifySignerAuthenticity(context.Background(), cred)
@@ -265,21 +265,21 @@ func TestVerifySignerAuthenticity_ErrBoundsWhatOthersReturn(t *testing.T) {
 		for _, tc := range []struct {
 			name      string
 			mutate    func(map[string]any)
-			stage     func(s *stageIssuers)
+			setup     func(s *tableIssuers)
 			lifecycle vc.LifecycleRegistry
 			sig       crypto.Verifier
 			state     vc.ConfidenceState
 			want      func(err error) error
 		}{
-			{name: "the issuer verifier's not-found error", stage: func(s *stageIssuers) { s.keyErr = mk(vc.ErrIssuerNotFound) },
+			{name: "the issuer verifier's not-found error", setup: func(s *tableIssuers) { s.keyErr = mk(vc.ErrIssuerNotFound) },
 				state: vc.ConfidenceFailed, want: func(error) error { return vc.ErrIssuerNotFound }},
-			{name: "the issuer verifier's transient error", stage: func(s *stageIssuers) { s.keyErr = mk(nil) },
+			{name: "the issuer verifier's transient error", setup: func(s *tableIssuers) { s.keyErr = mk(nil) },
 				state: vc.ConfidenceIndeterminate, want: func(err error) error { return err }},
 			{name: "the lifecycle registry's error", lifecycle: phaseLifecycle{err: mk(nil)},
 				state: vc.ConfidenceIndeterminate, want: func(err error) error { return err }},
 			{name: "the signature verifier's error", sig: failingSignatures{err: mk(nil)},
 				state: vc.ConfidenceFailed, want: func(error) error { return vc.ErrSignatureInvalid }},
-			{name: "a key of another, long method", stage: func(s *stageIssuers) {
+			{name: "a key of another, long method", setup: func(s *tableIssuers) {
 				s.answer = &vc.IssuerKey{ID: issuerDID + "#" + long, PublicKey: s.keys[vmID], Encoding: did.EncodingMultikey}
 			}, state: vc.ConfidenceFailed, want: func(error) error { return vc.ErrIssuerNotFound }},
 			{name: "a long member outside the signature", mutate: func(m map[string]any) { m["proof"].(map[string]any)[long] = "x" },
@@ -289,9 +289,9 @@ func TestVerifySignerAuthenticity_ErrBoundsWhatOthersReturn(t *testing.T) {
 		} {
 			t.Run(kind+": "+tc.name, func(t *testing.T) {
 				cred, pub := exampleCredential(t, issuerDID, tc.mutate)
-				s := &stageIssuers{keys: map[string][]byte{vmID: pub}}
-				if tc.stage != nil {
-					tc.stage(s)
+				s := &tableIssuers{keys: map[string][]byte{vmID: pub}}
+				if tc.setup != nil {
+					tc.setup(s)
 				}
 				opts := []vc.VerifierOption{vc.WithIssuerVerifier(s)}
 				if tc.lifecycle != nil {
@@ -310,7 +310,7 @@ func TestVerifySignerAuthenticity_ErrBoundsWhatOthersReturn(t *testing.T) {
 				}
 				var want error
 				switch {
-				case tc.stage != nil && s.keyErr != nil:
+				case tc.setup != nil && s.keyErr != nil:
 					want = tc.want(s.keyErr)
 				case tc.lifecycle != nil:
 					want = tc.want(tc.lifecycle.(phaseLifecycle).err)

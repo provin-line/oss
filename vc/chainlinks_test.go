@@ -167,8 +167,8 @@ func TestValidateChainLinks_BrokenLinks(t *testing.T) {
 			if linkErr.Index != tc.wantIndex || linkErr.Reason == "" {
 				t.Errorf("Index, Reason = %d, %q; want %d and a reason", linkErr.Index, linkErr.Reason, tc.wantIndex)
 			}
-			if !errors.Is(err, vc.ErrChainLinkBroken) || errors.Is(err, vc.ErrChainMalformed) {
-				t.Errorf("err = %v, want ErrChainLinkBroken and not ErrChainMalformed", err)
+			if !errors.Is(err, vc.ErrChainLinkBroken) || errors.Is(err, vc.ErrChainEmpty) {
+				t.Errorf("err = %v, want ErrChainLinkBroken and not ErrChainEmpty", err)
 			}
 			if !tc.wellFormed {
 				return
@@ -215,13 +215,13 @@ func TestValidateChainLinks_SourceCommitmentOfAnIssuerlessPredecessor(t *testing
 }
 
 // Nothing to link is an error of another kind than a broken link:
-// ErrChainMalformed. An empty origin input is the caller's argument, not the
+// ErrChainEmpty. An empty origin input is the caller's argument, not the
 // chain: it is neither.
 func TestValidateChainLinksAndFrom_NothingToLink(t *testing.T) {
 	origin, _, _ := buildChainFixture(t, procAOrigin, procBSameOrg)
 	for name, c := range map[string]struct {
-		err       error
-		malformed bool
+		err   error
+		empty bool
 	}{
 		"empty chain":          {vc.ValidateChainLinks(nil), true},
 		"empty chain (from)":   {vc.ValidateChainFrom(nil, chainFixtureInput), true},
@@ -234,12 +234,11 @@ func TestValidateChainLinksAndFrom_NothingToLink(t *testing.T) {
 		if c.err == nil || errors.As(c.err, &linkErr) || errors.Is(c.err, vc.ErrChainLinkBroken) {
 			t.Errorf("%s: err = %v, want an error that is not a *ChainLinkError nor ErrChainLinkBroken", name, c.err)
 		}
-		if errors.Is(c.err, vc.ErrChainMalformed) != c.malformed {
-			t.Errorf("%s: err = %v, errors.Is ErrChainMalformed = %t, want %t", name, c.err, !c.malformed, c.malformed)
+		if errors.Is(c.err, vc.ErrChainEmpty) != c.empty {
+			t.Errorf("%s: err = %v, errors.Is ErrChainEmpty = %t, want %t", name, c.err, !c.empty, c.empty)
 		}
 	}
-	// The texts are the ones these errors had before they were
-	// ErrChainMalformed.
+	// Each text says what is missing, and where.
 	for err, want := range map[error]string{
 		vc.ValidateChainLinks(nil):                                       "vc: empty chain",
 		vc.ValidateChainLinks([]*vc.PipelinePassCredential{origin, nil}): "vc: chain credential 1 is nil",
@@ -254,11 +253,11 @@ func TestValidateChainLinksAndFrom_NothingToLink(t *testing.T) {
 // nothing else of this package's.
 func TestChainLinkError_IsErrChainLinkBroken(t *testing.T) {
 	e := &vc.ChainLinkError{Index: 1, Reason: "inputHash is not the predecessor's outputHash"}
-	wrapped := fmt.Errorf("stage s2: %w", e)
+	wrapped := fmt.Errorf("wrapped: %w", e)
 	if !errors.Is(e, vc.ErrChainLinkBroken) || !errors.Is(wrapped, vc.ErrChainLinkBroken) {
 		t.Errorf("errors.Is(%v, ErrChainLinkBroken) = false", wrapped)
 	}
-	for _, other := range []error{vc.ErrChainMalformed, vc.ErrIssuerNotFound, vc.ErrSignatureInvalid} {
+	for _, other := range []error{vc.ErrChainEmpty, vc.ErrIssuerNotFound, vc.ErrSignatureInvalid} {
 		if errors.Is(wrapped, other) {
 			t.Errorf("errors.Is(%v, %v) = true", wrapped, other)
 		}

@@ -1464,8 +1464,7 @@ func requireProcessDID(didStr, loop, field string) error {
 }
 
 // loadRegistry reads an optional registry ID: the {registry} segment of a
-// did:dplaax DID, by the same grammar and bound dplaax.Parse applies. Absent
-// is "".
+// did:dplaax DID, as dplaax.ValidateRegistry checks it. Absent is "".
 func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
 	if !cfg.Has(key) {
 		return "", nil
@@ -1474,8 +1473,8 @@ func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
 	}
-	if !dplaax.IsSafeSegment(v) || len(v) > dplaax.MaxRegistryLen {
-		return "", fmt.Errorf("pipeline: config %s: %s is not a registry ID ([A-Za-z0-9._-], not all dots, at most %d octets)", key, excerpt.Quoted(v, 128), dplaax.MaxRegistryLen)
+	if err := dplaax.ValidateRegistry(v); err != nil {
+		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
 	}
 	return v, nil
 }

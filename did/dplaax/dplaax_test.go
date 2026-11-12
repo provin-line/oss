@@ -263,3 +263,92 @@ func TestValidation_NamesWhatItRefusesWithinABound(t *testing.T) {
 		}
 	}
 }
+
+// ValidateRegistry takes exactly the registry segments Parse takes: the
+// safe-segment grammar and at most MaxRegistryLen octets.
+func TestValidateRegistry(t *testing.T) {
+	for id, ok := range map[string]bool{
+		"poc.dplaax.dev":         true,
+		"a":                      true,
+		"1":                      true,
+		"a_b-c.d":                true,
+		"under_score.example":    true,
+		strings.Repeat("a", 253): true,
+		"":                       false,
+		".":                      false,
+		"..":                     false,
+		strings.Repeat("a", 254): false,
+		"a/b":                    false,
+		"a b":                    false,
+		"a*":                     false,
+		"a#b":                    false,
+		"é.example":              false,
+	} {
+		err := dplaax.ValidateRegistry(id)
+		if (err == nil) != ok {
+			t.Errorf("ValidateRegistry(%.40q) = %v, want accepted %t", id, err, ok)
+		}
+		_, perr := dplaax.Parse("did:dplaax:" + id + ":org:acme")
+		if (perr == nil) != ok {
+			t.Errorf("Parse with registry %.40q = %v, want accepted %t, as ValidateRegistry", id, perr, ok)
+		}
+	}
+}
+
+// ValidateRegistry names what it refuses within a bound, however long the
+// registry, and the length of one that is too long.
+func TestValidateRegistry_NamesWhatItRefusesWithinABound(t *testing.T) {
+	long := strings.Repeat("a", 200<<10)
+	err := dplaax.ValidateRegistry(long + "!")
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long)+1)) {
+		t.Errorf("a long unsafe registry: %.200v, want a refusal naming the head and the length", err)
+	}
+	err = dplaax.ValidateRegistry(long)
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprint(len(long))) {
+		t.Errorf("a long registry: %.200v, want a refusal naming its length", err)
+	}
+}
+
+// Pipeline is the hierarchy's answer (did.dplaax.hierarchy): only a Process
+// has a Pipeline. PipelineDID truncates any resource path that begins with
+// pipeline.
+func TestPipeline(t *testing.T) {
+	for _, c := range []struct {
+		did  string
+		want string
+	}{
+		{"did:dplaax:r.example:org:acme:pipeline:p1:process:q1", "did:dplaax:r.example:org:acme:pipeline:p1"},
+		{"did:dplaax:r.example:org:acme:pipeline:p1", ""},
+		{"did:dplaax:r.example:org:acme", ""},
+		{"did:dplaax:r.example:org:acme:pipeline:p1:widget:w1", ""},
+		{"did:dplaax:r.example:org:acme:pipeline:p1:process:q1:step:s1", ""},
+		{"did:dplaax:r.example:org:acme:widget:w1:process:q1", ""},
+	} {
+		d, err := dplaax.Parse(c.did)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.did, err)
+		}
+		p, ok := d.Pipeline()
+		switch {
+		case c.want == "" && (ok || p != nil):
+			t.Errorf("Pipeline of %q = %v, %t, want none", c.did, p, ok)
+		case c.want != "" && (!ok || p == nil || p.String() != c.want || !p.IsPipeline()):
+			t.Errorf("Pipeline of %q = %v, %t, want %s", c.did, p, ok, c.want)
+		}
+	}
+
+	if p, ok := (*dplaax.DID)(nil).Pipeline(); ok || p != nil {
+		t.Errorf("Pipeline of nil = %v, %t, want none", p, ok)
+	}
+
+	d, _ := dplaax.Parse("did:dplaax:r.example:org:acme:pipeline:p1:process:q1")
+	p, _ := d.Pipeline()
+	d.ResourcePath[1] = "MUTATED"
+	if p.String() != "did:dplaax:r.example:org:acme:pipeline:p1" {
+		t.Error("Pipeline() aliased the Process's ResourcePath")
+	}
+	p.ResourcePath[1] = "ALSO"
+	if d.ResourcePath[1] != "MUTATED" {
+		t.Error("the Process shares its ResourcePath with its Pipeline")
+	}
+}
