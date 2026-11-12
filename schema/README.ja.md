@@ -13,7 +13,9 @@ schema レジストリのクライアント側コントラクト：`Validator` �
 
 ## 限り
 
-JSON Schema の library は `internal/jsonschema` で、`santhosh-tekuri/jsonschema` の写しに patch を足したもの: 手間の予算、読めない数で upstream が panic する所の誤り、schema の大きさにほぼ線形の時間での compile（`uniqueItems` が長い前置きを共にする object の名前を並べる所では、最大で log n 倍）、予算の中での metaschema の確かめ、数を読めない数の keyword を compile の誤りにすること、`int` の範囲を越える整数の keyword を範囲の端として読むこと（その README を参照）。断る時の誤りの文は、どの限りで断ったかを書く。
+JSON Schema の library は `internal/jsonschema` で、`santhosh-tekuri/jsonschema` の写しに patch を足したもの: 手間の予算、読めない数で upstream が panic する所の誤り、schema の大きさにほぼ線形の時間での compile（`uniqueItems` が長い前置きを共にする object の名前を並べる所では、最大で log n 倍）、予算の中での metaschema の確かめ、数を読めない数の keyword を compile の誤りにすること、`int` の範囲を越える整数の keyword を範囲の端として読むこと、整数でない値を持つ整数の keyword を compile の誤りにすること（その README を参照）。断る時の誤りの文は、どの限りで断ったかを書く。
+
+schema の正規表現（`pattern`、`patternProperties` の名前）の Unicode の一般カテゴリ（`\p{L}`、`\p{Letter}` …）が持つ code point は、Go の toolchain の `unicode` の表が決め、その範囲の数は正規表現の限り（8,192）に数える。だから toolchain は、schema が受ける文字列と、schema をそもそも受け入れるかの両方を決める。後の Unicode の版を持つ toolchain では、同じ schema で受ける文字列が変わりうるし、前の toolchain が受け入れた schema を断りうる。go.mod の `toolchain` の行は、この module を build する最小の版であって、固定ではない。go1.26.10 は Unicode 15.0.0、go1.27 は Unicode 17.0.0 を持つ（`unicode.Version`）。
 
 この package は、schema の大きさを限らない。限るのは呼び手で、network の schema の登録は 1 MiB で限る（文書の request の限り）。下の限りは schema の大きさとともに増え、schema の重さもそれとともに増える。1 MiB の schema が compile した形で持つのは約 170 MB まで。測った最悪の形で、compile か拒否に約 0.8 s かかる（下）。
 

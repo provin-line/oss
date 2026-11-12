@@ -283,6 +283,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   keyword as absent, and so did `multipleOf` where the library skips the
   metaschema check. The schema package refuses these numbers before the
   library reads them, so its behaviour does not change.
+- `internal/jsonschema` fails the compile of a schema whose integer keyword
+  (`minLength`, `maxLength`, `minItems`, `maxItems`, `minProperties`,
+  `maxProperties`, `minContains`, `maxContains`) holds a value that is not an
+  integer (a number with a fraction, or a value that is not a number), with a
+  `*NonIntegerError`, under every draft that has the keyword, where the
+  library reads it; where the library skips the metaschema check, it compiled
+  such a keyword as absent. A number with no fraction, such as `2.0`, is an
+  integer. The schema package compiles every schema at a location the library
+  checks against its metaschema, which refuses these values first, so its
+  behaviour does not change.
 - `schema`: in a schema it compiles, an integer keyword (`minLength`,
   `maxLength`, `minItems`, `maxItems`, `minProperties`, `maxProperties`,
   `minContains`, `maxContains`) whose value is an integer above `math.MaxInt`
@@ -409,6 +419,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Documentation
 
+- `schema`: the README (en/ja) and `pattern`'s doc say that the Unicode
+  general categories in a schema's regular expressions hold the code points
+  the Go toolchain's `unicode` tables give them, and that their ranges count
+  toward the bound on a regular expression, so a toolchain that carries a
+  later Unicode version can change which strings the same schema accepts
+  and can refuse a schema an earlier one admitted. go.mod's `toolchain` is
+  the least version, not a pin (go1.26.10: Unicode 15.0.0; go1.27: Unicode
+  17.0.0).
 - `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
   view binds the signer DID), D-w10 (nonces per signer), D-w11 (the fields'
   value grammar) and D-w12 (the view binds the audience), which the code

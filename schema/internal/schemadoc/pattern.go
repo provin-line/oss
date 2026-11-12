@@ -191,7 +191,12 @@ func nodeSize(re *syntax.Regexp) int64 {
 //     (unicode.Categories: L, Lu, Nd ...) or by a long name or alias
 //     (categoryAliases: Letter, Decimal_Number, digit ...), spelled exactly
 //     as ECMA-262 spells them; Go's parser, which reads such names
-//     loosely, reads these as ECMA-262 does;
+//     loosely, reads these as ECMA-262 does. A category holds the code
+//     points the toolchain's unicode tables give it, and its ranges count
+//     toward maxPatternSize, so a toolchain that carries a later Unicode
+//     version (unicode.Version: 15.0.0 with go1.26.10, 17.0.0 with go1.27)
+//     can change what a pattern matches and refuse a pattern an earlier
+//     one admitted;
 //   - a class [...] or [^...] of characters, those escapes (\b and \B
 //     aside) and \- , and ranges of two characters, the first not after
 //     the second; not empty, with no [ inside;

@@ -199,7 +199,8 @@ func TestCompile_RefusesANumberKeywordItCannotRead(t *testing.T) {
 
 // An integer keyword reads an integer above math.MaxInt as math.MaxInt, and
 // one below math.MinInt as math.MinInt, under every draft that has it; a
-// number big.Rat cannot read is a *LargeNumberError at the keyword.
+// number big.Rat cannot read is a *LargeNumberError at the keyword, and a
+// value that is not an integer a *NonIntegerError.
 func TestCompile_ReadsAnIntegerKeywordBeyondIntAsTheNearestInt(t *testing.T) {
 	const above, below = "18446744073709551616", "-18446744073709551616" // ±2^64
 	for _, c := range []struct {
@@ -264,6 +265,63 @@ func TestCompile_ReadsAnIntegerKeywordBeyondIntAsTheNearestInt(t *testing.T) {
 		if !errors.As(err, &lne) || !strings.HasSuffix(lne.URL, "#/"+keyword) {
 			t.Errorf("%s %s below json-schema.org: %v, want a *LargeNumberError at /%s", keyword, large, err, keyword)
 		}
+	}
+
+	// The metaschema refuses an integer keyword whose value is not an
+	// integer; below json-schema.org the compiler alone refuses it, with a
+	// *NonIntegerError at the keyword, rather than reading it as absent. A
+	// number with no fraction is an integer.
+	for _, c := range []struct{ keyword, value string }{
+		{"minLength", "1.5"},
+		{"maxLength", "-0.5"},
+		{"minItems", "2.5"},
+		{"maxItems", `"5"`},
+		{"minProperties", "true"},
+		{"maxProperties", "null"},
+		{"minContains", "[1]"},
+		{"maxContains", `{"a": 1}`},
+	} {
+		schema := `{"` + c.keyword + `": ` + c.value + `}`
+		if c.keyword == "minContains" || c.keyword == "maxContains" {
+			schema = `{"contains": {}, "` + c.keyword + `": ` + c.value + `}`
+		}
+		_, err := compileAt(schema)
+		var nie *jsonschema.NonIntegerError
+		if !errors.As(err, &nie) || !strings.HasSuffix(nie.URL, "#/"+c.keyword) {
+			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError at /%s", schema, err, c.keyword)
+		}
+	}
+	if sch, err := compileAt(`{"minLength": 2.0}`); err != nil || sch.MinLength == nil || *sch.MinLength != 2 {
+		t.Errorf(`{"minLength": 2.0} below json-schema.org: %v, want it read as 2`, err)
+	}
+	// Under draft 4 and draft 2019-09 too.
+	for _, schema := range []string{
+		`{"$schema": "http://json-schema.org/draft-04/schema#", "minLength": 1.5}`,
+		`{"$schema": "https://json-schema.org/draft/2019-09/schema", "contains": {}, "minContains": 1.5}`,
+	} {
+		var nie *jsonschema.NonIntegerError
+		if _, err := compileAt(schema); !errors.As(err, &nie) {
+			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError", schema, err)
+		}
+	}
+	// A document made of Go values: a float64 with a fraction is refused.
+	c := jsonschema.NewCompiler()
+	const loc = "https://json-schema.org/integer-keyword-go.json"
+	if err := c.AddResource(loc, map[string]any{"minLength": 1.5}); err != nil {
+		t.Fatal(err)
+	}
+	var nie *jsonschema.NonIntegerError
+	if _, err := c.Compile(loc); !errors.As(err, &nie) {
+		t.Errorf("a float64 1.5 below json-schema.org: %v, want a *NonIntegerError", err)
+	}
+	// The error writes the value as JSON writes it, so a string reads as one.
+	if _, err := compileAt(`{"maxItems": "5"}`); err == nil || !strings.Contains(err.Error(), `"5"`) {
+		t.Errorf(`{"maxItems": "5"}: %v, want the value written as the string "5"`, err)
+	}
+	// Elsewhere, the metaschema refuses such a value before the compiler
+	// reads the keyword.
+	if _, err := compile(`{"minLength": 1.5}`); err == nil || errors.As(err, &nie) {
+		t.Errorf(`{"minLength": 1.5}: %v, want the metaschema's refusal`, err)
 	}
 }
 

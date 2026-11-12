@@ -2,8 +2,9 @@
 // lines marked "work budget"), a reference's target found once for each URL
 // it resolves to (the lines marked "reference index"), a number keyword whose
 // number cannot be read refused (the lines marked "number keyword"), and an
-// integer keyword beyond int read as the nearest int (the lines marked
-// "integer keyword"). See README.md in this directory.
+// integer keyword beyond int read as the nearest int and one whose value is
+// not an integer refused (the lines marked "integer keyword"). See README.md
+// in this directory.
 
 package jsonschema
 
@@ -549,11 +550,18 @@ func (c *objCompiler) numberKeyword(pname string) (*big.Rat, error) { // number 
 // intKeyword reads the integer keyword pname: an integer within int as
 // itself, one above math.MaxInt as math.MaxInt, one below math.MinInt as
 // math.MinInt. A number big.Rat cannot read is a *LargeNumberError, and a
-// number that is not an integer reads as absent.
+// value that is not an integer is a *NonIntegerError.
 func (c *objCompiler) intKeyword(pname string) (*int, error) { // integer keyword
-	n, err := c.numberKeyword(pname)          // integer keyword
-	if err != nil || n == nil || !n.IsInt() { // integer keyword
+	v, ok := c.obj[pname] // integer keyword
+	if !ok {              // integer keyword
+		return nil, nil // integer keyword
+	} // integer keyword
+	n, err := c.numberKeyword(pname) // integer keyword
+	if err != nil {                  // integer keyword
 		return nil, err // integer keyword
+	} // integer keyword
+	if n == nil || !n.IsInt() { // integer keyword
+		return nil, &NonIntegerError{URL: c.up.format(pname), Value: v} // integer keyword
 	} // integer keyword
 	i := math.MaxInt         // integer keyword
 	switch num := n.Num(); { // integer keyword
@@ -616,6 +624,24 @@ type LargeNumberError struct { // number keyword
 func (e *LargeNumberError) Error() string { // number keyword
 	return fmt.Sprintf("number too large to parse %v at %q", e.Value, e.URL) // number keyword
 } // number keyword
+
+// NonIntegerError reports an integer keyword (minLength, maxLength,
+// minItems, maxItems, minProperties, maxProperties, minContains,
+// maxContains) whose value is not an integer: a number with a fraction, or a
+// value that is not a number. A number with no fraction, such as 2.0, is an
+// integer.
+type NonIntegerError struct { // integer keyword
+	URL   string // integer keyword
+	Value any    // integer keyword
+} // integer keyword
+
+func (e *NonIntegerError) Error() string { // integer keyword
+	value := fmt.Sprint(e.Value)                     // integer keyword
+	if b, err := json.Marshal(e.Value); err == nil { // integer keyword
+		value = string(b) // integer keyword
+	} // integer keyword
+	return fmt.Sprintf("integer keyword holds %s, which is not an integer, at %q", value, e.URL) // integer keyword
+} // integer keyword
 
 // --
 

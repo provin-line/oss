@@ -23,9 +23,21 @@ The JSON Schema library is `internal/jsonschema`, a copy of
 number it cannot read where upstream panics, compiling a schema in time
 about linear in its size (up to a factor of log n where `uniqueItems` sorts
 object names that share a long prefix), its check against its metaschema within a work
-budget, a compile error for a number keyword whose number it cannot read, and
-an integer keyword beyond the range of `int` read at that range's end (its
+budget, a compile error for a number keyword whose number it cannot read, an
+integer keyword beyond the range of `int` read at that range's end, and a
+compile error for an integer keyword whose value is not an integer (its
 README). Each refusal names the bound it hit.
+
+The Unicode general categories in a schema's regular expressions
+(`pattern`, the names of `patternProperties`; `\p{L}`, `\p{Letter}` …) hold
+the code points the Go toolchain's `unicode` tables give them, and their
+ranges count toward the bound on a regular expression (8,192). So the
+toolchain decides both which strings a schema accepts and whether the schema
+is admitted at all: a toolchain that carries a later Unicode version can
+accept or refuse other strings with the same schema, and can refuse a schema
+an earlier one admitted. The `toolchain` line in go.mod is the least version
+this module builds with, not a pin: go1.26.10 carries Unicode 15.0.0, and
+go1.27 Unicode 17.0.0 (`unicode.Version`).
 
 This package does not bound a schema's size: its caller does, as the
 network's schema registration does at 1 MiB (the bound of a document request).
