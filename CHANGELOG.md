@@ -60,8 +60,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `vc.ErrIssuerNotFound` or `vc.ErrSignatureInvalid` for a failed verdict,
   and the issuer verifier's or the lifecycle registry's own error for an
   indeterminate one. The field's documentation lists each condition and the
-  order they are decided in. `State` and the other fields are unchanged, and
-  so are `Verify`'s and `VerifyChain`'s verdicts.
+  order they are decided in: a failed verdict's `Err` matches exactly one of
+  these sentinels, the one for the first condition met, and an indeterminate
+  one's none of them. An error of a component the caller passes (an issuer
+  verifier or `VerifyChainSigners`' `IssuerKeys`, a resolver, a signature
+  verifier, a lifecycle registry) is
+  wrapped as it is, so another sentinel of `vc` it wraps is found too; that
+  is outside the promise. `State` and the other fields are unchanged, and so
+  are `Verify`'s and `VerifyChain`'s verdicts.
 - `vc`: the chain-link checks tell their failures apart without reading
   text. `ValidateChainLinks` and `ValidateChainFrom` return an error that is
   `vc.ErrChainLinkBroken` for a broken link (a `*ChainLinkError`, which now
@@ -76,8 +82,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   Owner. It takes an `IssuerKeys`, the key half of `IssuerVerifier` (which
   now embeds it, with the same methods), and returns a `ChainSignersResult`:
   the links (as `ValidateChainLinks` checks them), the order of the proofs'
-  created times (`vc.ErrChainOrder`, a `*ChainOrderError` naming the later
-  credential of the first pair out of order) and each credential's signer
+  created times (`vc.ErrChainOrder`, a `*ChainOrderError` whose `Index` is
+  the later credential of the first pair out of order and whose
+  `FaultIndex` is the credential the reported defect is in; its
+  documentation gives the order a pair's defects are reported in) and each
+  credential's signer
   verdict, its suite contract included, with `State` folding the three into
   one verdict (a check added later is folded into it). It establishes no
   Owner; its documentation lists what a caller still checks. `VerifyChain` is

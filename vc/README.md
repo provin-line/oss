@@ -122,7 +122,8 @@ different ones, so neither is the signed credential's identity.
 - A chain by its keys alone: `Verifier.VerifyChainSigners` takes an
   `IssuerKeys` (the key half of `IssuerVerifier`; any `IssuerVerifier` is
   one) and returns the chain's links, the order of its proofs' created times
-  (`ErrChainOrder`, a `*ChainOrderError` with the later credential's index)
+  (`ErrChainOrder`, a `*ChainOrderError` with the later credential's index
+  and the index of the credential the reported defect is in, `FaultIndex`)
   and each credential's signer verdict, contract included, with `State`
   folding them into one verdict. It establishes no Owner, so it fits
   credentials whose issuers are not Process DIDs; the caller accepts only the

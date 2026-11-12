@@ -71,8 +71,16 @@ type ChainOrderError struct {
 	// Index is the later credential's position: the pair is (Index-1, Index),
 	// also when it is the earlier credential's time that cannot be read.
 	Index int
+	// FaultIndex is the position of the credential the order break was found
+	// at, Index-1 or Index: of the pair's defects, the first in this order is
+	// reported, the earlier credential's proof missing (Index-1), the later
+	// one's proof missing (Index), the earlier one's created time not
+	// parsing (Index-1), the later one's not parsing (Index), the later one's
+	// time before the earlier one's (Index). It names the credential the
+	// reported defect is in, not which of the two is in error.
+	FaultIndex int
 	// Reason says why. It is for people; callers branch on errors.Is
-	// ErrChainOrder, the error's type and Index, not on this text.
+	// ErrChainOrder, the error's type, Index and FaultIndex, not on this text.
 	Reason string
 }
 
@@ -157,35 +165,40 @@ func (v *Verifier) VerifyChainSigners(ctx context.Context, keys IssuerKeys, chai
 // the one ordering check, for VerifyChain and VerifyChainSigners.
 func firstOrderBreak(chain []*PipelinePassCredential) *ChainOrderError {
 	for n := 1; n < len(chain); n++ {
-		if reason := orderBreak(chain[n-1], chain[n]); reason != "" {
-			return &ChainOrderError{Index: n, Reason: reason}
+		if reason, atPrev := orderBreak(chain[n-1], chain[n]); reason != "" {
+			fault := n
+			if atPrev {
+				fault = n - 1
+			}
+			return &ChainOrderError{Index: n, FaultIndex: fault, Reason: reason}
 		}
 	}
 	return nil
 }
 
 // orderBreak says why cur's proof.created is not at or after prev's, naming
-// the side at fault, or "" when it is. A missing proof or a created time that
-// does not parse, on either side, is out of order (the signer-authenticity
-// axis surfaces the unsigned or malformed proof separately).
-func orderBreak(prev, cur *PipelinePassCredential) string {
+// the side at fault, and whether that side is prev ("" and false when it is
+// in order). A missing proof or a created time that does not parse, on
+// either side, is out of order (the signer-authenticity axis surfaces the
+// unsigned or malformed proof separately).
+func orderBreak(prev, cur *PipelinePassCredential) (reason string, atPrev bool) {
 	pp, cp := prev.Proof(), cur.Proof()
 	switch {
 	case pp == nil:
-		return "the predecessor's proof is missing"
+		return "the predecessor's proof is missing", true
 	case cp == nil:
-		return "its proof is missing"
+		return "its proof is missing", false
 	}
 	pt, err := time.Parse(time.RFC3339, pp.Created)
 	if err != nil {
-		return "the predecessor's proof created time does not parse"
+		return "the predecessor's proof created time does not parse", true
 	}
 	ct, err := time.Parse(time.RFC3339, cp.Created)
 	if err != nil {
-		return "its proof created time does not parse"
+		return "its proof created time does not parse", false
 	}
 	if ct.Before(pt) {
-		return "its proof created time is before its predecessor's"
+		return "its proof created time is before its predecessor's", false
 	}
-	return ""
+	return "", false
 }

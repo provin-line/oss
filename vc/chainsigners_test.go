@@ -189,8 +189,12 @@ func TestVerifyChainSigners_LinksAreValidateChainLinks(t *testing.T) {
 }
 
 // Order names the first pair whose created times decrease or cannot be read,
-// by the later credential's position, and agrees with VerifyChain's ordering
-// verdict on the same chain.
+// by the later credential's position (Index) and by the position of the
+// credential the reported defect is in (FaultIndex: of a pair's defects, the
+// earlier credential's missing proof first, then the later one's, then the
+// earlier one's unreadable time, then the later one's, then a time that
+// decreases), and agrees with VerifyChain's ordering verdict on the same
+// chain.
 func TestVerifyChainSigners_Order(t *testing.T) {
 	origin, child, r := buildChainFixture(t, procAOrigin, procBSameOrg)
 	created := func(c *vc.PipelinePassCredential, at string) *vc.PipelinePassCredential {
@@ -204,17 +208,22 @@ func TestVerifyChainSigners_Order(t *testing.T) {
 		name  string
 		chain []*vc.PipelinePassCredential
 		at    int // -1: in order
+		fault int
 	}{
-		{"in order", []*vc.PipelinePassCredential{origin, child}, -1},
-		{"equal times", []*vc.PipelinePassCredential{created(origin, "2026-11-01T00:00:00Z"), created(child, "2026-11-01T00:00:00Z")}, -1},
-		{"a successor earlier", []*vc.PipelinePassCredential{created(origin, "2026-11-02T00:00:00Z"), created(child, "2026-11-01T00:00:00Z")}, 1},
-		{"the origin's time unreadable", []*vc.PipelinePassCredential{created(origin, "yesterday"), child}, 1},
-		{"the successor's time unreadable", []*vc.PipelinePassCredential{origin, created(child, "yesterday")}, 1},
-		{"the origin unsigned", []*vc.PipelinePassCredential{noProof(origin), child}, 1},
-		{"the third earlier", []*vc.PipelinePassCredential{origin, child, created(third, "2000-01-01T00:00:00Z")}, 2},
-		{"two pairs out of order: the first is named", []*vc.PipelinePassCredential{created(origin, "2026-11-03T00:00:00Z"), created(child, "2026-11-02T00:00:00Z"), created(third, "2026-11-01T00:00:00Z")}, 1},
-		{"a middle time unreadable", []*vc.PipelinePassCredential{origin, created(child, "yesterday"), third}, 1},
-		{"one credential, unreadable", []*vc.PipelinePassCredential{created(origin, "yesterday")}, -1},
+		{"in order", []*vc.PipelinePassCredential{origin, child}, -1, 0},
+		{"equal times", []*vc.PipelinePassCredential{created(origin, "2026-11-01T00:00:00Z"), created(child, "2026-11-01T00:00:00Z")}, -1, 0},
+		{"a successor earlier", []*vc.PipelinePassCredential{created(origin, "2026-11-02T00:00:00Z"), created(child, "2026-11-01T00:00:00Z")}, 1, 1},
+		{"the origin's time unreadable", []*vc.PipelinePassCredential{created(origin, "yesterday"), child}, 1, 0},
+		{"the successor's time unreadable", []*vc.PipelinePassCredential{origin, created(child, "yesterday")}, 1, 1},
+		{"the origin unsigned", []*vc.PipelinePassCredential{noProof(origin), child}, 1, 0},
+		{"the successor unsigned", []*vc.PipelinePassCredential{origin, noProof(child)}, 1, 1},
+		{"both unsigned: the origin's is reported", []*vc.PipelinePassCredential{noProof(origin), noProof(child)}, 1, 0},
+		{"the origin's time unreadable and the successor unsigned: the missing proof is reported", []*vc.PipelinePassCredential{created(origin, "yesterday"), noProof(child)}, 1, 1},
+		{"both times unreadable: the origin's is reported", []*vc.PipelinePassCredential{created(origin, "yesterday"), created(child, "yesterday")}, 1, 0},
+		{"the third earlier", []*vc.PipelinePassCredential{origin, child, created(third, "2000-01-01T00:00:00Z")}, 2, 2},
+		{"two pairs out of order: the first is named", []*vc.PipelinePassCredential{created(origin, "2026-11-03T00:00:00Z"), created(child, "2026-11-02T00:00:00Z"), created(third, "2026-11-01T00:00:00Z")}, 1, 1},
+		{"a middle time unreadable", []*vc.PipelinePassCredential{origin, created(child, "yesterday"), third}, 1, 1},
+		{"one credential, unreadable", []*vc.PipelinePassCredential{created(origin, "yesterday")}, -1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := vc.NewVerifier(local.New(), ed25519Verifier()).VerifyChainSigners(context.Background(), &tableIssuers{}, tc.chain)
@@ -229,6 +238,8 @@ func TestVerifyChainSigners_Order(t *testing.T) {
 				var orderErr *vc.ChainOrderError
 				if !errors.As(res.Order, &orderErr) || orderErr.Index != tc.at || orderErr.Reason == "" || !errors.Is(res.Order, vc.ErrChainOrder) {
 					t.Errorf("Order = %v, want a *ChainOrderError at %d (ErrChainOrder) with a reason", res.Order, tc.at)
+				} else if orderErr.FaultIndex != tc.fault {
+					t.Errorf("FaultIndex = %d, want %d", orderErr.FaultIndex, tc.fault)
 				}
 			}
 			whole, err := vc.NewVerifier(r, ed25519Verifier()).VerifyChain(context.Background(), tc.chain)

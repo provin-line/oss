@@ -192,10 +192,19 @@ type SignerAuthenticityResult struct {
 	// order, each would keep its sentinel, and the order would decide only
 	// which one a credential that meets several is reported under.
 	//
-	// An error of an IssuerVerifier or a LifecycleRegistry is wrapped as it is,
-	// so errors.Is also reaches what it wraps: decide on State, and read Err
-	// for why. Its text is bounded, whatever the credential or the wrapped
-	// error holds.
+	// Failed, Err matches exactly one of ErrUnsigned, ErrProofPolicy,
+	// ErrCryptosuiteNotRegistered, ErrIssuerNotFound and ErrSignatureInvalid:
+	// the one for the first condition above that the credential meets (for an
+	// established negative of the key source, the ErrIssuerNotFound its error
+	// wraps). Indeterminate, it matches none of them.
+	//
+	// An error of a component the caller passes (an IssuerVerifier or the
+	// IssuerKeys of VerifyChainSigners, the Verifier's resolver, which the
+	// default NewDIDDocumentIssuers reads, the signature verifier, a
+	// LifecycleRegistry) is wrapped as it is, so errors.Is also reaches what
+	// it wraps. If it wraps another sentinel of this package, errors.Is finds
+	// that one too: that is outside the promise above. Decide on State, and read Err for why. Its text is bounded,
+	// whatever the credential or the wrapped error holds.
 	Err error
 }
 

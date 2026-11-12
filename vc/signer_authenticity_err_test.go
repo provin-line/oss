@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
@@ -42,8 +44,8 @@ var signerSentinels = []error{
 // verifiers and lifecycle registries wrap no sentinel but ErrIssuerNotFound:
 // nil when verified; when failed, it wraps want and no other of
 // signerSentinels; when indeterminate, it wraps want and none of them. (Err
-// itself promises no more than errors.Is reaching want: an error it wraps from
-// an IssuerVerifier or a LifecycleRegistry may wrap others.)
+// promises this up to what an error of a component the caller passes wraps:
+// see SignerAuthenticityResult.Err.)
 func checkSignerErr(t *testing.T, res *vc.SignerAuthenticityResult, want error) {
 	t.Helper()
 	if res.State == vc.ConfidenceVerified {
@@ -337,4 +339,66 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// unanswering is a resolver that cannot answer now.
+type unanswering struct{ err error }
+
+func (u unanswering) Resolve(context.Context, string) (*did.DIDDocument, error) { return nil, u.err }
+
+// With the module's own components (the DID document issuer verifier over a
+// resolver of the module, and its Ed25519 verifier), Err is exactly one of
+// the sentinels when failed and none when indeterminate. unanswering stands
+// in for a resolver of the module that cannot answer now.
+func TestVerifySignerAuthenticity_TheModulesComponentsGiveOneSentinel(t *testing.T) {
+	transient := errors.New("registry unreachable")
+	_, otherPub := exampleCredential(t, issuerDID, nil)
+	for _, tc := range []struct {
+		name     string
+		mutate   func(map[string]any)
+		resolver func(pub []byte) resolver.Resolver
+		state    vc.ConfidenceState
+		want     error
+	}{
+		{name: "verified", state: vc.ConfidenceVerified},
+		{name: "a proof for another purpose", mutate: func(m map[string]any) { m["proof"].(map[string]any)["proofPurpose"] = "authentication" },
+			state: vc.ConfidenceFailed, want: vc.ErrProofPolicy},
+		{name: "an issuer with no document", resolver: func([]byte) resolver.Resolver { return local.New() },
+			state: vc.ConfidenceFailed, want: vc.ErrIssuerNotFound},
+		{name: "a document with no key", resolver: func([]byte) resolver.Resolver {
+			r := local.New()
+			r.Add(didDoc(issuerDID, issuerDID, vmID, nil))
+			return r
+		}, state: vc.ConfidenceFailed, want: vc.ErrIssuerNotFound},
+		{name: "a key that did not sign", resolver: func([]byte) resolver.Resolver {
+			r := local.New()
+			r.Add(didDoc(issuerDID, issuerDID, vmID, otherPub))
+			return r
+		}, state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
+		{name: "a body changed after signing", mutate: func(m map[string]any) {
+			m["credentialSubject"].(map[string]any)["role"] = "approver"
+		}, state: vc.ConfidenceFailed, want: vc.ErrSignatureInvalid},
+		{name: "a resolver that cannot answer", resolver: func([]byte) resolver.Resolver { return unanswering{transient} },
+			state: vc.ConfidenceIndeterminate, want: transient},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, pub := exampleCredential(t, issuerDID, tc.mutate)
+			var r resolver.Resolver
+			if tc.resolver != nil {
+				r = tc.resolver(pub)
+			} else {
+				l := local.New()
+				l.Add(didDoc(issuerDID, issuerDID, vmID, pub))
+				r = l
+			}
+			res, err := vc.NewVerifier(r, ed25519.Verifier{}).VerifySignerAuthenticity(context.Background(), cred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.State != tc.state {
+				t.Fatalf("State = %v (Err %v), want %v", res.State, res.Err, tc.state)
+			}
+			checkSignerErr(t, res, tc.want)
+		})
+	}
 }
