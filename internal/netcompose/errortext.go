@@ -3,10 +3,16 @@ package netcompose
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
+	"os"
+	"strings"
+	"syscall"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -24,6 +30,22 @@ import (
 // details as they were. Only the text is bounded: an error's details and
 // metadata pass as they are, and no handler puts a request's text in them.
 //
+// A server error — one a caller receives as Internal, Unknown or DataLoss, one
+// with a code outside connect's own, or one that carries no connect error at
+// all, whatever code connect gives it (Canceled, DeadlineExceeded, Unknown) —
+// says what went wrong inside the node (a store's path in the data directory, a
+// dependency's own words, the node's own outbound call), which is not the
+// caller's to read. Its caller receives, with its code, details and metadata,
+// only the fixed text "server error (ref <16 hex digits>); the server's log has
+// the details", and log records under that ref, at level ERROR (WARN for
+// Canceled and DeadlineExceeded, often the caller's own doing), the error's own
+// text (its head within netexcerpt.TextLimit bytes and its length), the cause
+// its text hides behind Unwrap if any, the procedure, the code and the peer's
+// address (a proxy's, behind one). A nil log is slog.Default() at the time of
+// the error. Every other code keeps its text, as connect would answer it: it
+// says what the caller sent or must change, or, for Unavailable, that it may
+// retry.
+//
 // connect answers some requests before any handler option sees them, and
 // those answers are outside it: a protocol header, query parameter or method
 // connect cannot read (a timeout, a compression name, the protocol version)
@@ -31,22 +53,23 @@ import (
 // times the value sent, within four times the headers the server reads and
 // connect's own words; it goes to the one who sent it and to no log. How a
 // request's body is read is package httpserve's.
-func errorText() connect.HandlerOption {
+func errorText(log *slog.Logger) connect.HandlerOption {
 	return connect.WithHandlerOptions(
-		connect.WithInterceptors(errorTextInterceptor{}),
+		connect.WithInterceptors(errorTextInterceptor{log: log}),
 		connect.WithCodec(boundedJSON{name: "json"}),
 		connect.WithCodec(boundedJSON{name: "json; charset=utf-8"}),
 	)
 }
 
-// errorTextInterceptor passes each error a handler returns through
+// errorTextInterceptor answers a server error with a fixed text (see
+// errorText) and passes every other error a handler returns through
 // boundError.
-type errorTextInterceptor struct{}
+type errorTextInterceptor struct{ log *slog.Logger }
 
-func (errorTextInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+func (i errorTextInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 		res, err := next(ctx, req)
-		return res, boundError(err)
+		return res, i.answer(ctx, req.Spec().Procedure, req.Peer().Addr, err)
 	}
 }
 
@@ -54,10 +77,125 @@ func (errorTextInterceptor) WrapStreamingClient(next connect.StreamingClientFunc
 	return next
 }
 
-func (errorTextInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+func (i errorTextInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		return boundError(next(ctx, conn))
+		return i.answer(ctx, conn.Spec().Procedure, conn.Peer().Addr, next(ctx, conn))
 	}
+}
+
+// answer is err as the caller of procedure, at peer, is to receive it.
+func (i errorTextInterceptor) answer(ctx context.Context, procedure, peer string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch code, coded := answeredCode(err); {
+	case !coded,
+		code == connect.CodeInternal, code == connect.CodeUnknown, code == connect.CodeDataLoss,
+		code < connect.CodeCanceled, code > connect.CodeUnauthenticated:
+		return i.serverError(ctx, code, procedure, peer, err)
+	}
+	return boundError(err)
+}
+
+// answeredCode is the code connect answers a handler's err with, as
+// connect v1.21.1 maps it on the way to the wire: the code of the first
+// connect error in err's chain; else Canceled for a context's cancellation
+// or a client that went away (a broken pipe, a reset connection, or the
+// texts net/http and x/net/http2 give one), DeadlineExceeded for a
+// deadline, a context's or the os package's; else Unknown. coded reports
+// whether the code is a connect error's: an error that carries none is the
+// node's own text, whatever code connect gives it, as a connection reset or a
+// deadline on the node's own outbound call names that call. A code a later
+// connect maps otherwise is a test's to catch: they compare with connect's
+// own answer.
+func answeredCode(err error) (code connect.Code, coded bool) {
+	var ce *connect.Error
+	if errors.As(err, &ce) && ce != nil {
+		return ce.Code(), true
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return connect.CodeCanceled, false
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return connect.CodeDeadlineExceeded, false
+	case errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ECONNRESET):
+		return connect.CodeCanceled, false
+	}
+	switch excerpt.ErrorText(err) {
+	case "client disconnected", "http2: stream closed":
+		return connect.CodeCanceled, false
+	}
+	return connect.CodeUnknown, false
+}
+
+// serverError logs err under a new ref and returns the error its caller
+// receives in its place: code, the fixed text naming the ref, and the details
+// and metadata of err's connect error (but a wire error's metadata, which
+// connect does not send). It holds err, so errors.Is and errors.As still find
+// all err held.
+func (i errorTextInterceptor) serverError(ctx context.Context, code connect.Code, procedure, peer string, err error) error {
+	ref := newRef()
+	log := i.log
+	if log == nil {
+		log = slog.Default()
+	}
+	attrs := []slog.Attr{
+		slog.String("ref", ref),
+		slog.String("procedure", procedure),
+		slog.String("code", code.String()),
+		slog.String("peer", peer),
+		slog.String("err", netexcerpt.ErrorText(err)),
+	}
+	if causeErr := hiddenCause(err); causeErr != nil {
+		attrs = append(attrs, slog.String("cause", netexcerpt.ErrorText(causeErr)))
+	}
+	// A cancellation or a deadline is often the caller's own doing, not a
+	// fault of the node's: it is a warning.
+	level := slog.LevelError
+	if code == connect.CodeCanceled || code == connect.CodeDeadlineExceeded {
+		level = slog.LevelWarn
+	}
+	// The request's context has often ended by now; its values stay.
+	log.LogAttrs(context.WithoutCancel(ctx), level, "network: a server error answered with a fixed text", attrs...)
+	// out is this node's own error, not a wire error, whatever err held:
+	// its text is the node's.
+	out := connect.NewError(code, &boundText{text: "server error (ref " + ref + "); the server's log has the details", err: err})
+	var ce *connect.Error
+	if errors.As(err, &ce) && ce != nil {
+		for _, d := range ce.Details() {
+			out.AddDetail(d)
+		}
+		if !connect.IsWireError(ce) {
+			maps.Copy(out.Meta(), ce.Meta())
+		}
+	}
+	return out
+}
+
+// hiddenCause is the error at the end of err's chain of single Unwraps when
+// err's text does not hold that error's text, as a fixed text that holds its
+// cause does (the L1 authorization interceptor answers a check that failed
+// so); else nil. It follows at most maxCauseDepth Unwraps, and compares no
+// errors, as an error's value may be one == cannot compare.
+func hiddenCause(err error) error {
+	cause, depth := err, 0
+	for next := errors.Unwrap(cause); next != nil && depth < maxCauseDepth; next = errors.Unwrap(cause) {
+		cause, depth = next, depth+1
+	}
+	if depth == 0 || strings.Contains(excerpt.ErrorText(err), excerpt.ErrorText(cause)) {
+		return nil
+	}
+	return cause
+}
+
+// maxCauseDepth bounds hiddenCause's walk down a chain of Unwraps.
+const maxCauseDepth = 64
+
+// newRef is a new ref for a server error: 8 random bytes in hex.
+func newRef() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // boundError is err as its caller is to receive it. connect asks err's whole

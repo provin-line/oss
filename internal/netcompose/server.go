@@ -363,7 +363,7 @@ func BuildHandler(coreCfg *core.CoreConfig, regCfg *registry.RegistryConfig, cha
 	authz := connect.WithInterceptors(auth.Interceptors(verifier)...)
 	// bound is every mount's first option, so the text of each error it
 	// answers, authz's included, is held to errorText's limit.
-	bound := errorText()
+	bound := errorText(nil)
 
 	// RegisterEvidence's admission gate: the head variant id (the exact
 	// wire bytes StoreVC admitted — audit.proto's head_variant_address

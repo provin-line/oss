@@ -77,6 +77,16 @@ audience で署名する view が変わり（`v` = 2）、node は他の version
 
 スーパーバイザはこれに合わせて配線する（例: Kubernetes の `livenessProbe` → `/healthz`、`readinessProbe` → `/readyz`）。
 
+## server の error
+
+node の中で失敗し、`Internal`・`Unknown`・`DataLoss` として答える RPC は、その code と固定の文で呼び手に届く。node の code が自分の code を付けずに返す error も、connect が与える code（取り消しや切れた接続なら `Canceled`、期限なら `DeadlineExceeded`）と固定の文で届く:
+
+```text
+server error (ref 3f9c2a7e1b4d5c60); the server's log has the details
+```
+
+node は、その ref の下に level `ERROR`（`Canceled` と `DeadlineExceeded` は、呼び手自身によることが多いので `WARN`）で、error の元の文（1,024 bytes 以内の頭と長さ）、文が隠す原因（あれば）、RPC の procedure・code・node から見える address（TLS 終端の proxy の後ろでは proxy の address）を log に書く。connect の定める範囲の外の code も同じく答える。呼び手が ref を伝えれば、運用者はその記録を引ける。error の文は data directory の中の store の path など node 自身の状態を含みうるので、呼び手には届けない。ほかの code は文をそのまま返す。呼び手が送ったものや直すべきこと、`Unavailable` なら呼び直してよいことを言うからである。
+
 ## TLS 終端
 
 ノードは平文 **h2c**（HTTP/2 cleartext）を提供する。L1 RPC は bearer token を平文で運ぶので、非 loopback な平文 listener は on-path 攻撃者に捕捉・replay される。そのため default `listen-addr` は **loopback 限定**（`127.0.0.1:8443`、secure by default）で、listener を loopback から外す際に transport posture を選ばないと boot guard が **fail-closed** する。いずれかを選ぶ:

@@ -213,6 +213,29 @@ evidence written before the upgrade (view version 1) stays readable.
 Wire supervisors accordingly (e.g. Kubernetes `livenessProbe` → `/healthz`,
 `readinessProbe` → `/readyz`).
 
+## Server errors
+
+An RPC that fails inside the node, answered as `Internal`, `Unknown` or
+`DataLoss`, reaches its caller with that code and a fixed text, and so does
+an error the node's code returns without a code of its own, with the code
+connect gives it (`Canceled` for a cancellation or a reset connection,
+`DeadlineExceeded` for a deadline):
+
+```text
+server error (ref 3f9c2a7e1b4d5c60); the server's log has the details
+```
+
+The node logs at level `ERROR` (`WARN` for `Canceled` and
+`DeadlineExceeded`, often the caller's own doing) under that ref the error's
+own text (its head
+within 1,024 bytes and its length), the cause the text hides if any, the
+RPC's procedure, the code and the address the node sees (a proxy's, behind a
+TLS terminator), so a caller who reports the ref lets the operator find it.
+A code outside connect's own is answered the same way. The error's text can name the node's own
+state, such as a store's path in the data directory, and does not reach the
+caller. Every other code keeps its text: it says what the caller sent or must
+change, or, for `Unavailable`, that the call may be retried.
+
 ## TLS termination
 
 The node serves cleartext **h2c** (HTTP/2 cleartext). L1 RPCs carry a bearer

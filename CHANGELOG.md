@@ -144,6 +144,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   own store resolver as long as what they pass through does. A resolver that
   returns neither is outside the contract: some of the module's callers
   panic on it, and `delegation` refuses it (see Fixed).
+- The network node answers an RPC that fails inside it, as `Internal`,
+  `Unknown` or `DataLoss`, with that code and the fixed text `server error
+  (ref <16 hex digits>); the server's log has the details`, and logs under
+  that ref at level `ERROR` the error's own text (its head within 1,024
+  bytes and its length), the cause the text hides if any, the procedure,
+  the code and the address the node sees. A code outside connect's own is
+  answered the same way, and so is an error that carries no code of its
+  own, with the code connect gives it (`Canceled` or `DeadlineExceeded`,
+  logged at `WARN`, for a cancellation, a reset connection or a deadline).
+  Before, the caller received the error's own
+  text, which could name the node's state, such as a store's path in the
+  data directory. Other codes keep their text
+  (`docs/architecture/deployment.md`, "Server errors").
 - `decisionrecord`: the sinks `NewJSONLines`, `NewLog` and their `Format`
   forms return as soon as the call's context ends, without waiting for a
   write to end, with an error wrapping `ctx.Err()` that names the sink and
