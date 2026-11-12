@@ -15,7 +15,7 @@ const (
 	ReasonKeyConflict     Reason = "key_conflict"     // multiple records name this DID and disagree with each other -> Invalid
 	ReasonMalformedRecord Reason = "malformed_record" // a record clearly intended for this DID violates the TXT grammar -> Invalid
 	ReasonDNSUnreachable  Reason = "dns_unreachable"  // timeout / SERVFAIL / transport -> Unreachable
-	ReasonDocFetchFailed  Reason = "doc_fetch_failed" // DID Document could not be fetched -> Unreachable
+	ReasonDocFetchFailed  Reason = "doc_fetch_failed" // the Owner's DID Document could not be fetched (an error, or the document of another DID) -> Unreachable
 	ReasonOrgIDNotFQDN    Reason = "orgid_not_fqdn"   // single label / public suffix / unicode IDN -> N/A
 )
 

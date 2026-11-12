@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/resolver"
 )
 
@@ -24,6 +26,25 @@ type Options struct {
 	DNSResolver DNSResolver
 	DIDResolver resolver.Resolver
 	Now         func() time.Time
+}
+
+// ownersDocument reports whether doc is the document of want; when it is not,
+// text says what resolving want returned instead: no document, or the
+// document of another DID.
+func ownersDocument(doc *did.DIDDocument, want string) (string, bool) {
+	switch {
+	case doc == nil:
+		return fmt.Sprintf("resolving %s returned no document and no error", excerpt.Quoted(want, 128)), false
+	case doc.ID() != want:
+		return fmt.Sprintf("resolving %s returned the DID Document of %s", excerpt.Quoted(want, 128), excerpt.Quoted(doc.ID(), 128)), false
+	}
+	return "", true
+}
+
+// resolveErrorText says that resolving want failed with err, the error's text
+// within a bound: it may quote what the registry answered, at any length.
+func resolveErrorText(want string, err error) string {
+	return excerpt.Wrap("failed to fetch DID Document for "+want, err, 512).Error()
 }
 
 // Verify performs end-to-end DNS-based organization endorsement for didStr.
@@ -79,7 +100,18 @@ func Verify(ctx context.Context, didStr string, opts Options) (*Result, error) {
 	if derr != nil {
 		res.Level = EndorsementUnreachable
 		res.Reason = ReasonDocFetchFailed
-		res.Detail = fmt.Sprintf("failed to fetch DID Document for %s: %v", ownerStr, derr)
+		res.Detail = resolveErrorText(ownerStr, derr)
+		return res, nil
+	}
+	// A resolver that answers with neither is outside resolver.Resolver's
+	// contract; it fetched no document. resolver.Resolver does not promise
+	// the document's id: a document of another DID is not the Owner's, so its
+	// key says nothing about the key the Owner's TXT record endorses, and the
+	// Owner's document was not fetched.
+	if text, ok := ownersDocument(doc, ownerStr); !ok {
+		res.Level = EndorsementUnreachable
+		res.Reason = ReasonDocFetchFailed
+		res.Detail = text
 		return res, nil
 	}
 	res.DIDDocumentSource = parsed.Registry

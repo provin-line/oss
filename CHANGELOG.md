@@ -314,6 +314,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Fixed
 
+- `orgverify`: `Verify` and `Inspect` refuse a DID Document whose id is not
+  the Owner DID they asked for. `Verify` answers `unreachable`
+  (`doc_fetch_failed`), naming both DIDs, and `Inspect` reports it as the
+  document's error, with neither the document nor its key's fingerprint.
+  Before, they fingerprinted that document's key as the Owner's. The
+  resolver the CLI's org commands pass refuses such a document already. A
+  resolver that answers with neither a document nor an error is refused the
+  same way; before, `Verify` returned an error for it, and `Inspect`
+  reported neither a document nor an error. Both write a resolver's error
+  within 512 bytes of its text.
 - `didregistry/store/yamlstore`: the saves refuse a nil DID or document,
   and `SavePipeline` and `SaveProcess` a nil delegation, with an error, and
   store nothing. Before, a nil DID panicked, a nil document was stored as

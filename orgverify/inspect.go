@@ -62,11 +62,17 @@ func Inspect(ctx context.Context, didStr string, opts Options) (*InspectResult, 
 	out.IsFQDN = isFQDN
 	out.OrgID = canon
 
-	// DID Document fetch (best-effort).
+	// DID Document fetch (best-effort). No document, or a document of
+	// another DID, is not the Owner's: it is reported as an error, without a
+	// key's fingerprint.
 	doc, derr := opts.DIDResolver.Resolve(ctx, owner.String())
-	if derr != nil {
-		out.DocumentError = derr.Error()
-	} else {
+	text, owners := ownersDocument(doc, owner.String())
+	switch {
+	case derr != nil:
+		out.DocumentError = resolveErrorText(owner.String(), derr)
+	case !owners:
+		out.DocumentError = text
+	default:
 		out.DocumentRetrieved = doc
 		if fp, ferr := FingerprintFromDIDDocument(doc); ferr == nil {
 			out.KeyFingerprint = fp
