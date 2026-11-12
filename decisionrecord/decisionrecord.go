@@ -756,7 +756,12 @@ func (f *Filter) count(r Record) {
 // again after it panicked, so a sink not made here stays callable after a
 // panic, and the panic reaches the caller once those writes have returned. A
 // panic as one of those is a warning that its point's summary was not
-// written, with its value; a panic in that warning's handler is dropped.
+// written, with its value; a panic in that warning's handler is dropped; and
+// neither a panic nor runtime.Goexit as one of those, or as its warning, ends
+// the writing of the rest. A runtime.Goexit as one of those, or as its
+// warning, in the caller's goroutine still ends that goroutine once the rest
+// are written, and an earlier panic, which it cuts short, then does not reach
+// the caller.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	if f == nil || f.level == "" {
 		return errNotMade
@@ -786,22 +791,40 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	sort.Strings(points)
 	// A panic, or runtime.Goexit, as one point's summary is written goes on
 	// to the caller as it is, its stack with it, once this deferred call has
-	// written the points after it; a panic in one of those is a warning.
+	// written the points after it (writeRest).
 	next := 0
 	defer func() {
-		if next == len(points) {
-			return
-		}
-		for _, p := range points[next+1:] {
-			if v, panicked := panicOf(func() { f.writeSummary(ctx, windows[p], p, from, until) }); panicked {
-				panicOf(func() { f.warnf(ctx, "decision record: summary not written", "point", p, "panic", v) })
-			}
+		if next < len(points) {
+			f.writeRest(ctx, windows, points[next+1:], from, until)
 		}
 	}()
 	for ; next < len(points); next++ {
 		f.writeSummary(ctx, windows[points[next]], points[next], from, until)
 	}
 	return nil
+}
+
+// writeRest writes the summaries of points after one whose write panicked or
+// called runtime.Goexit, in a loop under a deferred call that, when
+// runtime.Goexit cuts the loop short, writes the ones after it: neither a
+// panic nor runtime.Goexit as one is written, or as its warning is, ends the
+// writing of the rest, and its stack grows with the runtime.Goexit calls
+// alone, not with the points. A panic as one is written is a warning that its
+// summary was not written, with its value; a panic in that warning's handler
+// is dropped.
+func (f *Filter) writeRest(ctx context.Context, windows map[string]*window, points []string, from, until time.Time) {
+	next := 0
+	defer func() {
+		if next < len(points) {
+			f.writeRest(ctx, windows, points[next+1:], from, until)
+		}
+	}()
+	for ; next < len(points); next++ {
+		p := points[next]
+		if v, panicked := panicOf(func() { f.writeSummary(ctx, windows[p], p, from, until) }); panicked {
+			panicOf(func() { f.warnf(ctx, "decision record: summary not written", "point", p, "panic", v) })
+		}
+	}
 }
 
 // writeSummary writes the summary of point p's window w, from from until

@@ -351,8 +351,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   writes every point after it, then the panic goes on to the caller as it was
   raised, with its own stack (and so does `runtime.Goexit` in the caller's
   goroutine). A panic as one of those writes is a warning that its point's
-  summary was not written, with its value. `Flush` calls a sink again after it
-  panicked, so a sink not made here stays callable after a panic.
+  summary was not written, with its value, and neither a panic nor
+  `runtime.Goexit` as one of them, or as its warning, ends the writing of the
+  rest. A `runtime.Goexit` as one of those, or as its warning, in the caller's
+  goroutine still ends that goroutine once the rest are written, and an
+  earlier panic, which it cuts short, then does not reach the caller. `Flush`
+  calls a sink again after it panicked, so a sink not made here stays callable
+  after a panic.
 - `chainmanager`: subscribing to a publisher, and unsubscribing from one,
   refuse a resolved DID Document whose id is not the publisher's DID, as a
   failure to resolve the publisher (`ErrRemotePeer`, which the operator API

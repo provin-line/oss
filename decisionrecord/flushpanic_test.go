@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +173,103 @@ func TestFilter_FlushWritesTheOtherPointsPastAGoexit(t *testing.T) {
 	defer sink.mu.Unlock()
 	if got := points(sink.summaries); got != "gate-b gate-c" {
 		t.Errorf("summaries written: %q, want gate-b gate-c", got)
+	}
+}
+
+// flushExits runs f.Flush with a context that cannot end in a goroutine of
+// its own and, once that goroutine ends, reports whether Flush returned and
+// what the goroutine recovered: nil when runtime.Goexit ended it.
+func flushExits(f *decisionrecord.Filter) (returned bool, p any) {
+	type result struct {
+		returned bool
+		p        any
+	}
+	done := make(chan result, 1)
+	go func() {
+		var r result
+		defer func() {
+			r.p = recover()
+			done <- r
+		}()
+		_ = f.Flush(context.Background(), t0.Add(time.Minute))
+		r.returned = true
+	}()
+	r := <-done
+	return r.returned, r.p
+}
+
+// A second runtime.Goexit, as a point after the first is written, does not
+// end the writing of the rest: each point after it is still written.
+func TestFilter_FlushWritesThePointsPastTwoGoexits(t *testing.T) {
+	sink := &pointSink{exits: map[string]bool{"gate-a": true, "gate-b": true}}
+	warn, _ := quietLog()
+	f := summaryFilter(t, sink, warn)
+	if returned, p := flushExits(f); returned || p != nil {
+		t.Errorf("Flush returned %v, its goroutine recovered %v; want its goroutine ended", returned, p)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if got := points(sink.summaries); got != "gate-c" {
+		t.Errorf("summaries written: %q, want gate-c", got)
+	}
+}
+
+// A runtime.Goexit as a point after a panic is written ends the caller's
+// goroutine once the rest are written, and the panic, which it cuts short,
+// does not reach the caller.
+func TestFilter_FlushGoexitAfterAPanicEndsTheGoroutine(t *testing.T) {
+	sink := &pointSink{panics: map[string]bool{"gate-a": true}, exits: map[string]bool{"gate-b": true}}
+	warn, _ := quietLog()
+	f := summaryFilter(t, sink, warn)
+	if returned, p := flushExits(f); returned || p != nil {
+		t.Errorf("Flush returned %v, its goroutine recovered %v; want its goroutine ended", returned, p)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if got := points(sink.summaries); got != "gate-c" {
+		t.Errorf("summaries written: %q, want gate-c", got)
+	}
+}
+
+// A warning handler that calls runtime.Goexit, as Flush warns of a later
+// panic, does not end the writing of the rest either.
+func TestFilter_FlushWritesThePointsPastAGoexitInALaterWarning(t *testing.T) {
+	sink := &pointSink{panics: map[string]bool{"gate-a": true, "gate-b": true}}
+	var out lockedBuffer
+	f := summaryFilter(t, sink, slog.New(goexitHandler{mu: &sync.Mutex{}, calls: new(int), b: &out}))
+	if returned, p := flushExits(f); returned || p != nil {
+		t.Errorf("Flush returned %v, its goroutine recovered %v; want its goroutine ended", returned, p)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if got := points(sink.summaries); got != "gate-c" {
+		t.Errorf("summaries written: %q, want gate-c", got)
+	}
+}
+
+// Writing the points after a panic takes a stack that does not grow with
+// their number: a window of 100,000 points, the first of which panics, is
+// written within a stack of 4 MiB.
+func TestFilter_FlushWritesManyPointsPastAPanicWithinAFixedStack(t *testing.T) {
+	prev := debug.SetMaxStack(4 << 20)
+	t.Cleanup(func() { debug.SetMaxStack(prev) })
+	sink := &pointSink{panics: map[string]bool{"p000000": true}}
+	warn, _ := quietLog()
+	f, err := decisionrecord.NewFilter(decisionrecord.LevelSummary, sink, warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 100000
+	for i := range n {
+		if err := f.Record(context.Background(), rec(fmt.Sprint(i), fmt.Sprintf("p%06d", i), decisionrecord.Accepted, "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p := recovered(func() { _ = f.Flush(context.Background(), t0.Add(time.Minute)) }); p != "summary of p000000" {
+		t.Errorf("Flush panicked with %v, want the first point's panic", p)
+	}
+	if len(sink.summaries) != n-1 {
+		t.Errorf("%d summaries written, want %d", len(sink.summaries), n-1)
 	}
 }
 

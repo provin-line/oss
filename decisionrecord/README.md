@@ -142,7 +142,11 @@ caller's goroutine. `Flush` calls the sink again after it panicked, so a sink
 not made here stays callable after a panic, and the panic reaches the caller
 once those writes have returned. A panic as one of those is a warning that its
 point's summary was not written, with its value; a panic in that warning's
-handler is dropped.
+handler is dropped; and neither a panic nor `runtime.Goexit` as one of those,
+or as its warning, ends the writing of the rest. A `runtime.Goexit` as one of
+those, or as its warning, in the caller's goroutine still ends that goroutine
+once the rest are written, and an earlier panic, which it cuts short, then
+does not reach the caller.
 
 ## Format versions
 
