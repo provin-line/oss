@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
@@ -406,13 +407,13 @@ type auditClientFactory struct {
 	baseURL    string
 	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*auditorclient.Client
 }
 
-func newAuditClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient connect.HTTPClient) *auditClientFactory {
+func newAuditClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *auditClientFactory {
 	return &auditClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*auditorclient.Client{}}
 }
 
@@ -630,7 +631,7 @@ type payloadClientFactory struct {
 	upstreamAudiences map[string]string
 	audience          string
 	bearer            string
-	httpClient        connect.HTTPClient
+	httpClient        *http.Client
 	retainChunkSize   int
 
 	mu      sync.Mutex
@@ -677,7 +678,7 @@ func retainChunkSizeFor(maxRetainChunkSize int) int {
 	return size
 }
 
-func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, audience, bearer string, httpClient connect.HTTPClient, maxRetainChunkSize int, upstreamAudiences map[string]string) *payloadClientFactory {
+func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, audience, bearer string, httpClient *http.Client, maxRetainChunkSize int, upstreamAudiences map[string]string) *payloadClientFactory {
 	return &payloadClientFactory{
 		signer:            signer,
 		storeEndpoint:     storeEndpoint,

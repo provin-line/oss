@@ -22,6 +22,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
 	"github.com/provin-line/oss/tlog"
@@ -59,7 +61,13 @@ type Config struct {
 	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint.
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call — the L1 PDP gate MirrorLogSegment/GetMirrorState mount
 	// behind, IN ADDITION to MirrorLogSegment's own L2 wireauth proof. Empty
@@ -82,11 +90,15 @@ type Client struct {
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
 		audience:  cfg.Audience,
-		svc: tlogpbconnect.NewTlogServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		svc: tlogpbconnect.NewTlogServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
 }

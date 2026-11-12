@@ -420,22 +420,25 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	}
 }
 
-// The store client carries the bearer, so it follows no redirect: a store that
-// redirects does not pass the bearer on.
-func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
-	var sawBearer atomic.Bool
+// The store client carries the bearer, so it follows no redirect: over
+// HTTP/1.1, where net/http carries an Authorization header on to the same
+// host, the server the store redirects to gets no request.
+func TestRetain_FollowsNoRedirectOverHTTP11(t *testing.T) {
+	var hits, followed atomic.Int32
+	var bearerShown atomic.Bool
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			sawBearer.Store(true)
-		}
+		followed.Add(1)
 		http.Error(w, "no", http.StatusNotFound)
 	}))
 	t.Cleanup(other.Close)
-	mux := http.NewServeMux()
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			bearerShown.Store(true)
+		}
 		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
 	}))
-	httpSrv, httpc := newH2CServer(t, mux)
+	t.Cleanup(store.Close)
 
 	ks := ksfilestore.New(t.TempDir())
 	kp, err := (ed25519.Generator{}).Generate()
@@ -445,11 +448,14 @@ func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL, StoreAudience: storeAudience, Bearer: "node-token"})
+	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: &http.Client{}, StoreEndpoint: store.URL, StoreAudience: storeAudience, Bearer: "node-token"})
 	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7, contentaddress.Of([]byte("payload"))); err == nil {
 		t.Error("a redirected retain succeeded")
 	}
-	if sawBearer.Load() {
-		t.Error("the server the store redirected to saw the bearer")
+	if hits.Load() == 0 || !bearerShown.Load() {
+		t.Fatalf("the store answered %d requests, bearer shown %v; want the retain to reach it with the bearer", hits.Load(), bearerShown.Load())
+	}
+	if n := followed.Load(); n != 0 {
+		t.Errorf("the store client followed the redirect: the server it points to answered %d requests", n)
 	}
 }

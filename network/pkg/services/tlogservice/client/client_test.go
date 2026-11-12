@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -383,4 +384,51 @@ func TestGetMirrorState_BeforeAnySegment_Zero(t *testing.T) {
 	if state != 0 {
 		t.Fatalf("acked_size before any segment = %d, want 0", state)
 	}
+}
+
+// With a bearer, the client follows no redirect, whatever *http.Client it is
+// given: the bearer goes to BaseURL's origin only.
+func TestBearer_ShownToNoServerTheEndpointRedirectsTo(t *testing.T) {
+	url, counts := redirectingServer(t)
+	c := client.New(client.Config{Audience: nodeAudience, Signer: newFixtureKeyStore(), SignerDID: clientProcessA1, BaseURL: url, HTTPClient: &http.Client{}, Bearer: "node-token"})
+	if _, err := c.GetMirrorState(context.Background(), clientPipeline); err == nil {
+		t.Error("a redirected call succeeded")
+	}
+	if counts.hits.Load() == 0 || !counts.bearerShown.Load() {
+		t.Fatalf("the endpoint answered %d requests, bearer shown %v; want the call to reach it with the bearer", counts.hits.Load(), counts.bearerShown.Load())
+	}
+	if n := counts.followed.Load(); n != 0 {
+		t.Errorf("the client followed the redirect: the server it points to answered %d requests", n)
+	}
+}
+
+// redirectCounts is what redirectingServer saw: the requests its endpoint
+// answered, whether one carried a bearer, and the requests that reached the
+// server it redirects to.
+type redirectCounts struct {
+	hits        atomic.Int32
+	bearerShown atomic.Bool
+	followed    atomic.Int32
+}
+
+// redirectingServer answers every request with a redirect to a second server
+// on the same host, over HTTP/1.1, where net/http carries an Authorization
+// header on to the same host.
+func redirectingServer(t *testing.T) (string, *redirectCounts) {
+	t.Helper()
+	counts := &redirectCounts{}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.followed.Add(1)
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			counts.bearerShown.Store(true)
+		}
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+	return redirector.URL, counts
 }

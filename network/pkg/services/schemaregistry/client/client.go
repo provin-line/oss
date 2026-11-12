@@ -23,11 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"connectrpc.com/connect"
 
 	schemapb "github.com/provin-line/oss/gen/go/dplaax/schema/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/schema/v1/schemapbconnect"
+	"github.com/provin-line/oss/internal/origin"
 )
 
 // schemaDocumentReadCapBytes bounds a GetSchema response. Reuses — never
@@ -58,7 +60,13 @@ type Config struct {
 	BaseURL string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client, e.g.
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call — GetSchema is mounted behind L1 authz (schema.proto's
 	// o3co.authz.v1.policy {resource: "schemas", action: "read"} option).
@@ -77,8 +85,12 @@ type Client struct {
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
-		svc: schemapbconnect.NewSchemaServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		svc: schemapbconnect.NewSchemaServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)),
 			connect.WithReadMaxBytes(schemaDocumentReadCapBytes),
 		),

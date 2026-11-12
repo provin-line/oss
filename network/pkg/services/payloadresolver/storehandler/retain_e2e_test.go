@@ -135,7 +135,7 @@ type harness struct {
 	signer crypto.Signer
 	client *client.Resolver
 	url    string
-	httpc  connect.HTTPClient
+	httpc  *http.Client
 }
 
 func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOption) *harness {

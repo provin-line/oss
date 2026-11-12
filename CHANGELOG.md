@@ -544,6 +544,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   one with a `typ` of `JWT` for instance, is refused as `Unauthenticated`, as
   an invalid token is. 0.4.x checked neither: an issuer whose tokens lack them
   must issue tokens of that form first.
+- **Go API:** the `Config.HTTPClient` of `auditor/client`,
+  `chainmanager/reportclient`, `schemaregistry/client`, `tlogservice/client`
+  and `payloadresolver/client` is an `*http.Client`, not a
+  `connect.HTTPClient`, and must not be nil (`New` panics on nil where it
+  confines). With `Bearer` set, the first four send through a copy of it
+  that refuses every redirect, so the bearer goes to `BaseURL`'s origin
+  only; before, the client given was used as it was. Without `Bearer` they
+  use it as given. `payloadresolver/client`'s store client refuses every
+  redirect whether or not `Bearer` is set, as it did before for an
+  `*http.Client` and now for every client. This holds over a `Transport`
+  that sends each request as it is, as net/http's does. A caller that passed
+  another `connect.HTTPClient` passes an `*http.Client` whose `Transport`
+  does not follow redirects itself.
 - **Go API:** `decisionrecord.Filter.Flush` with a context that has already
   ended returns its error and keeps the window for the next `Flush`, where
   0.4.x passed the window's summaries to its sink whatever the context said

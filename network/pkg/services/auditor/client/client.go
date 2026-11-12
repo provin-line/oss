@@ -24,6 +24,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"connectrpc.com/connect"
 
@@ -31,6 +32,7 @@ import (
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
 )
@@ -58,7 +60,13 @@ type Config struct {
 	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client, e.g.
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call. Both RegisterEvidence and RegisterAuditHead are mounted
 	// behind L1 authz IN ADDITION to the L2 wireauth proof
@@ -86,11 +94,15 @@ type Client struct {
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
 		audience:  cfg.Audience,
-		svc: auditpbconnect.NewAuditServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		svc: auditpbconnect.NewAuditServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
 }

@@ -14,9 +14,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
-
-	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -32,13 +31,13 @@ type mirrorClientFactory struct {
 	baseURL    string
 	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*tlogserviceclient.Client
 }
 
-func newMirrorClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient connect.HTTPClient) *mirrorClientFactory {
+func newMirrorClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *mirrorClientFactory {
 	return &mirrorClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*tlogserviceclient.Client{}}
 }
 

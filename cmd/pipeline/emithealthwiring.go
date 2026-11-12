@@ -38,10 +38,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"sync"
 	"time"
-
-	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -68,13 +67,13 @@ type reportClientFactory struct {
 	baseURL    string
 	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*reportclient.Client
 }
 
-func newReportClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient connect.HTTPClient) *reportClientFactory {
+func newReportClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *reportClientFactory {
 	return &reportClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*reportclient.Client{}}
 }
 

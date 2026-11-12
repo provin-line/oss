@@ -105,8 +105,12 @@ type Config struct {
 	Signer    crypto.Signer
 	SignerDID string
 	// HTTPClient dials the serving boundary; supply an SSRF-guarded client, e.g.
-	// core.URLGuard.HTTPClient().
-	HTTPClient connect.HTTPClient
+	// core.URLGuard.HTTPClient(). It must not be nil. The store client, which
+	// carries Bearer, uses a copy of it that refuses every redirect, whether
+	// or not Bearer is set, so the bearer goes to StoreEndpoint's origin only,
+	// over a Transport that sends each request as it is, as net/http's does;
+	// fetches use it as given.
+	HTTPClient *http.Client
 	// MaxBytes caps the assembled payload (<=0 → DefaultMaxBytes).
 	MaxBytes int
 	// FetchTimeout bounds one whole fetch (<=0 → DefaultFetchTimeout).
@@ -209,11 +213,7 @@ func New(cfg Config) *Resolver {
 	if cfg.StoreEndpoint != "" {
 		// The store client carries the bearer, so it follows no redirect: the
 		// bearer goes to StoreEndpoint's origin only.
-		storeClient := cfg.HTTPClient
-		if c, ok := storeClient.(*http.Client); ok {
-			storeClient = origin.Confine(c)
-		}
-		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(storeClient, cfg.StoreEndpoint,
+		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(origin.Confine(cfg.HTTPClient), cfg.StoreEndpoint,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)))
 	}
 	return &Resolver{
