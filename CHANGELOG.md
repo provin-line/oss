@@ -168,6 +168,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Changed
 
+- `schemaregistry.Service.Register` refuses a schema body longer than 1 MiB
+  with `ErrInvalidArgument`, before it parses the body, and stores nothing. A
+  node already bounded the whole request to 1 MiB in its transport, so its
+  clients see no change; a caller that uses the `Service` directly gets this
+  new refusal.
 - `network/pkg/services/payloadresolver`: the proof of a `RetainPayload` call
   binds the payload's content address, and the store keeps the payload only
   when the bytes it receives have that address (see Breaking changes).

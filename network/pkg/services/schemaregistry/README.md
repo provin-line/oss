@@ -14,6 +14,7 @@ Append-only registry of pipeline data schemas.
 - **No "latest" resolution, by design.** Pipelines pin exact versions; every VC embeds
   its `schema` reference (`name:version`). Implicit version drift between pipeline
   stages is the failure mode this rule exists to prevent.
+- A schema body is at most 1 MiB; a longer one is refused before it is read.
 - Schema bodies are compile-validated at registration (JsonSchema: strict-decode,
   Draft 2020-12, external `$ref` denied) so the registry never holds a schema a
   downstream validator would reject.
