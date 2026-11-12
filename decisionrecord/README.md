@@ -138,15 +138,17 @@ A write that fails still loses its summary. A panic as `Flush` writes one
 point's summary, in the sink or in the handler of the warning that the summary
 was not written, goes on to the caller as it was raised, with its own stack,
 once `Flush` has written every point after it; so does `runtime.Goexit` in the
-caller's goroutine. `Flush` calls the sink again after it panicked, so a sink
-not made here stays callable after a panic, and the panic reaches the caller
-once those writes have returned. A panic as one of those is a warning that its
-point's summary was not written, with its value; a panic in that warning's
-handler is dropped; and neither a panic nor `runtime.Goexit` as one of those,
-or as its warning, ends the writing of the rest. A `runtime.Goexit` as one of
-those, or as its warning, in the caller's goroutine still ends that goroutine
-once the rest are written, and an earlier panic, which it cuts short, then
-does not reach the caller.
+caller's goroutine, which then ends. `Flush` calls the sink again after it
+panicked, so a sink not made here stays callable after a panic, and the panic
+reaches the caller once those writes have returned. `Flush` makes those calls,
+and writes their warnings, from a goroutine of its own, not the caller's: one
+at a time, in the order of the points, and it waits for them. A panic as one
+of those is a warning that its point's summary was not written, with its
+value; a panic in that warning's handler is dropped. A `runtime.Goexit` in
+that goroutine, as one of those or as its warning, ends only it, and `Flush`
+goes on with the next point in another. So neither a panic nor `runtime.Goexit` as one
+of those ends the writing of the rest or the caller's goroutine: the first
+panic or `runtime.Goexit` is the one that reaches the caller.
 
 ## Format versions
 

@@ -214,15 +214,15 @@ func TestFilter_FlushWritesThePointsPastTwoGoexits(t *testing.T) {
 	}
 }
 
-// A runtime.Goexit as a point after a panic is written ends the caller's
-// goroutine once the rest are written, and the panic, which it cuts short,
-// does not reach the caller.
-func TestFilter_FlushGoexitAfterAPanicEndsTheGoroutine(t *testing.T) {
+// A runtime.Goexit as a point after a panic is written does not end the
+// caller's goroutine: the panic reaches the caller once the rest are
+// written.
+func TestFilter_FlushGoexitAfterAPanicLeavesThePanicToTheCaller(t *testing.T) {
 	sink := &pointSink{panics: map[string]bool{"gate-a": true}, exits: map[string]bool{"gate-b": true}}
 	warn, _ := quietLog()
 	f := summaryFilter(t, sink, warn)
-	if returned, p := flushExits(f); returned || p != nil {
-		t.Errorf("Flush returned %v, its goroutine recovered %v; want its goroutine ended", returned, p)
+	if returned, p := flushExits(f); returned || p != "summary of gate-a" {
+		t.Errorf("Flush returned %v and panicked with %v, want the first panic", returned, p)
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
@@ -232,13 +232,14 @@ func TestFilter_FlushGoexitAfterAPanicEndsTheGoroutine(t *testing.T) {
 }
 
 // A warning handler that calls runtime.Goexit, as Flush warns of a later
-// panic, does not end the writing of the rest either.
+// panic, does not end the writing of the rest either, nor the caller's
+// goroutine: the first panic reaches the caller.
 func TestFilter_FlushWritesThePointsPastAGoexitInALaterWarning(t *testing.T) {
 	sink := &pointSink{panics: map[string]bool{"gate-a": true, "gate-b": true}}
 	var out lockedBuffer
 	f := summaryFilter(t, sink, slog.New(goexitHandler{mu: &sync.Mutex{}, calls: new(int), b: &out}))
-	if returned, p := flushExits(f); returned || p != nil {
-		t.Errorf("Flush returned %v, its goroutine recovered %v; want its goroutine ended", returned, p)
+	if returned, p := flushExits(f); returned || p != "summary of gate-a" {
+		t.Errorf("Flush returned %v and panicked with %v, want the first panic", returned, p)
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()

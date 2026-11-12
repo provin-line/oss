@@ -395,14 +395,17 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   no longer loses the other points' summaries without a warning: `Flush`
   writes every point after it, then the panic goes on to the caller as it was
   raised, with its own stack (and so does `runtime.Goexit` in the caller's
-  goroutine). A panic as one of those writes is a warning that its point's
-  summary was not written, with its value, and neither a panic nor
-  `runtime.Goexit` as one of them, or as its warning, ends the writing of the
-  rest. A `runtime.Goexit` as one of those, or as its warning, in the caller's
-  goroutine still ends that goroutine once the rest are written, and an
-  earlier panic, which it cuts short, then does not reach the caller. `Flush`
-  calls a sink again after it panicked, so a sink not made here stays callable
-  after a panic.
+  goroutine, which then ends). `Flush` calls the sink for those points, and
+  the warning handler for their warnings, from a goroutine of its own, not the
+  caller's: one call at a time, in the order of the points, and it waits for
+  them. A panic as one of those writes is a warning that its point's summary
+  was not written, with its value. A `runtime.Goexit` in that goroutine, as
+  one of them or as its warning, ends only it, and `Flush` goes on with the
+  next point in another. So neither a panic nor `runtime.Goexit` there ends the
+  writing of the rest or the caller's goroutine, the first panic or
+  `runtime.Goexit` is the one that reaches the caller, and the caller's stack
+  does not grow with them. `Flush` calls a sink again after it panicked, so a
+  sink not made here stays callable after a panic.
 - `chainmanager`: subscribing to a publisher, and unsubscribing from one,
   refuse a resolved DID Document whose id is not the publisher's DID, as a
   failure to resolve the publisher (`ErrRemotePeer`, which the operator API
