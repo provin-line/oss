@@ -8,23 +8,15 @@
 // proof additionally binds the request to a proven signer DID this handler
 // requires to equal the claimed owner_did (the proven DID is authoritative).
 //
-// It holds no business logic beyond frame-sequencing and byte-accounting: the
+// It converts proto frames to calls and Connect error codes only (handler =
+// proto↔domain + error mapping, AGENTS.md): it sequences the frames, has the
+// proof verified, parses the content_address, and aborts the writer when the
+// stream fails or a frame is out of sequence. Whether the payload is kept is
+// payloadresolver/internal/retention's: the declared size (not zero, within
+// the quota), the bytes against it and against the content_address, and
+// committing the writer, or aborting it when the bytes do not meet them. The
 // content-address derivation and durable persistence live in
-// payloadresolver.Store/PayloadWriter; this package only converts proto
-// frames to writer calls and Connect error codes (handler = proto↔domain +
-// error mapping only, AGENTS.md). Two exceptions, both because it streams
-// directly to Store.StoreWriter rather than through
-// payloadresolver.Service.Store (whose signature takes a whole []byte, not a
-// stream):
-//   - it re-enforces Service's "no empty payload" invariant itself
-//     (errZeroDeclaredSize) — that check would otherwise be silently bypassed
-//     on this path;
-//   - it computes the address of the bytes it receives and Aborts the writer
-//     unless it is the content_address the proof covers
-//     (errContentAddressMismatch): a PayloadWriter commits whatever it was
-//     given under that bytes' own address, so the refusal must come before
-//     Commit. It moves to the store side once a PayloadWriter can commit only
-//     under an expected address, refusing and discarding the bytes otherwise.
+// payloadresolver.Store/PayloadWriter.
 package storehandler
 
 import (
@@ -40,6 +32,7 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/internal/retention"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
@@ -78,13 +71,11 @@ var (
 	// the proven DID is authoritative over the claimed owner_did (the proto's
 	// own doc).
 	errOwnerMismatch = errors.New("storehandler: owner_did does not match the proven signer")
-	// errZeroDeclaredSize is a declared_size of 0. This handler streams
-	// directly to Store.StoreWriter (bypassing payloadresolver.Service.Store,
-	// which rejects an empty payload — "a producing process never emits an
-	// empty payload; an empty by-reference payload could never bind"), so it
-	// re-enforces that SAME invariant here rather than silently admitting an
-	// empty-payload entry through this path. Mapped to InvalidArgument;
-	// rejected before any store interaction (no writer is ever opened).
+	// errZeroDeclaredSize is a declared_size of 0 (retention.ErrEmpty), the
+	// same invariant as payloadresolver.Service.Store's: "a producing process
+	// never emits an empty payload; an empty by-reference payload could never
+	// bind". Mapped to InvalidArgument; rejected before any store interaction
+	// (no writer is ever opened).
 	errZeroDeclaredSize = errors.New("storehandler: declared_size must be non-zero (an empty payload is never valid)")
 	// errMalformedContentAddress is a metadata frame whose content_address is
 	// missing or not spelled as an address ("sha256:" and 64 lowercase hex
@@ -93,22 +84,25 @@ var (
 	// proof covers the address) and before any writer is opened.
 	errMalformedContentAddress = errors.New("storehandler: content_address is missing or not an address")
 	// errContentAddressMismatch is a stream whose bytes are not the ones its
-	// declared content_address names: the store keeps nothing (InvalidArgument,
-	// as for a declared_size the bytes do not meet).
+	// declared content_address names (retention.ErrAddressMismatch): the store
+	// keeps nothing (InvalidArgument, as for a declared_size the bytes do not
+	// meet).
 	errContentAddressMismatch = errors.New("storehandler: the payload's bytes are not the ones its content_address names")
 	// errDeclaredSizeExceeded is a declared_size above the configured
-	// max-retain-payload-size quota. Mapped to ResourceExhausted; rejected
-	// before any store interaction (no writer is ever opened).
+	// max-retain-payload-size quota (retention.ErrOverQuota). Mapped to
+	// ResourceExhausted; rejected before any store interaction (no writer is
+	// ever opened).
 	errDeclaredSizeExceeded = errors.New("storehandler: declared_size exceeds the configured quota")
 	// errCumulativeOverrun is the sum of received chunk bytes exceeding
-	// declared_size. Mapped to ResourceExhausted; the writer is Aborted — a
-	// caller that understated its size gets nothing persisted.
+	// declared_size (retention.ErrOverrun). Mapped to ResourceExhausted; the
+	// writer is Aborted — a caller that understated its size gets nothing
+	// persisted.
 	errCumulativeOverrun = errors.New("storehandler: received bytes exceed declared_size")
 	// errSizeMismatch is a cleanly-closed stream whose received bytes fall
-	// SHORT of declared_size (errCumulativeOverrun already catches the
-	// "too many" case mid-stream, so only undershoot reaches here).
-	// declared_size is a commitment, not a hint — mapped to InvalidArgument;
-	// the writer is Aborted.
+	// SHORT of declared_size (retention.ErrShort; errCumulativeOverrun already
+	// catches the "too many" case mid-stream, so only undershoot reaches
+	// here). declared_size is a commitment, not a hint — mapped to
+	// InvalidArgument; the writer is Aborted.
 	errSizeMismatch = errors.New("storehandler: received bytes fall short of declared_size")
 )
 
@@ -139,12 +133,11 @@ func New(store WriterStore, v Verifier, maxPayloadSize uint64) *Handler {
 // RetainPayload verifies the first frame (declared_size within quota, a
 // content_address spelled as one, then the wireauth proof over owner_did,
 // declared_size and content_address with owner_did == proven signer), then
-// streams subsequent chunk frames to a Store.StoreWriter, enforcing the
-// cumulative declared_size bound as it goes and computing the bytes' address
-// alongside. Before it commits, the bytes must meet declared_size and have the
-// declared content_address. On ANY receive error, cancellation, or validation
-// failure once a writer is open, it Aborts before returning — the
-// StoreWriter's ctx gates creation only (payloadresolver.Store doc), so
+// streams subsequent chunk frames through a retention.Retention to a
+// Store.StoreWriter, which keeps the bytes only when they meet declared_size
+// and have the declared content_address. On ANY receive error, cancellation,
+// or frame out of sequence once a writer is open, it Aborts before returning
+// — the StoreWriter's ctx gates creation only (payloadresolver.Store doc), so
 // detecting and reacting to a mid-stream failure is this handler's job, not
 // the store's.
 func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStream[payloadpb.RetainPayloadRequest]) (*connect.Response[payloadpb.RetainPayloadResponse], error) {
@@ -166,12 +159,9 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 	}
 
 	declaredSize := meta.GetDeclaredSize()
-	if declaredSize == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errZeroDeclaredSize)
-	}
-	if declaredSize > h.maxPayloadSize {
-		return nil, connect.NewError(connect.CodeResourceExhausted,
-			fmt.Errorf("%w: declared_size %d exceeds max %d", errDeclaredSizeExceeded, declaredSize, h.maxPayloadSize))
+	declared, err := retention.Declare(declaredSize, h.maxPayloadSize)
+	if err != nil {
+		return nil, h.retentionError(err, declaredSize)
 	}
 
 	contentAddress, err := contentaddress.Parse(meta.GetContentAddress())
@@ -197,47 +187,51 @@ func (h *Handler) RetainPayload(ctx context.Context, stream *connect.ClientStrea
 		return nil, mapError(err)
 	}
 
-	var received uint64
-	bytesSeen := contentaddress.NewHasher()
+	r := retention.New(w, declared, contentAddress)
 	for stream.Receive() {
 		switch f := stream.Msg().GetFrame().(type) {
 		case *payloadpb.RetainPayloadRequest_Metadata:
-			_ = w.Abort()
+			_ = r.Abort()
 			return nil, connect.NewError(connect.CodeInvalidArgument, errUnexpectedMetadataFrame)
 		case *payloadpb.RetainPayloadRequest_Chunk:
-			received += uint64(len(f.Chunk))
-			if received > declaredSize {
-				_ = w.Abort()
-				return nil, connect.NewError(connect.CodeResourceExhausted, errCumulativeOverrun)
+			if err := r.Write(f.Chunk); err != nil {
+				return nil, h.retentionError(err, declaredSize)
 			}
-			if _, werr := w.Write(f.Chunk); werr != nil {
-				_ = w.Abort()
-				return nil, mapError(werr)
-			}
-			bytesSeen.Write(f.Chunk)
 		default:
-			_ = w.Abort()
+			_ = r.Abort()
 			return nil, connect.NewError(connect.CodeInvalidArgument, errMalformedFrame)
 		}
 	}
 	if err := stream.Err(); err != nil {
-		_ = w.Abort()
+		_ = r.Abort()
 		return nil, mapError(err)
-	}
-	if received != declaredSize {
-		_ = w.Abort()
-		return nil, connect.NewError(connect.CodeInvalidArgument, errSizeMismatch)
-	}
-	if bytesSeen.Address() != contentAddress {
-		_ = w.Abort()
-		return nil, connect.NewError(connect.CodeInvalidArgument, errContentAddressMismatch)
 	}
 
-	addr, err := w.Commit()
+	addr, err := r.Commit()
 	if err != nil {
-		return nil, mapError(err)
+		return nil, h.retentionError(err, declaredSize)
 	}
 	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: addr}), nil
+}
+
+// retentionError is err from retention as this RPC answers it: the sentinel
+// and code of the check that refused, or mapError's answer for the writer's
+// own error, which retention returns as it is.
+func (h *Handler) retentionError(err error, declaredSize uint64) error {
+	switch {
+	case errors.Is(err, retention.ErrEmpty):
+		return connect.NewError(connect.CodeInvalidArgument, errZeroDeclaredSize)
+	case errors.Is(err, retention.ErrOverQuota):
+		return connect.NewError(connect.CodeResourceExhausted,
+			fmt.Errorf("%w: declared_size %d exceeds max %d", errDeclaredSizeExceeded, declaredSize, h.maxPayloadSize))
+	case errors.Is(err, retention.ErrOverrun):
+		return connect.NewError(connect.CodeResourceExhausted, errCumulativeOverrun)
+	case errors.Is(err, retention.ErrShort):
+		return connect.NewError(connect.CodeInvalidArgument, errSizeMismatch)
+	case errors.Is(err, retention.ErrAddressMismatch):
+		return connect.NewError(connect.CodeInvalidArgument, errContentAddressMismatch)
+	}
+	return mapError(err)
 }
 
 // mapError translates codec, wireauth, and domain sentinels to Connect codes
