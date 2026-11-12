@@ -113,24 +113,54 @@ func safeSegment(s string) error {
 }
 
 func (s *Store) SaveOwner(d *dplaax.DID, doc *did.DIDDocument) error {
+	if d == nil {
+		return errors.New("yamlstore: SaveOwner: nil DID")
+	}
 	if !d.IsOwner() {
 		return fmt.Errorf("yamlstore: SaveOwner: %s is not an owner DID", netexcerpt.ValueText(d.String()))
+	}
+	if doc == nil {
+		return errors.New("yamlstore: SaveOwner: nil document")
 	}
 	return s.saveNode(d, doc, nil)
 }
 
 func (s *Store) SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
+	if d == nil {
+		return errors.New("yamlstore: SavePipeline: nil DID")
+	}
 	if !d.IsPipeline() {
 		return fmt.Errorf("yamlstore: SavePipeline: %s is not a pipeline DID", netexcerpt.ValueText(d.String()))
+	}
+	if err := requireDocAndDelegation("SavePipeline", doc, dlg); err != nil {
+		return err
 	}
 	return s.saveNode(d, doc, dlg)
 }
 
 func (s *Store) SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
+	if d == nil {
+		return errors.New("yamlstore: SaveProcess: nil DID")
+	}
 	if !d.IsProcess() {
 		return fmt.Errorf("yamlstore: SaveProcess: %s is not a process DID", netexcerpt.ValueText(d.String()))
 	}
+	if err := requireDocAndDelegation("SaveProcess", doc, dlg); err != nil {
+		return err
+	}
 	return s.saveNode(d, doc, dlg)
+}
+
+// requireDocAndDelegation refuses a nil document or delegation for the save
+// named op, so the save stores nothing (store.DIDStore).
+func requireDocAndDelegation(op string, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error {
+	switch {
+	case doc == nil:
+		return fmt.Errorf("yamlstore: %s: nil document", op)
+	case dlg == nil:
+		return fmt.Errorf("yamlstore: %s: nil delegation", op)
+	}
+	return nil
 }
 
 // saveNode publishes a DID node atomically: the document, optional delegation,
@@ -249,6 +279,9 @@ func (s *Store) GetStatus(d *dplaax.DID) (store.DIDStatus, error) {
 }
 
 func (s *Store) ListPipelines(owner *dplaax.DID) ([]store.DIDSummary, error) {
+	if owner == nil {
+		return nil, errors.New("yamlstore: ListPipelines: nil DID")
+	}
 	if !owner.IsOwner() {
 		return nil, fmt.Errorf("yamlstore: ListPipelines: %s is not an owner DID", netexcerpt.ValueText(owner.String()))
 	}
@@ -264,6 +297,9 @@ func (s *Store) ListPipelines(owner *dplaax.DID) ([]store.DIDSummary, error) {
 }
 
 func (s *Store) ListProcesses(pipeline *dplaax.DID) ([]store.DIDSummary, error) {
+	if pipeline == nil {
+		return nil, errors.New("yamlstore: ListProcesses: nil DID")
+	}
 	if !pipeline.IsPipeline() {
 		return nil, fmt.Errorf("yamlstore: ListProcesses: %s is not a pipeline DID", netexcerpt.ValueText(pipeline.String()))
 	}

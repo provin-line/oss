@@ -1,6 +1,8 @@
 // Package store defines the persistence contracts of the DID registry
 // service. Implementations (store/yamlstore) hold no validation logic; they
-// build filesystem paths only from safety-checked DID segments.
+// build filesystem paths only from safety-checked DID segments, and refuse
+// the arguments the contract below says they refuse (a nil, a DID of the
+// wrong shape), which is not a check of what the DID registry accepts.
 //
 // Private keys are NOT stored here — key custody goes through
 // keystore.
@@ -99,6 +101,10 @@ func (e LifecycleEvent) CanonicalMap() map[string]any {
 // DIDStore persists DID Documents and their delegations across the
 // owner → pipeline → process hierarchy.
 type DIDStore interface {
+	// SaveOwner, SavePipeline and SaveProcess store d's document, and a
+	// Pipeline's or a Process's delegation. Each refuses a nil DID, document
+	// or delegation with an error and stores nothing: a nil reaching the
+	// store is a caller bug.
 	SaveOwner(d *dplaax.DID, doc *did.DIDDocument) error
 	SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 	SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
@@ -113,6 +119,8 @@ type DIDStore interface {
 	UpdateStatus(d *dplaax.DID, status DIDStatus) error
 	GetStatus(d *dplaax.DID) (DIDStatus, error)
 
+	// ListPipelines and ListProcesses list the children of owner and of
+	// pipeline; each refuses a nil DID with an error, a caller bug.
 	ListPipelines(owner *dplaax.DID) ([]DIDSummary, error)
 	ListProcesses(pipeline *dplaax.DID) ([]DIDSummary, error)
 

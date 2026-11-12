@@ -82,6 +82,7 @@ import (
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
+	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/internal/netcompose"
@@ -350,7 +351,15 @@ func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]
 			if err != nil {
 				t.Fatalf("buildSepRegistry: parse seed DID %q: %v", didStr, err)
 			}
-			if err := st.SaveProcess(d, doc, nil); err != nil {
+			// The ancestry check reads only the document; the store takes a
+			// Process only with a delegation, so the seed gives it a minimal,
+			// unsigned delegation issued by its Owner, which nothing here reads.
+			dlg := &delegation.DelegationCredential{
+				Type:              []string{"VerifiableCredential", "DelegationCredential"},
+				Issuer:            d.OwnerDID().String(),
+				CredentialSubject: delegation.DelegationSubject{ID: didStr, DelegatedBy: d.OwnerDID().String()},
+			}
+			if err := st.SaveProcess(d, doc, dlg); err != nil {
 				t.Fatalf("buildSepRegistry: seed internal DID store for %q: %v", didStr, err)
 			}
 		}

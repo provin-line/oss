@@ -150,7 +150,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   lifecycle event is appended, so a later request for it answers `null`
   with no error and the event is never appended; re-registering an owner
   already registered panics; and issuing a Pipeline or Process is refused
-  as `Unavailable`.
+  as `Unavailable`. The contract also says the saves (`SaveOwner`,
+  `SavePipeline`, `SaveProcess`) refuse a nil DID, document or delegation
+  with an error and store nothing, and `ListPipelines` and `ListProcesses` a
+  nil DID: a nil reaching the store is a caller bug (see Fixed).
 - `resolver.Resolver`'s contract says `Resolve` returns a non-nil document or
   a non-nil error, never both nil, so a caller that gets a nil error uses the
   document without checking it for nil. The module's resolvers keep it:
@@ -311,6 +314,15 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Fixed
 
+- `didregistry/store/yamlstore`: the saves refuse a nil DID or document,
+  and `SavePipeline` and `SaveProcess` a nil delegation, with an error, and
+  store nothing. Before, a nil DID panicked, a nil document was stored as
+  `null`, which `Resolve` read back as an empty document with no error, and
+  a nil delegation was not stored, so `ResolveDelegation` answered
+  `store.ErrNotFound` for a Pipeline or Process the store held.
+  `ListPipelines` and `ListProcesses` refuse a nil DID with an error, as its
+  other methods do, where they panicked. The DID service passes none of
+  these, so it is not affected.
 - `delegation.Verify` and `VerifyFor` refuse, with
   `delegation.ErrSignatureUnestablished`, a resolver that returns neither a
   document nor an error for the issuer. Before, they panicked.
@@ -465,7 +477,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - **Go API:** an implementation of `didregistry/store.DIDStore` must return
   a non-nil value or a non-nil error from `Resolve` and `ResolveDelegation`,
   never both nil (see Changed). One that answered with neither must return
-  an error instead, `store.ErrNotFound` for a miss.
+  an error instead, `store.ErrNotFound` for a miss. An implementation's
+  saves must also refuse a nil DID, document or delegation with an error and
+  store nothing, and its `ListPipelines` and `ListProcesses` a nil DID. A
+  caller that saved a Pipeline or Process with a nil delegation gets that
+  error from `yamlstore` now.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
   only the members `vc` reads, under their names and in their forms; one with
   any other member is refused.
