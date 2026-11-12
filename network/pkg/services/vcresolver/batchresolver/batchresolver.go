@@ -262,8 +262,8 @@ func (r *Runner) tryEndpoint(ctx context.Context, e vcresolver.UnresolvedEntry, 
 }
 
 // deriveIssuerEndpoint resolves issuer's DID document and returns its single
-// #vc-resolver VCResolver service endpoint, failing closed on zero or multiple
-// matches. The id must be exactly "#vc-resolver" or issuer+"#vc-resolver" —
+// #vc-resolver VCResolver service endpoint, failing closed on a document of
+// another DID and on zero or multiple matches. The id must be exactly "#vc-resolver" or issuer+"#vc-resolver" —
 // another URI merely ending in the fragment is someone else's advertisement
 // and must be ignored, never captured or counted into a false ambiguity (the
 // same exact-id rule the bundle exporter applies).
@@ -274,6 +274,11 @@ func (r *Runner) deriveIssuerEndpoint(ctx context.Context, issuer string) (strin
 	}
 	if doc == nil {
 		return "", errors.New("nil DID document")
+	}
+	// resolver.Resolver does not promise the document's id: a document of
+	// another DID advertises that DID's endpoint, not the issuer's.
+	if doc.ID() != issuer {
+		return "", fmt.Errorf("resolving %s returned the DID Document of %s", netexcerpt.ValueText(issuer), netexcerpt.ValueText(doc.ID()))
 	}
 	var found string
 	var n int

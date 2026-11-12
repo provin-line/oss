@@ -339,7 +339,8 @@ func (s *Service) countImportsForSubject(remoteSubject string) (int, error) {
 // #chain-manager endpoint, after the SSRF preflight, with the audience of
 // publisherDID's node (wireauth.AudienceForDID). The registry that answers
 // for publisherDID's document serves its #chain-manager endpoint, so the
-// endpoint and the audience come from the same source.
+// endpoint and the audience come from the same source; a document of another
+// DID is refused (ErrRemotePeer), so it is publisherDID's endpoint.
 func (s *Service) resolveTarget(ctx context.Context, publisherDID string) (Peer, error) {
 	audience, err := wireauth.AudienceForDID(publisherDID)
 	if err != nil {
@@ -348,6 +349,12 @@ func (s *Service) resolveTarget(ctx context.Context, publisherDID string) (Peer,
 	doc, err := s.resolver.Resolve(ctx, publisherDID)
 	if err != nil {
 		return Peer{}, fmt.Errorf("%w: resolve publisher DID: %v", ErrRemotePeer, err)
+	}
+	// resolver.Resolver does not promise the document's id: a document of
+	// another DID advertises that DID's endpoint, not the publisher's, so the
+	// publisher was not resolved.
+	if doc.ID() != publisherDID {
+		return Peer{}, fmt.Errorf("%w: resolve publisher DID: resolving %s returned the DID Document of %s", ErrRemotePeer, netexcerpt.ValueText(publisherDID), netexcerpt.ValueText(doc.ID()))
 	}
 	endpoint, err := resolveChainManagerEndpoint(doc, publisherDID)
 	if err != nil {

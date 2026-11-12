@@ -314,6 +314,19 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ### Fixed
 
+- `chainmanager`: subscribing to a publisher, and unsubscribing from one,
+  refuse a resolved DID Document whose id is not the publisher's DID, as a
+  failure to resolve the publisher (`ErrRemotePeer`, which the operator API
+  answers `Unavailable`), and call no peer. Before, they took the
+  `#chain-manager` endpoint that document advertised. The resolver the
+  network node passes refuses such a document already.
+- `vcresolver/batchresolver`: deriving an issuer's `#vc-resolver` endpoint
+  refuses a resolved DID Document whose id is not the issuer's DID, so no
+  issuer-derived endpoint is fetched from, and the entry follows the policy
+  for a derivation that found no endpoint: retried while its retry budget
+  remains, then dropped. Before, it fetched the predecessor from the
+  endpoint that document advertised. The resolver the network node passes
+  refuses such a document already.
 - `orgverify`: `Verify` and `Inspect` refuse a DID Document whose id is not
   the Owner DID they asked for. `Verify` answers `unreachable`
   (`doc_fetch_failed`), naming both DIDs, and `Inspect` reports it as the
