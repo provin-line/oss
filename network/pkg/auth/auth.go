@@ -35,10 +35,12 @@ import (
 // A backend that cannot answer (unreachable, timed out, overloaded) must
 // return an error wrapping interceptors.ErrBackendUnavailable: the RPC
 // interceptors report it as CodeUnavailable and the push receiver as 503, both
-// retryable. Any other error is a refusal or a fault, not an outage. The cedar
-// backend counts a bearer-token check that cannot fetch the issuer's key set,
-// for whatever reason, as one that cannot answer: its token check can only
-// refuse a token or not answer.
+// retryable. When the error also wraps the RPC's own context error and that
+// context has ended, the interceptors report CodeCanceled or
+// CodeDeadlineExceeded instead. Any other error is a refusal or a fault, not
+// an outage. The cedar backend counts a bearer-token check that cannot fetch
+// the issuer's key set, for whatever reason, as one that cannot answer: its
+// token check can only refuse a token or not answer.
 type Verifier interface {
 	Verify(ctx context.Context, resource, action string) error
 }

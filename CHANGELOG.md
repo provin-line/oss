@@ -597,14 +597,16 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   case when the latest fetch failed, for whatever reason (unreachable, a TLS
   failure, past its 5-second timeout, any status but 200, or a body over
   1 MiB or not a key set), and the node holds no key set within its grace, or
-  one with no key that fits the token (by key id, algorithm and use). The
-  node fetches again at most every 30 seconds, so a retry sooner than that
-  gets the same answer. A token the set the latest fetch returned has no key
-  for, and every other failed token check, stay `Unauthenticated` (push:
-  403). 0.4.x answered `Unauthenticated` (push: 403) for a key set it could
-  not fetch as well. A caller whose own context ends while the node waits
-  for the key set gets `Canceled` or `DeadlineExceeded`, as on the other
-  paths; 0.4.x answered `Unauthenticated` there too.
+  one with no key that fits the token (by key id, algorithm and use).
+  Fetches start at least 30 seconds apart, and until the next one starts a
+  retry is answered from the latest completed fetch. A token the set the
+  latest fetch returned has no key for, and every other failed token check,
+  stay `Unauthenticated` (push: 403). 0.4.x answered `Unauthenticated`
+  (push: 403) for a key set it could not fetch as well. An L1-guarded RPC
+  whose own context ends while the node waits for the key set fails with
+  `Canceled` or `DeadlineExceeded`, as on the other paths (push: 503, as for
+  a key set it cannot fetch); 0.4.x answered `Unauthenticated` (push: 403)
+  there too.
 - **Authorization answers:** a PDP answer in which a JSON object names a key
   twice, at any depth, has no single reading and is not read: a `200` from
   the `o3co` policy verifier, OPA or the Cedar agent in that form allows

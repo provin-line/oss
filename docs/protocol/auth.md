@@ -75,11 +75,13 @@ Facts a deployment must internalize:
   grace, or one with no key that fits the token (by `kid`, algorithm and use).
   A fetch that retrying does not fix (a 404, a certificate the node does not
   trust) is `Unavailable` too, unlike a PDP's HTTP 500: the Cedar endpoint lets
-  the token check only refuse the token or report that it cannot answer. The
-  node fetches again at most every 30 seconds, so a retry sooner than that gets
-  the same answer. A token the set the latest fetch returned has no key for is
-  `Unauthenticated`. A caller whose own context ends while the node waits for
-  the key set gets `Canceled` / `DeadlineExceeded`, as on the other paths.
+  the token check only refuse the token or report that it cannot answer.
+  Fetches start at least 30 seconds apart, and until the next one starts a retry
+  is answered from the latest completed fetch. A token the set the latest fetch
+  returned has no key for is `Unauthenticated`. An L1-guarded RPC whose own
+  context ends while the node waits for the key set fails with `Canceled` /
+  `DeadlineExceeded`, as on the other paths (push: 503, as for a key set it
+  cannot fetch).
   Callers may retry `Unavailable` with backoff; the pipeline's
   own wire retry now retries L1-guarded RPCs through a PDP outage within its
   bounded budget.
