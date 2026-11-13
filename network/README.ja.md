@@ -29,7 +29,7 @@ audit-reachable conformance class（ソースコミットメント — [pipeline
 
 ## 二層認証
 
-- **L1（オペレーター向け）**: RPC ごとのポリシーオプション（リソース + アクション）を `pkg/auth` が強制する — 設定された policy-verifier（PDP）に対して o3co の認可インターセプターを配線する PEP。トークン発行とポリシー判定は外部（dPLaaX の `auth.provider` / `auth.policy-verifier` サービス）が担い、`pkg/auth` 自体はポリシーを決めず、JWT 署名も検証しない。
+- **L1（オペレーター向け）**: RPC ごとのポリシーオプション（リソース + アクション）を `pkg/auth` が強制する — 設定された policy-verifier（PDP）に対して o3co の認可インターセプターを配線する PEP。トークン発行とポリシー判定は外部（dPLaaX の `auth.provider` / `auth.policy-verifier` サービス）が担い、`pkg/auth` 自体はポリシーを決めず、トークンも発行しない。bearer JWT を検証するのは `cedar` backend の下だけで、その agent は何も認証しない（後述の「PDP backend と認証の所在」参照）。
 - **L2（ピア向け）**: ChainPeerService の全 RPC が `AuthProof` を持つ — JCS 正規化ビューに対する Ed25519 署名で、ノンスリプレイ保護と再起動エポックバリアを備える。`pkg/wireauth` に実装。**L2 に認証オフモードは存在しない。** L2 は PDP から独立しており、policy-verifier を必要としない。
 - **Evidence 書き込み**（`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`）: L1 + in-band wireauth — PDP ゲート（L1 のポリシーオプション）が「そもそも書き込みを許可するか」を判定し、リクエストはさらに wireauth `AuthProof` を運び、ハンドラーが in-band で検証する。証明された DID が authoritative。
 
@@ -62,7 +62,7 @@ PDP が答えられない（到達不能、timeout、HTTP 429/502/503/504）と�
 cmd/network/      バイナリ: 設定ロード、DI ワイヤリング、マルチプレクサ登録
 config/           application.conf（オペレーターレイヤー）
 pkg/core/         マージ済み設定モデル、シークレット解決、SSRF 耐性 URL チェック
-pkg/auth/         L1 JWT 検証 + 認可インターセプター
+pkg/auth/         L1 PEP: 設定された PDP に対する認可インターセプター、cedar の bearer JWT の検証
 pkg/wireauth/     L2 のワイヤー証明: 帯域内の AuthProof の署名と検証
 pkg/services/     サービスごとに 1 パッケージ — pkg/services/README.md 参照
 ```

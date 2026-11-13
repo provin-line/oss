@@ -71,7 +71,9 @@ posture.
   `pkg/auth` — the PEP that wires the o3co authorization interceptors against a
   configured policy-verifier (PDP). Token issuance and the policy decision are
   external (the dPLaaX `auth.provider` / `auth.policy-verifier` services);
-  `pkg/auth` itself decides no policy and verifies no JWT signature.
+  `pkg/auth` itself decides no policy and issues no token; it verifies the
+  bearer JWT only under the `cedar` backend, whose agent authenticates nothing
+  (see the PDP backends below).
 - **L2 (peer-facing)**: every ChainPeerService RPC carries an `AuthProof` — Ed25519
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
   epoch barrier. Implemented in `pkg/wireauth`. **There is no
@@ -143,7 +145,7 @@ but the DID grant needs an already-registered owner) and its production options.
 cmd/network/      binary: config load, DI wiring, mux registration
 config/           application.conf (operator layer)
 pkg/core/         merged config model, secret resolution, SSRF-resistant URL checks
-pkg/auth/         L1 JWT verification + authorization interceptor
+pkg/auth/         L1 PEP: authorization interceptors against the configured PDP; bearer-JWT check for cedar
 pkg/wireauth/     L2 wire proof: signs and verifies the in-band AuthProof
 pkg/services/     one package per service — see pkg/services/README.md
 ```
