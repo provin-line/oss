@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -107,12 +108,17 @@ type registrarCall struct {
 
 // recordRegistrar is a fake EmissionRegistrar: it records the emitted head hash
 // and the consumed-source hashes it was handed, or fails to exercise the fail-closed path.
+// onRegister, when set, runs at each registration, before the call is recorded.
 type recordRegistrar struct {
-	calls   []registrarCall
-	failErr error
+	calls      []registrarCall
+	failErr    error
+	onRegister func()
 }
 
 func (r *recordRegistrar) RegisterEmission(_ context.Context, cred *vc.PipelinePassCredential, consumed []string) error {
+	if r.onRegister != nil {
+		r.onRegister()
+	}
 	if r.failErr != nil {
 		return r.failErr
 	}
@@ -205,6 +211,32 @@ func newHarness(t *testing.T, opts func(*Config)) *harness {
 	return &harness{p: p, sub: sub, store: store, pub: pub, sign: sign, obs: obs, emis: emis}
 }
 
+// credHashes are the content addresses of the credentials, sorted, so two sets
+// compare equal whatever their order.
+func credHashes(t *testing.T, creds []*vc.PipelinePassCredential) []string {
+	t.Helper()
+	hashes := make([]string, 0, len(creds))
+	for _, c := range creds {
+		h, err := c.Hash()
+		if err != nil {
+			t.Fatalf("credential hash: %v", err)
+		}
+		hashes = append(hashes, h)
+	}
+	slices.Sort(hashes)
+	return hashes
+}
+
+// wireCredential is the credential of an envelope on the wire.
+func wireCredential(t *testing.T, wire []byte) *vc.PipelinePassCredential {
+	t.Helper()
+	env, err := testCodec().UnmarshalEnvelope(wire)
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	return env.Credential
+}
+
 // feed drives one ingress input synchronously through the handler.
 func (h *harness) feed(wire []byte) {
 	h.p.handleIngress(context.Background(), wire, Ingress{UpstreamEndpoint: "https://up.example/src"})
@@ -224,8 +256,10 @@ func (h *harness) feedIngress(wire []byte, ing Ingress) {
 // Verified confidence (inputs were adjacent-verified).
 func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 	h := newHarness(t, nil)
-	h.feed(ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`)))
-	h.feed(ingressEnvelope(t, "did:example:b", []byte(`{"v":2}`)))
+	waA := ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`))
+	wbB := ingressEnvelope(t, "did:example:b", []byte(`{"v":2}`))
+	h.feed(waA)
+	h.feed(wbB)
 
 	if !h.p.foldOnce(context.Background()) {
 		t.Fatal("foldOnce returned false, want emitted")
@@ -236,6 +270,10 @@ func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 	}
 	if len(h.sign.gotSources) != 1 || len(h.sign.gotSources[0]) != 2 {
 		t.Fatalf("signer sources = %v, want one fold of 2", h.sign.gotSources)
+	}
+	want := credHashes(t, []*vc.PipelinePassCredential{wireCredential(t, waA), wireCredential(t, wbB)})
+	if got := credHashes(t, h.sign.gotSources[0]); !slices.Equal(got, want) {
+		t.Errorf("signer sources = %v, want the two input credentials %v", got, want)
 	}
 	if len(h.pub.calls) != 1 {
 		t.Fatalf("published = %d, want 1", len(h.pub.calls))
@@ -281,8 +319,10 @@ func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 // BEFORE publishing (fail-closed ordering). The registrar's consumed set matches the pooled
 // inputs' content addresses.
 func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
-	reg := &recordRegistrar{}
-	h := newHarness(t, func(c *Config) { c.SelfAudit = reg })
+	var h *harness
+	publishedAtRegister := -1
+	reg := &recordRegistrar{onRegister: func() { publishedAtRegister = len(h.pub.calls) }}
+	h = newHarness(t, func(c *Config) { c.SelfAudit = reg })
 	waA := ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`))
 	wbB := ingressEnvelope(t, "did:example:b", []byte(`{"v":2}`))
 	h.feed(waA)
@@ -294,6 +334,14 @@ func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
 	if len(reg.calls) != 1 {
 		t.Fatalf("registrar calls = %d, want 1", len(reg.calls))
 	}
+	// Registration comes before publishing: nothing was published when the
+	// registrar was called, and the one credential is published after it.
+	if publishedAtRegister != 0 {
+		t.Errorf("published %d before registering, want 0", publishedAtRegister)
+	}
+	if len(h.pub.calls) != 1 {
+		t.Fatalf("published = %d, want 1", len(h.pub.calls))
+	}
 	call := reg.calls[0]
 	// The registered head hash is the emitted credential's content address.
 	env, _ := testCodec().UnmarshalEnvelope(h.pub.calls[0])
@@ -301,14 +349,12 @@ func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
 	if call.headHash != wantHead {
 		t.Errorf("registered head = %q, want emitted head %q", call.headHash, wantHead)
 	}
-	// The consumed set is the two pooled inputs' content addresses.
-	if len(call.consumed) != 2 {
-		t.Fatalf("registered consumed = %v, want 2 hashes", call.consumed)
-	}
-	for _, ch := range call.consumed {
-		if len(ch) != len("sha256:")+64 {
-			t.Errorf("consumed hash %q is not a content address", ch)
-		}
+	// The consumed set is exactly the two pooled inputs' content addresses, in
+	// any order.
+	want := credHashes(t, []*vc.PipelinePassCredential{wireCredential(t, waA), wireCredential(t, wbB)})
+	got := slices.Sorted(slices.Values(call.consumed))
+	if !slices.Equal(got, want) {
+		t.Errorf("registered consumed = %v, want the inputs' content addresses %v", call.consumed, want)
 	}
 }
 
@@ -399,6 +445,14 @@ func TestProcess_FoldOutput_StrictGated(t *testing.T) {
 	if len(h.obs.events) != 1 || h.obs.events[0].Result.Status != contract.StatusErrored {
 		t.Errorf("want one errored observer event, got %+v", h.obs.events)
 	}
+	// The window was consumed: the next fold has nothing to fold, so it emits
+	// nothing and notifies no observer.
+	if h.p.foldOnce(context.Background()) {
+		t.Error("second foldOnce emitted, want the window consumed")
+	}
+	if len(h.obs.events) != 1 {
+		t.Errorf("observer events after the second fold = %d, want 1 (the window is consumed)", len(h.obs.events))
+	}
 }
 
 type badFold struct{}
@@ -418,12 +472,21 @@ func TestProcess_Declarations(t *testing.T) {
 	}
 }
 
-// Run subscribes every ingress, then on ctx cancel drains the subscriber and
-// closes the publisher (partial windows are discarded). Stubs are read only after
-// <-done, so the read is synchronized.
+// Run subscribes every ingress, then on ctx cancel drains every subscriber,
+// discards the partial window, and closes the publisher. Stubs are read only
+// after <-done, so the read is synchronized.
 func TestProcess_Run_SubscribesDrainsCloses(t *testing.T) {
 	tickCh := make(chan time.Time)
-	h := newHarness(t, func(c *Config) { c.Tick = tickCh })
+	first, second := &captureSubscriber{}, &captureSubscriber{}
+	h := newHarness(t, func(c *Config) {
+		c.Tick = tickCh
+		c.Ingress = []Ingress{
+			{Subscriber: first, UpstreamEndpoint: "a"},
+			{Subscriber: second, UpstreamEndpoint: "b"},
+		}
+	})
+	// A partial window: one input pooled, no tick before shutdown.
+	h.feed(ingressEnvelope(t, "did:example:a", []byte(`{"v":1}`)))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- h.p.Run(ctx) }()
@@ -432,11 +495,19 @@ func TestProcess_Run_SubscribesDrainsCloses(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !h.sub.drained {
-		t.Error("subscriber not drained on shutdown")
+	for name, s := range map[string]*captureSubscriber{"first": first, "second": second} {
+		if s.handler == nil {
+			t.Errorf("%s ingress not subscribed", name)
+		}
+		if !s.drained {
+			t.Errorf("%s subscriber not drained on shutdown", name)
+		}
 	}
 	if !h.pub.closed {
 		t.Error("publisher not closed on shutdown")
+	}
+	if len(h.sign.gotSources) != 0 || len(h.pub.calls) != 0 {
+		t.Errorf("partial window folded on shutdown: signed %d, published %d, want 0/0", len(h.sign.gotSources), len(h.pub.calls))
 	}
 }
 
