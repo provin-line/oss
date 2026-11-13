@@ -154,19 +154,18 @@ func TestCompile_RefusesURLsPastTheBoundInEveryDraft(t *testing.T) {
 // reference's URL once.) Each compiles but those refused by the metaschema,
 // the bound on pointers and URLs, or a pointer that does not resolve. (Sixteen
 // times the size takes about sixteen times as long; work in the square of the
-// size, about 256 times.)
+// size, about 256 times.) The two sizes are timed in turn, the best of each
+// kept, so a change in the machine's load falls on both; a ratio past the
+// bound three times over fails.
 func TestCompile_IsLinear(t *testing.T) {
-	timeOf := func(doc string, valid bool) time.Duration {
-		best := time.Hour
-		for range 3 {
-			start := time.Now()
-			_, err := schemadoc.Compile([]byte(doc))
-			best = min(best, time.Since(start))
-			if valid && err != nil {
-				t.Fatalf("%.60s…: %v", doc, err)
-			}
+	timeOf := func(t *testing.T, doc string, valid bool) time.Duration {
+		start := time.Now()
+		_, err := schemadoc.Compile([]byte(doc))
+		elapsed := time.Since(start)
+		if valid && err != nil {
+			t.Fatalf("%.60s…: %v", doc, err)
 		}
-		return best
+		return elapsed
 	}
 	items := func(n int, item func(i int) string) string {
 		parts := make([]string, n)
@@ -224,10 +223,20 @@ func TestCompile_IsLinear(t *testing.T) {
 		}, true},
 	} {
 		t.Run(strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
-			short, long := timeOf(c.shape(2000), c.valid), timeOf(c.shape(32000), c.valid)
-			if ratio := float64(long) / float64(max(short, time.Millisecond)); ratio > 48 {
-				t.Errorf("16 times the size took %.0f times as long (%v, %v)", ratio, short, long)
+			shortDoc, longDoc := c.shape(2000), c.shape(32000)
+			var ratio float64
+			var short, long time.Duration
+			for range 3 {
+				short, long = time.Hour, time.Hour
+				for range 3 {
+					short = min(short, timeOf(t, shortDoc, c.valid))
+					long = min(long, timeOf(t, longDoc, c.valid))
+				}
+				if ratio = float64(long) / float64(max(short, time.Millisecond)); ratio <= 48 {
+					return
+				}
 			}
+			t.Errorf("16 times the size took %.0f times as long (%v, %v)", ratio, short, long)
 		})
 	}
 }

@@ -108,27 +108,37 @@ func TestPrescan_BoundsUnicodeClasses(t *testing.T) {
 // scan accepts and ends in one it refuses, so the scan reads all of it.
 // (Sixteen times as long takes about sixteen times as long; a scan that
 // searched the rest of the expression at each step would take about 256
-// times.)
+// times.) The two lengths are timed in turn, the best of each kept, so a
+// change in the machine's load falls on both; a ratio past the bound three
+// times over fails.
 func TestPrescan_IsLinear(t *testing.T) {
 	timeOf := func(s string) time.Duration {
-		best := time.Hour
-		for range 5 {
-			start := time.Now()
-			for range 20 {
-				prescan(s)
-			}
-			best = min(best, time.Since(start))
+		start := time.Now()
+		for range 20 {
+			prescan(s)
 		}
-		return best
+		return time.Since(start)
 	}
 	for _, unit := range []string{"a", "[a-z]", "(?:a)", "(a)", "a{2,5}", `\x41`, `[\x41-\x5A]`, `\d\w`, "a|", "[^a]", `\.`, "[-a]"} {
 		if _, _, err := prescan(strings.Repeat(unit, 2000)); err != nil {
 			t.Fatalf("%q: %v", unit, err)
 		}
-		short := timeOf(strings.Repeat(unit, 2000) + "(?i)")
-		long := timeOf(strings.Repeat(unit, 32000) + "(?i)")
-		if ratio := float64(long) / float64(max(short, time.Microsecond)); ratio > 64 {
-			t.Errorf("%q: 16 times as long took %.0f times as long", unit, ratio)
+		shortExpr := strings.Repeat(unit, 2000) + "(?i)"
+		longExpr := strings.Repeat(unit, 32000) + "(?i)"
+		var ratio float64
+		var short, long time.Duration
+		for range 3 {
+			short, long = time.Hour, time.Hour
+			for range 5 {
+				short = min(short, timeOf(shortExpr))
+				long = min(long, timeOf(longExpr))
+			}
+			if ratio = float64(long) / float64(max(short, time.Microsecond)); ratio <= 64 {
+				break
+			}
+		}
+		if ratio > 64 {
+			t.Errorf("%q: 16 times as long took %.0f times as long (%v, %v)", unit, ratio, short, long)
 		}
 	}
 }

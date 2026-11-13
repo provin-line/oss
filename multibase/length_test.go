@@ -3,6 +3,7 @@ package multibase_test
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"testing"
@@ -54,15 +55,49 @@ func TestBase58Btc_RoundTripUpToTheBound(t *testing.T) {
 	}
 }
 
-// bytesAllocated is what f allocates, on average over runs.
+// bytesAllocated is what f allocates in one call: the least over runs calls.
+// The runtime counts what the whole process allocates, so a call's count also
+// holds what another goroutine allocated meanwhile (a collection's first
+// cycles allocate tens of KiB for their own workers); the least of the calls
+// is f's own, so an allocation f makes in only some of the calls is not
+// counted. A collection is run first, so one is unlikely to be due during the
+// calls. A collection can drop what a sync.Pool holds, so the first call can
+// cost more than the rest.
 func bytesAllocated(runs int, f func()) uint64 {
+	least := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
+	runtime.GC()
 	for range runs {
+		runtime.ReadMemStats(&before)
 		f()
+		runtime.ReadMemStats(&after)
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
 	}
-	runtime.ReadMemStats(&after)
-	return (after.TotalAlloc - before.TotalAlloc) / uint64(runs)
+	return least
+}
+
+// The runtime counts what the whole process allocates, so what another
+// goroutine allocates while f runs is in the count of that call: here 64 KiB,
+// during the first call only. bytesAllocated leaves it out, since the other
+// calls run clear of it.
+func TestBytesAllocated_LeavesOutWhatAnotherGoroutineAllocatesDuringACall(t *testing.T) {
+	var other []byte
+	first := true
+	n := bytesAllocated(5, func() {
+		if first {
+			first = false
+			done := make(chan struct{})
+			go func() {
+				other = make([]byte, 64<<10)
+				close(done)
+			}()
+			<-done
+		}
+	})
+	if n != 0 {
+		t.Errorf("f allocates nothing, bytesAllocated says %d bytes", n)
+	}
+	_ = other
 }
 
 // A value past the bound, or without the prefix, is refused before any of it
