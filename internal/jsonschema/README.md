@@ -5,15 +5,16 @@ This directory is a copy of the JSON Schema library
 with patches added: a work budget for validation; an error for a number
 `big.Rat` cannot read, where upstream panics or drops the keyword; an
 integer keyword beyond `int` read as the nearest `int`, and one whose value
-is not an integer refused; compiling a schema in time about linear in its
-size (up to a factor of log n where `uniqueItems` sorts object names that
-share a long prefix, as `ValidateWithBudget` states); its check against its
-metaschema within a work budget; and a JSON pointer's array index read only
-as RFC 6901 writes one (Changes, below). The schema package
-(`schema/internal/schemadoc`) is its only user. It lives here, under its own
-import path, so that every module that imports `github.com/provin-line/oss`
-builds with the patches. A `replace` directive in go.mod would apply only
-when this module is the main module.
+is not an integer refused; a `multipleOf` not greater than 0 refused;
+compiling a schema in time about linear in its size (up to a factor of log n
+where `uniqueItems` sorts object names that share a long prefix, as
+`ValidateWithBudget` states); its check against its metaschema within a work
+budget; and a JSON pointer's array index read only as RFC 6901 writes one
+(Changes, below). The schema package (`schema/internal/schemadoc`) is its
+only user. It lives here, under its own import path, so that every module
+that imports `github.com/provin-line/oss` builds with the patches. A
+`replace` directive in go.mod would apply only when this module is the main
+module.
 
 ## Origin
 
@@ -35,9 +36,9 @@ Every changed file says so at its top, and every changed statement is
 marked with the name of its change (`work budget`, `large number`,
 `compile index`, `resource index`, `subschema journal`, `dynamic anchor
 set`, `hash sign`, `metaschema budget`, `vocabulary cache`, `pointer
-index`, `reference index`, `number keyword`, `integer keyword`), except the
-import paths. Each change from 4 on is a patch of its own, so it can be
-offered upstream on its own.
+index`, `reference index`, `number keyword`, `integer keyword`, `multiple
+of`), except the import paths. Each change from 4 on is a patch of its own,
+so it can be offered upstream on its own.
 
 1. **Import path.** `output.go`, `util.go` and `validator.go` import package
    `kind` as `github.com/provin-line/oss/internal/jsonschema/kind`.
@@ -175,6 +176,16 @@ offered upstream on its own.
     after change 13's. Changed lines in `objcompiler.go`; tests in
     `compile_test.go`.
     [patches/integer-keyword.patch](patches/integer-keyword.patch).
+15. **Multiple of.** A `multipleOf` whose number is not greater than 0
+    (such as `0` or `-1`) fails the compile with a `*NonPositiveError`,
+    which names the keyword's location and the number, under every draft:
+    every draft requires a number greater than 0. Upstream v6.0.3 compiles
+    it, and a number validated against a `multipleOf` of 0 panics in the
+    division. Where the library checks a schema against its metaschema, the
+    metaschema refuses it first; it does not check a schema located below
+    json-schema.org, and there the compiler alone refuses it. Changed lines
+    in `objcompiler.go`; tests in `compile_test.go`.
+    [patches/multiple-of.patch](patches/multiple-of.patch).
 
 Each patch from 4 on is a diff against upstream v6.0.3 with the patches
 before it applied, with upstream's import path.
@@ -184,8 +195,8 @@ commit above with its `testdata/JSON-Schema-Test-Suite` submodule, apply the
 patches in the order above (`work-budget`, `large-number`, `compile-index`,
 `resource-index`, `subschema-journal`, `dynamic-anchor-set`, `hash-sign`,
 `metaschema-budget`, `vocabulary-cache`, `pointer-index`,
-`reference-index`, `number-keyword`, `integer-keyword`), and run
-`go test ./...` there. To run the test suite through the budget as well,
+`reference-index`, `number-keyword`, `integer-keyword`, `multiple-of`),
+and run `go test ./...` there. To run the test suite through the budget as well,
 have `suite_test.go` call `sch.ValidateWithBudget(test.Data, 1<<62)` in place of
 `sch.Validate(test.Data)`.
 
@@ -207,9 +218,10 @@ When upstream bounds its own work, by a budget or a way to stop a validation
 or a compile, releases a version that reports every number it cannot read
 as an error (the number keywords and the `uniqueItems` hash, in `Validate`
 and in `Compile`), reads an integer keyword beyond `int` as the nearest
-`int` and refuses one whose value is not an integer (change 14), compiles a
-schema in time linear in its size (changes 4 to 8, 10 and 12), and reads an
-array index only as RFC 6901 writes one (change 11), switch the schema package to the upstream module and delete
-this directory. Until then, apply upstream releases here by copying
-them again and re-applying the changes above; drop a patch once a release
-carries its fix.
+`int` and refuses one whose value is not an integer (change 14), refuses a
+`multipleOf` not greater than 0 (change 15), compiles a schema in time
+linear in its size (changes 4 to 8, 10 and 12), and reads an array index
+only as RFC 6901 writes one (change 11), switch the schema package to the
+upstream module and delete this directory. Until then, apply upstream
+releases here by copying them again and re-applying the changes above; drop
+a patch once a release carries its fix.

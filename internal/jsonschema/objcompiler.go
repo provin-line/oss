@@ -1,10 +1,11 @@
 // Changed by 1o1 Co. Ltd. for github.com/provin-line/oss: a work budget (the
 // lines marked "work budget"), a reference's target found once for each URL
 // it resolves to (the lines marked "reference index"), a number keyword whose
-// number cannot be read refused (the lines marked "number keyword"), and an
+// number cannot be read refused (the lines marked "number keyword"), an
 // integer keyword beyond int read as the nearest int and one whose value is
-// not an integer refused (the lines marked "integer keyword"). See README.md
-// in this directory.
+// not an integer refused (the lines marked "integer keyword"), and a
+// multipleOf not greater than 0 refused (the lines marked "multiple of"). See
+// README.md in this directory.
 
 package jsonschema
 
@@ -158,6 +159,9 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
 		if s.MultipleOf, err = c.numberKeyword("multipleOf"); err != nil { // number keyword
 			return err // number keyword
 		} // number keyword
+		if s.MultipleOf != nil && s.MultipleOf.Sign() <= 0 { // multiple of
+			return &NonPositiveError{URL: c.up.format("multipleOf"), Value: c.obj["multipleOf"]} // multiple of
+		} // multiple of
 		if s.Maximum, err = c.numberKeyword("maximum"); err != nil { // number keyword
 			return err // number keyword
 		} // number keyword
@@ -642,6 +646,21 @@ func (e *NonIntegerError) Error() string { // integer keyword
 	} // integer keyword
 	return fmt.Sprintf("integer keyword holds %s, which is not an integer, at %q", value, e.URL) // integer keyword
 } // integer keyword
+
+// NonPositiveError reports a multipleOf whose number is not greater than 0,
+// which every draft requires of it.
+type NonPositiveError struct { // multiple of
+	URL   string // multiple of
+	Value any    // multiple of
+} // multiple of
+
+func (e *NonPositiveError) Error() string { // multiple of
+	value := fmt.Sprint(e.Value)                     // multiple of
+	if b, err := json.Marshal(e.Value); err == nil { // multiple of
+		value = string(b) // multiple of
+	} // multiple of
+	return fmt.Sprintf("number keyword holds %s, which is not greater than 0, at %q", value, e.URL) // multiple of
+} // multiple of
 
 // --
 

@@ -470,6 +470,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   integer. The schema package compiles every schema at a location the library
   checks against its metaschema, which refuses these values first, so its
   behaviour does not change.
+- `internal/jsonschema` fails the compile of a schema whose `multipleOf`
+  holds a number not greater than 0 (such as `0` or `-1`), with a
+  `*NonPositiveError`, under every draft; where the library skips the
+  metaschema check, it compiled such a keyword, and a number validated
+  against a `multipleOf` of 0 panicked. The schema package compiles every
+  schema at a location the library checks against its metaschema, which
+  refuses these values first, so its behaviour does not change.
 - `schema`: in a schema it compiles, an integer keyword (`minLength`,
   `maxLength`, `minItems`, `maxItems`, `minProperties`, `maxProperties`,
   `minContains`, `maxContains`) whose value is an integer above `math.MaxInt`

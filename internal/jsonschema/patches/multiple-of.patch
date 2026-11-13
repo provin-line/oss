@@ -1,0 +1,111 @@
+diff --git a/compile_test.go b/compile_test.go
+index 139cd99..8c69fb3 100644
+--- a/compile_test.go
++++ b/compile_test.go
+@@ -322,6 +322,70 @@ func TestCompile_ReadsAnIntegerKeywordBeyondIntAsTheNearestInt(t *testing.T) {
+ 	}
+ }
+ 
++// A multipleOf not greater than 0 fails the compile with a *NonPositiveError
++// at the keyword, under every draft: every draft requires a number greater
++// than 0. The metaschema refuses such a multipleOf, but the library does not
++// check a schema located below json-schema.org against it: there the
++// compiler alone refuses it. A multipleOf greater than 0 is still a bound.
++func TestCompile_RefusesAMultipleOfNotGreaterThanZero(t *testing.T) {
++	compileAt := func(schema string) (*jsonschema.Schema, error) {
++		const loc = "https://json-schema.org/multiple-of.json"
++		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
++		if err != nil {
++			return nil, err
++		}
++		c := jsonschema.NewCompiler()
++		if err := c.AddResource(loc, doc); err != nil {
++			return nil, err
++		}
++		return c.Compile(loc)
++	}
++	for _, c := range []struct{ schema, keyword string }{
++		{`{"multipleOf": 0}`, "/multipleOf"},
++		{`{"multipleOf": 0.0}`, "/multipleOf"},
++		{`{"multipleOf": -0}`, "/multipleOf"},
++		{`{"multipleOf": -1}`, "/multipleOf"},
++		{`{"multipleOf": -0.5}`, "/multipleOf"},
++		{`{"properties": {"a": {"multipleOf": 0}}}`, "/properties/a/multipleOf"},
++		{`{"$schema": "http://json-schema.org/draft-04/schema#", "multipleOf": 0}`, "/multipleOf"},
++		{`{"$schema": "http://json-schema.org/draft-06/schema#", "multipleOf": 0}`, "/multipleOf"},
++		{`{"$schema": "http://json-schema.org/draft-07/schema#", "multipleOf": -2}`, "/multipleOf"},
++		{`{"$schema": "https://json-schema.org/draft/2019-09/schema", "multipleOf": 0}`, "/multipleOf"},
++	} {
++		_, err := compileAt(c.schema)
++		var npe *jsonschema.NonPositiveError
++		if !errors.As(err, &npe) || !strings.HasSuffix(npe.URL, "#"+c.keyword) {
++			t.Errorf("%s below json-schema.org: %v, want a *NonPositiveError at %s", c.schema, err, c.keyword)
++		}
++	}
++	// A document made of Go values: a float64 0 is refused.
++	c := jsonschema.NewCompiler()
++	const loc = "https://json-schema.org/multiple-of-go.json"
++	if err := c.AddResource(loc, map[string]any{"multipleOf": 0.0}); err != nil {
++		t.Fatal(err)
++	}
++	var npe *jsonschema.NonPositiveError
++	if _, err := c.Compile(loc); !errors.As(err, &npe) {
++		t.Errorf("a float64 0 below json-schema.org: %v, want a *NonPositiveError", err)
++	}
++	// The error writes the value as JSON writes it.
++	if _, err := compileAt(`{"multipleOf": -0.5}`); err == nil || !strings.Contains(err.Error(), "holds -0.5,") {
++		t.Errorf(`{"multipleOf": -0.5}: %v, want the value written as -0.5`, err)
++	}
++	// Elsewhere, the metaschema refuses such a value before the compiler
++	// reads the keyword.
++	if _, err := compile(`{"multipleOf": 0}`); err == nil || errors.As(err, &npe) {
++		t.Errorf(`{"multipleOf": 0}: %v, want the metaschema's refusal`, err)
++	}
++	sch, err := compileAt(`{"multipleOf": 0.5}`)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if sch.Validate(1.5) != nil || sch.Validate(1.25) == nil {
++		t.Error(`{"multipleOf": 0.5} below json-schema.org: want 1.5 accepted and 1.25 refused`)
++	}
++}
++
+ // intText is *p, or "nil".
+ func intText(p *int) string {
+ 	if p == nil {
+diff --git a/objcompiler.go b/objcompiler.go
+index 25f4c45..e863a02 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -150,6 +150,9 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 		if s.MultipleOf, err = c.numberKeyword("multipleOf"); err != nil { // number keyword
+ 			return err // number keyword
+ 		} // number keyword
++		if s.MultipleOf != nil && s.MultipleOf.Sign() <= 0 { // multiple of
++			return &NonPositiveError{URL: c.up.format("multipleOf"), Value: c.obj["multipleOf"]} // multiple of
++		} // multiple of
+ 		if s.Maximum, err = c.numberKeyword("maximum"); err != nil { // number keyword
+ 			return err // number keyword
+ 		} // number keyword
+@@ -635,6 +638,21 @@ func (e *NonIntegerError) Error() string { // integer keyword
+ 	return fmt.Sprintf("integer keyword holds %s, which is not an integer, at %q", value, e.URL) // integer keyword
+ } // integer keyword
+ 
++// NonPositiveError reports a multipleOf whose number is not greater than 0,
++// which every draft requires of it.
++type NonPositiveError struct { // multiple of
++	URL   string // multiple of
++	Value any    // multiple of
++} // multiple of
++
++func (e *NonPositiveError) Error() string { // multiple of
++	value := fmt.Sprint(e.Value)                     // multiple of
++	if b, err := json.Marshal(e.Value); err == nil { // multiple of
++		value = string(b) // multiple of
++	} // multiple of
++	return fmt.Sprintf("number keyword holds %s, which is not greater than 0, at %q", value, e.URL) // multiple of
++} // multiple of
++
+ // --
+ 
+ func toStrings(arr []any) []string {
