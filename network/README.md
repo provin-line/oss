@@ -111,10 +111,19 @@ With `jwks-url` the key set is cached for 10 minutes and refetched at most every
 30 seconds (also when a token names an unknown `kid`). While a refetch fails, the
 expired set still verifies tokens for the `kid`s it holds for another 30 minutes,
 so a key the issuer withdrew can stay trusted for up to 40 minutes during a JWKS
-outage; unknown `kid`s are refused. A JWKS outage (and any other token-check
-failure) reaches clients as `Unauthenticated` (push: 403, no wire retry), not
-`Unavailable`, because the Cedar endpoint turns every resolver error into an
-authentication failure.
+outage. A token for which the set the latest fetch returned has no key that
+fits (by `kid`, algorithm and use) is refused as `Unauthenticated` (push: 403, no
+wire retry), like any other token-check failure. When the latest fetch failed,
+for whatever reason (unreachable, a TLS failure, past the 5-second timeout, any
+status but 200, or a body over 1 MiB or not a key set), and the node holds no set
+within its grace, or one with no key that fits, the token has not been judged:
+clients get `Unavailable` (push: 503 with `Retry-After`). A fetch that retrying
+does not fix (a 404, a certificate the node does not trust) is `Unavailable`
+too, unlike a PDP's HTTP 500 below: the Cedar endpoint lets the token check only
+refuse the token or report that it cannot answer. The node fetches again at most
+every 30 seconds, so a retry sooner than that gets the same answer. A caller whose
+own context ends while the node waits for the key set gets `Canceled` /
+`DeadlineExceeded`, as on the other paths.
 
 A PDP reached over plaintext `http://` on anything but loopback is refused unless
 its `host:port` is listed in `provin.network.auth.plain-internal` (default empty).

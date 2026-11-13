@@ -15,8 +15,8 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.55.0
 	github.com/nats-io/nkeys v0.4.16
-	github.com/o3co/protobuf.interceptors v0.6.0
-	github.com/o3co/protobuf.interceptors/connectrpc v0.6.0
+	github.com/o3co/protobuf.interceptors v0.7.0
+	github.com/o3co/protobuf.interceptors/connectrpc v0.7.0
 	github.com/piprate/json-gold v0.9.1
 	github.com/prometheus/client_golang v1.25.0
 	go.opentelemetry.io/otel v1.47.0

@@ -60,16 +60,27 @@ Facts a deployment must internalize:
   The JWKS is cached 10 minutes and refetched at most every 30 seconds; while a
   refetch fails, the expired set still verifies known `kid`s for another 30
   minutes, so a withdrawn key can be trusted for up to 40 minutes during a JWKS
-  outage (unknown `kid`s are refused).
+  outage (a token the set holds no key for is never accepted).
 - **PDP outage is `Unavailable`, not a refusal of the caller**: when the PDP
   cannot answer (unreachable, timeout, HTTP 429/502/503/504) an L1-guarded RPC
   fails with ConnectRPC `Unavailable` (previously `Internal`), and the pipeline's
   push endpoint (`/ingest/<name>/…`) answers **503 with `Retry-After`**
   (previously 403). A PDP that answers badly (HTTP 500, malformed body) is still
-  `Internal` / 403. The `cedar` backend is the exception: a failure to verify the
-  token (a JWKS outage included) is reported as `Unauthenticated` (push: 403, no
-  wire retry), because the Cedar endpoint turns every resolver error into an
-  authentication failure. Callers may retry `Unavailable` with backoff; the pipeline's
+  `Internal` / 403. Under the `cedar` backend a token that fails verification is
+  `Unauthenticated` (push: 403, no wire retry), but a node that cannot fetch the
+  issuer's key set has not judged the token, and reports `Unavailable` as well
+  (push: 503 with `Retry-After`): the latest fetch failed, for whatever reason
+  (unreachable, a TLS failure, past its 5-second timeout, any status but 200, or
+  a body over 1 MiB or not a key set), and the node holds no set within its
+  grace, or one with no key that fits the token (by `kid`, algorithm and use).
+  A fetch that retrying does not fix (a 404, a certificate the node does not
+  trust) is `Unavailable` too, unlike a PDP's HTTP 500: the Cedar endpoint lets
+  the token check only refuse the token or report that it cannot answer. The
+  node fetches again at most every 30 seconds, so a retry sooner than that gets
+  the same answer. A token the set the latest fetch returned has no key for is
+  `Unauthenticated`. A caller whose own context ends while the node waits for
+  the key set gets `Canceled` / `DeadlineExceeded`, as on the other paths.
+  Callers may retry `Unavailable` with backoff; the pipeline's
   own wire retry now retries L1-guarded RPCs through a PDP outage within its
   bounded budget.
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	interceptors "github.com/o3co/protobuf.interceptors"
 )
 
 const (
@@ -43,16 +44,13 @@ type jwksCache struct {
 	set         *jose.JSONWebKeySet
 	fetchedAt   time.Time
 	lastAttempt time.Time
-	inflight    *flight
+	// lastErr is why the latest completed fetch failed, or nil if it succeeded
+	// or no fetch has completed.
+	lastErr error
+	// inflight is the running fetch every waiting caller shares; it is closed
+	// when the fetch completes.
+	inflight chan struct{}
 }
-
-// flight is one running fetch that every waiting caller shares.
-type flight struct {
-	done chan struct{}
-	err  error
-}
-
-var errRefetchLimited = errors.New("key set refetch rate-limited")
 
 func newJWKSCache(url string, client *http.Client, now func() time.Time) *jwksCache {
 	if client == nil {
@@ -72,9 +70,21 @@ func newJWKSCache(url string, client *http.Client, now func() time.Time) *jwksCa
 // set triggers one shared fetch, started at most every jwksMinRefetch. The fetch
 // runs detached from the caller's context, so a caller that gives up neither
 // fails it for the others nor spends the rate limit with a fetch that never
-// completed. If the set is expired and the fetch fails or is rate-limited, the
-// set still verifies tokens for the key ids it holds until jwksGrace after its
-// expiry; an unknown key id is always refused.
+// completed. If the set is expired and the latest fetch failed, whether this
+// call waited for it or found the next one rate-limited, the set still verifies
+// tokens for the key ids it holds until jwksGrace after its expiry.
+//
+// A token for which no key of the set the latest fetch returned fits the header
+// (by key id, algorithm and use; see lookup) is refused. When the latest fetch
+// failed, the token is not judged instead: no set at all, a set past its grace,
+// or a set with no key that fits is an error wrapping
+// interceptors.ErrBackendUnavailable. A fetch fails for whatever reason it does
+// not yield a key set, so one that retrying does not fix (a 404, a certificate
+// the node does not trust) is reported as unavailable too: the Cedar endpoint
+// lets a principal resolver only refuse a token or report that it cannot
+// answer. A caller whose context ends while it waits for a fetch has not had its
+// token judged either: that error wraps interceptors.ErrBackendUnavailable and
+// the context's error, so the caller is told its own context ended.
 func (c *jwksCache) key(ctx context.Context, h jose.Header) (any, error) {
 	c.mu.Lock()
 	now := c.now()
@@ -84,43 +94,52 @@ func (c *jwksCache) key(ctx context.Context, h jose.Header) (any, error) {
 			return k, nil
 		}
 	}
-	fl := c.inflight
-	if fl == nil && (c.lastAttempt.IsZero() || now.Sub(c.lastAttempt) >= jwksMinRefetch) {
-		fl = &flight{done: make(chan struct{})}
-		c.inflight = fl
+	done := c.inflight
+	if done == nil && (c.lastAttempt.IsZero() || now.Sub(c.lastAttempt) >= jwksMinRefetch) {
+		done = make(chan struct{})
+		c.inflight = done
 		c.lastAttempt = now
-		go c.run(fl)
+		go c.run(done)
 	}
 	c.mu.Unlock()
 
-	fetchErr := errRefetchLimited
-	if fl != nil {
+	if done != nil {
 		select {
-		case <-fl.done:
-			fetchErr = fl.err
+		case <-done:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("%w: waiting for the key set: %w", interceptors.ErrBackendUnavailable, ctx.Err())
 		}
 	}
 
 	c.mu.Lock()
-	set, age := c.set, c.now().Sub(c.fetchedAt)
+	set, age, fetchErr := c.set, c.now().Sub(c.fetchedAt), c.lastErr
 	c.mu.Unlock()
 	switch {
 	case set == nil:
-		return nil, fmt.Errorf("no key set available: %w", fetchErr)
+		return nil, unavailable("no key set available", fetchErr)
 	case age < jwksTTL:
 	case fetchErr != nil && age < jwksTTL+jwksGrace:
 	default:
-		return nil, fmt.Errorf("key set expired: %w", fetchErr)
+		return nil, unavailable("key set expired", fetchErr)
 	}
 	if k, ok := lookup(set, h); ok {
 		return k, nil
 	}
+	if fetchErr != nil {
+		return nil, unavailable(fmt.Sprintf("no verification key for kid %q", h.KeyID), fetchErr)
+	}
 	return nil, fmt.Errorf("no verification key for kid %q", h.KeyID)
 }
 
-func (c *jwksCache) run(fl *flight) {
+// unavailable reports that the token could not be judged: what is missing, and
+// why the latest fetch failed. It wraps interceptors.ErrBackendUnavailable but
+// not the fetch's error, so the fetch's own timeout does not read as the
+// caller's context ending.
+func unavailable(what string, fetchErr error) error {
+	return fmt.Errorf("%w: %s; the latest key set fetch failed: %v", interceptors.ErrBackendUnavailable, what, fetchErr)
+}
+
+func (c *jwksCache) run(done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), jwksTimeout)
 	defer cancel()
 	set, err := c.fetch(ctx)
@@ -128,12 +147,10 @@ func (c *jwksCache) run(fl *flight) {
 	if err == nil {
 		c.set, c.fetchedAt = set, c.now()
 	}
+	c.lastErr = err
 	c.inflight = nil
 	c.mu.Unlock()
-	if err != nil {
-		fl.err = fmt.Errorf("fetch jwks: %w", err)
-	}
-	close(fl.done)
+	close(done)
 }
 
 func (c *jwksCache) fetch(ctx context.Context) (*jose.JSONWebKeySet, error) {

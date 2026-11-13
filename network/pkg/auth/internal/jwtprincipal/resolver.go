@@ -11,7 +11,10 @@
 // not-before time (these three within the leeway), its issuer equals the
 // configured issuer, its audience contains the configured audience, and it
 // has a subject. The principal is that subject. Everything else is refused;
-// there is no partial acceptance.
+// there is no partial acceptance. With a key set URL, a token the node cannot
+// judge now, because the latest fetch of the set failed and the set held does
+// not settle it, is not accepted either: that error wraps
+// interceptors.ErrBackendUnavailable.
 package jwtprincipal
 
 import (
@@ -49,8 +52,9 @@ const (
 )
 
 // Resolver authenticates a bearer token and names its principal. An error means
-// the token is refused; the error text is for logs and never reaches the RPC
-// caller.
+// the token is refused, except one that wraps interceptors.ErrBackendUnavailable:
+// the resolver could not judge the token now. Neither allows anything. The error
+// text is for logs and never reaches the RPC caller.
 type Resolver interface {
 	Principal(ctx context.Context, token string) (string, error)
 }

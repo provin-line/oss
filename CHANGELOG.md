@@ -386,7 +386,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - Dependencies, from 0.4.0: `golang.org/x/net` 0.61.0 → 0.62.0 and
   `github.com/klauspost/compress` 1.20.1 → 1.20.2 (indirect), which carry
   the fixes for GO-2026-6866 and GO-2026-6860 (`x/net/html`) and
-  GO-2026-6865.
+  GO-2026-6865. `github.com/o3co/protobuf.interceptors` and its
+  `connectrpc` module 0.6.0 → 0.7.0 (see Breaking changes:
+  Authentication, Authorization answers).
 
 ### Fixed
 
@@ -588,6 +590,25 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   one with a `typ` of `JWT` for instance, is refused as `Unauthenticated`, as
   an invalid token is. 0.4.x checked neither: an issuer whose tokens lack them
   must issue tokens of that form first.
+- **Authentication:** with the `cedar` backend and `jwks-url`, a node that
+  cannot fetch the issuer's key set reports the PDP unavailable rather than
+  the caller unauthenticated: an L1-guarded RPC fails with `Unavailable`, and
+  the pipeline's push endpoint answers 503 with `Retry-After`. That is the
+  case when the latest fetch failed, for whatever reason (unreachable, a TLS
+  failure, past its 5-second timeout, any status but 200, or a body over
+  1 MiB or not a key set), and the node holds no key set within its grace, or
+  one with no key that fits the token (by key id, algorithm and use). The
+  node fetches again at most every 30 seconds, so a retry sooner than that
+  gets the same answer. A token the set the latest fetch returned has no key
+  for, and every other failed token check, stay `Unauthenticated` (push:
+  403). 0.4.x answered `Unauthenticated` (push: 403) for a key set it could
+  not fetch as well. A caller whose own context ends while the node waits
+  for the key set gets `Canceled` or `DeadlineExceeded`, as on the other
+  paths; 0.4.x answered `Unauthenticated` there too.
+- **Authorization answers:** a PDP answer in which a JSON object names a key
+  twice, at any depth, has no single reading and is not read: a `200` from
+  the `o3co` policy verifier, OPA or the Cedar agent in that form allows
+  nothing and is a malformed answer, `Internal` (push: 403).
 - **Go API:** the `Config.HTTPClient` of `auditor/client`,
   `chainmanager/reportclient`, `schemaregistry/client`, `tlogservice/client`
   and `payloadresolver/client` is an `*http.Client`, not a
