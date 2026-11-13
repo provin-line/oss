@@ -516,6 +516,40 @@ func TestCanonicalize_RefusesACredentialThatWritesAValueTwice(t *testing.T) {
 	}
 }
 
+// A node object of only an @id, where JSON-LD expands it to nothing (at the
+// top of the document, in its @graph, or as all a named graph holds), is
+// refused: its @id would ride the document unsigned. So is a named graph that
+// holds nothing. As a property's value, the same object names that node, and
+// the quad holds its IRI.
+func TestCanonicalize_RefusesANodeOfOnlyAnID(t *testing.T) {
+	c := testContexts(t)
+	onlyID := map[string]any{"@id": "https://e.x/n"}
+	other := map[string]any{"@id": "https://e.x/s", "https://e.x/p": "v"}
+	for name, tc := range map[string]struct {
+		doc  any
+		want string
+	}{
+		"at the top":                        {[]any{onlyID, other}, "JSON-LD drops the others"},
+		"in the document's @graph":          {map[string]any{"@graph": []any{onlyID, other}}, "JSON-LD drops the others"},
+		"all a named graph holds":           {[]any{map[string]any{"@id": "https://e.x/g", "@graph": []any{onlyID}}, other}, "JSON-LD drops the others"},
+		"all a named graph holds, no array": {[]any{map[string]any{"@id": "https://e.x/g", "@graph": onlyID}, other}, "could not expand"},
+		"a named graph that holds nothing":  {[]any{map[string]any{"@id": "https://e.x/g", "@graph": []any{}}, other}, "an empty array at"},
+	} {
+		if _, err := c.Canonicalize(tc.doc); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want an error naming %q", name, err, tc.want)
+		}
+	}
+	for name, doc := range map[string]any{
+		"a property's value":             map[string]any{"@id": "https://e.x/s", "https://e.x/p": onlyID},
+		"a property's value in an array": map[string]any{"@id": "https://e.x/s", "https://e.x/p": []any{onlyID}},
+	} {
+		out, err := c.Canonicalize(doc)
+		if want := "<https://e.x/s> <https://e.x/p> <https://e.x/n> .\n"; err != nil || string(out) != want {
+			t.Errorf("%s: %q, %v, want %q", name, out, err, want)
+		}
+	}
+}
+
 // The RDF collection vocabulary written out (rdf:first and rdf:rest as
 // properties, rdf:nil as an IRI) would be signed as the list @list makes,
 // though a JSON reader sees another shape, so it is refused: a list comes
