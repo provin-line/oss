@@ -68,7 +68,7 @@ func (fakeVCStore) StoreVC(_ context.Context, credential []byte, _ string, _ int
 }
 
 // dpVCStore returns a fresh IngressStorer for data-plane tests that build
-// consuming loops (slice-17f: all consuming loops require a VCStore).
+// consuming loops (all consuming loops require a VCStore).
 func dpVCStore() IngressStorer {
 	return fakeVCStore{}
 }
@@ -162,7 +162,7 @@ func dpPipelineCfg() *Config {
 	}}}
 }
 
-// TestDataPlane_SourceLoopBoot is the slice-17b capstone: it assembles a
+// TestDataPlane_SourceLoopBoot assembles a
 // source loop (nats transport + ingest signer + memlog) and runs it; a raw JSON push
 // on the ingress subject yields a signed, correctly-attributed Envelope on the output
 // subject; cancelling the context drains the runner.
@@ -457,7 +457,7 @@ func TestBuildDataPlane_AgentAccessRequiresChainResolver(t *testing.T) {
 	}
 }
 
-// The per-loop metrics bookkeeping follows capability (P1-2): a source loop
+// The per-loop metrics bookkeeping follows capability: a source loop
 // registers emit counting (but no verify, and no stripped counting without a
 // payload store); a sink registers verify counting only.
 func TestBuildDataPlane_MetricsBookkeepingFollowsRole(t *testing.T) {
@@ -778,16 +778,16 @@ const dpArchiveReceiptIssr = "did:dplaax:reg:org:acme:pipeline:archive:process:a
 
 // dpArchivalSinkCfg is an archival sink loop: Kind = archival, which config
 // validation (config.go) already REQUIRES to carry a receipt issuer
-// (sink.receipt.issuer) — the same signer identity this task arms the
-// reject log's checkpoint with (D-T3).
+// (sink.receipt.issuer) — the same signer identity the reject log's
+// checkpoint is armed with.
 func dpArchivalSinkCfg() *Config {
 	return dpArchivalSinkCfgWithIssuer(dpArchiveReceiptIssr)
 }
 
 // dpArchivalSinkCfgWithIssuer is dpArchivalSinkCfg parameterized on the
 // receipt issuer DID, so tests can construct two archival sinks that differ
-// ONLY in that identity — the axis the reject-log rekeying fix (Task 7) must
-// key storage on.
+// ONLY in that identity — the axis the reject-log storage must
+// be keyed on.
 func dpArchivalSinkCfgWithIssuer(issuerDID string) *Config {
 	return &Config{MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxIngestPayloadSize: 1 << 20, Loops: []LoopConfig{{
 		Name:           "archive",
@@ -812,14 +812,13 @@ func dpArchivalSinkCfgWithIssuer(issuerDID string) *Config {
 	}}}
 }
 
-// TestDataPlane_ArchivalSinkRejectLog_SignedIdentity is the D-T3 sink-reject
-// capstone: an archival sink's reject log is armed with the SAME signer as
-// its (mandatory) sink-receipt issuer, so its checkpoint carries the stable
-// custody identity `sink-reject:<receipt-issuer-process-DID>` — AND (Task 7
-// rekeying) the on-disk directory is keyed by sha256(log id), exactly like
-// newEmission: identity and storage co-move, so a receipt-DID change across
-// a restart resolves to a fresh directory instead of reopening the old DID's
-// journal under a new signer.
+// TestDataPlane_ArchivalSinkRejectLog_SignedIdentity checks that an
+// archival sink's reject log is armed with the SAME signer as its (mandatory)
+// sink-receipt issuer, so its checkpoint carries the stable custody identity
+// `sink-reject:<receipt-issuer-process-DID>` — AND the on-disk directory is
+// keyed by sha256(log id), exactly like newEmission: identity and storage
+// co-move, so a receipt-DID change across a restart resolves to a fresh
+// directory instead of reopening the old DID's journal under a new signer.
 func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
 	ks := filestore.New(t.TempDir())
@@ -852,10 +851,10 @@ func TestDataPlane_ArchivalSinkRejectLog_SignedIdentity(t *testing.T) {
 		t.Fatalf("reject log at the identity-derived path: %v", err)
 	}
 
-	// D-T5: the reject log must never be registered into dp.tlogs (custody-only,
+	// The reject log must never be registered into dp.tlogs (custody-only,
 	// never served via TlogService reads).
 	if _, ok := dp.tlogs[wantRejectLogID]; ok {
-		t.Fatalf("reject log registered into dp.tlogs under %q — must stay unregistered (D-T5)", wantRejectLogID)
+		t.Fatalf("reject log registered into dp.tlogs under %q — must stay unregistered", wantRejectLogID)
 	}
 
 	// TlogDir is unset here, so the sibling sink-receipt log stays memlog-backed
@@ -897,12 +896,12 @@ func dpArchiveKeyStore(t *testing.T, issuerDID string) keystore.KeyStore {
 	return ks
 }
 
-// TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity is the Task-7 rekeying
-// regression for the P1 custody hole Codex found: with the OLD loop-name
-// keying, a receipt-DID change across a restart (volume retained) reopened
-// the SAME directory under a NEW signer, and every subsequent checkpoint
-// silently re-signed all historical rejects as the new DID's evidence. The
-// fix keys the directory by sha256(log id) — the SAME derivation newEmission
+// TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity guards the
+// directory keying: if it were keyed by loop name, a receipt-DID change across
+// a restart (volume retained) would reopen the SAME directory under a NEW
+// signer, and every subsequent checkpoint would silently re-sign all
+// historical rejects as the new DID's evidence. The directory is keyed by
+// sha256(log id) — the SAME derivation newEmission
 // uses — so identity and storage co-move:
 //
 //   - a receipt-DID CHANGE must resolve to a FRESH, different directory and
@@ -965,7 +964,7 @@ func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
 	}
 
 	// Reconstruct under DID-B — a NEW receipt issuer DID, same RejectLogDir.
-	// The P1 hole: with loop-name keying this would reopen DID-A's journal
+	// With loop-name keying this would reopen DID-A's journal
 	// under DID-B's signer. With identity keying it must resolve to a
 	// DIFFERENT, fresh directory and must NOT touch DID-A's journal.
 	dpB := buildArchive(didB, dpArchiveKeyStore(t, didB))
@@ -1001,7 +1000,7 @@ func TestDataPlane_ArchivalSinkRejectLog_KeyedByIdentity(t *testing.T) {
 	}
 
 	// Reconstruct under DID-A again (a same-DID restart): continuity — same
-	// directory, and the previously appended reject is still there (size 1,
+	// directory, and the earlier appended reject is still there (size 1,
 	// not reset to 0 under a fresh journal).
 	dpA2 := buildArchive(dpArchiveReceiptIssr, dpArchiveKeyStore(t, dpArchiveReceiptIssr))
 	t.Cleanup(func() { _ = dpA2.conn.Close() })

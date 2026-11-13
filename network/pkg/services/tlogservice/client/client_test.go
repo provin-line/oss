@@ -1,7 +1,7 @@
 package client_test
 
 // Round-trip tests for tlogservice/client against the REAL production
-// stack (task-6 brief): a real didregistry.Service issuing real
+// stack: a real didregistry.Service issuing real
 // pipeline/process DIDs, a real wireauth.Verifier, a real
 // mirrorstore.Store, and the real handler.Handler — served over httptest,
 // exercised only through client.Client. Modeled on
@@ -256,8 +256,8 @@ func recPayloads(n int) [][]byte {
 
 // TestMirrorLogSegment_RoundTrip proves the client's signed view is exactly
 // what the real handler verifies end-to-end: two successive
-// checkpoint-aligned segments land through the wireauth verifier, D-T3
-// identity binding, and the real mirror store, with GetMirrorState
+// checkpoint-aligned segments land through the wireauth verifier, identity
+// binding, and the real mirror store, with GetMirrorState
 // reflecting the growing durable size.
 func TestMirrorLogSegment_RoundTrip(t *testing.T) {
 	h := newHarness(t, 256, 4<<20)
@@ -363,7 +363,7 @@ func TestMirrorLogSegment_WrongSigner_Unauthenticated(t *testing.T) {
 
 // TestMirrorLogSegment_NilCheckpoint_RejectedClientSide proves a nil
 // checkpoint is rejected before any signing or network call — a
-// MirrorLogSegment call always carries one (D-T2 rule 1).
+// MirrorLogSegment call always carries one.
 func TestMirrorLogSegment_NilCheckpoint_RejectedClientSide(t *testing.T) {
 	h := newHarness(t, 256, 4<<20)
 	_, err := h.client.MirrorLogSegment(context.Background(), clientPipeline, 0, recPayloads(1), nil)

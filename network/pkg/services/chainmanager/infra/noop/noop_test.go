@@ -22,8 +22,8 @@ func TestAddExport(t *testing.T) {
 	}
 }
 
-// AddExport is idempotent: a second call for the same subject succeeds (D-p8 —
-// shared per-publisher export, ref-counted by the domain).
+// AddExport is idempotent: a second call for the same subject succeeds
+// (shared per-publisher export, ref-counted by the domain).
 func TestAddExport_Idempotent(t *testing.T) {
 	op := noop.New()
 	subject := "did:dplaax:reg:org:acme:pipeline:p1"

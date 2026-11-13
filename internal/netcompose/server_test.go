@@ -55,7 +55,8 @@ const nodeDID = "did:dplaax:poc.dplaax.dev:org:node"
 // natsChainCfg builds a valid nats chain config (fresh throwaway seeds, a temp
 // resolver dir) so BuildHandler constructs + wires the real nats infra operator
 // and both chain surfaces. The boot tests exercise the mount structure, not the
-// data plane (the full Subscribe->JWT round-trip through the mount is C2b-2b).
+// data plane (the full Subscribe->JWT round-trip through the mount is not
+// exercised here).
 func natsChainCfg(t *testing.T) *chainconfig.Config {
 	t.Helper()
 	acc, _ := nkeys.CreateAccount()
@@ -339,7 +340,7 @@ func TestBoot_Healthz(t *testing.T) {
 
 // An oversized request body is rejected with ResourceExhausted BEFORE the auth
 // interceptor runs — connect reads/decompresses the body first, so the per-RPC
-// read cap is the pre-auth memory bound (adversarial-review F0). AuditService
+// read cap is the pre-auth memory bound. AuditService
 // carries the proof-class cap (256 KiB); a >256 KiB request trips it.
 func TestBoot_RequestReadCap_RejectsOversizedBeforeAuth(t *testing.T) {
 	srv, _, _ := assembled(t)
@@ -451,7 +452,7 @@ func TestBoot_RetainPayloadMountedBehindL1(t *testing.T) {
 // VCResolverService is mounted in the assembled stack: store a VC and resolve it
 // back at its returned content address. The unresolved-pool enqueue path is
 // unit-covered (vcresolver_test) rather than here: the pool has no wire surface
-// this slice (ListUnresolved is deferred), so it is intentionally unobservable
+// (ListUnresolved is deferred), so it is intentionally unobservable
 // over the assembled mux.
 func TestBoot_VCStoreResolve(t *testing.T) {
 	ctx := context.Background()
@@ -536,7 +537,7 @@ func TestRegistryBaseURL_HitAndFallback(t *testing.T) {
 	}
 }
 
-// F8: with closeUnmapped=true (allow-private-networks mode) an UNMAPPED registry
+// With closeUnmapped=true (allow-private-networks mode) an UNMAPPED registry
 // must NOT fall back to https://{registry} — an attacker-supplied registry name
 // that would otherwise reach private space via the open fallback must fail
 // resolution outright. Mapped registries still resolve to their configured base.
@@ -555,7 +556,7 @@ func TestRegistryBaseURL_ClosedFallbackInPrivateMode(t *testing.T) {
 	}
 }
 
-// F8: NewDIDResolution fails boot when allow-private-networks is on but NO
+// NewDIDResolution fails boot when allow-private-networks is on but NO
 // registry resolution is scoped (neither a per-registry map nor a single
 // resolver-base-url) — that combination is the exact hole (open fallback +
 // blanket private allow). With scoping present, or with private off, it boots.
@@ -594,15 +595,14 @@ func TestNewDIDResolution_PrivateModeRequiresRegistryScoping(t *testing.T) {
 
 // The outer raw-body cap is the largest legitimate request plus headroom — big
 // enough for the biggest real request (credential or push body), never smaller
-// (which would reject legitimate traffic). Relocated from
-// cmd/standalone/main_test.go (PR3c: cmd/standalone retired) — cmd/network is
-// this function's only remaining caller (cmd/pipeline defines its own,
-// simpler outerRequestCapBytes; see its main.go), and before this move
-// neither carried a unit test for OuterRequestCapBytes itself.
+// (which would reject legitimate traffic). cmd/network is
+// this function's only caller (cmd/pipeline defines its own,
+// simpler outerRequestCapBytes; see its main.go), and neither carries a
+// unit test for OuterRequestCapBytes itself.
 func TestOuterRequestCapBytes_SizedToLargestLegit(t *testing.T) {
 	// maxDocumentRequestBytes mirrors this file's own private constant of the
-	// same name/value directly (no cross-package literal pin needed, unlike
-	// cmd/standalone's copy, since this test lives beside the constant now).
+	// same name/value directly (no cross-package literal pin needed, since
+	// this test lives beside the constant).
 	const cred, push = 1 << 20, 4 << 20
 	got := OuterRequestCapBytes(cred, push, 0, 0)
 	if got <= push {

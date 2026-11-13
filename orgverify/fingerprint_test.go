@@ -90,8 +90,7 @@ func TestFingerprintFromDIDDocument_Nil(t *testing.T) {
 }
 
 // No #signing key at all under assertionMethod: extraction fails rather than
-// falling back to "the first assertionMethod entry" (spec §7.1 — the
-// predecessor's fragment-only / first-entry behavior is not ported).
+// falling back to "the first assertionMethod entry" (spec §7.1).
 func TestFingerprintFromDIDDocument_NoSigningKey(t *testing.T) {
 	doc := did.New(did.DocumentFields{
 		ID:         fpTestDID,

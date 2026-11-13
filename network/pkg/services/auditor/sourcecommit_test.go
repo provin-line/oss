@@ -9,7 +9,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// --- source-commitment fakes (slice-17o) ---
+// --- source-commitment fakes ---
 
 type fakeReceipts struct{ m map[string][]string }
 
@@ -39,8 +39,8 @@ const (
 	scSrc2 = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 )
 
-// newRunnerSC wires a Runner with the source-commitment capability enabled (slice-17o
-// WithSourceCommitment), the head registered, and headStore extended with the two sources.
+// newRunnerSC wires a Runner with the source-commitment capability enabled
+// (WithSourceCommitment), the head registered, and headStore extended with the two sources.
 func newRunnerSC(t *testing.T, cv ChainVerifier, receipts ReceiptReader, scv SourceCommitmentVerifier, extraHeads map[string]*vc.PipelinePassCredential) (*Runner, *MemQueue, *MemStatusStore) {
 	t.Helper()
 	q := NewMemQueue()
@@ -99,7 +99,7 @@ func TestAuditOne_SourceCommitment_Verified(t *testing.T) {
 // When only a subset of the receipt's sources resolves locally, the runner MUST NOT trust
 // the verifier's subset result — a subset recompute can spuriously match (false Verified) or
 // spuriously mismatch (false Failed). It records Indeterminate WITHOUT calling the verifier
-// and retains the head for retry (Codex P1/P2, Claude Important). Here the verifier is armed
+// and retains the head for retry. Here the verifier is armed
 // to return Verified (the dangerous case); the runner must still record Indeterminate.
 func TestAuditOne_SourceCommitment_PartialResolves_IndeterminateNotTrustingSubset(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
@@ -128,7 +128,7 @@ func TestAuditOne_SourceCommitment_PartialResolves_IndeterminateNotTrustingSubse
 
 // A source-commitment Indeterminate (incomplete receipt) retains the head across a terminal
 // linear verdict, and once the missing source appears the next drain flips it to Verified and
-// dequeues — the SC verdict participates in the retry lifecycle (Codex P2, Claude Important).
+// dequeues — the SC verdict participates in the retry lifecycle.
 func TestAuditOne_SourceCommitment_IndeterminateRetainsThenVerifies(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
 	scv := &fakeSCV{state: vc.ConfidenceVerified}
@@ -262,7 +262,7 @@ func TestAuditOne_SourceCommitment_NoReceipt_LinearOnly(t *testing.T) {
 }
 
 // A receipt carrying a malformed content address is a corrupt receipt → fail-closed Failed,
-// without calling the verifier (D-17o-6 decision table).
+// without calling the verifier.
 func TestAuditOne_SourceCommitment_CorruptReceipt_Failed(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
 	scv := &fakeSCV{state: vc.ConfidenceVerified}

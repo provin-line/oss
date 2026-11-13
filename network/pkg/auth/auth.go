@@ -43,9 +43,9 @@ type Verifier interface {
 // streamRecheckInterval is how often, at most, an open stream is checked
 // again. A stream is checked when it opens; after that, a message sent or
 // received at least this long after the last check began is checked before it
-// goes through, so a revoked permission or an expired token ends a stream
-// within this interval of its next message, and a payload of many frames costs
-// a check per interval, not one per frame.
+// goes through. A permission withdrawn, or a token that expires, while a stream
+// is open ends the stream at the first message whose check is due, and a
+// payload of many frames costs a check per interval, not one per frame.
 const streamRecheckInterval = 5 * time.Second
 
 // Interceptors returns the ordered authorization interceptor chain for a

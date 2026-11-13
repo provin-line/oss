@@ -531,7 +531,7 @@ func TestIssuePipeline_DuplicateIsErrExists(t *testing.T) {
 }
 
 // A revoked owner cannot mint new pipelines (revocation enforces, not just
-// audits — confirmed slice-4 intent).
+// audits).
 func TestIssuePipeline_RejectsRevokedOwner(t *testing.T) {
 	ctx := context.Background()
 	svc, signer, signPub := newService(t)
@@ -703,7 +703,7 @@ func TestRegisterOwner_RejectsUnsafeIntegerInsteadOfRoundingAtRest(t *testing.T)
 	}
 }
 
-// --- external-key issuance (PR3c) --------------------------------------------
+// --- external-key issuance --------------------------------------------
 //
 // These tests cover the additive external-key path: the caller mints its own
 // #auth/#signing Ed25519 keypair locally and hands the registry only the

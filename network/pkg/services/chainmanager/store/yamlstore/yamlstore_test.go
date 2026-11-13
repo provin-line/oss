@@ -123,7 +123,7 @@ func TestSubscriptionStore_UnsafeID(t *testing.T) {
 }
 
 // A corrupt/unparseable file is a real error, never silently collapsed to
-// ErrNotFound (which would silently drop a subscription — Codex Medium).
+// ErrNotFound (which would silently drop a subscription).
 func TestSubscriptionStore_CorruptIsError(t *testing.T) {
 	root := t.TempDir()
 	s := NewSubscriptionStore(root)
@@ -157,7 +157,7 @@ func TestAllowListStore_RoundTrip(t *testing.T) {
 }
 
 // The on-disk path includes the registry, so two registries' identical
-// accountType/accountID/pipeline do not collide (Codex Medium).
+// accountType/accountID/pipeline do not collide.
 func TestAllowListStore_RegistryInPath(t *testing.T) {
 	root := t.TempDir()
 	s := NewAllowListStore(root)
@@ -225,7 +225,7 @@ func TestAllowListStore_GetAbsentEmpty(t *testing.T) {
 }
 
 // A corrupt allow-list file is a real error, never silently collapsed to empty
-// (which would silently drop trust config — Codex Medium).
+// (which would silently drop trust config).
 func TestAllowListStore_CorruptIsError(t *testing.T) {
 	root := t.TempDir()
 	s := NewAllowListStore(root)

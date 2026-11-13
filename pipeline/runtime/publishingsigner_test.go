@@ -110,7 +110,7 @@ func TestPublishingSigner_ChainPreserving_PassesUpstreamHint(t *testing.T) {
 }
 
 // An aggregate sign tees the issued credential to the store like the other paths, so
-// an aggregate FirstDrop is published before emit (D-17k-6).
+// an aggregate FirstDrop is published before emit.
 func TestPublishingSigner_AggregateFirstDrop_PublishesAndReturns(t *testing.T) {
 	cred := testCred(t)
 	inner := &fakeFullSigner{cred: cred}

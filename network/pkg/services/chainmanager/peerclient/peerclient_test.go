@@ -27,8 +27,9 @@ const (
 )
 
 // fakeSigner returns a fixed signature; the byte-equality of the signed view is
-// proven end-to-end against the real verifier in Phase E, not here. This phase
-// pins the CLIENT's request/proof construction.
+// proven end-to-end against the real verifier in chainmanager/handler's e2e
+// tests (which use this client), not here. This test pins the CLIENT's
+// request/proof construction.
 type fakeSigner struct{}
 
 func (fakeSigner) Sign(_, _ string, _ []byte) ([]byte, error) { return []byte("test-sig"), nil }
@@ -160,7 +161,7 @@ func TestClient_Disconnect(t *testing.T) {
 }
 
 // A remote NotFound is surfaced as store.ErrNotFound so the domain's idempotent
-// teardown (D-s5) can treat it as already-disconnected.
+// teardown can treat it as already-disconnected.
 func TestClient_Disconnect_RemoteNotFound(t *testing.T) {
 	cli, cap, url := setup(t)
 	cap.disconnectCode = connect.CodeNotFound

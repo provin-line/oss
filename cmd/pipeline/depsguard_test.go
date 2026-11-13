@@ -70,12 +70,11 @@ func TestProdDeps_NoRegistryServerCodeInPipelineBinary(t *testing.T) {
 // the families this binary is allowed to carry. Every family is a WIRE-CLIENT
 // concern — proto/connect stub + the shared shape both ends of the wire
 // derive from — never a handler, a persistence backend, or a service's
-// Service-implementation root. chainmanager used to be a documented exception
-// here (its op name and signed-view builder lived on the service root, so
-// reportclient — and transitively this binary — had to compile in the whole
-// Service implementation to reach them); it now gets the SAME wirecontract
-// leaf split auditor/payloadresolver/tlogservice already had (see
-// chainmanager/wirecontract's package doc), so the exception is gone.
+// Service-implementation root. chainmanager has no exception: its op name
+// and signed-view builder live in a wirecontract leaf, the SAME split
+// auditor/payloadresolver/tlogservice have (see chainmanager/wirecontract's
+// package doc), so reportclient — and transitively this binary — never
+// compiles in the whole Service implementation.
 func isAllowedNetworkPkgDep(dep string) bool {
 	const svcPrefix = "github.com/provin-line/oss/network/pkg/services/"
 	rest := strings.TrimPrefix(dep, svcPrefix)

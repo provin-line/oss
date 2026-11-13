@@ -20,7 +20,7 @@ import (
 	"github.com/provin-line/oss/resolver"
 )
 
-// One HTTP resolver satisfies both consumer interfaces (D-r1): the publisher-side
+// One HTTP resolver satisfies both consumer interfaces: the publisher-side
 // verifier (wireauth.DIDResolver) and the subscriber-side domain
 // (chainmanager.DIDResolver).
 var (

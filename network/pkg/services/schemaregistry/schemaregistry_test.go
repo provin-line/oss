@@ -150,7 +150,7 @@ func TestRegister_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-// D2: a body that is not a valid, self-contained JsonSchema is rejected at
+// A body that is not a valid, self-contained JsonSchema is rejected at
 // Register and never enters the registry.
 func TestRegister_RejectsInvalidSchemaBody(t *testing.T) {
 	svc := newService(t)

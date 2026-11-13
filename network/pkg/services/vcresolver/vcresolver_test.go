@@ -246,7 +246,7 @@ func TestStoreVC_EnqueuesPredecessorAtDepthPlusOne(t *testing.T) {
 	}
 }
 
-// CA#3: a credential that is BOTH already queued as a deep predecessor AND then
+// A credential that is BOTH already queued as a deep predecessor AND then
 // directly received (depth 0) must enqueue its own predecessor at depth 1 — the
 // head depth — not the stale deep-hole depth+1.
 func TestStoreVC_HeadAlsoQueuedHole_UsesHeadDepth(t *testing.T) {
@@ -371,15 +371,16 @@ func TestStoreVC_AddsNextHoleBeforeRemovingResolved(t *testing.T) {
 	}
 }
 
-// TestNoWriterTakesACallerSuppliedKey is FCoT counter-argument #2, made
-// mechanical.
+// TestNoWriterTakesACallerSuppliedKey pins that the types in its table
+// (vcresolver.VariantStore and memstore.Backend) export no method named Put,
+// the writer that takes a key from its caller. Other store types are not
+// checked here.
 //
-// Replacing an interface does not remove a method from a concrete type: the old
-// Put(hash, cred) could have stayed exported on memstore and filestore, still
-// compiling, still overwriting — the very semantics this slice exists to end,
-// reachable by anyone who happened to hold the concrete type. Deleting it is
-// what actually removed it; this asserts it stays deleted, because reintroducing
-// a keyed writer would silently reopen the hole rather than fail a build.
+// A concrete type can keep a method its interface no longer has: a
+// Put(hash, cred) exported on one of these types would still compile and
+// still overwrite, reachable by anyone who holds the concrete type. This
+// fails if a Put method appears on either, because adding one would silently
+// reopen that overwrite rather than fail a build.
 //
 // reflect is the point: a compile-time reference would only prove the method is
 // gone from the ONE type named, and would itself stop compiling — which is not
@@ -405,9 +406,10 @@ func TestNoWriterTakesACallerSuppliedKey(t *testing.T) {
 	}
 }
 
-// TestStoreVCGatesUnsafeIntegersInTheProofToo is Codex spec-review #6.
+// TestStoreVCGatesUnsafeIntegersInTheProofToo pins that the unsafe-integer
+// gate covers the proof too.
 //
-// The gate used to run on cred.Body(), which is the wrong scope by exactly one
+// Gating only cred.Body() would be the wrong scope by exactly one
 // member: the variant id digests the FULL wire document, so an unsafe integer in
 // a proof member would be silently rounded by the RFC 8785 re-serialization and
 // then admitted under an id naming bytes the submitter never sent — with the
@@ -642,7 +644,7 @@ func TestListVariantsPagesAndReportsMore(t *testing.T) {
 		t.Errorf("ListVariants(limit=0) = %v, want ErrInvalidArgument", err)
 	}
 	// The cap: a direct caller is told, loudly — and math.MaxInt can no longer
-	// reach the limit+1 arithmetic, where it used to overflow into the
+	// reach the limit+1 arithmetic, where it would overflow into the
 	// non-positive guard and read as an empty page.
 	if _, _, err := svc.ListVariants(ctx, body, "", pagination.MaxPageSize+1); !errors.Is(err, vcresolver.ErrInvalidArgument) {
 		t.Errorf("ListVariants(limit=cap+1) = %v, want ErrInvalidArgument", err)

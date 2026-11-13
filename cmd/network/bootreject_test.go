@@ -20,11 +20,10 @@ import (
 )
 
 // A pipeline loop configured under this binary's config is a boot error: the
-// network node is the control-plane-only half of the recomposition (task
-// brief) and must die loudly rather than silently ignore data-plane config
-// meant for the pipeline runtime. Ported from cmd/standalone/bootsmoke_test.go's
-// builder-helper pattern (buildStandaloneBinary / writeBootConfig), adjusted to
-// this package's binary path and to carry one pipeline loop.
+// network node is the control-plane-only half of the recomposition and must
+// die loudly rather than silently ignore data-plane config meant for the
+// pipeline runtime. The test builds this package's binary, writes a boot
+// config carrying one pipeline loop, and runs it.
 func TestNetwork_BootRejectsConfiguredPipelineLoop(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boot reject builds a binary")
@@ -65,8 +64,8 @@ func TestNetwork_BootRejectsConfiguredPipelineLoop(t *testing.T) {
 	}
 }
 
-// This binary always runs the peer-fetching batch resolver (Task 9): builders build
-// unconditionally now, and this binary can never gate the runner on
+// This binary always runs the peer-fetching batch resolver: builders build
+// unconditionally, and this binary can never gate the runner on
 // pipeCfg.HasConsumingLoop() (the guard above enforces zero loops here, so that predicate
 // is always false). The resolver's peer fetches present provin.network.pipeline.vc-store-
 // bearer against L1-protected peers regardless of local loops, so an empty bearer must
@@ -138,7 +137,7 @@ const validSourceLoopConf = `
 // loops); empty means no pipeline block at all (zero loops, the valid default).
 // VCStoreBearer, when non-empty, sets provin.network.pipeline.vc-store-bearer;
 // empty means the key is omitted (this binary's boot-validation guard requires
-// it non-empty regardless of PipelineLoops — Task 9 — since it always runs the
+// it non-empty regardless of PipelineLoops, since it always runs the
 // peer-fetching batch resolver).
 type bootConfig struct {
 	ListenAddr    string
@@ -154,8 +153,7 @@ type bootConfig struct {
 }
 
 // writeBootConfig writes dir/config/application.conf for the actual binary to
-// load via hoconconfig.Load(".", "CONFIG_OVERLAY") (cmd.Dir = dir). Ported
-// from cmd/standalone/bootsmoke_test.go's writeBootConfig.
+// load via hoconconfig.Load(".", "CONFIG_OVERLAY") (cmd.Dir = dir).
 func writeBootConfig(t *testing.T, dir string, c bootConfig) {
 	t.Helper()
 	confDir := filepath.Join(dir, "config")
@@ -231,8 +229,7 @@ func buildNetworkBinary(t *testing.T) string {
 }
 
 // writeSelfSignedCert generates an ed25519 self-signed cert for 127.0.0.1 and
-// writes cert.pem / key.pem to a temp dir, returning their paths. Ported from
-// cmd/standalone/main_test.go.
+// writes cert.pem / key.pem to a temp dir, returning their paths.
 func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -271,8 +268,7 @@ func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 }
 
 // writeNKeySeedFiles writes the account and trust-root seeds to files: the
-// config surface takes PATHS, never inline key material. Ported from
-// cmd/standalone/bootsmoke_test.go.
+// config surface takes PATHS, never inline key material.
 func writeNKeySeedFiles(t *testing.T) (accountSeedFile, trustRootSeedFile string) {
 	t.Helper()
 	acc, err := nkeys.CreateAccount()
@@ -303,8 +299,7 @@ func writeNKeySeedFiles(t *testing.T) (accountSeedFile, trustRootSeedFile string
 	return accountSeedFile, trustRootSeedFile
 }
 
-// freePort returns an OS-assigned free TCP port. Ported from
-// cmd/standalone/bootsmoke_test.go.
+// freePort returns an OS-assigned free TCP port.
 func freePort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

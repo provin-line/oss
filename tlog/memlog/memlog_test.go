@@ -83,7 +83,7 @@ func TestGet_RoundTripAndOutOfRange(t *testing.T) {
 
 // TestReturnedRecordsAreImmutable asserts the tlog.Log immutability contract: a
 // caller mutating a record returned by Append or Get must NOT corrupt the committed
-// record (independently flagged by Claude + Codex review → convergent must-fix).
+// record.
 func TestReturnedRecordsAreImmutable(t *testing.T) {
 	ctx := context.Background()
 	l := memlog.New()

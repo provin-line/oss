@@ -16,15 +16,14 @@ import (
 	natstest "github.com/nats-io/nats-server/v2/test"
 )
 
-// P0-6 closure #5, ported for the control-plane-only binary: the actual
+// P0-6 closure #5, for the control-plane-only binary: the actual
 // network binary, booted from a real config file with an ephemeral
 // certificate and ZERO pipeline loops — readiness reached over HTTPS, a
 // request served, graceful shutdown on SIGTERM. Every other TLS test in this
 // package builds the server in-process, which cannot see what main() does:
 // config layering, the guard's position, ListenAndServeTLS with empty paths,
-// signal handling. Ported from cmd/standalone/bootsmoke_test.go's
-// TestStandalone_ActualBootOverTLS — names/paths adjusted, no pipeline loop
-// (this binary must boot with none).
+// signal handling. The config carries no pipeline loop (this binary must boot
+// with none).
 func TestNetwork_ActualBootOverTLS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boot smoke builds a binary and starts a broker")
@@ -48,7 +47,7 @@ func TestNetwork_ActualBootOverTLS(t *testing.T) {
 		// No PipelineLoops: this binary runs no data plane, so zero loops is
 		// the only config that boots (the guard rejects any other).
 		// VCStoreBearer: this binary always runs the peer-fetching batch
-		// resolver (Task 9), so boot fails closed without one.
+		// resolver, so boot fails closed without one.
 		VCStoreBearer: "network-boot-smoke-bearer",
 	})
 
@@ -120,8 +119,7 @@ func TestNetwork_ActualBootOverTLS(t *testing.T) {
 }
 
 // runEmbeddedNATS starts an in-process NATS broker for the boot smoke's chain
-// operator to publish claims against. Ported from
-// cmd/standalone/bootsmoke_test.go.
+// operator to publish claims against.
 func runEmbeddedNATS(t *testing.T) string {
 	t.Helper()
 	srv := natstest.RunServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
@@ -130,7 +128,7 @@ func runEmbeddedNATS(t *testing.T) string {
 }
 
 // trustingClient returns an HTTP client that trusts the given self-signed
-// cert. Ported from cmd/standalone/bootsmoke_test.go.
+// cert.
 func trustingClient(t *testing.T, certFile string) *http.Client {
 	t.Helper()
 	pem, err := os.ReadFile(certFile)

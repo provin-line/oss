@@ -10,7 +10,7 @@ import (
 // The exported auth seam is expressed in the package-owned Verifier interface:
 // the frozen public surface carries no upstream (o3co) type identity, so the
 // enforcement library can be swapped without breaking auth's signatures
-// (P0-4 follow-up, F1). Function-value assignment requires identical types,
+// (P0-4). Function-value assignment requires identical types,
 // so these pin the exact exported signatures at compile time — repointing
 // either signature back at an upstream-owned type breaks this file.
 var (

@@ -450,7 +450,7 @@ func TestBundleExportAggregateComplete_RoundTrip(t *testing.T) {
 }
 
 // Without --allow-loopback the URLGuard rejects loopback targets across the
-// WHOLE export path — the DID-document fetches and (Codex P1) the DERIVED
+// WHOLE export path — the DID-document fetches and the DERIVED
 // endpoints (issuer registry base / advertised #vc-resolver) alike: the
 // exporter must not be a bearer-carrying SSRF proxy. (The derived-endpoint
 // guard shares the same URLGuard instance, asserted here through the

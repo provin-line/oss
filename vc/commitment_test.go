@@ -195,8 +195,8 @@ func TestVerifySourceCommitmentVerified(t *testing.T) {
 func TestVerifySourceCommitmentNilInputs(t *testing.T) {
 	// Misuse guard: nil inputs must return a defined error, never panic —
 	// sources arrive from gather loops whose slots can legitimately still be
-	// nil when a caller wires the gathering wrong (17k hardened the
-	// construction side in ComputeSourceRoot; this pins the verify side).
+	// nil when a caller wires the gathering wrong (ComputeSourceRoot guards
+	// the construction side; this pins the verify side).
 	s := threeSources(t)
 	oc, err := vc.NewSourceCommitment(s, vc.SourceRootCanonicalJCS)
 	if err != nil {

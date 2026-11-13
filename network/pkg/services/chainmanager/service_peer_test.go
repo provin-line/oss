@@ -226,7 +226,7 @@ func TestPeer_RegisterSubscription_NotAdmitted(t *testing.T) {
 }
 
 // A Save failure for the first subscription must compensate by removing the
-// export it just created, so no orphan export survives (D-p8).
+// export it just created, so no orphan export survives.
 func TestPeer_RegisterSubscription_SaveFailureCompensates(t *testing.T) {
 	inf := &fakeInfra{}
 	allows := memstore.NewAllowListStore()
@@ -260,7 +260,7 @@ func TestPeer_Disconnect_Owner_LastSubscription(t *testing.T) {
 }
 
 // Disconnecting one subscriber must NOT tear down the export while a sibling
-// subscriber of the same publisher remains (D-p8 ref-count).
+// subscriber of the same publisher remains (ref-count).
 func TestPeer_Disconnect_SiblingRemains(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, _ := svcWith(t, inf)
@@ -289,7 +289,7 @@ func TestPeer_Disconnect_SiblingRemains(t *testing.T) {
 
 // A RemoveExport failure during Disconnect must NOT delete the subscription:
 // teardown runs before the irreversible Delete, so the call is fully retryable
-// and never orphans the export (Codex/Claude convergent).
+// and never orphans the export.
 func TestPeer_Disconnect_RemoveExportFailureKeepsSubscription(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, subs := svcWith(t, inf)

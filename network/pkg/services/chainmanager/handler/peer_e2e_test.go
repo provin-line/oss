@@ -125,8 +125,8 @@ func e2eSetup(t *testing.T) (chainpbconnect.ChainPeerServiceClient, crypto.Signe
 	return chainpbconnect.NewChainPeerServiceClient(srv.Client(), srv.URL), subSigner, strangerSigner
 }
 
-// The full subscriber-initiated round-trip with a real signature proves the D-p4
-// view contract (handler reconstructs exactly what the subscriber signed) end to
+// The full subscriber-initiated round-trip with a real signature proves the signed-view
+// contract (handler reconstructs exactly what the subscriber signed) end to
 // end over the mux.
 func TestPeerE2E_HappyPath(t *testing.T) {
 	ctx := context.Background()

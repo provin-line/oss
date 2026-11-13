@@ -14,8 +14,8 @@ import (
 )
 
 // memPub is a test-only JWTPublisher backed by the embedded server's in-memory
-// account resolver (the production push to a live resolver is C2b-2). It is a
-// helper, NOT a production export of infra/nats (D-n3): it references the
+// account resolver (not the production push to a live resolver). It is a
+// helper, NOT a production export of infra/nats: it references the
 // nats-server, which must stay out of the production import graph.
 type memPub struct{ mr *server.MemAccResolver }
 
@@ -72,7 +72,7 @@ func connectAs(t *testing.T, url string, accKP nkeys.KeyPair) *natsclient.Conn {
 	return nc
 }
 
-// TestIsolationE2E proves broker-enforced cross-account isolation (D-n5): the nats
+// TestIsolationE2E proves broker-enforced cross-account isolation: the nats
 // operator's account claims are evaluated by a real nats-server, so an exported→
 // imported subject crosses accounts (positive) while a subject the subscriber is
 // structurally ready to receive but the publisher did NOT export does not
@@ -90,7 +90,7 @@ func TestIsolationE2E(t *testing.T) {
 	const denied = "chain.pub.denied"
 
 	// Establish the FINAL claim set in the resolver BEFORE any client connects
-	// (D-n5 timing: MemAccResolver.Store does not update an already-loaded account).
+	// (MemAccResolver.Store does not update an already-loaded account).
 	mr := &server.MemAccResolver{}
 	pubOp, pubAcc, pubPub := newE2EOperator(t, opSeed, mr)
 	subOp, subAcc, _ := newE2EOperator(t, opSeed, mr)

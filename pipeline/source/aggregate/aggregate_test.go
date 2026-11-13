@@ -2,7 +2,7 @@ package aggregate
 
 // In-package tests drive the runtime SYNCHRONOUSLY: handleIngress and foldOnce
 // are called directly (no goroutine, no ticker, no sleep), so every assertion is
-// deterministic and race-free by construction — fitting for the slice whose
+// deterministic and race-free by construction — fitting for a runtime whose
 // thesis is concurrency correctness. Two dedicated tests exercise the Run
 // lifecycle (subscribe + shutdown, and subscribe-failure drain) with a goroutine,
 // reading stubs only after Run has returned.
@@ -105,7 +105,7 @@ type registrarCall struct {
 	consumed []string
 }
 
-// recordRegistrar is a fake EmissionRegistrar (slice-17o): it records the emitted head hash
+// recordRegistrar is a fake EmissionRegistrar: it records the emitted head hash
 // and the consumed-source hashes it was handed, or fails to exercise the fail-closed path.
 type recordRegistrar struct {
 	calls   []registrarCall
@@ -276,7 +276,7 @@ func TestProcess_Capstone_PoolsFoldsSignsEmits(t *testing.T) {
 	}
 }
 
-// slice-17o: when a SelfAudit registrar is wired, foldOnce registers the emitted head for
+// When a SelfAudit registrar is wired, foldOnce registers the emitted head for
 // self-audit — with the emitted head hash and the exact consumed-source content hashes —
 // BEFORE publishing (fail-closed ordering). The registrar's consumed set matches the pooled
 // inputs' content addresses.
@@ -312,7 +312,7 @@ func TestProcess_SelfAudit_RegistersEmittedHeadWithConsumedSet(t *testing.T) {
 	}
 }
 
-// slice-17o: a registrar failure aborts emission (fail-closed) — the credential is never
+// A registrar failure aborts emission (fail-closed) — the credential is never
 // published without a local audit trail; an errored observer event fires.
 func TestProcess_SelfAudit_FailClosed(t *testing.T) {
 	reg := &recordRegistrar{failErr: errors.New("audit substrate down")}
@@ -441,7 +441,7 @@ func TestProcess_Run_SubscribesDrainsCloses(t *testing.T) {
 }
 
 // Run drains already-subscribed ingresses when a later Subscribe fails, and
-// returns the error (Codex P2#2).
+// returns the error.
 func TestProcess_Run_SubscribeFailureDrainsPrior(t *testing.T) {
 	first := &captureSubscriber{}
 	second := &captureSubscriber{subscribeErr: errors.New("subscribe boom")}
@@ -459,8 +459,7 @@ func TestProcess_Run_SubscribeFailureDrainsPrior(t *testing.T) {
 	}
 }
 
-// New validates required deps, including a nil Subscriber inside an Ingress
-// (Codex P2#1).
+// New validates required deps, including a nil Subscriber inside an Ingress.
 func TestNew_RequiresDeps(t *testing.T) {
 	base := func() Config {
 		return Config{

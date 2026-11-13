@@ -386,7 +386,7 @@ func TestSubscribe_InvalidSubscriberDID(t *testing.T) {
 
 // Unsubscribing one subscriber must NOT tear down the shared import while a
 // sibling subscriber-direction record on the same remote subject remains
-// (Codex P2 ref-count). Under D-4's mixed-mode invariant, Subscribe itself no
+// (ref-count). Under the mixed-mode invariant, Subscribe itself no
 // longer produces two subscriber-direction records for the SAME publisherDID
 // (ErrDuplicateSubscription rejects the second regardless of subscriberDID —
 // the local infra account has exactly one import target per publisherDID, so
@@ -433,7 +433,7 @@ func TestUnsubscribe_SiblingKeepsImport(t *testing.T) {
 
 // When the caller's context is canceled after the remote registration but before
 // persist, the compensating Disconnect must still reach the publisher — it runs
-// on a context detached from the caller's cancellation (Codex P2). The fake peer
+// on a context detached from the caller's cancellation. The fake peer
 // honors ctx, so without the detach the compensation would silently no-op.
 func TestSubscribe_CompensationSurvivesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

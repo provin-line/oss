@@ -612,9 +612,8 @@ func runProcess(t *testing.T, v dplaaxVector) {
 // driven through the sink MUST record "verify" strictly before "write". A
 // refactor that terminated without verifying (write before, or without, verify)
 // reorders the trace to ["write", …] and fails here — the exact regression the
-// vector guards. Unblocked by the sink production/archival slice (PR #7), which
-// gave the sink its injectable Verifier/Writer seams; before it, no instrumented
-// sink runtime existed to drive.
+// vector guards. The sink's injectable Verifier/Writer seams make it possible to drive an
+// instrumented sink runtime.
 //
 // Two teeth beyond ordering: the driver asserts the sink verified the RECEIVED
 // credential (identity, not just that some verify ran — else a regression to
@@ -1105,7 +1104,7 @@ func runIdentityStore(t *testing.T, v dplaaxVector) {
 			}
 			body = b
 		case "legacy-put":
-			// The pre-slice layout: a body-only entry, no variants. Written
+			// The legacy layout: a body-only entry, no variants. Written
 			// straight to the backend because the façade has no surface that
 			// produces one — which is the point of the migration this vector
 			// pins.

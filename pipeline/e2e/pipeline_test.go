@@ -219,7 +219,7 @@ func (r *registeringSigner) SignChainPreserving(ctx context.Context, payload []b
 
 // SignAggregateFirstDrop MUST be overridden explicitly: the embedded *vcdid.Signer
 // now carries this method, and Go method promotion would otherwise expose it directly
-// — bypassing the resolver registration this decorator exists to perform (D-17k-6).
+// — bypassing the resolver registration this decorator exists to perform.
 func (r *registeringSigner) SignAggregateFirstDrop(ctx context.Context, payload []byte, outputHash string, sources []*vc.PipelinePassCredential) (*vc.PipelinePassCredential, error) {
 	c, err := r.Signer.SignAggregateFirstDrop(ctx, payload, outputHash, sources)
 	if err == nil {
@@ -228,11 +228,11 @@ func (r *registeringSigner) SignAggregateFirstDrop(ctx context.Context, payload 
 	return c, err
 }
 
-// TestRegisteringSigner_AggregateOverridden guards D-17k-6: because registeringSigner
-// EMBEDS *vcdid.Signer, the newly added SignAggregateFirstDrop would be promoted and
-// expose the embedded method directly — bypassing res.register. The explicit override
-// above prevents that; this test fails if the override is removed (the issued
-// aggregate credential would not be resolvable).
+// TestRegisteringSigner_AggregateOverridden guards against promotion: because
+// registeringSigner EMBEDS *vcdid.Signer, SignAggregateFirstDrop would be
+// promoted and expose the embedded method directly — bypassing res.register.
+// The explicit override above prevents that; this test fails if the override
+// is removed (the issued aggregate credential would not be resolvable).
 func TestRegisteringSigner_AggregateOverridden(t *testing.T) {
 	kp, err := (ed25519.Generator{}).Generate()
 	if err != nil {

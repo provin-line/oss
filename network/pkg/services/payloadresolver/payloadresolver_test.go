@@ -71,7 +71,7 @@ func TestService_StoreResolve_RoundTrip(t *testing.T) {
 
 // TestService_MultiOwner pins the owner-set append: two pipelines emitting
 // bit-identical bytes converge on one entry whose owner set holds BOTH — the
-// second retain must not clobber the first's ownership (Codex High-1). A repeat
+// second retain must not clobber the first's ownership. A repeat
 // owner is idempotent.
 func TestService_MultiOwner(t *testing.T) {
 	for _, f := range factories() {
@@ -178,7 +178,7 @@ func sha256sum(b []byte) []byte {
 	return sum[:]
 }
 
-// --- F9: authorize-before-read + owner-metadata-only lookup ---
+// --- authorize-before-read + owner-metadata-only lookup ---
 
 // TestStore_Owners_Contract pins the cheap owner-metadata lookup across both
 // backends: Owners returns the recorded set for a present entry and ErrNotFound
@@ -246,7 +246,7 @@ func TestStore_Owners_CrashResidual_FailsClosed(t *testing.T) {
 }
 
 // spyStore records which read path Serve takes, proving it authorizes on owner
-// metadata BEFORE reading (and hashing) the payload bytes (F9).
+// metadata BEFORE reading (and hashing) the payload bytes.
 type spyStore struct {
 	owners      []string
 	payload     []byte
@@ -275,7 +275,7 @@ type allowFunc func(pipelineDID, callerDID string) error
 
 func (f allowFunc) Admit(pipelineDID, callerDID string) error { return f(pipelineDID, callerDID) }
 
-// TestServingBoundary_Serve_AuthorizeBeforeRead is the F9 core: a valid-signer-
+// TestServingBoundary_Serve_AuthorizeBeforeRead: a valid-signer-
 // but-not-admitted caller and an absent hash both get ErrNotFound (oracle
 // collapse), and in neither denial case are the payload bytes read.
 func TestServingBoundary_Serve_AuthorizeBeforeRead(t *testing.T) {
@@ -291,7 +291,7 @@ func TestServingBoundary_Serve_AuthorizeBeforeRead(t *testing.T) {
 		_, err := sb.Serve(context.Background(), hash, caller)
 		// Byte-identical to the absent case below (== the bare sentinel): the
 		// serving boundary must not wrap the cause, or the differing message
-		// would itself be an existence oracle (Codex-3).
+		// would itself be an existence oracle.
 		if err != payloadresolver.ErrNotFound {
 			t.Fatalf("Serve(not admitted) err = %v, want the bare payloadresolver.ErrNotFound (collapsed, unwrapped)", err)
 		}

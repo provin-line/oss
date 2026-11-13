@@ -173,8 +173,8 @@ func TestVerify_TamperedBody_SignerAuthenticityFails(t *testing.T) {
 	}
 }
 
-// FCoT obligation: a proof carrying any member outside the typed six is
-// rejected — the extra member is not covered by the signature.
+// A proof carrying any member outside the typed six is rejected — the extra
+// member is not covered by the signature.
 func TestVerify_ExtraProofMember_Rejected(t *testing.T) {
 	cred, pub := signedCred(t)
 	forged := reUnmarshal(t, cred, func(m map[string]any) {
@@ -191,8 +191,8 @@ func TestVerify_ExtraProofMember_Rejected(t *testing.T) {
 	}
 }
 
-// FCoT obligation: a proof whose verificationMethod names a DID other than the
-// issuer is rejected, even if a key with that fragment exists elsewhere.
+// A proof whose verificationMethod names a DID other than the issuer is
+// rejected, even if a key with that fragment exists elsewhere.
 func TestVerify_VerificationMethodNotIssuer_Rejected(t *testing.T) {
 	cred, pub := signedCred(t)
 	forged := reUnmarshal(t, cred, func(m map[string]any) {

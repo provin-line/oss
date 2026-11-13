@@ -1,7 +1,7 @@
 package auditor
 
 // Integration pin for the resolver-error classification contract through the
-// runner lifecycle (review fix FIX-1): a transient registry outage during
+// runner lifecycle: a transient registry outage during
 // signer/controller DID resolution must yield a RETRYABLE Indeterminate — the
 // head stays queued and flips to Verified once the registry is reachable —
 // never a terminal Failed, which the runner would dequeue and (with a durable

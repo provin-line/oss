@@ -99,7 +99,7 @@ func publisherPeerServerOpts(t *testing.T, rules []store.AllowRule, serving bool
 
 // The full subscriber-initiated round-trip over a real signature/verify exchange:
 // Subscribe (GetPublisherInfo + RegisterSubscription) → ListSubscriptions →
-// Unsubscribe (Disconnect). This proves the D-p4 signed-view byte contract from
+// Unsubscribe (Disconnect). This proves the signed-view byte contract from
 // the SENDING side — the peer client reproduces exactly what the publisher's
 // verifier rebuilds and checks.
 func TestSubscriberE2E_RoundTrip(t *testing.T) {

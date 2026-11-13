@@ -154,12 +154,10 @@ func (fakePublisher) Close() error         { return nil }
 // level, no HTTP handler assembly): a bearer the PDP denies is 403 (any
 // Verify failure — the RPC interceptors elsewhere in this module likewise do
 // not distinguish denial from outage), distinct from the 401 of a missing
-// bearer. Also pins Retry-After on the readiness 503. Relocated from
-// cmd/standalone/push_test.go (PR3c: cmd/standalone retired) — push.go here
-// is a byte-for-byte copy of that binary's own push.go (see its package
-// doc), and this is the only test either copy's pushRoutes ever had for its
-// 403/Retry-After behavior specifically (TestRoutes_PushIngressIsMounted,
-// above, only exercises the 401/503 paths through the full handler).
+// bearer. Also pins Retry-After on the readiness 503. This is the only test
+// of pushRoutes for its 403/Retry-After behavior specifically
+// (TestRoutes_PushIngressIsMounted, above, only exercises the 401/503 paths
+// through the full handler).
 func TestPushRoutes_PDPDenial403(t *testing.T) {
 	ready := make(chan struct{})
 	close(ready)

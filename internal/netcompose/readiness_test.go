@@ -207,7 +207,7 @@ func TestHostOnly(t *testing.T) {
 }
 
 // The cache bounds outbound probes: a burst of /readyz requests within one TTL
-// runs the checks ONCE (amplification defense F7), and the very first request
+// runs the checks ONCE (so requests cannot amplify into probes), and the very first request
 // refreshes synchronously so a zero snapshot never reads as ready.
 func TestCachedReadiness_CoalescesProbes(t *testing.T) {
 	var probes int64

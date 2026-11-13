@@ -1,7 +1,7 @@
 package client_test
 
-// TestShipper_EndToEnd is task-6's "ideally one integration test against
-// the real client+handler" (brief): a real tlogship.Shipper (pipeline/,
+// TestShipper_EndToEnd is one integration test against the real
+// client+handler: a real tlogship.Shipper (pipeline/,
 // under test here from the network SIDE — see
 // network/pkg/services/payloadresolver/handler/byref_dataplane_e2e_test.go
 // for the established precedent of an external `_test` package crossing

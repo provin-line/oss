@@ -1,23 +1,19 @@
 package main
 
 // This is the by-reference CROSS-NODE proof on the separated (cmd/network +
-// cmd/pipeline) topology — the coverage that used to live in cmd/standalone's
-// crossnode_byref_e2e_test.go / crossnode_byref_fullsmoke_e2e_test.go (PR3c
-// retired cmd/standalone; those two files are readable at
-// `git show da95e32^:cmd/standalone/crossnode_byref_e2e_test.go` and its
-// fullsmoke sibling). Their properties, ported here:
+// cmd/pipeline) topology — its properties are:
 //
 //  1. A producer node's source loop DUAL-EMITS: the plain (inline) form on its
 //     own account subject, and a STRIPPED (nil-payload) form on the
 //     by-reference subject, with the payload retained at the registry's
-//     payload-serving boundary (buildDeps always wires PayloadStore — D-6 —
+//     payload-serving boundary (buildDeps always wires PayloadStore,
 //     so this is automatic, not a scenario-specific opt-in).
 //  2. A consumer on a SECOND NATS account negotiates a REAL chainmanager
 //     subscription (RegisterSubscription/Subscribe, over a real wire
 //     ChainPeerService round trip) that maps "by-reference" to the
 //     ByReferenceSubjectPrefix-prefixed subject, exports it on the producer's
 //     account, imports-and-renames it back to the plain subject on the
-//     consumer's account (D-4) — so the consumer's sink loop's own ingress
+//     consumer's account, so the consumer's sink loop's own ingress
 //     config is mode-independent.
 //  3. The consumer's production sink loop (payload-delivery=by-reference)
 //     synchronously appraises the exact selected credential evidence, then dereferences
@@ -31,23 +27,20 @@ package main
 //     above already proves the plain form was published on that exact
 //     subject — a deliver-then-check confidentiality proof, not a race.
 //
-// What differs from the deleted tests, and why:
+// What this file sets up, and what it leaves to other tests:
 //
-//   - Topology: the deleted tests ran TWO standalone nodes, each with its OWN
-//     embedded chainmanager.Service + ChainPeerService + PayloadService (one
-//     monolithic binary serving both control- and data-plane per node). In
-//     this repo's current architecture, ONE registry (cmd/network,
-//     netcompose.BuildHandler — reused here via buildSepRegistry, extended
-//     with two small additive parameters, see its doc) hosts chainmanager,
-//     ChainPeerService, and PayloadService for the whole mesh — cmd/pipeline
-//     is architecturally barred from linking any of that in-process
-//     (depsguard_test.go). So the "producer logical node" here is
-//     buildSepRegistry (its own account) + a pipeline runtime; the "consumer
-//     logical node" is a directly-constructed chainmanager.Service (a
-//     legitimate stand-in for whatever operator tool would drive
-//     Subscribe against a real registry — never itself a shipped binary,
-//     mirroring network/pkg/services/chainmanager/handler/
-//     multinode_e2e_test.go's own subSvc) + a pipeline runtime. Only the
+//   - Topology: ONE registry (cmd/network, netcompose.BuildHandler — reused
+//     here via buildSepRegistry, extended with two small additive parameters,
+//     see its doc) hosts chainmanager, ChainPeerService, and PayloadService
+//     for the whole mesh — cmd/pipeline is architecturally barred from
+//     linking any of that in-process (depsguard_test.go). So the "producer
+//     logical node" here is buildSepRegistry (its own account) + a pipeline
+//     runtime; the "consumer logical node" is a directly-constructed
+//     chainmanager.Service (a legitimate stand-in for whatever operator tool
+//     would drive Subscribe against a real registry — never itself a shipped
+//     binary, mirroring
+//     network/pkg/services/chainmanager/handler/multinode_e2e_test.go's own
+//     subSvc) + a pipeline runtime. Only the
 //     producer side needs a full registry: a pure observation sink has no
 //     wire dependency (VCStore/AuditQueue/PayloadResolver) that isn't already
 //     satisfied by pointing at the SAME one registry every other wire Dep in
@@ -55,23 +48,21 @@ package main
 //   - Emit-health gating: buildSepRegistry wires NEITHER WithByReferenceHealth
 //     nor WithPublisherHealth (the same as its two existing scenarios), so
 //     chainmanager.Service.byReferenceHealthy defaults to unconditionally
-//     healthy (service_peer.go) — by-reference is offered/negotiated exactly
-//     as it always was pre-degradation. cmd/pipeline's own real
-//     ReportEmitHealth path (emithealthwiring.go) is therefore NOT exercised
-//     here: wiring a report-mode registry (cmd/network's own emitHealth
-//     option) plus the producer's health reporter would roughly double this
-//     file's setup for a property the fullsmoke capstone itself treated as
-//     separable, and this port's brief is the retired coverage (dual-emit +
-//     cross-account delivery + fetch + confidentiality), not a new capstone.
-//   - No mirror-custody / shipping assertions: the deleted fullsmoke's own
-//     scope note already treated the HTTP fetch mechanics as covered
-//     elsewhere (network/pkg/services/payloadresolver/handler/
-//     byref_dataplane_e2e_test.go, still alive, untouched by the standalone
-//     retirement) and this file does not re-prove them in isolation; nor does
-//     it exercise custody-log mirror shipping (cmd/pipeline/separated_e2e_test.go's
-//     own MirrorCustody_LiveGetMirrorStateAdvances case already proves that,
+//     healthy (service_peer.go) — by-reference is offered and negotiated
+//     without a health condition. cmd/pipeline's own real ReportEmitHealth
+//     path (emithealthwiring.go) is therefore NOT exercised here: wiring a
+//     report-mode registry (cmd/network's own emitHealth option) plus the
+//     producer's health reporter would roughly double this file's setup for
+//     a separable property, and this file covers dual-emit + cross-account
+//     delivery + fetch + confidentiality only.
+//   - No mirror-custody / shipping assertions: the HTTP fetch mechanics are
+//     covered in network/pkg/services/payloadresolver/handler/
+//     byref_dataplane_e2e_test.go, and this file does not re-prove them in
+//     isolation; nor does it exercise custody-log mirror shipping
+//     (cmd/pipeline/separated_e2e_test.go's own
+//     MirrorCustody_LiveGetMirrorStateAdvances case already proves that,
 //     unrelated to by-reference). One assertion here (the PayloadService
-//     request counter) stands in for the fullsmoke's own "teeth #2".
+//     request counter) shows the payload is fetched over the wire.
 
 import (
 	"context"
@@ -121,8 +112,7 @@ const (
 // byrefDIDMap is the consumer's ad hoc chainmanager.DIDResolver: it resolves
 // ONLY the producer's pipeline DID, to a document advertising the producer
 // registry's own #chain-manager endpoint (its real, wire-mounted
-// ChainPeerService) — mirrors the deleted crossnode_byref tests' own
-// mapDIDResolver/byrefEndpointDoc.
+// ChainPeerService).
 type byrefDIDMap map[string]*did.DIDDocument
 
 func (m byrefDIDMap) Resolve(_ context.Context, d string) (*did.DIDDocument, error) {
@@ -145,7 +135,7 @@ func byrefEndpointDoc(pipelineDID, endpoint string) *did.DIDDocument {
 // byrefCaptureWriter is the consumer sink's Deps.SinkWriter override — the
 // test seam dataplane.go's own doc names ("assert on a buffer instead of a
 // real surface") — capturing every delivered sink.Record for direct
-// assertion, mirroring the deleted tests' own captureWriter /
+// assertion; it holds the records under a mutex and hands out copies, like
 // byref_dataplane_e2e_test.go's e2eWriter.
 type byrefCaptureWriter struct {
 	mu   sync.Mutex
@@ -218,7 +208,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	// --- shared operator trust root + resolver dir: bridges the producer
 	// registry's OWN chainOp (built inside buildSepRegistry from the chainCfg
 	// passed in below) and the consumer's independently-built account
-	// operator into ONE broker's grants (cold-account ordering, D-x5). ---
+	// operator into ONE broker's grants (cold-account ordering). ---
 	opKP, err := nkeys.CreateOperator()
 	if err != nil {
 		t.Fatal(err)
@@ -255,14 +245,14 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	}
 
 	// --- identities: one keystore per logical node, each holding exactly the
-	// keys its own runtime needs (D9 preflight scope). ---
+	// keys its own runtime needs (payload-retain preflight scope). ---
 	producerKS := ksfilestore.New(t.TempDir())
 	producerNodeKP, err := gen.Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// byrefProducerPipeline is BOTH the source loop's OWN output subject
-	// (PayloadStore retain signs as the owning loop's output subject, D9) and
+	// (PayloadStore retain signs as the owning loop's output subject) and
 	// this runtime's node identity (AuditQueue/PayloadResolver) — reusing one
 	// identity for both is the same choice the existing separated_e2e_test.go
 	// main scenario makes ("sepSrc1Pipeline is reused here only because its
@@ -311,8 +301,8 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	// independently-built account operator writes to), and the allow-list
 	// pre-seeded so RegisterSubscription/PayloadService admit the consumer's
 	// identity. The wrap hook counts real PayloadService requests — this
-	// file's stand-in for the deleted fullsmoke capstone's own payloadReqs
-	// teeth. ---
+	// file's check that PayloadService is actually called (payloadReqs
+	// counter). ---
 	producerChainCfg := &chainconfig.Config{
 		Transport: chainconfig.TransportNATS,
 		NATS: chainconfig.NATSConfig{
@@ -390,7 +380,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	natsURL := natsSrv.ClientURL()
 
 	// --- producer pipeline runtime: ONE source loop. buildDeps ALWAYS wires
-	// a PayloadStore (D-6), so this loop dual-emits automatically — no
+	// a PayloadStore, so this loop dual-emits automatically — no
 	// separate opt-in needed to prove property 1. ---
 	producerPipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint: reg.url, VCStoreBearer: sepBearer, MaxCredentialSize: 1 << 20, MaxInlinePayloadSize: 1 << 20, MaxPushBodySize: 1 << 20,
@@ -420,7 +410,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 
 	// --- consumer pipeline runtime: ONE sink loop, payload-delivery =
 	// by-reference. IngressSubject stays the PLAIN producer pipeline DID
-	// (unchanged by mode — Subscribe's D-4 rename absorbs it). VCStoreEndpoint
+	// (unchanged by mode — Subscribe's import rename absorbs it). VCStoreEndpoint
 	// points at the PRODUCER's registry: a pure observation sink's only wire
 	// dependencies (StoreIngressVC/RegisterAuditHead, and the PayloadResolver
 	// fetch) all resolve there, and wiring.go's own "one registry base URL"
@@ -541,8 +531,7 @@ func TestSeparatedTopology_ByReferenceCrossesNodes(t *testing.T) {
 	// (pipeline/sink/sink.go's acquirePayload fails closed otherwise: "by-
 	// reference + present -> RejectPayloadDeliveryViolation"); this
 	// independently OBSERVES that the bytes were fetched over the real wire
-	// rather than smuggled inline, mirroring the deleted fullsmoke capstone's
-	// own payloadReqs counter (teeth #2 there). ---
+	// rather than smuggled inline, via the payloadReqs counter. ---
 	if hits := atomic.LoadInt32(&payloadReqs); hits == 0 {
 		t.Fatal("byref: PayloadService received zero requests — the sink did not fetch over the real HTTP surface")
 	}

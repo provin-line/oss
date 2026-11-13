@@ -234,7 +234,7 @@ func TestDrainOnce_TwoDeepChain_ResolvesAcrossTwoTicks(t *testing.T) {
 
 // Within one drain tick, an earlier entry can lower this hole's depth (keep-min) before it
 // is processed; the depth bound must use the LIVE depth, not the stale snapshot, or a
-// now-shallow hole is wrongly max-depth-dropped (multi-path truncation). Codex P2.
+// now-shallow hole is wrongly max-depth-dropped (multi-path truncation).
 func TestDrainOnce_LiveDepth_NotStaleSnapshot(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -277,7 +277,7 @@ func TestDrainOnce_LiveDepth_NotStaleSnapshot(t *testing.T) {
 }
 
 // A hole at or beyond max-depth is dropped WITHOUT fetching, and the truncation is logged
-// — the bound that stops an adversarial unbounded chain (D-17g-12).
+// — the bound that stops an adversarial unbounded chain.
 func TestDrainOnce_MaxDepth_DropsWithoutFetching(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -310,7 +310,7 @@ func TestDrainOnce_MaxDepth_DropsWithoutFetching(t *testing.T) {
 }
 
 // A peer returning a body that hashes to a different address is rejected — never stored,
-// terminal drop (D-17g-11: never trust the peer).
+// terminal drop (never trust the peer).
 func TestDrainOnce_ContentAddressMismatch_NotStored(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -337,7 +337,7 @@ func TestDrainOnce_ContentAddressMismatch_NotStored(t *testing.T) {
 	}
 }
 
-// A guard-rejected endpoint is never dialed and the entry is dropped (D-17g-8).
+// A guard-rejected endpoint is never dialed and the entry is dropped.
 func TestDrainOnce_SSRFRejected_NotDialed(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -373,7 +373,7 @@ func docWith(ep string) *did.DIDDocument {
 }
 
 // An entry with no UpstreamEndpoint hint resolves via the ReferrerIssuer's #vc-resolver
-// service endpoint (D-17g-2).
+// service endpoint.
 func TestDrainOnce_IssuerDerivedEndpoint(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -404,7 +404,7 @@ func TestDrainOnce_IssuerDerivedEndpoint(t *testing.T) {
 	}
 }
 
-// A connection error on the hint falls back to the issuer-derived endpoint (D-17g-6).
+// A connection error on the hint falls back to the issuer-derived endpoint.
 func TestDrainOnce_ConnectionError_FallsBackToIssuer(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -439,7 +439,7 @@ func TestDrainOnce_ConnectionError_FallsBackToIssuer(t *testing.T) {
 }
 
 // A NotFound is a definitive miss: the entry is retried, NOT failed over to another
-// endpoint (D-17g-6).
+// endpoint.
 func TestDrainOnce_NotFound_IsMissNoFallback(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -464,7 +464,7 @@ func TestDrainOnce_NotFound_IsMissNoFallback(t *testing.T) {
 	}
 }
 
-// A hole is retried up to MaxRetries, then dropped (D-17g-6).
+// A hole is retried up to MaxRetries, then dropped.
 func TestDrainOnce_BoundedRetry_DropsAfterMaxRetries(t *testing.T) {
 	pool, svc := newWiring()
 	ctx := context.Background()
@@ -518,7 +518,7 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 // A service whose ID is another URI merely ENDING in "#vc-resolver" is not
 // this issuer's advertisement: it must be ignored — neither captured as the
 // endpoint nor counted into a false ambiguity (the exact-id rule the bundle
-// exporter applies; P1-3 alignment).
+// exporter applies).
 func TestDeriveIssuerEndpoint_ForeignSuffixIgnored(t *testing.T) {
 	pool, svc := newWiring()
 	const legit = "https://issuer.example/vc"

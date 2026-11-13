@@ -110,7 +110,7 @@ func (tr trust) sysUser(t *testing.T) (userJWT, userSeed string) {
 
 // dirServer runs an embedded nats-server in operator mode with a directory
 // account resolver rooted at dir and the system account configured — the
-// quickstart broker shape after this slice.
+// quickstart broker shape.
 func dirServer(t *testing.T, tr trust, dir string) *server.Server {
 	t.Helper()
 	res, err := server.NewDirAccResolver(dir, 0, 2*time.Minute, server.NoDelete)
@@ -195,7 +195,7 @@ func connectUnder(t *testing.T, url string, acc nkeys.KeyPair) *natsclient.Conn 
 	return nc
 }
 
-// The slice's acceptance property, end to end: a subscriber that imported a
+// End to end: a subscriber that imported a
 // subject BEFORE the publisher's export existed receives nothing (the silent
 // no-flow state), and starts receiving as soon as the publisher's granted
 // claims are pushed to the RUNNING broker — no reconnect, no restart.
@@ -536,8 +536,7 @@ func TestPublish_ReplyLost_RetriesThenCompensates(t *testing.T) {
 // in the exact provisioned wiring (inner directory == the broker's resolver
 // directory), where a lookup-style reconciliation would tautologically
 // "confirm" whatever the inner publisher just wrote. This is the regression
-// pin for the review finding that an applied-state probe must never be able
-// to ACK a rejected grant.
+// pin that an applied-state probe must never be able to ACK a rejected grant.
 func TestPublish_ServerRejects_ProvisionedShape_CompensatesFast(t *testing.T) {
 	tr := newTrust(t)
 	dir := t.TempDir()

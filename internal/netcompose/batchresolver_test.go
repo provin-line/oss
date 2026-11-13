@@ -81,7 +81,7 @@ func brConfig(loops []pipelineconfig.LoopConfig, interval time.Duration, maxByte
 	}
 }
 
-// BuildBatchResolver builds unconditionally from its args now (Task 9): the "does this
+// BuildBatchResolver builds unconditionally from its args: the "does this
 // node have a consuming loop" gate moved to the composition roots (cmd/network always
 // builds, since it never has a local loop to gate on).
 // A source-only or zero-loop config therefore returns a non-nil runner just like a
@@ -183,7 +183,7 @@ func TestBatchResolver_Integration_DrainsFromPeer(t *testing.T) {
 }
 
 // An over-cap predecessor on the peer is rejected by the size-bounded fetch client and
-// never stored locally (D-17g-13).
+// never stored locally.
 func TestBatchResolver_Integration_OverCapFetchRejected(t *testing.T) {
 	ctx := context.Background()
 	const cap = 512
@@ -233,7 +233,7 @@ func requireBearer(token string) connect.HandlerOption {
 
 // The audit fetch must present the node's configured bearer: a real peer mounts
 // VCResolverService behind L1 auth, so an unauthenticated fetch would never assemble
-// (D-17g-10 revised — reuse the node's VCStoreBearer). Codex P1.
+// (the node's VCStoreBearer is reused).
 func TestBatchResolver_Integration_AuthenticatedPeer(t *testing.T) {
 	ctx := context.Background()
 	const token = "audit-token"
@@ -344,7 +344,7 @@ func TestBatchResolver_Integration_BearerOnlyToListedOrigins(t *testing.T) {
 }
 
 // The server handler bounds an inbound StoreVC: an over-cap credential is rejected through
-// the real authenticated stack (D-17g-13).
+// the real authenticated stack.
 func TestBoot_StoreVC_RejectsOverCap(t *testing.T) {
 	const cap = 512
 	ctx := context.Background()

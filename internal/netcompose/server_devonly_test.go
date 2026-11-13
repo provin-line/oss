@@ -9,7 +9,7 @@ import (
 )
 
 // In a dev build the noop transport is available, but only when explicitly
-// enabled via chain.dev.allow-noop-transport (slice-15 D-m2). This exercises the
+// enabled via chain.dev.allow-noop-transport. This exercises the
 // dev-tagged ChainOperator branch (main calls ChainOperator before BuildHandler).
 func TestChainOperator_DevNoop(t *testing.T) {
 	// enabled -> boots.

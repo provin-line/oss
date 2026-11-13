@@ -126,8 +126,8 @@ func init() {
 	// yet. They arrived here because vendoring is whole-corpus by design
 	// (scripts/sync-spec-vectors.sh mirrors the catalog; there is no partial
 	// adoption), so the catalog had outrun the harness silently — these
-	// entries are what makes that visible. Each converts to a driver in the
-	// slice that builds its subject; none is a judgment that the rule is
+	// entries are what makes that visible. Each converts to a driver once its
+	// subject is built; none is a judgment that the rule is
 	// unimportant.
 	registerSkip("claims-effect", 1, 2, "blocked-on: no effect-scope mapping or legacy receipt projection — both are surfaces of the P0-5 external-effect gate, unimplemented (spec transcribed 2026-07-15, catalog rules effect.*)")
 	registerSkip("effect", 1, 13, "blocked-on: no external-effect gate — the P0-5 subject (ReleaseAuthorization, quarantine entries, ObservationRecord/DecisionRecord, the effect state machine) is spec-only; the catalog transcription landed 2026-07-15 ahead of any implementation")

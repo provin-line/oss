@@ -28,8 +28,8 @@ import (
 
 // spyVerifier records the (op, fields, proof) the handler passes and, optionally,
 // runs the authorizer or returns a preset error — letting the handler tests pin
-// the D-p4 view contract, the "handler actually calls Verify" contract (slice-9
-// D-c1), and the authorizer binding without a real signature.
+// the signed-view contract, the "handler actually calls Verify" contract, and the
+// authorizer binding without a real signature.
 type spyVerifier struct {
 	called    bool
 	gotOp     string
@@ -168,7 +168,7 @@ func TestPeerHandler_RegisterSubscription_VerifyContract(t *testing.T) {
 }
 
 // payload_delivery is signed verbatim — an empty requested mode must appear as an
-// empty string in the signed fields, not normalized to by-reference (D-p4).
+// empty string in the signed fields, not normalized to by-reference.
 func TestPeerHandler_RegisterSubscription_EmptyModeSignedVerbatim(t *testing.T) {
 	v := &spyVerifier{}
 	svc := &fakePeer{sub: &store.Subscription{ID: "s1"}}
@@ -532,8 +532,9 @@ func (m evResolver) Resolve(_ context.Context, d string) (*did.DIDDocument, erro
 // a filelog, then reloaded across a restart — and the retained Record alone is
 // sufficient to reconstruct the JCS signed view (using rec.ViewVersion for the
 // "v" member) and re-verify the counterparty signature against the snapshotted
-// public key. This is RED without FIX 1: a zero ViewVersion serializes "v":0,
-// diverging from the "v":1 the signer used, so the signature fails to verify.
+// public key. A retained Record whose ViewVersion were left zero would
+// serialize "v":0, diverging from the "v":1 the signer used, so the signature
+// would fail to verify.
 func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	const (

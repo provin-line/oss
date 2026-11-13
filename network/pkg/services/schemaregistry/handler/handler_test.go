@@ -117,7 +117,7 @@ func TestRegister_PathTraversalName_InvalidArgument(t *testing.T) {
 	}
 }
 
-// D2: every rejection mode of the admission check surfaces as InvalidArgument
+// Every rejection mode of the admission check surfaces as InvalidArgument
 // over the wire, and none of the rejected bodies is registered.
 func TestRegister_InvalidSchemaBodies_InvalidArgument(t *testing.T) {
 	c := testClient(t)

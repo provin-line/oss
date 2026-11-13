@@ -20,11 +20,11 @@ import (
 // broker, serves /healthz and a fully green /readyz (both configured
 // dependencies reachable), and shuts down cleanly on SIGTERM. This is the
 // one test that exercises buildDeps + pipeline/runtime.Build together
-// end-to-end for this task; a full credential-flow e2e (publish through a
-// loop, observe the emitted event) is PR3b Task 9's job per the task brief —
-// this smoke stays at "the process boots, serves, and drains", the same
-// scope cmd/network's own TestNetwork_ActualBootOverTLS covers for that
-// binary.
+// end-to-end; a full credential-flow e2e (publish through a loop, observe
+// the emitted event) is the separated-topology e2e's job
+// (separated_e2e_test.go); this smoke stays at "the process boots, serves,
+// and drains", the same scope cmd/network's own
+// TestNetwork_ActualBootOverTLS covers for that binary.
 //
 // The registry dependency (vc-store-endpoint) is a trivial httptest server
 // that answers ANY request (even 404) — this binary's /readyz registry
@@ -36,9 +36,9 @@ import (
 //
 // No TLS: listen-addr is loopback, so core.LoadCoreConfig's transport-
 // security guard permits cleartext (ListenerIsLoopback) — simpler than a
-// TLS-carrying smoke, and orthogonal to what this test
-// proves (Deps wiring + lifecycle, not the TLS preflight, already covered by
-// cmd/network's own suite).
+// TLS-carrying smoke, and orthogonal to what this test proves (Deps wiring +
+// lifecycle, not the TLS preflight, already covered by cmd/network's own
+// suite).
 func TestPipeline_ActualBoot(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boot smoke builds a binary and starts a broker")
@@ -53,19 +53,19 @@ func TestPipeline_ActualBoot(t *testing.T) {
 	port := freePort(t)
 	dataDir := filepath.Join(dir, "data")
 
-	// D9 boot preflight (main.go's Boot guard 5, preflightPayloadRetainKeys):
-	// validSourceLoopConf's "src" loop is a producing loop, so its own output
+	// Payload-retain boot preflight (main.go's Boot guard 5,
+	// preflightPayloadRetainKeys): validSourceLoopConf's "src" loop is a producing loop, so its own output
 	// subject needs a #auth key in the keystore BEFORE this binary starts —
 	// provisioned directly into the DataDir/keys tree the real binary's
 	// keystore (main.go) will open, same convention
 	// bootreject_test.go's own TestPipeline_BootRejectsMissingPayloadRetainKey
 	// uses.
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
-	// Boot guard 6 (main.go, preflightWireOnlySignerKeys, wiring.go — branch
-	// review): nodeDID's own key (RegisterAuditHead / PayloadResolver) and
-	// the source loop's issuer DID (its emission log's checkpoint-signer
-	// identity, dp.CustodyLogs()) must ALSO already be provisioned, or this
-	// binary now rejects boot before ever reaching readiness.
+	// Boot guard 6 (main.go, preflightWireOnlySignerKeys, wiring.go):
+	// nodeDID's own key (RegisterAuditHead / PayloadResolver) and the source
+	// loop's issuer DID (its emission log's checkpoint-signer identity,
+	// dp.CustodyLogs()) must ALSO already be provisioned, or this binary
+	// rejects boot before ever reaching readiness.
 	const nodeDID = "did:dplaax:reg:org:acme:pipeline:p1:process:node"
 	provisionPayloadRetainKey(t, dataDir, nodeDID)
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
@@ -157,8 +157,7 @@ func TestPipeline_ActualBoot(t *testing.T) {
 
 // runEmbeddedNATS starts an in-process NATS broker (no auth/operator config,
 // so the account-JWT credentials natstransport.Connect mints are accepted
-// unconditionally) and returns its client URL. Originally ported from
-// cmd/standalone/bootsmoke_test.go (now retired).
+// unconditionally) and returns its client URL.
 func runEmbeddedNATS(t *testing.T) string {
 	t.Helper()
 	srv := natstest.RunServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})

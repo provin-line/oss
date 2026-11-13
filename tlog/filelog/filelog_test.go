@@ -255,7 +255,7 @@ func TestCheckpoint_SignedViewVerifies(t *testing.T) {
 }
 
 // CheckpointAt is the optional, filelog-only capability the tlog-custody
-// mirror shipper needs (task-6 controller decision): a signed checkpoint
+// mirror shipper needs: a signed checkpoint
 // over an ARBITRARY earlier prefix, not just the log's current head.
 // CheckpointAt(0)/mid/full all produce a Size/Head pair whose SignedView
 // re-verifies, and CheckpointAt(N) — taken while the log has exactly N

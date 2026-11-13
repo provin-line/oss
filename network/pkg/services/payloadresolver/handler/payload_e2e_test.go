@@ -140,12 +140,10 @@ func TestPayloadService_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestPayloadService_NotAdmitted denies a caller no owner admits (PermissionDenied).
-// TestPayloadService_NotAdmitted proves the F9/F4 existence-oracle closure: a
+// TestPayloadService_NotAdmitted proves there is no existence oracle: a
 // valid-signer-but-not-admitted caller gets the SAME client.ErrNotFound as a
-// well-formed miss (TestPayloadService_NotFound), so a caller who may not receive
-// the bytes cannot tell "present but forbidden" from "absent" — same code AND
-// same message on the wire (was CodePermissionDenied before P1-4d).
+// well-formed miss (TestPayloadService_NotFound), so a caller who may not
+// receive the bytes cannot tell "present but forbidden" from "absent".
 func TestPayloadService_NotAdmitted(t *testing.T) {
 	h := newHarness(t, 0)
 	delete(h.allow, ownerPBA) // node no longer admitted by the sole owner

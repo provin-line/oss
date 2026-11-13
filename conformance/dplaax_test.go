@@ -308,7 +308,7 @@ func runCommitment(t *testing.T, v dplaaxVector) {
 		if sErr != nil {
 			// Advisory in the API contract, but visible here so a
 			// driver-side parse defect cannot silently satisfy a
-			// failed-expectation (review note).
+			// failed expectation.
 			t.Logf("VerifySourceCommitment advisory error: %v", sErr)
 		}
 		if want := expectConfidence(t, v); got != want {

@@ -43,7 +43,7 @@ const nodeDID = "did:dplaax:poc.dplaax.dev:org:pipeline"
 func addr(hexDigit string) string { return "sha256:" + strings.Repeat(hexDigit, 64) }
 
 // variantAddr builds a well-formed but NEVER-ADMITTED wire variant id — the
-// grammar RegisterEvidence now requires (P1-A), for tests that need a
+// grammar RegisterEvidence requires (P1-A), for tests that need a
 // syntactically valid head without going through a real StoreVC (e.g. because
 // the request is rejected before admission is ever checked).
 func variantAddr(hexDigit string) string {
@@ -286,7 +286,7 @@ func TestRegisterEvidence_BareBodyAddress_InvalidArgument(t *testing.T) {
 }
 
 // TestRegisterEvidence_UnknownVariant_FailedPrecondition proves the
-// arbitrary-hash amplification guard (D1) still holds under the new grammar:
+// arbitrary-hash amplification guard holds for wire variant ids:
 // a well-formed wire variant id this node never admitted (no StoreVC call
 // preceded it) is FailedPrecondition, never silently registered.
 func TestRegisterEvidence_UnknownVariant_FailedPrecondition(t *testing.T) {
@@ -341,7 +341,7 @@ func TestRegisterEvidence_MalformedConsumedSet_ClientSideRejection(t *testing.T)
 	}
 }
 
-// --- P1-C: RegisterEvidence is mounted behind L1 authz IN ADDITION to the L2
+// --- RegisterEvidence is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises. newHarness deliberately mounts NO
 // L1 interceptor (it isolates the wireauth layer); these tests add it back —
 // a real deployment's actual mounting (see internal/netcompose.BuildHandler's
@@ -469,7 +469,7 @@ func TestRegisterAuditHead_RoundTrip(t *testing.T) {
 }
 
 // TestRegisterAuditHead_UnknownVariant_FailedPrecondition mirrors
-// RegisterEvidence's own: the arbitrary-hash amplification guard (D1) still
+// RegisterEvidence's own: the arbitrary-hash amplification guard still
 // holds — a well-formed wire variant id this node never admitted is
 // FailedPrecondition, never silently registered.
 func TestRegisterAuditHead_UnknownVariant_FailedPrecondition(t *testing.T) {

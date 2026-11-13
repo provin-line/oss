@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The receipt is the emit-time discovery locator (slice-17o D-17o-2): it maps an emitted
+// The receipt is the emit-time discovery locator: it maps an emitted
 // aggregate head's content address to the exact set of consumed source content addresses,
 // captured by the aggregate runtime from the pooled set that computed SourceRoot. The audit
 // runner reads it to gather the consumed sources for VerifySourceCommitment.
@@ -55,10 +55,11 @@ func TestMemReceiptStore_Isolation(t *testing.T) {
 	}
 }
 
-// The frozen contract (D1): Put canonicalizes (sort, dedup) and is first-write-wins. A
-// canonically-identical replay (including a permuted one) is an idempotent no-op — this is
-// what makes aggregate re-emit retries safe. A canonically-different Put is a conflict: the
-// recorded set is pinned by the first successful write and never silently changes.
+// The frozen contract: Put canonicalizes (sort, dedup) and is first-write-wins.
+// A canonically-identical replay (including a permuted one) is an idempotent
+// no-op — this is what makes aggregate re-emit retries safe. A
+// canonically-different Put is a conflict: the recorded set is pinned by the
+// first successful write and never silently changes.
 func TestMemReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	s := NewMemReceiptStore()
 	head := "sha256:aaa"

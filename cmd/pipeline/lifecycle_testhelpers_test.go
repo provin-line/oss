@@ -1,11 +1,11 @@
 package main
 
-// Shared test doubles for this task's (PR3b Task 7) shipper-wiring and
+// Shared test doubles for the shipper-wiring and
 // ordered-shutdown tests: a real filelog.Log builder (mirrors
 // pipeline/transport/tlogship's own shipper_test.go newSignedLog helper,
 // reproduced here since that helper is unexported to a different test
 // package), a spy tlogship.MirrorClient that also records whether the
-// context it was called with was already cancelled (the D8 fresh-context
+// context it was called with was already cancelled (the fresh-context
 // property), and a fake dataPlane for driving run's shutdown sequence
 // without a real NATS broker.
 
@@ -60,7 +60,7 @@ func newTestFilelog(t *testing.T, ks *ksfilestore.Store, signerDID, logID string
 }
 
 // spiedMirrorCall is one recorded MirrorClient call: which op, which logID,
-// and whether ctx was ALREADY done at call time — the D8 fresh-context
+// and whether ctx was ALREADY done at call time — the fresh-context
 // property every caller of this spy checks.
 type spiedMirrorCall struct {
 	op        string // "GetMirrorState" or "MirrorLogSegment"
@@ -73,8 +73,8 @@ type spiedMirrorCall struct {
 // spyMirrorClient is an in-memory tlogship.MirrorClient spy: it tracks its
 // own durable acked size like a real registry would (so Drain/Run behave
 // realistically) and records every call, including whether the caller's ctx
-// was already cancelled — the property this task's lifecycle test exists to
-// disprove for the final shutdown-time flush. failAlways, when set, makes
+// was already cancelled — the property the lifecycle test exists to disprove
+// for the final shutdown-time flush. failAlways, when set, makes
 // every MirrorLogSegment call return an error (registry permanently down),
 // for the drain-timeout test.
 type spyMirrorClient struct {
@@ -146,7 +146,7 @@ func (f *fakeDataPlane) Run(ctx context.Context) error { return f.runFn(ctx) }
 func (f *fakeDataPlane) Close() error                  { return f.closeFn() }
 
 // eventLog is a concurrency-safe ordered record of named events, for
-// asserting the D8 shutdown sequence's relative order.
+// asserting the shutdown sequence's relative order.
 type eventLog struct {
 	mu     sync.Mutex
 	events []string

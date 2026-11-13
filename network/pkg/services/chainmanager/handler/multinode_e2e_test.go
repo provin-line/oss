@@ -30,8 +30,8 @@ import (
 // bridgeDirToResolver copies every <accountPub>.jwt the operators wrote into a
 // MemAccResolver, so the embedded server enforces the SAME grants the real
 // DirPublisher produced (the DirPublisher<->DirAccResolver file contract is proven
-// in slice-15 Phase A; this avoids the DirAccResolver system-account machinery the
-// deferred $SYS live-update needs).
+// by the DirPublisher tests; this avoids the DirAccResolver system-account
+// machinery the deferred $SYS live-update needs).
 func bridgeDirToResolver(t *testing.T, dir string) *server.MemAccResolver {
 	t.Helper()
 	mr := &server.MemAccResolver{}
@@ -57,8 +57,8 @@ func bridgeDirToResolver(t *testing.T, dir string) *server.MemAccResolver {
 
 // natsClient connects to url as accKP's account (a freshly minted user JWT) —
 // stands in for the pipeline data plane (cmd/pipeline, wired over NATS
-// transport since PR3c's separated topology; this fixture predates that and
-// was never migrated to a real cmd/pipeline instance).
+// transport in the separated topology; this fixture does not use a real
+// cmd/pipeline instance).
 func natsClient(t *testing.T, url string, accKP nkeys.KeyPair) *natsclient.Conn {
 	t.Helper()
 	u, _ := nkeys.CreateUser()
@@ -75,9 +75,9 @@ func natsClient(t *testing.T, url string, accKP nkeys.KeyPair) *natsclient.Conn 
 	return nc
 }
 
-// TestMultiNodeDelivery is the chainmanager capstone: two nodes (a publisher peer
-// server + a subscriber Service), each with a REAL nats operator writing grants
-// via the production DirPublisher to a shared dir, negotiate a subscription over
+// TestMultiNodeDelivery is the end-to-end chainmanager test: two nodes (a
+// publisher peer server + a subscriber Service), each with a REAL nats operator
+// writing grants via the production DirPublisher to a shared dir, negotiate a subscription over
 // the real wireauth peer round-trip; a real nats-server then enforces those
 // operator-written grants so a publish on the publisher account is delivered to
 // the subscriber account cross-account (positive), while a subject the publisher
@@ -145,7 +145,7 @@ func TestMultiNodeDelivery(t *testing.T) {
 	}
 
 	// All grants established BEFORE any data-plane client connects (cold-account /
-	// first-lookup semantics — D-x5). Bridge them into the broker's resolver.
+	// first-lookup semantics). Bridge them into the broker's resolver.
 	mr := bridgeDirToResolver(t, sharedDir)
 	natsSrv := natstest.RunServer(&server.Options{
 		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,

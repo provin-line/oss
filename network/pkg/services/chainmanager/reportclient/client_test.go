@@ -188,7 +188,7 @@ func TestReportEmitHealth_MismatchedKey_Unauthenticated(t *testing.T) {
 	}
 }
 
-// --- P1-C: ReportEmitHealth is mounted behind L1 authz IN ADDITION to the L2
+// --- ReportEmitHealth is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises (newHarness deliberately mounts NO
 // L1 interceptor, isolating the wireauth layer). These tests add it back —
 // production's actual mounting (internal/netcompose.BuildHandler's

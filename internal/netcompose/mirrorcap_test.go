@@ -1,6 +1,6 @@
 package netcompose
 
-// Task 5 review (M-1): MirrorLogSegment's mount cap must be derived from
+// MirrorLogSegment's mount cap must be derived from
 // tlog-mirror.max-batch-bytes, not borrowed from max-credential-size (an
 // unrelated class — the single-VC StoreVC/fetch path). This file proves it
 // through the REAL BuildHandler + REAL connect transport, not a direct Go

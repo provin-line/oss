@@ -14,7 +14,7 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────
-// pdpCheck (P2 Codex fix, branch review) — mirrors internal/netcompose.
+// pdpCheck — mirrors internal/netcompose.
 // PDPCheck's backend switch and reachability semantics exactly.
 // ─────────────────────────────────────────────────────────────────────────
 

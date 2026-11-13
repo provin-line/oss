@@ -207,7 +207,7 @@ func TestResolvePayload_NotFound(t *testing.T) {
 	}
 }
 
-// TestResolvePayload_NeverPresentsBearer is the P1-C anti-leak proof: even
+// TestResolvePayload_NeverPresentsBearer is the anti-leak proof: even
 // when Config.Bearer is set (for Retain, whose target is THIS node's own
 // fixed StoreEndpoint), ResolvePayload — which dials whichever endpoint a
 // caller passes, an arbitrary and potentially untrusted publisher — must
@@ -231,7 +231,7 @@ func TestResolvePayload_NeverPresentsBearer(t *testing.T) {
 	}
 }
 
-// --- F10: per-fetch total + idle deadlines (independent of caller ctx) ---
+// --- per-fetch total + idle deadlines (independent of caller ctx) ---
 
 const fetchTestHash = "sha256:" +
 	"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"

@@ -168,7 +168,7 @@ func registerReq(t *testing.T, signer crypto.Signer, signPub []byte, token strin
 	return req
 }
 
-// --- authz enforcement (slice-3 pattern) ------------------------------------
+// --- authz enforcement ------------------------------------
 
 func TestEnforcement_Allowed(t *testing.T) {
 	svc, signer, pub := newSvc(t)

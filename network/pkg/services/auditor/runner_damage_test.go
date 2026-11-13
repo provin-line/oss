@@ -1,8 +1,7 @@
 package auditor
 
-// Damage-path behaviors of the error-sentinel store contracts (the
-// evidence-persistence slice's Codex-High-1 gate): damage must never be read
-// as absence anywhere in the audit path.
+// Damage-path behaviors of the error-sentinel store contracts: damage must
+// never be read as absence anywhere in the audit path.
 
 import (
 	"context"
@@ -110,8 +109,9 @@ func (missingHeads) ResolveVC(context.Context, string) (*vc.PipelinePassCredenti
 // store yet — and once retries exhaust without the head ever resolving, the
 // runner finalizes it as UNRESOLVABLE: a RESOLUTION outcome (chain assembly
 // never even obtained the evidence), distinct from a VERIFICATION outcome
-// (Indeterminate/Failed/Verified). Before this, a definitive miss was dropped
-// silently with no verdict at all — indistinguishable from never-registered.
+// (Indeterminate/Failed/Verified). A definitive miss is never dropped
+// silently with no verdict at all, which would be indistinguishable from
+// never-registered.
 func TestAuditOne_HeadUnreadableRetained_MissDropped(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) {
 		t.Fatal("VerifyChain must not be called without a resolvable head")

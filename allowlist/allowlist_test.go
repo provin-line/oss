@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Match is segment-aware over the ":"-delimited dplaax DID (D-c5): literal
+// Match is segment-aware over the ":"-delimited dplaax DID: literal
 // segments match exactly, "*" matches exactly one interior segment, a trailing
 // "*" matches zero-or-more remaining segments, and the did:dplaax method prefix
 // must be literal. It is fail-closed on both sides — a malformed pattern is an
@@ -77,7 +77,7 @@ func TestMatch_InvalidPattern(t *testing.T) {
 		// Dead fixed (non-trailing-*) patterns: a pattern with no trailing
 		// wildcard must have a valid DID arity (owner=5 / pipeline=7 / process=9
 		// segments), else no dplaax DID can ever match it and storing it as a rule
-		// would silently deny the intended subscriber (Codex P2). The minimum DID
+		// would silently deny the intended subscriber. The minimum DID
 		// is the 5-segment owner.
 		{"fixed too short, registry only", "did:dplaax:reg"},
 		{"fixed too short, no accountID", "did:dplaax:reg:org"},
@@ -87,7 +87,7 @@ func TestMatch_InvalidPattern(t *testing.T) {
 
 		// Unsafe literal segments: a non-wildcard literal that is not a dplaax
 		// safe-segment can never appear in a real candidate, so it is a dead rule —
-		// fail-loud at the boundary instead of silently never-matching (Codex Med).
+		// fail-loud at the boundary instead of silently never-matching.
 		{"literal with slash", "did:dplaax:reg:org:ac/me"},
 		{"literal all dots", "did:dplaax:reg:org:.."},
 		{"literal with space", "did:dplaax:reg:org:ac me"},

@@ -208,7 +208,7 @@ func TestAggregateComplete_LinearPathUnchanged(t *testing.T) {
 }
 
 // A v1 manifest smuggling a receipts member is rejected by construction
-// (per-version exact wire structs — Codex Med-1).
+// (per-version exact wire structs).
 func TestVerify_V1ManifestWithReceipts_Rejected(t *testing.T) {
 	f := buildFixture(t, originDID, childDID)
 	dir, _ := exportFixture(t, f)
@@ -300,7 +300,7 @@ func TestExportAggregateComplete_MissingReceiptFailsExport(t *testing.T) {
 // A chain-preserving credential carrying a commitment over its predecessor
 // needs NO receipt: the predecessor is already in the bundle
 // (all-consumed semantics) — pinned so the shape the library permits stays
-// exportable (Codex High-1).
+// exportable.
 func TestAggregateComplete_ChainPreservingCommitment(t *testing.T) {
 	gen := ed25519.Generator{}
 	ks := newMemKeyStore()
@@ -461,7 +461,7 @@ func TestAggregateComplete_NestedAggregates(t *testing.T) {
 
 // A spineless extra credential is an integrity error under the union rule —
 // including via a self-referential receipt, which must not mint a
-// credential its own "spine" (Claude Minor-4).
+// credential its own "spine".
 func TestVerifyV2_SpinelessCredential_UnionRule(t *testing.T) {
 	f := buildAggFixture(t)
 	dir, _ := exportAggComplete(t, f)

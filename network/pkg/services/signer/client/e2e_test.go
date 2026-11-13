@@ -74,7 +74,7 @@ func wireSigner(t *testing.T) (sig crypto.Signer, signPub, authPub []byte) {
 
 // The headline proof: a VC proof created with the client crypto.Signer — keys
 // never leave the server — verifies. CreateProof passes raw hashData to Sign and
-// multibase-encodes the raw signature the wire returns (D-s1), so the whole KMS
+// multibase-encodes the raw signature the wire returns, so the whole KMS
 // seam round-trips through Create→wire→Verify.
 func TestE2E_VCProof_RoundTripsThroughWire(t *testing.T) {
 	clientSigner, signPub, _ := wireSigner(t)

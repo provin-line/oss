@@ -107,7 +107,7 @@ func (o originLog) Checkpoint(context.Context) (*tlog.Checkpoint, error) {
 	return &tlog.Checkpoint{Origin: o.origin, Size: 1, Head: "h", SignedBy: "did:x#s"}, nil
 }
 
-// TestCheckBatchCaps pins the D-T2 rule 5 cap POLICY in the service (the
+// TestCheckBatchCaps pins the cap POLICY in the service (the
 // single definition both the handler's pre-auth guard and MirrorSegment's
 // defense-in-depth check call). A map-only node has no caps; a configured node
 // rejects over-count and over-bytes with ErrCapExceeded and admits a

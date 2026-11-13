@@ -10,7 +10,7 @@ import (
 
 // In the default (production) build, the noop transport is refused: the noop
 // operator is not compiled in, so ChainOperator returns an error and the boot
-// fails closed (slice-15 D-m2 / slice-11 D-p2) — main calls ChainOperator before
+// fails closed — main calls ChainOperator before
 // BuildHandler and fatals on the error. Tagged !dev because a dev build
 // legitimately accepts noop (with the flag).
 func TestChainOperator_NoopRequiresDevBuild(t *testing.T) {

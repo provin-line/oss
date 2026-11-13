@@ -125,7 +125,7 @@ func TestLoad_NATS_MalformedResolverBaseURL(t *testing.T) {
 	op, _ := nkeys.CreateOperator()
 	opSeed, _ := op.Seed()
 	// resolver-base-url set to a number → type mismatch must fail boot, not be
-	// silently ignored (convergent review).
+	// silently ignored.
 	conf := `provin.network.chain {
   transport = "nats"
   nats {

@@ -27,7 +27,7 @@ func pipelineConf(endpoint, bearer, body string) string {
 // adjacentSinkLoop is a valid consuming (sink) loop. The node-level vc-store-endpoint /
 // vc-store-bearer validation below is independent of the loop's verification strategy
 // (it gates publication, not the per-loop check), so these tests drive it through an
-// adjacent loop — slice-17j retired "full", which is now rejected (see below).
+// adjacent loop — "full" is not a valid strategy and is rejected (see below).
 const adjacentSinkLoop = `
   archive {
     role = "sink"
@@ -40,7 +40,7 @@ const adjacentSinkLoop = `
   }
 `
 
-// fullSinkLoop declares the retired "full" strategy — used only to assert it is rejected.
+// fullSinkLoop declares the unsupported "full" strategy — used only to assert it is rejected.
 const fullSinkLoop = `
   archive {
     role = "sink"
@@ -53,7 +53,7 @@ const fullSinkLoop = `
   }
 `
 
-// slice-17j: "full" is retired. A loop declaring it is rejected as an unknown
+// "full" is not a supported strategy. A loop declaring it is rejected as an unknown
 // verification-strategy at config load — and rejected for THAT reason (not for a missing
 // endpoint/bearer, which load later), so endpoint + bearer are supplied to isolate the cause.
 func TestLoad_FullStrategy_Rejected(t *testing.T) {
@@ -100,7 +100,7 @@ func TestLoad_VCStoreEndpoint_RejectsQueryFragment(t *testing.T) {
 	}
 }
 
-// An adjacent-only config still loads with no vc-store-endpoint (17d unaffected) —
+// An adjacent-only config still loads with no vc-store-endpoint —
 // the bearer alone satisfies the consuming-loop requirement (endpoint stays optional).
 func TestLoad_AdjacentNeedsNoEndpoint(t *testing.T) {
 	cfg := loadWith(t, withBearer(loopsConf(validSinkLoop)))

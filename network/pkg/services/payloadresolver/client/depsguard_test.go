@@ -7,7 +7,7 @@ import (
 )
 
 // TestProdDeps_NoPayloadresolverRootInClient guards the architectural
-// promise PR3b Task 2 sets up: payloadresolver/client depends on the
+// promise that payloadresolver/client depends on the
 // payloadresolver/wirecontract LEAF for its shared op name and signed-view
 // builder, never the payloadresolver SERVICE ROOT (which carries the
 // store/handler domain logic) — so a future cmd/pipeline binary can import

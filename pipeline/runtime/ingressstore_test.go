@@ -41,8 +41,8 @@ func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 // audit queue so tests can inspect it.
 //
 // The predecessor-pool / resolvability / out-of-order-draining /
-// malformed-previousCredential semantics that used to be exercised here
-// against a REAL *vcresolver.Service are network/pkg/services/vcresolver's
+// malformed-previousCredential semantics of a REAL *vcresolver.Service are
+// network/pkg/services/vcresolver's
 // own behavior (serviceIngressStore is a thin pass-through over
 // IngressStorer), already covered by that package's own test suite
 // (vcresolver_test.go: TestStoreVC_EnqueuesUnheldPredecessor,
@@ -50,8 +50,8 @@ func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 // TestStoreVC_StoreAndResolve, TestStoreVC_NullPreviousCredential_AcceptedAsOrigin,
 // et al.) — this package no longer imports network/pkg/services/vcresolver at
 // all (network/ and pipeline/ never import each other, AGENTS.md rule 2), so
-// those tests moved with the type they test, not duplicated here. What
-// remains is serviceIngressStore's OWN added value: does it forward the
+// those tests live with the type they test, not duplicated here. What this
+// file covers is serviceIngressStore's OWN added value: does it forward the
 // store's returned body address to the audit registrar, and is that
 // registration fail-closed.
 func newTestIngressSetup() (*serviceIngressStore, *memAuditQueue) {
@@ -61,7 +61,7 @@ func newTestIngressSetup() (*serviceIngressStore, *memAuditQueue) {
 }
 
 // TestServiceIngressStore_RegistersHeadForAudit asserts the stored head's content address
-// is registered in the audit queue (slice-17h, D-17h-2).
+// is registered in the audit queue.
 func TestServiceIngressStore_RegistersHeadForAudit(t *testing.T) {
 	store, queue := newTestIngressSetup()
 
@@ -78,8 +78,8 @@ func TestServiceIngressStore_RegistersHeadForAudit(t *testing.T) {
 	}
 }
 
-// TestServiceIngressStore_RegistersWireVariantID asserts the seam widening
-// (task-3): the audit registrar receives the FULL StoredHead the store
+// TestServiceIngressStore_RegistersWireVariantID asserts the seam: the audit
+// registrar receives the FULL StoredHead the store
 // returned, not just the body address — a future wire audit registration
 // needs the variant id, and this is where it would otherwise silently be
 // dropped.

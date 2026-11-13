@@ -12,7 +12,7 @@ import (
 )
 
 // aggSigner builds a real aggregate signer: transformationClaim provin:aggregate
-// with the audit-reachable canonical configured (D-17k-4/5). The aggregate path is
+// with the audit-reachable canonical configured. The aggregate path is
 // always commitment-bearing, so SourceRootCanonical is required at construction even
 // though AuditReachable (the chained flag) is unset.
 func aggSigner(t *testing.T) *vcdid.Signer {
@@ -57,7 +57,7 @@ const (
 	srcBIssuer = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:b:process:b1"
 )
 
-// TestSigner_SignAggregateFirstDrop_CommitsAndVerifies is the slice-17k capstone: a
+// TestSigner_SignAggregateFirstDrop_CommitsAndVerifies checks that a
 // real aggregate signer folds a consumed set of two signed sources (distinct issuers)
 // into a FirstDrop whose source commitment a verifier recomputes to Verified, with
 // InputHash and previousCredential structurally absent and claim provin:aggregate.
@@ -82,8 +82,7 @@ func TestSigner_SignAggregateFirstDrop_CommitsAndVerifies(t *testing.T) {
 	}
 
 	// InputHash and previousCredential are absent in the WIRE BODY — the typed
-	// accessors collapse absent and empty to "", so check the raw keys (D-17k-2,
-	// spec-review L3).
+	// accessors collapse absent and empty to "", so check the raw keys.
 	csub, ok := cred.Body()["credentialSubject"].(map[string]any)
 	if !ok {
 		t.Fatal("credentialSubject missing")
@@ -92,8 +91,8 @@ func TestSigner_SignAggregateFirstDrop_CommitsAndVerifies(t *testing.T) {
 		t.Error("aggregate FirstDrop wire body carries inputHash (must be absent)")
 	}
 	// previousCredential is written inside credentialSubject (credential.go), so
-	// check there, not the body top level (review #1 — the top-level key is always
-	// absent and would make this assertion vacuous).
+	// check there, not the body top level (the top-level key is always absent
+	// and would make this assertion vacuous).
 	if _, present := csub["previousCredential"]; present {
 		t.Error("aggregate FirstDrop credentialSubject carries previousCredential (must be absent)")
 	}
@@ -136,7 +135,7 @@ func TestSigner_SignAggregateFirstDrop_BatchOfOne(t *testing.T) {
 }
 
 // A duplicate-content source is caller misuse — surfaced as an error, never silently
-// deduped (D-17k-7).
+// deduped.
 func TestSigner_SignAggregateFirstDrop_DuplicateSource(t *testing.T) {
 	s := aggSigner(t)
 	src := signedSource(t, srcAIssuer, "a")
@@ -146,7 +145,7 @@ func TestSigner_SignAggregateFirstDrop_DuplicateSource(t *testing.T) {
 	}
 }
 
-// A nil source element fails closed (an error, not a panic) — spec-review M2.
+// A nil source element fails closed (an error, not a panic).
 func TestSigner_SignAggregateFirstDrop_NilSource(t *testing.T) {
 	s := aggSigner(t)
 	if _, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out",
@@ -156,8 +155,7 @@ func TestSigner_SignAggregateFirstDrop_NilSource(t *testing.T) {
 }
 
 // An empty consumed set yields a valid empty-DerivedFrom commitment (legal on a chain
-// origin); whether to emit on an empty window is the runtime's policy, not the signer's
-// (D-17k-8).
+// origin); whether to emit on an empty window is the runtime's policy, not the signer's.
 func TestSigner_SignAggregateFirstDrop_EmptySet(t *testing.T) {
 	s := aggSigner(t)
 	cred, err := s.SignAggregateFirstDrop(context.Background(), nil, "sha256:out", nil)
@@ -171,7 +169,7 @@ func TestSigner_SignAggregateFirstDrop_EmptySet(t *testing.T) {
 }
 
 // A signer whose configured claim is NOT provin:aggregate cannot mint the aggregate
-// shape, even with SourceRootCanonical set (spec-review M1 / D-17k-4).
+// shape, even with SourceRootCanonical set.
 func TestSigner_SignAggregateFirstDrop_WrongClaimRejected(t *testing.T) {
 	b, _ := fixture(t)
 	s := newSigner(t, b, func(c *vcdid.Config) {
@@ -184,10 +182,11 @@ func TestSigner_SignAggregateFirstDrop_WrongClaimRejected(t *testing.T) {
 	}
 }
 
-// An aggregate-configured signer must mint ONLY through SignAggregateFirstDrop: the
-// legacy SignFirstDrop / SignChainPreserving paths fail closed, so an aggregate signer
-// cannot emit a malformed provin:aggregate credential (inputHash present / no
-// commitment, or a previousCredential link). Binds claim↔method both ways (review P2-b).
+// An aggregate-configured signer must mint ONLY through
+// SignAggregateFirstDrop: the legacy SignFirstDrop / SignChainPreserving paths
+// fail closed, so an aggregate signer cannot emit a malformed provin:aggregate
+// credential (inputHash present / no commitment, or a previousCredential
+// link). Binds claim↔method both ways.
 func TestSigner_AggregateSigner_RejectsLegacyPaths(t *testing.T) {
 	s := aggSigner(t)
 	if _, err := s.SignFirstDrop(context.Background(), nil, "sha256:in", "sha256:out"); err == nil {
@@ -200,7 +199,7 @@ func TestSigner_AggregateSigner_RejectsLegacyPaths(t *testing.T) {
 }
 
 // Constructing an aggregate-claim signer without SourceRootCanonical is a loud
-// construction error (D-17k-5), decoupled from the chained AuditReachable flag.
+// construction error, decoupled from the chained AuditReachable flag.
 func TestNewSigner_AggregateRequiresCanonical(t *testing.T) {
 	b, _ := fixture(t)
 	cfg := vcdid.Config{

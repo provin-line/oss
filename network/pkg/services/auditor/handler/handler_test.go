@@ -62,9 +62,10 @@ func get(t *testing.T, svc handler.Service) (*auditpb.GetAuditStatusResponse, er
 	return resp.Msg, nil
 }
 
-// A real linear-chain verdict projects verbatim: the three-state Overall/Axes (with the
-// Failed→FAILED(1) shift), notations, RFC3339 audited_at, and — because 17h-era records
-// never set SourceCommitmentEvaluated — source_commitment is ABSENT (presence == coverage).
+// A real linear-chain verdict projects verbatim: the three-state Overall/Axes
+// (with the Failed→FAILED(1) shift), notations, RFC3339 audited_at, and —
+// because the record leaves SourceCommitmentEvaluated false — source_commitment
+// is ABSENT (presence == coverage).
 func TestGetAuditStatus_LinearVerdictProjection(t *testing.T) {
 	rec := auditor.AuditRecord{
 		Overall: vc.ConfidenceVerified,
@@ -107,15 +108,15 @@ func TestGetAuditStatus_LinearVerdictProjection(t *testing.T) {
 	if got, want := msg.GetAuditedAt(), "2023-11-14T22:13:20Z"; got != want {
 		t.Errorf("audited_at = %q, want %q (RFC3339 UTC, second precision)", got, want)
 	}
-	// Coverage: linear-only record ⇒ source_commitment absent (the FCoT-#3 invariant).
+	// Coverage: a linear-only record carries no source_commitment verdict.
 	if msg.GetSourceCommitment() != nil {
 		t.Errorf("source_commitment = %+v, want nil (SourceCommitmentEvaluated false)", msg.GetSourceCommitment())
 	}
 }
 
-// An evaluated aggregate record (slice-17o) emits the source_commitment ScopeVerdict:
+// An evaluated aggregate record emits the source_commitment ScopeVerdict:
 // confidence from the DISTINCT domain field (not Overall), its own per-scope notations, and
-// no axes (VerifySourceCommitment yields a single state outside the three axes, 17i D-17i-2).
+// no axes (VerifySourceCommitment yields a single state outside the three axes).
 func TestGetAuditStatus_SourceCommitmentEmittedWhenEvaluated(t *testing.T) {
 	rec := auditor.AuditRecord{
 		Overall:                   vc.ConfidenceVerified, // linear
@@ -220,15 +221,14 @@ func TestGetAuditStatus_UnresolvableServed(t *testing.T) {
 }
 
 // TestGetAuditStatus_UnresolvableServed_FileBackedStore is
-// TestGetAuditStatus_UnresolvableServed's wire-level regression check (P1-B):
-// the test above drives the handler against fakeService, a plain in-memory
-// struct that never serializes anything, so it could never have caught the
-// verdictEnvelope bug where Unresolvable had no on-disk field and Put silently
-// dropped it. This test instead goes through the REAL
+// TestGetAuditStatus_UnresolvableServed's wire-level check: the test above
+// drives the handler against fakeService, a plain in-memory struct that never
+// serializes anything, so it cannot see whether Unresolvable has an on-disk
+// field that Put keeps. This test instead goes through the REAL
 // auditor.StatusService over a REAL filestore.StatusStore — Put, then a
-// point GetAuditStatus through the handler — so a regression of that exact
-// bug (Unresolvable surviving in memory but not on disk) fails here even
-// though runner_damage_test.go's equivalent coverage uses NewMemStatusStore
+// point GetAuditStatus through the handler — so a store that keeps
+// Unresolvable in memory but not on disk fails here, even though
+// runner_damage_test.go's equivalent coverage uses NewMemStatusStore
 // (auditor package, which cannot import filestore without a cycle — filestore
 // imports auditor — hence this lives in the handler package instead, the
 // first external package both auditor and auditor/filestore are visible to).

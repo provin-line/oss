@@ -13,11 +13,11 @@ import (
 // option. A missing option silently disables the authorization check, so this
 // catches an accidentally-unprotected signing RPC at build time — the
 // wire-visible authorization contract is frozen the moment signer.proto is
-// written (slice-5 Phase A), before any handler exists.
+// written, before any handler exists.
 //
-// Beyond presence, the exact resource/action values are asserted: D-s2 freezes
-// `signer:sign-vc` / `signer:sign-wire` as wire-visible names, and a typo or a
-// swap between the two domains would silently mis-route authorization while
+// Beyond presence, the exact resource/action values are asserted:
+// `signer:sign-vc` / `signer:sign-wire` are wire-visible names, and a typo or
+// a swap between the two domains would silently mis-route authorization while
 // still passing a presence-only check.
 func TestSignerService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{

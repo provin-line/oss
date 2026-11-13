@@ -56,9 +56,8 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────
 // pipelineRuntimeConfigFrom — the transport guard + a basic field-level
-// round-trip (the full per-role field mapping originally mirrored
-// cmd/standalone's own runtimewiring_test.go golden test, now retired; this
-// remains a lighter pin, not a full golden-mapping fixture).
+// round-trip (the full per-role field mapping is not covered here; this is
+// a lighter pin, not a full golden-mapping fixture).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPipelineRuntimeConfigFrom_NonNATSTransportWithLoopsErrors(t *testing.T) {
@@ -568,11 +567,11 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// payloadClientFactory / wirePayloadStore — the D9 fix: RetainPayload
+// payloadClientFactory / wirePayloadStore — RetainPayload
 // requires owner_did == the wireauth-proven signer (storehandler's
 // errOwnerMismatch), so a node running more than one producing loop (each
 // with its OWN output subject) needs one signing client PER owner, not one
-// shared node-identity client. This harness proves the fix directly: a real
+// shared node-identity client. This harness proves it directly: a real
 // storehandler.Handler + wireauth.Verifier + memstore over httptest, driven
 // through wirePayloadStore for TWO DIFFERENT owner DIDs sharing ONE
 // keystore — both retains must succeed, each recorded under its OWN owner.
@@ -649,11 +648,11 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 	return &payloadRetainHarness{store: store, ks: ks, url: srv.URL, httpc: srv.Client()}
 }
 
-// TestWirePayloadStore_SignsEachRetainAsItsOwnOwner is the D9 fix's core
+// TestWirePayloadStore_SignsEachRetainAsItsOwnOwner is the core
 // proof: ONE wirePayloadStore (backed by ONE payloadClientFactory, ONE
 // shared keystore) retains payloads for TWO DIFFERENT owner DIDs — the exact
 // topology a node running two producing loops with different output
-// subjects needs. Before the fix, ONE shared client signed every retain as a
+// subjects needs. A single shared client would sign every retain as a
 // single node identity, so at most one of these two calls could ever
 // satisfy storehandler's owner_did == proven-signer requirement; both must
 // now succeed, each recorded under its OWN owner.
@@ -689,7 +688,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 	}
 
 	// The factory must have cached (and reused) a distinct client per owner —
-	// never one shared client the way the pre-fix wiring did.
+	// never one shared client.
 	if factory.For(payloadOwnerA) == factory.For(payloadOwnerB) {
 		t.Error("factory returned the SAME client for two different owners")
 	}
@@ -697,7 +696,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 
 // TestWirePayloadStore_MissingOwnerKey_Errors proves a keystore that never
 // held a key for the claimed owner fails the retain (no silent bypass) —
-// the exact runtime symptom the D9 boot preflight (main.go) exists to catch
+// the exact runtime symptom the payload-retain boot preflight (main.go) exists to catch
 // before it ever reaches this wire call.
 func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA) // payloadOwnerB's key is never provisioned
@@ -710,12 +709,13 @@ func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// payloadClientFactory's chunk size (P2 Codex fix, branch review): the
-// factory previously always used payloadclient.DefaultRetainChunkSize (256
-// KiB) regardless of pipeCfg.MaxRetainChunkSize, so a registry configured
-// with a SMALLER cap rejected every frame (ResourceExhausted), aborting the
-// whole emission. newPayloadRetainHarnessWithChunkCap reproduces production's
-// EXACT server-side mount (internal/netcompose/server.go's retainChunkCap :=
+// payloadClientFactory's chunk size: the factory must honor
+// pipeCfg.MaxRetainChunkSize rather than always using
+// payloadclient.DefaultRetainChunkSize (256 KiB), otherwise a registry
+// configured with a SMALLER cap rejects every frame (ResourceExhausted),
+// aborting the whole emission. newPayloadRetainHarnessWithChunkCap
+// reproduces production's EXACT server-side mount
+// (internal/netcompose/server.go's retainChunkCap :=
 // connect.WithReadMaxBytes(maxRetainChunkSize)) so this is a real end-to-end
 // proof, not just a Config struct-literal assertion.
 // ─────────────────────────────────────────────────────────────────────────
@@ -766,9 +766,9 @@ func newPayloadRetainHarnessWithChunkCap(t *testing.T, chunkCap int, owners ...s
 }
 
 // TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize proves the
-// fix directly: a factory built with the DEFAULT (unconfigured) chunk size
+// configured chunk size is honored: a factory built with the DEFAULT (unconfigured) chunk size
 // sends 256 KiB frames regardless of a small server cap, tripping
-// ResourceExhausted on the very first chunk (pinning the PRE-FIX bug); a
+// ResourceExhausted on the very first chunk; a
 // factory built with pipeCfg.MaxRetainChunkSize (here, the same value as the
 // server's cap) keeps every frame under it, and the retain succeeds.
 func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
@@ -821,12 +821,11 @@ func TestRetainChunkSizeFor(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// preflightPayloadRetainKeys — the D9 boot preflight (main.go's Boot guard
+// preflightPayloadRetainKeys — the payload-retain boot preflight (main.go's Boot guard
 // 5): every producing loop's own output subject must already have a #auth
 // key in the keystore BEFORE this binary starts its data plane, since a
 // missing key would otherwise only surface as a runtime RetainPayload
-// failure that aborts the whole emission (dataplane.go's payloadWiring,
-// D-6).
+// failure that aborts the whole emission (dataplane.go's payloadWiring).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPreflightPayloadRetainKeys_AllKeysPresent_OK(t *testing.T) {
@@ -887,11 +886,11 @@ func TestPreflightPayloadRetainKeys_NoProducingLoops_OK(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// preflightWireOnlySignerKeys — the D9 extension (main.go's Boot guard 6,
-// branch review Important finding): nodeDID's own key (RegisterAuditHead /
-// PayloadResolver) and every DURABLE custody log's checkpoint-signer key,
-// both previously discoverable only at first use (see the function's own
-// doc for why filelog's checkpoint arming cannot catch this at boot).
+// preflightWireOnlySignerKeys — the main.go Boot guard 6 extension: nodeDID's
+// own key (RegisterAuditHead / PayloadResolver) and every DURABLE custody
+// log's checkpoint-signer key, both would otherwise be discoverable only at
+// first use (see the function's own doc for why filelog's checkpoint arming
+// cannot catch this at boot).
 // ─────────────────────────────────────────────────────────────────────────
 
 const (
@@ -1240,7 +1239,7 @@ func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
 // TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns
 // proves RegisterEvidence recovers via retry, each attempt re-signed. Put
 // also calls ResolveCredential first (over a real VCResolverService,
-// unwrapped — not in this task's loss-sensitive matrix), so this harness
+// unwrapped — not part of the loss-sensitive matrix), so this harness
 // mounts BOTH a real VCResolverService and the flaky AuditService on one mux.
 func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t *testing.T) {
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(vcresolvermemstore.NewBackend()), vcresolvermemstore.NewPool())

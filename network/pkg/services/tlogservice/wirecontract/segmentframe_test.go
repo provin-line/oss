@@ -37,7 +37,7 @@ func TestFrameUnframeRoundTrip(t *testing.T) {
 
 func TestUnframeRejectsOverRecordCapDuringScan(t *testing.T) {
 	// maxRecords+1 zero-length frames -> ErrCapExceeded, and the scan stops at
-	// the cap (never materializing an unbounded slice — the reshape's point).
+	// the cap (never materializing an unbounded slice).
 	const maxRecords = 4
 	framed := FrameRecordPayloads([][]byte{{}, {}, {}, {}, {}}) // 5 > 4
 	got, err := UnframeRecordPayloads(framed, maxRecords, 1<<20)

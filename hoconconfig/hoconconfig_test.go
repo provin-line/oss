@@ -522,7 +522,7 @@ func TestMultipleReferences(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F1. StringList — URL and DID values round-trip without quote wrapping;
+// StringList — URL and DID values round-trip without quote wrapping;
 //     non-string array elements → ErrTypeMismatch.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -566,7 +566,7 @@ func TestStringListIntElementsTypeMismatch(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F2. Scalar-parent lookup → ErrTypeMismatch (not panic); Has does not panic.
+// Scalar-parent lookup → ErrTypeMismatch (not panic); Has does not panic.
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestScalarParentNopanicString(t *testing.T) {
@@ -601,7 +601,7 @@ func TestScalarParentNopanicHas(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F3. String round-trip — value with special chars survives without corruption.
+// String round-trip — value with special chars survives without corruption.
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestStringSpecialCharsRoundTrip(t *testing.T) {
@@ -624,7 +624,7 @@ func TestStringSpecialCharsRoundTrip(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F4. Present-but-null: Has → true; typed accessors → ErrTypeMismatch.
+// Present-but-null: Has → true; typed accessors → ErrTypeMismatch.
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestNullValueBehavior(t *testing.T) {
@@ -647,7 +647,7 @@ func TestNullValueBehavior(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// F5. go test -count=2: covered by the uniq() helper applied to all
+// go test -count=2: covered by the uniq() helper applied to all
 //     RegisterPackageReference calls above. No additional test needed here;
 //     the suite itself IS the test — run with -count=2 to verify.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -683,15 +683,15 @@ func TestStringMap(t *testing.T) {
 	}
 }
 
-// The defaults that a parser defect had silently deleted. gurkankaymak/hocon
-// let a '#' comment containing '//' swallow the FOLLOWING line, so a URL in an
-// explanatory comment removed the setting written under it — with no parse
-// error, in files that looked fine. These three had been nil in shipped
-// reference config; this pins that they resolve.
+// Defaults declared next to a '#' comment that contains a URL must resolve.
+// A parser that lets a '#' comment containing '//' swallow the FOLLOWING line
+// would drop the setting written under a URL in an explanatory comment — with
+// no parse error, in files that look fine. This pins that three such
+// defaults resolve.
 //
-// The comments above them still carry their URLs, which is the point: the fix
-// was to use a parser that implements the spec, not to police what may be
-// written in a comment.
+// The comments above them still carry their URLs, which is the point: the
+// parser implements the spec, so what may be written in a comment is not
+// policed.
 func TestReferenceDefaultsSurviveURLComments(t *testing.T) {
 	hoconconfig.RegisterPackageReference(uniq("pkg-urlcomment"), `
 provin.test.urlcomment {

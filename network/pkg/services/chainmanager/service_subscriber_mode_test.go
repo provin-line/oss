@@ -8,7 +8,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
-// Subscribe's AddImport LOCAL subject is now publisherDID (D-4 rename), NOT
+// Subscribe's AddImport LOCAL subject is publisherDID, NOT
 // the remote subject: for inline this is unobservable (remote == local ==
 // publisherDID already), so this pins it directly via fakeInfra.importedLocal.
 func TestSubscribe_LocalSubjectIsPublisherDID_Inline(t *testing.T) {
@@ -49,7 +49,7 @@ func TestSubscribe_LocalSubjectIsPublisherDID_ByReference(t *testing.T) {
 	}
 }
 
-// --- Mixed-mode invariant, subscriber side (authoritative, D-4) ------------
+// --- Mixed-mode invariant, subscriber side (authoritative) ---------------
 
 // Subscribe rejects a second subscription to the SAME publisher regardless of
 // the requested mode — mode is per-subscription immutable; changing it means
@@ -95,8 +95,8 @@ func TestSubscribe_AfterUnsubscribe_CanResubscribeDifferentMode(t *testing.T) {
 // The duplicate check MUST hold under concurrency: the unlocked pre-RPC check
 // is a fast-fail only, and a concurrent Subscribe that commits between that
 // check and the lock must be caught by the locked re-check — the loser
-// compensates its already-registered remote side and wires nothing locally
-// (multi-agent-review convergent finding, 2026-07-12). Deterministic replay:
+// compensates its already-registered remote side and wires nothing locally.
+// Deterministic replay:
 // the fake peer's onRegister hook plays the concurrent winner by persisting a
 // competing subscription right after the remote side-effect commits.
 func TestSubscribe_ConcurrentDuplicate_RecheckUnderLock(t *testing.T) {

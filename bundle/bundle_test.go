@@ -431,8 +431,8 @@ func TestVerify_TamperedCredentialBody(t *testing.T) {
 func TestVerify_TamperedProofBytes_BodyUnchanged(t *testing.T) {
 	// The content address covers the BODY only — replaced proof bytes leave
 	// the credential's hash intact and are caught by the files digests
-	// (Codex High-2: the machinery that makes the bundle digest cover
-	// signatures, not just data flow).
+	// (this is what makes the bundle digest cover signatures, not just
+	// data flow).
 	f := buildFixture(t, originDID, childDID)
 	dir, _ := exportFixture(t, f)
 	mutateJSONFile(t, filepath.Join(dir, "credentials/"+hexOf(f.head)+".json"), func(m map[string]any) {
@@ -530,7 +530,7 @@ func TestVerify_MissingOwnerDoc_NotVerified(t *testing.T) {
 	// Consistently-removed owner document: the bundle is structurally intact
 	// but the authority chain cannot terminate — a VERIFICATION outcome
 	// (closed world: absence in an archive is definitive), not a structural
-	// error. Pins S8 rider (a): signing keys alone are not a usable archive.
+	// error. Signing keys alone are not a usable archive.
 	f := buildFixture(t, originDID, childDID)
 	dir, _ := exportFixture(t, f)
 	ownerRel := "diddocs/" + registryID + "/did/org/acme/did.json"
@@ -556,7 +556,7 @@ func TestVerify_MissingOwnerDoc_NotVerified(t *testing.T) {
 	}
 }
 
-// --- review fixes (multi-agent-review 2026-07-06) ----------------------------
+// --- archive file and manifest integrity, export round trip ------------------
 
 func TestVerify_SymlinkedListedFile_Rejected(t *testing.T) {
 	// The symlink target holds the CORRECT bytes — the rejection must be for

@@ -35,7 +35,7 @@ import (
 	_ "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	_ "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
 	// dplaax/payload/v1 above registers both PayloadService (L2, exempt) and
-	// PayloadStoreService (L1-gated, D7 evidence write surface) from the same
+	// PayloadStoreService (L1-gated, evidence write surface) from the same
 	// file — no separate blank import needed.
 )
 

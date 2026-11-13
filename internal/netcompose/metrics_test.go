@@ -1,23 +1,19 @@
 package netcompose
 
-// Relocated from cmd/standalone/metrics_test.go (PR3c: cmd/standalone
-// retired). BuildMetricsHandler/MaybeMountMetrics/WithMetrics are this
+// BuildMetricsHandler/MaybeMountMetrics/WithMetrics are this
 // package's own exported functions; these tests exercise them directly with
-// fake counters, with no cmd/standalone-specific composition. Before this
-// move, cmd/standalone/metrics_test.go was the ONLY test coverage any of the
-// three had anywhere in the repo — cmd/network calls MaybeMountMetrics from
-// its own main() but carried no unit test of the bridge's own family/gate
-// contract.
+// fake counters. They are the only test coverage any of the three has —
+// cmd/network calls MaybeMountMetrics from its own main() but carries no
+// unit test of the bridge's own family/gate contract.
 //
-// TestMetrics_RealEmitReachesExposition (a REAL source loop's delivered
-// emit reaching this bridge through pipeline/runtime.Build +
-// netcomposeMetricsFrom-style field copy) was NOT moved: that composition —
-// a data-plane Runtime's LoopMetrics converted and handed to this bridge —
-// has no current caller. cmd/network runs no data-plane loops of its own
+// Not covered here: a REAL source loop's delivered emit reaching this bridge
+// through pipeline/runtime.Build + a netcomposeMetricsFrom-style field copy.
+// That composition — a data-plane Runtime's LoopMetrics converted and handed
+// to this bridge — has no current caller. cmd/network runs no data-plane loops of its own
 // (always passes nil loops to MaybeMountMetrics); cmd/pipeline is the data
 // -plane composer but does not import this package at all (AGENTS.md layer
 // rule 2) and does not yet mount this bridge (see its main.go's own /metrics
-// doc comment — a named PR3c follow-up). The family-mapping logic that test
+// doc comment). The family-mapping logic that test
 // also exercised is still covered by TestMetricsHandler_FamiliesFollowCapabilities
 // below; only the "a REAL dataplane counter increments and becomes visible
 // through this bridge" property is presently unproven in any binary.

@@ -20,9 +20,10 @@ import (
 
 // newAccountServer embeds a nats-server with a single operator-trusted account and
 // returns its client URL plus that account's nkey seed. Publisher/Subscriber connect
-// as this account (minting an ephemeral user JWT) — the production form of the
-// slice-16 capstone's natsClient helper. Account isolation across accounts is the
-// chainmanager's concern (proven in slice-16); this harness isolates the transport's
+// as this account (minting an ephemeral user JWT) — the production form of
+// natsClient in network/pkg/services/chainmanager/handler/multinode_e2e_test.go.
+// Account isolation across accounts is the
+// chainmanager's concern; this harness isolates the transport's
 // own pub/sub behaviour within one account.
 func newAccountServer(t *testing.T) (url, accountSeed string) {
 	_, url, accountSeed = newAccountServerWithSrv(t)
@@ -104,8 +105,8 @@ func TestConn_PublishSubscribeRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPublisher_PublishErrorsWhenServerGone asserts the flush-on-Publish contract
-// (Codex review P2): Publish must surface a delivery failure rather than silently
+// TestPublisher_PublishErrorsWhenServerGone asserts the flush-on-Publish contract:
+// Publish must surface a delivery failure rather than silently
 // buffering it, so the Loop's emission log cannot record an undelivered message as
 // delivered. With the broker gone, a non-flushing Publish returns nil (the PUB is
 // queued for the reconnect buffer); flush-on-Publish instead waits for broker
@@ -185,7 +186,7 @@ func TestSubscriber_SubscribeTwiceErrors(t *testing.T) {
 	}
 }
 
-// TestSubscriber_DrainWaitsForInflight asserts the load-bearing contract (D-17a-5):
+// TestSubscriber_DrainWaitsForInflight asserts the load-bearing contract:
 // Drain must block until an in-flight handler completes. A direct mapping to nats.go
 // Subscription.Drain() (which returns before the background drain finishes) would
 // fail this.
@@ -244,7 +245,7 @@ func TestSubscriber_DrainWaitsForInflight(t *testing.T) {
 	}
 }
 
-// TestSubscriber_SequentialDelivery asserts D-17a-8: handlers are invoked sequentially
+// TestSubscriber_SequentialDelivery asserts that handlers are invoked sequentially
 // per subscription (never re-entered) and in publish order — the invariant the Loop's
 // mutex-free sequence discipline relies on.
 func TestSubscriber_SequentialDelivery(t *testing.T) {
@@ -296,7 +297,7 @@ func TestSubscriber_SequentialDelivery(t *testing.T) {
 	}
 }
 
-// TestPublisher_CloseDoesNotCloseSharedConn asserts D-17a-3: one Publisher's Close
+// TestPublisher_CloseDoesNotCloseSharedConn asserts that one Publisher's Close
 // (flush-only) must not tear down the shared connection that sibling Publishers /
 // Subscribers on the same Conn depend on.
 func TestPublisher_CloseDoesNotCloseSharedConn(t *testing.T) {

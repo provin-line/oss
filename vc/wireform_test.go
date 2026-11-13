@@ -131,7 +131,7 @@ func TestValidateWireForm_ValidFromUTCSecondPrecision(t *testing.T) {
 	}
 }
 
-// The cred-014 class end to end (review fix B-3, previously reproduced as
+// The cred-014 class end to end (a malformed address must not yield
 // DataIntegrity=Verified): a present-but-malformed content address fails the
 // data-integrity axis.
 func TestVerify_MalformedInputHash_DataIntegrityFails(t *testing.T) {
@@ -150,7 +150,7 @@ func TestVerify_MalformedInputHash_DataIntegrityFails(t *testing.T) {
 	}
 }
 
-// 17f D-17f-6 leftover: a malformed previousCredential is rejected by the
+// A malformed previousCredential is rejected by the
 // VERIFIER's wire-form check, not only by store ingress fail-closed drops.
 func TestVerify_MalformedPreviousCredential_DataIntegrityFails(t *testing.T) {
 	cred, pub := signedCred(t)

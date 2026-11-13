@@ -20,15 +20,9 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// capProcessDoc and capOwnerDoc were originally duplicated from
-// cmd/standalone/crossnode_e2e_test.go's helpers of the same name (Task 4
-// moved this file into internal/netcompose beside the code it exercises, but
-// that package's own capstone tests still needed a copy too, and identifiers
+// capProcessDoc and capOwnerDoc are this package's own fixtures: identifiers
 // declared in a _test.go file are invisible outside that package's own test
-// binary — there is no alias (compat.go or otherwise) that reaches a
-// _test.go symbol across a package boundary). cmd/standalone is gone
-// (PR3c), but this copy remains this package's own fixture. Kept
-// byte-for-byte equivalent to the originals.
+// binary.
 func capProcessDoc(processDID, owner string, pub []byte) *did.DIDDocument {
 	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
 	if err != nil {
@@ -47,12 +41,14 @@ func capOwnerDoc(owner string) *did.DIDDocument {
 	return did.New(did.DocumentFields{ID: owner, Controller: owner})
 }
 
-// cvSourceResolver adapts a local *vcresolver.Service to auditor.SourceResolver: it maps the
-// store's authoritative ErrNotFound to auditor.ErrSourceNotFound (→ orphan), leaving other
-// errors transient (→ unavailable). The real external-set fixture's resolver (slice-17q
-// D-17q-6) — a legitimate availability seam over a real serving store; issuer-endpoint fan-out
-// is the deferred production detail. This cross-layer integration lives in internal/netcompose
-// (the composition root), not in network/, honoring the network/↔pipeline/ layer rule.
+// cvSourceResolver adapts a local *vcresolver.Service to
+// auditor.SourceResolver: it maps the store's authoritative ErrNotFound to
+// auditor.ErrSourceNotFound (→ orphan), leaving other errors transient
+// (→ unavailable). The real external-set fixture's resolver is a legitimate
+// availability seam over a real serving store; issuer-endpoint fan-out is the
+// deferred production detail. This cross-layer integration lives in
+// internal/netcompose (the composition root), not in network/, honoring the
+// network/↔pipeline/ layer rule.
 type cvSourceResolver struct{ svc *vcresolver.Service }
 
 func (r cvSourceResolver) Resolve(ctx context.Context, hash string) (*vc.PipelinePassCredential, error) {
@@ -66,12 +62,12 @@ func (r cvSourceResolver) Resolve(ctx context.Context, hash string) (*vc.Pipelin
 	return cred, nil
 }
 
-// TestConsumeVerify_Integration_RealDIDGraph is the slice-17q real external-set fixture: a real
+// TestConsumeVerify_Integration_RealDIDGraph is the real external-set fixture: a real
 // aggregate FirstDrop signed over two real, independently-signed source FirstDrops is
 // independently verified at the CONSUME locus — sources fetched from a real serving store, the
 // signed SourceRoot recomputed by the real vc.Verifier over the real DID graph → Verified; then
 // orphan + partial branches over the same real machinery. The concrete caller that keeps the
-// verifier from being an uncalled library (D-17q-6).
+// verifier from being an uncalled library.
 func TestConsumeVerify_Integration_RealDIDGraph(t *testing.T) {
 	const (
 		owner   = "did:dplaax:reg:org:acme"

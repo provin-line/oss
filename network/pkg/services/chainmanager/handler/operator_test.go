@@ -27,7 +27,7 @@ func TestOperatorHandler_ListSubscriptions(t *testing.T) {
 		PublisherDID: "did:dplaax:reg:org:pub",
 		PublishType:  "nats",
 		Created:      time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
-		Direction:    "subscriber", // ListSubscriptions returns subscriber-direction records (D-s6 a)
+		Direction:    "subscriber", // ListSubscriptions returns subscriber-direction records
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestOperatorHandler_ListSubscriptions(t *testing.T) {
 }
 
 // A subscription with no Created timestamp maps to an empty wire string, not the
-// year-0001 zero-value sentinel (D-o5 zero handling).
+// year-0001 zero-value sentinel.
 func TestOperatorHandler_ListSubscriptions_ZeroCreated(t *testing.T) {
 	svc, subs, _ := newSvc(t)
 	if err := subs.Save(&store.Subscription{ID: "sub-1", Direction: "subscriber"}); err != nil {
@@ -118,8 +118,8 @@ func TestOperatorHandler_UpdateAllowList_InvalidPipelineDID(t *testing.T) {
 	}
 }
 
-// The two connection-flow RPCs are deferred to the last slice; the embedded
-// Unimplemented stub must keep returning CodeUnimplemented so the deferral is
+// The two connection-flow RPCs are not implemented yet; the embedded
+// Unimplemented stub must keep returning CodeUnimplemented so the gap is
 // explicit, not an accidental silent success.
 func TestOperatorHandler_ConnectionFlowUnimplemented(t *testing.T) {
 	svc, _, _ := newSvc(t)

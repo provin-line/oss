@@ -1,7 +1,7 @@
 package handler_test
 
-// Tests for MirrorLogSegment / GetMirrorState (tlog-custody spec D-T2/D-T3/
-// D-T4, Task 5). The fixture below wires REAL production components — a
+// Tests for MirrorLogSegment / GetMirrorState (tlog-custody mirror
+// acceptance rules). The fixture below wires REAL production components — a
 // didregistry.Service issuing real pipeline/process DIDs, a real
 // wireauth.Verifier, a real mirrorstore.Store — rather than spies, so each
 // negative test below fails to reproduce its expected connect code if the
@@ -364,8 +364,8 @@ func (f *mirrorFixture) freshStoreHandler(t *testing.T, maxRecords, maxBytes int
 // TestMirrorLogSegment_CanonicalUTCTimestampEnforced proves a
 // legitimately-SIGNED checkpoint whose wire timestamp carries a non-Z offset
 // (+09:00, or +00:00 instead of Z) is rejected as InvalidArgument BEFORE any
-// store write. On the pre-fix code checkpointFromWire accepted the string
-// verbatim and the segment was STORED (the checkpoint verifies over the
+// store write. A checkpointFromWire that accepted the string
+// verbatim would STORE the segment (the checkpoint verifies over the
 // as-stamped offset), but GetLogCheckpoint would later reformat the served
 // timestamp to UTC-Z while re-serving the original signature — an
 // unverifiable served checkpoint.
@@ -381,7 +381,7 @@ func TestMirrorLogSegment_CanonicalUTCTimestampEnforced(t *testing.T) {
 		{"plus-09:00", plus9.Format(time.RFC3339)},
 		// Signed over the canonical "...Z" but shipped as "+00:00": the parsed
 		// zero-offset time re-derives to "Z" so the signature still verifies —
-		// the non-canonical STRING is the only defect, which the fix rejects.
+		// the non-canonical STRING is the only defect, and it is rejected.
 		{"plus-00:00-not-Z", "2026-07-19T09:00:00+00:00"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,7 +403,7 @@ func TestMirrorLogSegment_CanonicalUTCTimestampEnforced(t *testing.T) {
 	}
 }
 
-// --- P1-B: sink-reject logs are custodied but never served via TlogService reads.
+// --- sink-reject logs are custodied but never served via TlogService reads.
 
 // TestMirrorLogSegment_SinkRejectCustodyOnly proves a mirrored sink-reject log
 // returns NotFound from BOTH read RPCs (GetLogCheckpoint, ListLogRecords) while
@@ -428,7 +428,7 @@ func TestMirrorLogSegment_SinkRejectCustodyOnly(t *testing.T) {
 		t.Fatalf("store.AckedSize(sink-reject) = %d, %v; want 2, nil (operator tooling reads here)", n, err)
 	}
 
-	// Read RPCs must refuse it (custody-only, D-T5).
+	// Read RPCs must refuse it (custody-only).
 	if _, err := f.handler.GetLogCheckpoint(ctx, connect.NewRequest(&tlogpb.GetLogCheckpointRequest{LogId: rejectLog})); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("GetLogCheckpoint(sink-reject): code = %v, want NotFound (err=%v)", connect.CodeOf(err), err)
 	}
@@ -455,13 +455,13 @@ func TestMirrorLogSegment_SinkRejectCustodyOnly(t *testing.T) {
 	}
 }
 
-// --- P2-D: batch caps enforced BEFORE hashing payloads / verifying the proof.
+// --- batch caps enforced BEFORE hashing payloads / verifying the proof.
 
 // TestMirrorLogSegment_CapEnforcedBeforeWireauth proves the batch cap runs
 // before SegmentDigest and wireauth.Verify: an over-cap batch carrying an
 // INVALID proof returns ResourceExhausted (the cap), not the Unauthenticated
-// the wireauth check would return if it ran first (pre-fix, the cap was only
-// checked inside Service.MirrorSegment, AFTER the handler hashed + verified).
+// the wireauth check would return if it ran first (a cap checked only inside
+// Service.MirrorSegment would run AFTER the handler hashed + verified).
 func TestMirrorLogSegment_CapEnforcedBeforeWireauth(t *testing.T) {
 	t.Run("record count cap", func(t *testing.T) {
 		f := newMirrorFixture(t, 2, 4<<20) // max-batch-records = 2
@@ -481,15 +481,16 @@ func TestMirrorLogSegment_CapEnforcedBeforeWireauth(t *testing.T) {
 	})
 }
 
-// --- P2-E: replay detection atomic with append (no Internal under concurrent retry).
+// --- replay detection atomic with append (no Internal under concurrent retry).
 
 // TestMirrorLogSegment_ConcurrentIdenticalRetry_NoInternal fires two
 // byte-identical MirrorLogSegment calls concurrently at a FRESH (acked 0) log.
 // Both must succeed — one commits the extend, the other resolves as a
 // byte-identical replay no-op — and the store must end at a single acked size
-// of 2. Pre-fix, the Service read the acked size and appended in two separate
-// store calls, so both goroutines could read acked 0, the first extend, and
-// the second fail the exact-extend arithmetic with a plain error → Internal.
+// of 2. Replay detection is atomic with the append: if the Service read the
+// acked size and appended in two separate store calls, both goroutines could
+// read acked 0, the first extend, and the second fail the exact-extend
+// arithmetic with a plain error → Internal.
 func TestMirrorLogSegment_ConcurrentIdenticalRetry_NoInternal(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	const iterations = 100
@@ -528,16 +529,16 @@ func TestMirrorLogSegment_ConcurrentIdenticalRetry_NoInternal(t *testing.T) {
 	}
 }
 
-// --- F1: first-signer pin is atomic with append (concurrency-safe).
+// --- first-signer pin is atomic with append (concurrency-safe).
 
 // TestMirrorLogSegment_ConcurrentInitialSiblingSigners_ExactlyOnePins fires
 // two INITIAL segments for the SAME emission log from two DIFFERENT valid
 // sibling signers (A1, A2 — both ancestry-valid under pipeline A) concurrently.
 // Exactly one must pin the signer; the other must be PermissionDenied. The pin
 // then survives a restart: the losing signer stays rejected against a reopened
-// store. Pre-fix, the pin was checked in the Service (read Store.Checkpoint)
-// BEFORE the append, so both could observe "no checkpoint yet" and both be
-// accepted — a signer-replacement race.
+// store. The pin is atomic with the append: if it were checked in the Service
+// (read Store.Checkpoint) BEFORE the append, both could observe "no
+// checkpoint yet" and both be accepted — a signer-replacement race.
 func TestMirrorLogSegment_ConcurrentInitialSiblingSigners_ExactlyOnePins(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	reqs := [2]*tlogpb.MirrorLogSegmentRequest{
@@ -598,14 +599,13 @@ func TestMirrorLogSegment_ConcurrentInitialSiblingSigners_ExactlyOnePins(t *test
 	}
 }
 
-// --- F2: a byte-identical replay still has its checkpoint head verified.
+// --- a byte-identical replay still has its checkpoint head verified.
 
 // TestMirrorLogSegment_ReplayWrongHeadRejected proves a replay whose records
 // byte-match the stored segment but whose (genuinely-signed) checkpoint Head is
-// wrong is rejected (FailedPrecondition), not acked. D-T2 rule 1 requires
-// recomputing every checkpoint head, replay included; pre-fix the replay branch
-// returned success before the head check, so a pinned signer could ack an
-// arbitrary Head.
+// wrong is rejected (FailedPrecondition), not acked. The acceptance rules require
+// recomputing every checkpoint head, replay included; a replay branch that
+// returned success before the head check would ack an arbitrary Head.
 func TestMirrorLogSegment_ReplayWrongHeadRejected(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	seed := payloads(2)
@@ -622,7 +622,7 @@ func TestMirrorLogSegment_ReplayWrongHeadRejected(t *testing.T) {
 	}
 }
 
-// --- P2-G: transient resolver errors preserved (not mapped to PermissionDenied).
+// --- transient resolver errors preserved (not mapped to PermissionDenied).
 
 type failingResolver struct{ err error }
 
@@ -637,12 +637,12 @@ func (a failingAncestry) AncestorPipeline(context.Context, string) (string, erro
 }
 
 // TestMirrorLogSegment_TransientResolverError proves a transient failure of the
-// D-T3 checkpoint-signer resolution OR the ancestry lookup (context
+// checkpoint-signer resolution OR the ancestry lookup (context
 // canceled/deadline, or the resolver at capacity) surfaces as the appropriate
 // retryable code — NOT PermissionDenied. The wireauth verifier keeps the REAL
 // resolver so the proof verifies and we reach the domain identity check; only
-// the domain-side resolver/ancestry fails. Pre-fix, both were wrapped into
-// ErrIdentityMismatch → PermissionDenied for every transient cause.
+// the domain-side resolver/ancestry fails. A handler that wrapped both into
+// ErrIdentityMismatch would return PermissionDenied for every transient cause.
 func TestMirrorLogSegment_TransientResolverError(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	realAncestry := logident.NewDIDRegistryAncestry(f.didSvc)
@@ -716,7 +716,7 @@ func TestMirrorLogSegment_Rule1_MissingAuthProof_InvalidArgument(t *testing.T) {
 	}
 }
 
-// --- rule 2 (D-T3 identity): every sub-case maps to PermissionDenied.
+// --- rule 2 (identity): every sub-case maps to PermissionDenied.
 func TestMirrorLogSegment_Rule2_IdentityMismatch_PermissionDenied(t *testing.T) {
 	t.Run("checkpoint signature invalid", func(t *testing.T) {
 		f := newMirrorFixture(t, 256, 4<<20)
@@ -746,7 +746,7 @@ func TestMirrorLogSegment_Rule2_IdentityMismatch_PermissionDenied(t *testing.T) 
 	})
 }
 
-// --- rule 3 (D-T2 rule 5): caps — ResourceExhausted.
+// --- rule 3 (caps): ResourceExhausted.
 func TestMirrorLogSegment_Rule3_CapsExceeded_ResourceExhausted(t *testing.T) {
 	t.Run("record count cap", func(t *testing.T) {
 		f := newMirrorFixture(t, 2, 4<<20) // max-batch-records = 2
@@ -764,7 +764,7 @@ func TestMirrorLogSegment_Rule3_CapsExceeded_ResourceExhausted(t *testing.T) {
 	})
 }
 
-// --- rule 4 (D-T2 rules 1/2): alignment / extend / overflow.
+// --- rule 4: alignment / extend / overflow.
 func TestMirrorLogSegment_Rule4_ChecklistSizeMismatch_InvalidArgument(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	p := validParams(mirrorPipelineA, 0, payloads(2), "", mirrorProcessA1)
@@ -812,8 +812,8 @@ func TestMirrorLogSegment_Rule4_PartialOverlap_FailedPrecondition(t *testing.T) 
 // covers the overlap shape the within-range test above does NOT: a segment
 // whose range [from_index, from_index+len) starts BEFORE the acked size but
 // ALSO extends PAST it (K < acked < K+L). Even though the overlapping
-// prefix byte-matches exactly, this is still a partial overlap (D-T2 rule
-// 2) — it must be rejected as FailedPrecondition, never treated as a clean
+// prefix byte-matches exactly, this is still a partial overlap — it must be
+// rejected as FailedPrecondition, never treated as a clean
 // replay or allowed to fall through to a Store.Get past the acked size
 // (whose plain out-of-range error would otherwise surface as CodeInternal).
 func TestMirrorLogSegment_Rule4_PartialOverlapExtendingPastAcked_FailedPrecondition(t *testing.T) {
@@ -834,7 +834,7 @@ func TestMirrorLogSegment_Rule4_PartialOverlapExtendingPastAcked_FailedPrecondit
 	}
 }
 
-// --- rule 5 (D-T2 rule 1): chain-to-head — FailedPrecondition.
+// --- rule 5: chain-to-head — FailedPrecondition.
 func TestMirrorLogSegment_Rule5_ChainToHeadMismatch_FailedPrecondition(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
 	p := validParams(mirrorPipelineA, 0, payloads(2), "", mirrorProcessA1)
@@ -953,7 +953,7 @@ func TestGetMirrorState_InvalidLogID_InvalidArgument(t *testing.T) {
 // checkpoint-aligned segments through the REAL mirror store, wireauth
 // verifier, and DID resolver with genuinely issued pipeline/process DIDs,
 // followed by reads through tlogservice.Service's map-then-mirror "second
-// source" (D-T4) — GetLogCheckpoint-equivalent and ListLogRecords-equivalent
+// source" — GetLogCheckpoint-equivalent and ListLogRecords-equivalent
 // both serve the mirrored data once nothing local claims the log id.
 func TestMirrorLogSegment_FullHappyPathRoundTrip(t *testing.T) {
 	f := newMirrorFixture(t, 256, 4<<20)
@@ -992,7 +992,7 @@ func TestMirrorLogSegment_FullHappyPathRoundTrip(t *testing.T) {
 		t.Fatalf("GetMirrorState.acked_size = %d, want 3", state.Msg.GetAckedSize())
 	}
 
-	// The domain Service's read path (map-then-mirror, D-T4) serves the
+	// The domain Service's read path (map-then-mirror) serves the
 	// mirrored checkpoint and records: this node runs no local log for
 	// mirrorPipelineA (an empty map), so both reads fall through to the
 	// mirror store.
@@ -1061,7 +1061,7 @@ func TestGetMirrorState_NotConfigured_Unimplemented(t *testing.T) {
 // TestMirrorLogSegment_OverRecordCapRejectedPreAuth proves a framed blob
 // encoding more records than the service's max-batch-records cap is rejected
 // as ResourceExhausted at DecodeSegment — BEFORE the wireauth proof is ever
-// decoded or verified (the reshape's whole point: the framed blob decodes as
+// decoded or verified (the framed blob decodes as
 // ONE wire-sized allocation and the unframe stops at the cap DURING the
 // scan). This fixture (mirrorFixture) wires a REAL wireauth.Verifier, not a
 // spy that records whether Verify was called, so the proof of "pre-auth" is

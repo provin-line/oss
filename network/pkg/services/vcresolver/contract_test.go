@@ -10,10 +10,10 @@ import (
 )
 
 // Fail-open guard: every VCResolverService RPC must carry the o3co.authz.v1.policy
-// option, with the exact frozen resource/action values (D-v2). A missing option
+// option, with the exact frozen resource/action values. A missing option
 // silently disables the authorization check; a typo/swap would mis-route
 // authorization while passing a presence-only check. The wire-visible contract is
-// frozen the moment vc.proto is written (slice-7 Phase A), before any handler exists.
+// frozen the moment vc.proto is written, before any handler exists.
 func TestVCResolverService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
 		"StoreVC":        {"vc", "store"},

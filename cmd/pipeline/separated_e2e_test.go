@@ -1,6 +1,6 @@
 package main
 
-// PR3b Task 9: THE separated-topology proof. A REAL netcompose.BuildHandler
+// THE separated-topology proof. A REAL netcompose.BuildHandler
 // registry (mem/tmp stores, behind an httptest server) and a REAL cmd/pipeline
 // composition (buildDeps + pipelineRuntimeConfigFrom + pipelineruntime.Build +
 // buildShippers — the exact wiring main.go uses) talk ONLY over the wire: no
@@ -15,8 +15,7 @@ package main
 // *didresolver.Resolver (an HTTP-fetching type, not swappable for a fake) —
 // unlike the pipeline's OWN upstream-credential verifier (deps.Resolver),
 // which is the resolver.Resolver INTERFACE and so happily takes
-// resolver/local's in-memory fake, matching every other e2e test in this
-// repo (cmd/standalone's aggregate_e2e_test.go, crossnode_e2e_test.go, etc).
+// resolver/local's in-memory fake, matching the other end-to-end tests.
 // Two independent identity surfaces are therefore built:
 //
 //  1. A small stand-in HTTP DID-resolution server (newSepFakeDIDServer),
@@ -24,10 +23,10 @@ package main
 //     resolves EVERY wireauth caller's signer_did against (RegisterAuditHead
 //     as the node identity, RegisterEvidence as the aggregate's issuer, and
 //     MirrorLogSegment's checkpoint-signature check for every custody log).
-//  2. For each producing loop's OWN emission log (src1's and, since the D9
-//     update below, agg's too), the registry's OWN internal DID store
+//  2. For each producing loop's OWN emission log (src1's, and agg's too), the
+//     registry's OWN internal DID store
 //     (network/pkg/services/didregistry/store/yamlstore) is seeded directly,
-//     bypassing its RPC surface entirely: MirrorLogSegment's D-T3 "emission"
+//     bypassing its RPC surface entirely: MirrorLogSegment's "emission"
 //     writer-binding check
 //     (network/pkg/services/tlogservice/logident.AncestorPipeline) resolves
 //     the checkpoint signer through the registry's OWN in-process
@@ -41,18 +40,11 @@ package main
 //     code change) is the cheapest honest way to prove this path rather than
 //     skipping it.
 //
-// See the report (.superpowers/sdd/task-9-cmdpipeline-report.md) for the full
-// per-case assertion map and this identity analysis in more detail.
-//
-// D9 update: the main scenario originally had to split src1 and agg (two
-// producing loops with different output subjects) across TWO separate
-// runtimes/node identities, working around a real production gap this task
-// discovered in buildDeps' payload-retain wiring (see the report's "Fix"
-// section for the full analysis). That gap is now fixed
-// (payloadClientFactory, wiring.go signs each RetainPayload call as the
-// OWNING loop's own output subject), so the main scenario below runs all
-// four loops — src1, sink1, archive, agg — on ONE runtime, and doubles as
-// that fix's own end-to-end proof.
+// The main scenario runs all four loops — src1, sink1, archive, agg — on ONE
+// runtime, even though src1 and agg are producing loops with different
+// output subjects: payloadClientFactory (wiring.go) signs each RetainPayload
+// call as the OWNING loop's own output subject, so the scenario doubles as
+// that wiring's end-to-end proof.
 
 import (
 	"bytes"
@@ -126,8 +118,8 @@ func testCodec() *envelopecodec.Codec {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Identities. registry component "reg" + accountType "org" matches every
-// other e2e test in this repo (cmd/standalone's crossnode_e2e_test.go etc).
+// Identities. registry component "reg" + accountType "org" matches the
+// other end-to-end tests.
 // ─────────────────────────────────────────────────────────────────────────
 
 const (
@@ -139,7 +131,7 @@ const (
 	// sepSrc1IssuerDID is a REAL, running source loop's signing identity: its
 	// FirstDrops are verified downstream (sink1, archive) via resolver/local,
 	// and its emission log's checkpoint is verified by the registry both for
-	// its signature (the fake DID server) and its D-T3 emission ancestry (the
+	// its signature (the fake DID server) and its emission ancestry (the
 	// registry's own internal DID store, seeded directly — see the file doc).
 	sepSrc1IssuerDID = "did:dplaax:reg:org:acme:pipeline:src1:process:s1"
 	sepSrc1Pipeline  = "did:dplaax:reg:org:acme:pipeline:src1"
@@ -151,8 +143,7 @@ const (
 	sepAggPipeline  = "did:dplaax:reg:org:acme:pipeline:aggout"
 
 	// sepAggSrcA/BIssuerDID are the aggregate's two ingress feeds. They are
-	// NOT run by a live source loop — they are pre-signed once (like
-	// cmd/standalone/aggregate_e2e_test.go's signedSourceEnv) and republished
+	// NOT run by a live source loop — they are pre-signed once and republished
 	// verbatim on retry, so a retry can never fork into a THIRD distinct
 	// source the aggregate's dedup would need to fold in.
 	sepAggSrcAIssuerDID = "did:dplaax:reg:org:acme:pipeline:aggsrca:process:sa"
@@ -200,7 +191,7 @@ func sepIdentityDoc(t *testing.T, subject string, pub []byte) *did.DIDDocument {
 // upstream-credential verifier (vc.Verifier's evalChainConsistency): a
 // Multikey "#signing" AssertionMethod key, Controller set to owner directly
 // (a 1-hop process->owner walk, the same convention capProcessDoc/capOwnerDoc
-// use in cmd/standalone's own e2e tests).
+// use in the other end-to-end tests).
 func sepLocalProcessDoc(t *testing.T, processDID, owner string, pub []byte) *did.DIDDocument {
 	t.Helper()
 	vm, err := did.NewMultikeyVerificationMethod(processDID+"#signing", processDID, pub)
@@ -315,9 +306,9 @@ func sepChainCfg(t *testing.T) *chainconfig.Config {
 }
 
 // sepRegistryHandle is the running registry's URL plus the raw in-memory
-// audit stores this test reads directly (the "queue store directly" seam the
-// task brief names as an acceptable read for the ordinary-ingress/sink-receipt
-// cases, alongside the wire ResolveVC/GetConsumedSources reads used elsewhere).
+// audit stores this test reads directly (the "queue store directly" seam,
+// used for the ordinary-ingress/sink-receipt cases alongside the wire
+// ResolveVC/GetConsumedSources reads used elsewhere).
 type sepRegistryHandle struct {
 	url        string
 	auditQueue *auditor.MemQueue
@@ -338,9 +329,8 @@ type sepRegistryHandle struct {
 // registry's OWN peer-client identity — see sepChainCfg's doc); callers that
 // need to control it externally (to share a trust root + resolver dir with a
 // second, independently-built account) build their own and pass it in rather
-// than relying on the internally-generated one every existing call site used
-// before this parameter existed. wrap, when non-nil, wraps the assembled
-// handler (the shutdown-fault case's slow-registry middleware).
+// than passing sepChainCfg's generated one. wrap, when non-nil, wraps the
+// assembled handler (the shutdown-fault case's slow-registry middleware).
 func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]*did.DIDDocument, seedAllowRules map[string][]store.AllowRule, chainCfg *chainconfig.Config, wrap func(http.Handler) http.Handler) sepRegistryHandle {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -383,7 +373,7 @@ func buildSepRegistry(t *testing.T, fakeDIDURL string, seedProcesses map[string]
 		{Resource: "tlog", Action: "mirror"},
 		{Resource: "tlog", Action: "read"},
 		// buildDeps (wiring.go) ALWAYS wires a PayloadStore — every producing
-		// loop dual-emits (D-6) — so RetainPayload is exercised regardless of
+		// loop dual-emits — so RetainPayload is exercised regardless of
 		// this scenario's config never declaring payload-delivery.
 		{Resource: "payloads", Action: "retain"},
 	})
@@ -462,7 +452,7 @@ func sepPayloadHash(b []byte) string {
 
 // sepSignFeed signs a real source FirstDrop (issuer's key already saved in
 // builder's keystore) and returns the credential plus its inline wire
-// envelope — mirrors cmd/standalone/aggregate_e2e_test.go's signedSourceEnv.
+// envelope.
 func sepSignFeed(t *testing.T, builder *vc.Builder, issuerDID, procID string, payload []byte) (*vc.PipelinePassCredential, []byte) {
 	t.Helper()
 	s, err := vcdid.NewSigner(vcdid.Config{
@@ -488,7 +478,7 @@ func sepSignFeed(t *testing.T, builder *vc.Builder, issuerDID, procID string, pa
 // sepAwaitTwoSourceAggregate polls ch (the aggregate's observed output
 // subject) publishing both pre-signed feeds until a TWO-source aggregate
 // FirstDrop arrives — a tick mid-arrival may emit a transient one-source
-// aggregate first (cmd/standalone/aggregate_e2e_test.go's own rationale).
+// aggregate first.
 func sepAwaitTwoSourceAggregate(t *testing.T, ch <-chan []byte, publishBoth func(), deadline time.Duration) *vc.PipelinePassCredential {
 	t.Helper()
 	codec := testCodec()
@@ -518,8 +508,7 @@ func sepAwaitTwoSourceAggregate(t *testing.T, ch <-chan []byte, publishBoth func
 }
 
 // sepFindAuditedCredential retry-publishes (action) while polling the
-// registry's audit queue (read directly — the task brief's "queue store
-// directly" seam) and, for each candidate, resolving it over the WIRE
+// registry's audit queue (read directly, not over the wire) and, for each candidate, resolving it over the WIRE
 // (vcClient.ResolveVC) checking match. Used by both the ordinary-ingress and
 // sink-receipt cases, which differ only in action/match.
 func sepFindAuditedCredential(t *testing.T, ctx context.Context, queue *auditor.MemQueue, vcClient vcpbconnect.VCResolverServiceClient, action func(), match func(*vc.PipelinePassCredential) bool, deadline time.Duration) string {
@@ -585,25 +574,18 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	// (observation-only), archive (archival + receipt), and agg (aggregate) —
 	// sharing ONE node identity and ONE keystore. src1 and agg are TWO
 	// DIFFERENT producing loops with TWO DIFFERENT output subjects: exactly
-	// the topology that used to be impossible on a single runtime before the
-	// D9 fix (payloadClientFactory, wiring.go). PayloadStoreService's
-	// RetainPayload requires owner_did (the emitting loop's OWN output
-	// subject — dataplane.go's retainerFor(src.OutputSubject)) to equal the
-	// proven signer (network/pkg/services/payloadresolver/storehandler's
-	// errOwnerMismatch) — "a producing process retains its own emitted
-	// payload" per that package's own retain_e2e_test.go — and buildDeps used
-	// to wire ONE shared node-identity retain client for every producing
-	// loop, which could satisfy at most ONE loop's output subject at a time
-	// (this test used to run src1 and agg as two SEPARATE runtimes to work
-	// around exactly that gap — see git history for the prior version, and
-	// the task report's "Blocker discovered" section for the original
-	// analysis). buildDeps now signs each retain call as the OWNING loop's
-	// OWN output subject (payloadClientFactory.For(ownerDID), keyed per
-	// call), so ONE runtime now suffices as long as the keystore holds BOTH
-	// producing loops' output-subject keys — which this test already
-	// provisions below (src1NodePub, aggNodePub) for an unrelated reason
-	// (both are ALSO the wireauth caller identities each loop's own
-	// emission-log mirror checkpoint signs as).
+	// the topology payloadClientFactory (wiring.go) exists for.
+	// PayloadStoreService's RetainPayload requires owner_did (the emitting
+	// loop's OWN output subject — dataplane.go's retainerFor(src.OutputSubject))
+	// to equal the proven signer (network/pkg/services/payloadresolver/
+	// storehandler's errOwnerMismatch) — "a producing process retains its own
+	// emitted payload" per that package's own retain_e2e_test.go. buildDeps
+	// therefore signs each retain call as the OWNING loop's OWN output subject
+	// (payloadClientFactory.For(ownerDID), keyed per call), so ONE runtime
+	// suffices as long as the keystore holds BOTH producing loops'
+	// output-subject keys — which this test provisions below (src1NodePub,
+	// aggNodePub) and which are ALSO the wireauth caller identities each
+	// loop's own emission-log mirror checkpoint signs as.
 	src1NodePub := genIdentity(sepSrc1Pipeline, false)
 	aggNodePub := genIdentity(sepAggPipeline, false)
 	src1Pub := genIdentity(sepSrc1IssuerDID, true)
@@ -648,7 +630,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	})
 
 	// The registry itself, with src1's AND agg's process DIDs pre-seeded into
-	// its OWN internal DID store (emission-log mirror custody's D-T3 ancestry
+	// its OWN internal DID store (emission-log mirror custody's emission ancestry
 	// check — see the file doc): both are producing loops whose emission log
 	// classifies as logident.KindEmission, which resolves its checkpoint
 	// signer's ancestor pipeline through this internal store, not the fake
@@ -662,7 +644,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	// ONE pipeline config, FOUR loops: src1 (source), sink1 (observation-only
 	// consumer), archive (archival sink + receipt issuer), and agg
 	// (aggregate) — src1 and agg are the two producing loops with DIFFERENT
-	// output subjects the D9 fix (see this function's own doc, above) makes
+	// output subjects payloadClientFactory (see this function's own doc, above) makes
 	// coexist on a single runtime.
 	pipeCfg := &pipelineconfig.Config{
 		VCStoreEndpoint:   reg.url,
@@ -747,7 +729,7 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	// ONE runtime for all four loops. nodeDID (this runtime's own subscriber/
 	// AuditQueue/PayloadResolver identity) can be ANY identity the keystore
 	// already holds an #auth key for — it need not equal either producing
-	// loop's own output subject any more (that was the pre-D9 constraint);
+	// loop's own output subject;
 	// sepSrc1Pipeline is reused here only because its key already exists.
 	dp := buildRuntime(pipeCfg, sepSrc1Pipeline, "a")
 
@@ -850,12 +832,11 @@ func TestSeparatedTopology_RegistryAndPipelineOverTheWire(t *testing.T) {
 	// ── Case 4: mirror custody LIVE — the shippers ship src1's emission log,
 	// archive's receipt log, AND agg's emission log; GetMirrorState advances
 	// to each local log's size. agg's own emission log is included here (not
-	// just src1's and archive's, as before the D9 fix) precisely BECAUSE it
-	// now shares this ONE runtime with src1: a nonempty local log for agg is
-	// itself proof its retain succeeded — dataplane.go's payloadWiring
-	// aborts an emission (and so never appends it to the emission log)
-	// before it is ever broadcast when the retain call fails, per the task
-	// report's own analysis. ──
+	// just src1's and archive's) precisely BECAUSE it shares this ONE runtime
+	// with src1: a nonempty local log for agg is itself proof its retain
+	// succeeded — dataplane.go's payloadWiring aborts an emission (and so
+	// never appends it to the emission log) before it is ever broadcast when
+	// the retain call fails. ──
 	t.Run("MirrorCustody_LiveGetMirrorStateAdvances", func(t *testing.T) {
 		var wanted []pipelineruntime.CustodyLog
 		for _, c := range dp.CustodyLogs() {
@@ -921,7 +902,7 @@ const (
 	sepShutSrcIngress   = "ingest.sep.shutsrc"
 )
 
-// TestSeparatedTopology_ShutdownFaultHonorsDrainBudget proves the D8 ordered
+// TestSeparatedTopology_ShutdownFaultHonorsDrainBudget proves the ordered
 // shutdown's final flush (run's step 4, drainShippers) against a REAL
 // registry that never answers a TlogService request: run still returns nil
 // (a timed-out final drain is not a shutdown failure — see DefaultDrainBudget's
@@ -931,8 +912,8 @@ func TestSeparatedTopology_ShutdownFaultHonorsDrainBudget(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	gen := ed25519.Generator{}
 	// The node identity happens to equal the source loop's own output
-	// subject here — harmless either way post-D9 (buildDeps' payload-retain
-	// client now signs each retain as the OWNING loop's own output subject
+	// subject here — harmless either way (buildDeps' payload-retain
+	// client signs each retain as the OWNING loop's own output subject
 	// via payloadClientFactory, not the shared node identity), kept only
 	// because this identity's key is what gets provisioned below.
 	// RetainPayload runs at boot (VCResolverService/PayloadStoreService stay

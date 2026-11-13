@@ -1,7 +1,7 @@
 package tlogship_test
 
 // Unit tests for Shipper against a fake MirrorClient and a REAL filelog.Log
-// (task-6 brief: the shipper receives the live tlog.Log handle — a fake log
+// (the shipper receives the live tlog.Log handle — a fake log
 // would not exercise the real CheckpointAt-backed cap-bounded batching this
 // package now depends on, nor filelog's real "CheckpointAt only ever
 // covers records it actually holds" behavior).
@@ -310,8 +310,8 @@ func TestDrain_CapHonoring_WithinCaps_ShipsOneBoundedSegment(t *testing.T) {
 	}
 }
 
-// TestDrain_BacklogLargerThanCaps_DrainsFullyInBoundedSegments proves the
-// controller-decided fix for the old admission-gate wedge: a backlog of
+// TestDrain_BacklogLargerThanCaps_DrainsFullyInBoundedSegments proves a
+// backlog larger than the per-call caps cannot wedge the shipper: a backlog of
 // 5×MaxBatchRecords drains FULLY within one Drain call, split into
 // successive segments each bounded by MaxBatchRecords, each shipped with a
 // checkpoint that EXACTLY covers that segment's own end (CheckpointAt, not

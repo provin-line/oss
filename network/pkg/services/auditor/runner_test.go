@@ -198,7 +198,7 @@ func hasAbandonNote(notes []string) bool {
 
 // The backstop can trigger on a path that never wrote a verdict (head unreadable
 // from the first attempt): the drop must synthesize an abandoned Indeterminate
-// record rather than leave the head with no status at all (Codex design review).
+// record rather than leave the head with no status at all.
 func TestAuditOne_BackstopDropWithoutRecord_SynthesizesAbandoned(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
 	cfg := okCfg()
@@ -247,7 +247,7 @@ func TestAuditOne_AbandonWriteFailure_RetainsHead(t *testing.T) {
 
 // Source-commitment exhaustion: linear verdict already terminal, the retry that
 // ran out is the consumed-set one — the abandon note lands in the SC scope's
-// notations, not the linear scope's (Codex design review).
+// notations, not the linear scope's.
 func TestMarkAbandoned_ScRetryable_NotesSourceCommitmentScope(t *testing.T) {
 	status := NewMemStatusStore()
 	rec := AuditRecord{
@@ -328,7 +328,7 @@ func TestAuditOne_HoleAppearedInStore_Retained(t *testing.T) {
 
 // A hole abandoned by the resolver (in neither store nor pool) → Indeterminate, finalized
 // via the attempt grace (NOT a single observation — that would race the StoreVC Put/Add
-// window, Codex P2). One drain records Indeterminate and bumps but retains; the head is
+// window). One drain records Indeterminate and bumps but retains; the head is
 // dequeued only after max-attempts consecutive abandoned observations.
 func TestAuditOne_HoleAbandoned_FinalizedAfterGrace(t *testing.T) {
 	const hole = "sha256:hole"
@@ -353,7 +353,7 @@ func TestAuditOne_HoleAbandoned_FinalizedAfterGrace(t *testing.T) {
 	}
 }
 
-// A failing StatusStore.Put must NOT dequeue the head — the audit is retried, not lost (Codex).
+// A failing StatusStore.Put must NOT dequeue the head — the audit is retried, not lost.
 func TestAuditOne_StatusWriteFailure_RetainsHead(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
 	q := NewMemQueue()
@@ -376,7 +376,7 @@ func (failingStatus) Get(h string) (AuditRecord, error) {
 }
 func (failingStatus) List(string, int) ([]HeadStatus, error) { return nil, errors.New("status boom") }
 
-// A head already holding a terminal verdict is dequeued without re-verifying (Codex #4).
+// A head already holding a terminal verdict is dequeued without re-verifying.
 func TestAuditOne_TerminalReRegistration_NotReaudited(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) {
 		t.Fatal("VerifyChain must not be called for an already-terminal head")
@@ -406,7 +406,7 @@ func TestAuditOne_CtxCancelDuringVerify_RecordsNothing(t *testing.T) {
 }
 
 // VerdictCounts is a monotonic counter of durably recorded verdict WRITES by
-// linear overall verdict (P1-2 metrics) — not a distribution of audited heads.
+// linear overall verdict (a metric) — not a distribution of audited heads.
 func TestVerdictCounts_CountsDurableWrites(t *testing.T) {
 	cv := fakeCV{fn: func() (*vc.VerifyResult, error) { return verifiedResult(), nil }}
 	r, _, _ := newRunner(t, cv, headStore(), fakePool{}, okCfg())

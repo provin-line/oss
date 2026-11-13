@@ -7,8 +7,7 @@ import (
 )
 
 // TestProdDeps_NoChainManagerRootInReportClient guards the architectural
-// promise this fix sets up (PR3b Task 8, applying the T2 split
-// auditor/payloadresolver/tlogservice already had): chainmanager/reportclient
+// promise that chainmanager/reportclient
 // depends on the chainmanager/wirecontract LEAF for its shared op name and
 // signed-view field builder, never the chainmanager SERVICE ROOT (which
 // carries the Service implementation and its store/infra/emithealth

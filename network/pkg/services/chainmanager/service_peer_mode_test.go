@@ -28,7 +28,7 @@ func svcServing(t *testing.T, inf *fakeInfra) *Service {
 const byrefPubSubject = ByReferenceSubjectPrefix + pubPipeline
 
 // By-reference registration exports the byref.-prefixed subject, not the
-// plain publisher DID (D-2/D-3).
+// plain publisher DID.
 func TestPeer_RegisterSubscription_ByReference_ExportsPrefixedSubject(t *testing.T) {
 	inf := &fakeInfra{}
 	svc := svcServing(t, inf)
@@ -64,7 +64,7 @@ func TestPeer_RegisterSubscription_Inline_StillExportsPlainSubject(t *testing.T)
 // Ref-counting is keyed on the EXPORTED SUBJECT, not the publisher DID: an
 // inline and a by-reference registration for the SAME publisher export
 // DIFFERENT subjects and must ref-count independently — disconnecting one
-// must not tear down the other's export (D-3).
+// must not tear down the other's export.
 func TestPeer_InlineAndByReference_CoexistIndependentRefcount(t *testing.T) {
 	inf := &fakeInfra{}
 	svc := svcServing(t, inf)
@@ -132,7 +132,7 @@ func TestPeer_ByReference_SiblingSameModeSharesExport(t *testing.T) {
 // whose stored mode is empty (the old by-reference default) but whose ACTUAL
 // export was the plain subject (pre-dual-emit posture) must still have the
 // PLAIN export removed — not a byref.-prefixed subject that was never
-// exported (D-3 migration: the residual "legacy export leak" this closes).
+// exported (the legacy export leak this closes).
 func TestPeer_Disconnect_LegacyEmptyMode_RemovesStoredPlainSubject(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, subs := svcWith(t, inf)
@@ -157,8 +157,7 @@ func TestPeer_Disconnect_LegacyEmptyMode_RemovesStoredPlainSubject(t *testing.T)
 
 // Same migration proof for a legacy record with an EXPLICIT "by-reference"
 // PayloadDelivery but whose ConnectionInfo still names the plain subject
-// (pre-mode-application posture — every record before this slice exported
-// plain regardless of agreed mode).
+// (a posture in which the record exported plain regardless of agreed mode).
 func TestPeer_Disconnect_LegacyExplicitByReference_RemovesStoredPlainSubject(t *testing.T) {
 	inf := &fakeInfra{}
 	svc, subs := svcWith(t, inf)
@@ -210,7 +209,7 @@ func TestPeer_Disconnect_MissingExportSubject_FailsClosed(t *testing.T) {
 	}
 }
 
-// --- Mixed-mode invariant, publisher side (defense-in-depth, D-4) ----------
+// --- Mixed-mode invariant, publisher side (defense-in-depth) -------------
 
 // RegisterSubscription rejects a registration for the same (subscriber,
 // publisher) pair that already has a subscription under a DIFFERENT mode.

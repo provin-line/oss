@@ -414,7 +414,7 @@ func TestRetainPayload_PerChunkReadCap_ResourceExhausted_AbortObserved(t *testin
 	}
 }
 
-// --- P1-C: RetainPayload is mounted behind L1 authz IN ADDITION to the L2
+// --- RetainPayload is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises (newHarness deliberately mounts NO
 // L1 interceptor, isolating the wireauth layer). These tests add it back —
 // production's actual mounting (internal/netcompose.BuildHandler's

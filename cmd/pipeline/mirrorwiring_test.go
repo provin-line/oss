@@ -35,7 +35,7 @@ func TestMirrorClientFactory_CachesPerDID(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────────────
 // buildShippers — one shipper per custody log entry, wired to a MirrorClient
-// requested under that entry's OWN checkpoint-signer DID (D-T3). Uses a real
+// requested under that entry's OWN checkpoint-signer DID. Uses a real
 // filelog.Log (a fake log would not exercise the CheckpointAt-backed capless
 // batching tlogship depends on, mirroring tlogship's own test rationale) and
 // a spy mirrorClientFor recording which DID each shipper was built with.
