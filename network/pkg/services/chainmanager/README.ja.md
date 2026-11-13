@@ -18,7 +18,7 @@
 
 payload 配送（`inline` / `by-reference`、デフォルト `by-reference`）は購読ごとに合意され、購読の生存期間中は不変 — モード変更 = 新規購読。`Subscription` record の契約（`store/`）と `Envelope` の契約（`pipeline/contract`）を参照。
 
-**empty-mode 互換性についての注意**: 未指定のリクエストモードは inline ではなく by-reference に正規化される。serving するパブリッシャーは now genuinely by-reference を提供する（後述）ため、以前は typed rejection だった empty/未指定モードのリクエストが、現在は by-reference 合意として**成立する**。これは互換エイリアスではなく挙動変更である: consumer 側は by-reference 用に構成されていなければならない（`payload-delivery = "by-reference"` config key + `PayloadResolver`）— さもなければ ingress は全イベントを配送違反として reject する。inline を望む古いクライアントは明示的にリクエストする必要がある — モード省略はもはや「inline をくれ」を意味しない。
+**empty-mode 互換性についての注意**: 未指定のリクエストモードは inline ではなく by-reference に正規化される。serving するパブリッシャーは現在、実際に by-reference を提供する（後述）ため、以前は typed rejection だった empty/未指定モードのリクエストが、現在は by-reference 合意として**成立する**。これは互換エイリアスではなく挙動変更である: consumer 側は by-reference 用に構成されていなければならない（`payload-delivery = "by-reference"` config key + `PayloadResolver`）— さもなければ ingress は全イベントを配送違反として reject する。inline を望む古いクライアントは明示的にリクエストする必要がある — モード省略はもはや「inline をくれ」を意味しない。
 
 ## モードスコープ export subject と subscriber 側 rename
 
@@ -48,6 +48,12 @@ ChainPeerService のすべての RPC は `AuthProof`（proto の message。Go �
 5. 正規バイト再構築（この verifier 自身の audience で） → 6. Ed25519 検証 →
 7. 署名者-アクター認可（解決した文書とフィールドの変わらない写しの上で） → 8. ノンス記録。
 
-**L2 identity と監査期間。** 署名ビューは呼び出し瞬間のアクセス制御だが、保存された記録は監査期間にわたる監査証拠を兼ねる。deployment が L2 当事者に web アンカー系 DID method（例: did:web の consumer）を許す場合、CM は署名ビューと並べて「解決した DID document のスナップショット（鍵束縛）」を tlog に記録する — 署名はスナップショット内の鍵に対して永久に再検証可能になり、残る主張は「その束縛が登録時に本当に提供されていたか」だけになる。検証可能な鍵履歴を持つ method はその残余も閉じる。監査感度の高い deployment は L2 当事者を T1/T2 に制限する（GLOSSARY の DID method tiers 参照）。
+**L2 identity と監査期間。** 署名ビューは呼び出し瞬間のアクセス制御だが、保存された記録は監査期間にわたる監査証拠を兼ねる（後述の evidence/ 参照）。deployment が L2 当事者に web アンカー系 DID method（例: did:web の consumer）を許す場合、CM は署名ビューと並べて「解決した DID document のスナップショット（鍵束縛）」を記録する — 署名はスナップショット内の鍵に対して永久に再検証可能になり、残る主張は「その束縛が登録時に本当に提供されていたか」だけになる。検証可能な鍵履歴を持つ method はその残余も閉じる。監査感度の高い deployment は L2 当事者を T1/T2 に制限する（GLOSSARY の DID method tiers 参照）。
 
 インメモリノンスストア + 再起動エポックバリアは許容された PoC 実装（永続ノンスストアはドキュメント化済みのフォローアップ）。すべての wireauth 失敗は型付きセンチネルエラーであり、ハンドラーが `errors.Is` でマッピングする。
+
+## evidence/ — relationship-evidence ログ
+
+`evidence.Log`（`New(tlog.Log) *Log`）は、相手方が署名した control-plane リクエストと、それを検証した鍵素材（transfer.relationship.record）を保持する、永続・追記専用の記録である。`Record` は `evidence.Record`（op、signerDID、nonce、issuedAt、signature、署名された fields そのもの、検証に使った鍵の `KeyMaterial` スナップショット）を JSON にマーシャルして追記する。`Get`/`Size` はそれを読み戻す。永続性、追記のみの順序、改ざん検知はすべてラップした `tlog.Log`（本番では filelog）が担い、この package が持つのは保持する形だけである。
+
+ハンドラーはこれを任意の capability として組み込む: `NewPeerWithEvidence(svc, v, rec)` が `RelationshipRecorder` を設定する（nil = 無効。`NewPeer` の挙動は変わらない）。`cmd/network` は `chain/relationship-evidence` の下に永続 filelog を配線する。RegisterSubscription と Disconnect は、domain の呼び出しが成功した後に証拠を記録する — したがって、拒否された・失敗した relationship の変更（未知のパブリッシャー、所有権の失敗）が成立した relationship として保持されることはない。記録の失敗は、domain の変更の後に `Internal` として現れる（fail-closed）。保持される記録には、proof が検証された署名ビューのバージョン（proof のビューバージョン。JCS ビューの `"v"` メンバー）、署名された audience（`"aud"` メンバー。ビューバージョン 2 から）、署名された fields そのもの、鍵素材を載せる。鍵素材は、verifier が解決したとおりの DID document から取り出す（`#auth` の `RelationshipAuthentication` リレーションシップの下で `did.ExtractPublicKey`）— 第三者が記録だけから署名ビューを再構築し、相手方の署名を再検証できる。

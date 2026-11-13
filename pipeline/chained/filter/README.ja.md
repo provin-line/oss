@@ -37,7 +37,7 @@ type Result struct {
 
 - **起動時プリコンパイル**：すべての式は `New` でコンパイルされる。コンパイルエラーや空リストは構築時に失敗する。フィルタは実行時に劣化しない。
 - **全 truthy セマンティクス**：`Pass=true` となるにはすべての式が truthy な結果を返す必要がある。最初の falsy な結果で評価は短絡する。
-- **undefined は falsy**：JSONata のノーマッチ（フィールド未存在、空パス）は `Pass=false`、`err=nil` を返す — フィルタの判定であり、ステップ失敗ではない。
+- **undefined は falsy**：JSONata のノーマッチ（フィールド未存在、空パス）は `Pass=false` と `nil` の error を返す — フィルタの判定であり、ステップ失敗ではない。
 - **Truthiness ルール** — `jlib.Boolean`（jsonata-go 自身の `$boolean()` 実装）に委譲することで正確に実装される：
   - `false` / `null` / undefined → falsy
   - `0` → falsy；それ以外の数値 → truthy（`$count(...)` や `$length(...)` 等の組み込み関数が返す `int` 型も含む）

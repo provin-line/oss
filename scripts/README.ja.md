@@ -12,7 +12,7 @@
 
 decoder、canonicalizer、number のチェックは、`gen/`（生成コード）を対象にしない。upstream の library の写しである `internal/jsonschema/` では、decoder のチェックが `loader.go` と `content.go`（schema の package が使わない decode）を対象にせず、`schema/internal/schemadoc` のほかの package がこの写しを import すると失敗する。number のチェックは `kind/kind.go`（誤りの文の整形）を対象にしない。その README を参照。
 
-適用除外コメントは、検出対象の行・その直前の行・`"encoding/json"` import 行（ファイル全体の除外）のいずれかに置き、その箇所で衛生ルールが問題にならない*理由*を明記する。
+適用除外コメントは、検出対象の行かその直前の行に置く（decoder と canonicalizer のチェックでは、`"encoding/json"` import 行にも置け、ファイル全体の除外になる）。そして、その箇所で衛生ルールが問題にならない*理由*を明記する。
 
 チェック以外のスクリプト:
 

@@ -19,6 +19,8 @@ boundary translation の DID-source 形、の契約。トリガーは foreign DI
 
 HTTP プッシュエンドポイント（`POST /push`、JSON のみ、ボディサイズ上限あり）がプロセスの入力キューにパブリッシュし、`GET /health` も提供する。署名パスに関する注記：HTTP エンドポイントはトランスポートアダプタ（Subscriber）であり、生のペイロードを下流の **Source Process** ランタイム — [`ingest.go`](ingest.go) の FirstDrop 署名器 — に向けてパブリッシュする。この署名器は何も検証せず（`VerificationNone` は Source の定義そのもの）、バイト列をそのまま署名する。エンドポイントと署名器を1つのプロセスに融合した自己完結型バリアントも同様に `pipeline/contract` に準拠する。
 
+`cmd/pipeline` は `push-ingress = true` の source ループごとに 1 つのアダプタを `/ingest/<loop-name>/…` にマウントする。push ルートはノードの L1 PDP チェックの背後にある（resource `ingest`、action `push`）。health は公開。push が成功すると `202 Accepted` と、payload の content address（`payload_hash`）を返す。これは発行される FirstDrop の input/output hash に等しい — 発行自体は非同期である。
+
 署名ランタイムは設計上 **transform-free**：filter / convert / enrich は Chained Process の責務であり、boundary translation の再整形はバイト列が署名器に届く*前*にアダプタ自身のロジックで行う（上記）。Source に変換を持たせると、対称性で Sink にも同じことが起き、Source / Chained / Sink の区別が何でも屋の単一プロセスへと崩れる。
 
 その他の外部ソースメカニクス（ファイルリーダー、スケジューラ・ポーラー、アーカイブリプレイ）も同じ形状に従い、ここまたは拡張リポジトリに置かれる。

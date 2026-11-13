@@ -3,7 +3,9 @@
 
 分散型データパイプラインエンジン — **dPLaaX protocol** の **`provin` wire profile**（参照実装）。すべてのデータ変換は W3C Verifiable Credential として暗号署名され、任意の参加者が独立に検証できる線形の来歴チェーンを形成する。DB 不要、YAML 駆動、セルフホスト可能。
 
-> **Status: PoC skeleton.** ディレクトリ構造と各レイヤーの規約は整備済み。インターフェースと実装は順次追加される。
+セルフホストでは、ノードの認可層も立てる必要がある: ノードは fail-closed で、policy decision point（PDP）を要する。認証付きの stack — 本物の `auth.provider` + policy-verifier + ノード + NATS を 1 コマンドで立て、record を `VERIFIED` の verdict まで進める — は [`deploy/quickstart/`](deploy/quickstart/README.md) を参照。PDP backend は差し替え可能（`o3co` | `opa` | `cedar` | `static`）。private ネットワーク上の plaintext `http://` の PDP は `provin.network.auth.plain-internal` に載せる必要がある。`static` は認可の許可リストであり、**認証ではない**（[network/README.ja.md](network/README.ja.md#pdp-backend-と認証の所在) 参照）。
+
+> **Status: PoC skeleton.** ディレクトリ構造と各レイヤーの規約は整備済み。インターフェースと実装は順次追加される。受け入れ済みの PoC のギャップは、コード上の該当箇所に記録され、P0 の slice に対して追跡される — 特に: audit evidence は credential の **body** の番地をキーにするため、verdict は、監査した受理済み variant のどれかを名指さない（`network/pkg/services/auditor/evidence.go`、P0-1 slice B/C）。また DID の lifecycle 書き込みは非トランザクションで、部分失敗の窓が既知である（`network/pkg/services/didregistry`、durable な tlog 基盤で閉じる）。
 
 ## 名前の使い分け
 
