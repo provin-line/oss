@@ -487,7 +487,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `LargeNumberError` there, and the schema package's own bound on numbers
   refuses it first).
 - `vc`: an `eddsa-rdfc-2022` `PipelinePassCredential` must hold the members
-  `vc` reads under their names and in their forms, and no others.
+  `vc` reads under their names and in their forms, and no others, and no two
+  of its node objects may carry the same id.
   `ValidateWireForm` (and so `Verify` and `VerifyChain`), `ValidateChainLinks`,
   `ValidateChainFrom` and `VerifySourceCommitment` refuse one that does not;
   `ValidateWireForm`'s documentation lists the form. `eddsa-jcs-2022`
@@ -718,8 +719,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   caller that saved a Pipeline or Process with a nil delegation gets that
   error from `yamlstore` now.
 - **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
-  only the members `vc` reads, under their names and in their forms; one with
-  any other member is refused.
+  only the members `vc` reads, under their names and in their forms, and no two
+  of its node objects may carry the same id; one with any other member, or with
+  two node objects of one id, is refused.
 
 ### Documentation
 

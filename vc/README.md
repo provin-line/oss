@@ -44,8 +44,9 @@ expansion probe** when it is registered — the process panics rather than serve
 broken canonicalization.
 
 A `PipelinePassCredential` signed under `eddsa-rdfc-2022` holds the members
-`vc` reads under their names and in their forms, and no others.
-`ValidateWireForm`, the chain links and `VerifySourceCommitment` refuse one
+`vc` reads under their names and in their forms, and no others; no two of its
+node objects share an id (an id written as a compact IRI and one written in
+full are the same id). `ValidateWireForm`, the chain links and `VerifySourceCommitment` refuse one
 that does not; the closed form is in `ValidateWireForm`'s documentation, and
 holds the members dplaax's `PipelinePassCredential` JSON Schema defines (a
 member the schema adds is added to it). Its `Hash` and `WireVariantID` are

@@ -3,6 +3,7 @@ package vc
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // memberForm is the JSON form vc reads a member in.
@@ -65,7 +66,8 @@ var (
 // a credential it requires the closed form: the credential, its
 // credentialSubject and the subject's schema hold only the members of
 // closedCredentialForm, closedSubjectForm and closedSchemaForm, each in its form;
-// the source commitment's three members are all present or all absent; and
+// the source commitment's three members are all present or all absent; no two
+// of the credential, its subject and its schema name one node; and
 // derived_from is strictly ascending. An eddsa-rdfc-2022 credential holds the
 // members vc reads under their names and in their forms, and no others.
 // Under eddsa-jcs-2022, and for a credential with no proof, nothing here
@@ -87,10 +89,14 @@ func checkRDFCClosedForm(c *PipelinePassCredential) error {
 	if err := checkMembers("credentialSubject", subject, closedSubjectForm); err != nil {
 		return err
 	}
-	if schema, ok := subject[keySchema].(map[string]any); ok {
+	schema, hasSchema := subject[keySchema].(map[string]any)
+	if hasSchema {
 		if err := checkMembers("schema", schema, closedSchemaForm); err != nil {
 			return err
 		}
+	}
+	if err := checkDistinctNodes(c.body, subject, schema); err != nil {
+		return err
 	}
 	_, hasDerived := subject[keyDerivedFrom]
 	_, hasRoot := subject[keySourceRoot]
@@ -153,4 +159,94 @@ func inForm(v any, f memberForm) bool {
 		_, ok := v.(map[string]any)
 		return ok
 	}
+}
+
+// The predicates that link the node objects of the closed form in the
+// canonical N-Quads: the credential to its subject, and the subject to its
+// schema.
+const (
+	predCredentialSubject = "<https://www.w3.org/2018/credentials#credentialSubject>"
+	predSchema            = "<https://dplaax.dev/vocab#schema>"
+)
+
+// checkDistinctNodes requires the node objects of the closed form (the
+// credential, its credentialSubject and its schema, nil when absent) to be
+// three nodes of the RDF dataset the credential signs. JSON-LD joins node
+// objects that expand to one @id into one node and merges their members, so
+// members written on one of them can be written on another without changing
+// the dataset. A node object with no id is a blank node of its own; two with
+// an id each are compared by the id written, and, when those differ, by the
+// node each becomes in the canonical N-Quads, which is the expansion of the
+// id (a compact IRI against a full IRI) done by the registered
+// eddsa-rdfc-2022 canonicalizer. When none is registered the ids are compared
+// as written: nothing of this suite is signed or verified then.
+func checkDistinctNodes(body, subject, schema map[string]any) error {
+	type object struct {
+		where string
+		obj   map[string]any
+	}
+	var withID []object
+	for _, n := range []object{{"the credential", body}, {"credentialSubject", subject}, {"schema", schema}} {
+		if _, ok := n.obj["id"].(string); ok {
+			withID = append(withID, n)
+		}
+	}
+	if len(withID) < 2 {
+		return nil
+	}
+	for i, a := range withID {
+		for _, b := range withID[i+1:] {
+			if a.obj["id"] == b.obj["id"] {
+				return fmt.Errorf("eddsa-rdfc-2022 credential: %s and %s carry the id %s", a.where, b.where, errQuote(a.obj["id"].(string)))
+			}
+		}
+	}
+	c, err := canonicalizerFor(CryptosuiteEdDSARDFC2022)
+	if err != nil {
+		return nil
+	}
+	nquads, err := c.Canonicalize(body)
+	if err != nil {
+		return fmt.Errorf("eddsa-rdfc-2022 credential: the ids of its node objects cannot be compared: %w", err)
+	}
+	var rootTerm, subjectTerm, schemaTerm string
+	var schemaLinks [][2]string // each subject → schema quad: its subject and its object
+	for _, line := range strings.Split(string(nquads), "\n") {
+		s, rest, _ := strings.Cut(line, " ")
+		p, o, _ := strings.Cut(rest, " ")
+		o = strings.TrimSuffix(o, " .")
+		switch p {
+		case predCredentialSubject:
+			rootTerm, subjectTerm = s, o
+		case predSchema:
+			schemaLinks = append(schemaLinks, [2]string{s, o})
+		}
+	}
+	for _, l := range schemaLinks {
+		if l[0] == subjectTerm {
+			schemaTerm = l[1]
+		}
+	}
+	terms := []node{{"the credential", rootTerm}, {"credentialSubject", subjectTerm}}
+	if schema != nil {
+		terms = append(terms, node{"schema", schemaTerm})
+	}
+	seen := map[string]string{}
+	for _, n := range terms {
+		if n.term == "" {
+			return fmt.Errorf("eddsa-rdfc-2022 credential: %s is not found in the canonical form", n.where)
+		}
+		if other, dup := seen[n.term]; dup {
+			return fmt.Errorf("eddsa-rdfc-2022 credential: %s and %s carry ids that expand to one node", other, n.where)
+		}
+		seen[n.term] = n.where
+	}
+	return nil
+}
+
+// node is a node object of the closed form, named where for an error: as the
+// object it is, or as the term it is in the canonical N-Quads.
+type node struct {
+	where string
+	term  string
 }
