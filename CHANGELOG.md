@@ -389,7 +389,8 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   GO-2026-6865. `golang.org/x/crypto` 0.58.0 → 0.59.0, which carries the fix
   for GO-2026-5932 (the `openpgp` packages, which this module does not
   import), with `golang.org/x/sys` 0.49.0 → 0.50.0 and `golang.org/x/text`
-  0.43.0 → 0.44.0 (indirect) that it requires.
+  0.43.0 → 0.44.0 that it requires (in `verification`, `golang.org/x/text`
+  alone, indirect).
   `github.com/o3co/protobuf.interceptors` and its `connectrpc` module
   0.6.0 → 0.7.0 (see Breaking changes: Authentication, Authorization
   answers).
@@ -697,10 +698,12 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `errors.Is` and `errors.As` reach an error value through `Unwrap`. With a
   context that cannot end, the panic is the value itself, as in 0.4.x.
 - **Go API:** `decisionrecord`: with a context that has already ended, the
-  sinks `NewJSONLines`, `NewLog` and their `Format` forms, and `Filter.Record`
-  at `LevelAll`, return an error wrapping the context's error and write
-  nothing; at `LevelRefusals` `Filter.Record` drops the record, with a
-  warning at most. 0.4.x wrote the record. A caller that records after its
+  sinks `NewJSONLines`, `NewLog` and their `Format` forms return an error
+  wrapping the context's error and write nothing, and so does
+  `Filter.Record` at `LevelAll` over one of them; at `LevelRefusals`,
+  `Filter.Record` over one of them drops the record, with a warning at
+  most. 0.4.x wrote the record. A `Filter` over a sink of another
+  implementation passes the context on, and the sink decides. A caller that records after its
   request's context may have ended passes
   `context.WithTimeout(context.WithoutCancel(ctx), d)`, a context the end of
   the request does not end and that has a deadline of its own (see Changed).
@@ -799,9 +802,11 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   two node objects of one id, is refused.
 
   Migration: a credential that does not fit is issued again by its issuer.
-  Editing the signed JSON in place breaks its proof, as the signature covers
-  every member. A re-issued credential has a new content address, so links
-  to the old one are made again.
+  Rewriting its JSON into the closed form is no substitute: an
+  `eddsa-rdfc-2022` proof signs the RDF dataset, which several JSON forms
+  share, so a proof that still verifies does not show that the issuer
+  wrote the form. A re-issued credential has a new content address, so
+  links to the old one are made again.
 
 ### Documentation
 
