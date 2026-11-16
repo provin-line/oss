@@ -74,6 +74,8 @@ override は **split-horizon の seam**: advertised URL は emitting network 内
 
 **資格情報を誰に見せるか。** これらの endpoint は、export する chain か peer が決めるので、呼び手の資格情報は、呼び手が名前を挙げた origin にだけ渡す。`provin bundle export` は `--token` を、`--registry` の origin と、各 `--credential-origin`（繰り返し可、`scheme://host[:port]`）にだけ見せる。node の batch resolver は `vc-store-bearer` を、`vc-store-endpoint` の origin と `provin.network.pipeline.credential-origins` にだけ見せる。ほかの endpoint は資格情報なしで呼び、資格情報を付けた呼び出し（CLI の registry への呼び出しをすべて含む）は redirect を追わないので、名前を挙げた origin が redirect する先の server には届かない。
 
+資格情報は `http` の origin には平文で渡る。信頼できる network を除いて `https` の origin を挙げる（quickstart の compose network は `http` を使う）。
+
 ## 凍結境界
 
 **credential Data Integrity wire**（context、proof algorithm、canonicalization、source-commitment 形、verification-method 読み契約）は凍結済みでテストが強制する — CHANGELOG 参照。本ページの内容 — RPC 面、routing、導出順、metric 名 — はすべて **operational surface**: 安定名だが、0.x 中は CHANGELOG 付きで変更可能。

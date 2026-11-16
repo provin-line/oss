@@ -124,6 +124,11 @@ func (e *ChainOrderError) Is(target error) bool { return target == ErrChainOrder
 // credential type requires on every entry, and only the issuers and keys
 // (each entry's Issuer and VerificationMethod) it lets sign each credential.
 //
+// Every signature in the chain is verified, whatever the links and the order
+// say, and the method has no bound on the chain's length: the caller bounds
+// the chain, its length and the time it allows (a ctx with a deadline, which
+// the method checks before each credential), before it calls.
+//
 // It does not establish, and a caller does not read into the result:
 //
 //   - who is responsible for an issuer (Owners), or the chain-consistency

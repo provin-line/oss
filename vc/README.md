@@ -129,7 +129,11 @@ different ones, so neither is the signed credential's identity.
   folding them into one verdict. It establishes no Owner, so it fits
   credentials whose issuers are not Process DIDs; the caller accepts only the
   contract and the issuers and keys it requires of each credential, and checks
-  what the method's documentation lists as not established.
+  what the method's documentation lists as not established. It verifies every
+  signature in the chain whatever the links say, and has no bound on the
+  chain's length: the caller bounds the chain, its length and the time it
+  allows (a context with a deadline, which the method checks before each
+  credential), before it calls.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'

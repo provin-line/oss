@@ -532,13 +532,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   alias is a function, no longer a variable: it cannot be assigned, and its
   address cannot be taken.
 - **Configuration:** a pipeline whose configuration names one
-  `upstream-endpoint` for two registries (the loops at that endpoint derive,
-  or override with `upstream-registry`, different audiences) does not start:
-  one endpoint is one node (`docs/architecture/deployment.md`, "Wire proof
-  audience"). Nor does a pipeline that signs its own node's proofs as DIDs
+  `upstream-endpoint` for two registries (the by-reference ingresses at that
+  endpoint derive, or override with `upstream-registry`, different
+  audiences) does not start: one endpoint is one node
+  (`docs/architecture/deployment.md`, "Wire proof audience"). Only
+  by-reference ingresses count; an inline ingress fetches nothing and names
+  no audience. Nor does a pipeline that signs its own node's proofs as DIDs
   of two registries (its node DID, a producing loop's output subject or
   issuer, a sink's receipt issuer) without `node-registry`: it decides one
-  audience for its node at start, and that node accepts one.
+  audience for its node at start, and that node accepts one. A
+  `vc-store-endpoint` or an `upstream-endpoint` served by a node of another
+  registry starts, and then every call the pipeline signs for that endpoint
+  fails as `Unauthenticated`, until `node-registry` or `upstream-registry`
+  names that registry. A publisher's `#chain-manager` endpoint must be served
+  by the node whose `provin.network.registry.id` is the registry of the
+  publisher's DID: the call names that registry as its audience.
 - **Wire and configuration:** a DID whose registry segment is longer than
   253 octets (`did/dplaax.MaxRegistryLen`) does not parse, so this release
   refuses such a DID that 0.4.x accepted, wherever it reads one. A registry
@@ -546,7 +554,14 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   configuration whose `registry-base-urls` names one, do not start. The
   registry's DID service answers
   such a DID `InvalidArgument`, where it answered `PermissionDenied` for a
-  registry that is not its own.
+  registry that is not its own. An allowlist pattern whose literal registry
+  is longer than 253 octets is invalid (`ErrInvalidPattern`) as well.
+
+  Migration: a DID already issued under a longer registry cannot be renamed
+  by configuration, as the registry is part of the DID; such a DID must be
+  issued again under a registry of at most 253 octets, and every registry
+  the configuration and the allowlists name must be within that bound before
+  the upgrade.
 - **Wire:** a key binding this release issues names the dplaax key-binding
   branch context in its `@context`, after credentials v2 and dplaax v1, and
   a 0.4.x relying party refuses it: it takes only a binding whose `@context`
@@ -556,7 +571,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   2027-01-01T00:00:00Z or later.
 
   Migration: upgrade relying parties before issuers, and every issuer before
-  it issues a binding valid from 2027-01-01T00:00:00Z.
+  it issues a binding valid from 2027-01-01T00:00:00Z. A binding a 0.4.x
+  issuer has already issued with a `validFrom` of 2027-01-01T00:00:00Z or
+  later is refused by this release, and upgrading its issuer does not repair
+  it: issue such a binding again.
 
   The two context documents of the v0 credential wire freeze that a key
   binding names (credentials v2, dplaax `vc/v1`) are unchanged, and a
@@ -567,7 +585,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `Unavailable` when the owner's document, which the delegation is verified
   against, cannot be read now: the store fails, returns the document of
   another DID, or returns neither a document nor an error. 0.4.x answered
-  `PermissionDenied`. A client may retry
+  `PermissionDenied` for the first two; for the third, its delegation check
+  read the nil document and panicked in the handler, which nothing in the
+  node recovers, so the request ended with no answer. A client may retry
   `Unavailable`; a delegation the registry refuses is still
   `PermissionDenied`.
 - **Schema:** a JSON Schema `pattern` may name a Unicode general category by a
@@ -586,15 +606,21 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   classes uses more of its regular expressions' total: a few schemas a 0.4.x
   process accepts are refused here, among them a schema a process holds when
   it registers it again at its start (`schema/local`'s `Add` compiles it):
-  check those schemas before upgrading. Upgrade every process that compiles or
-  validates against a schema before a schema uses one.
+  check those schemas before upgrading. The same cost applies to a payload
+  value checked as format `"regex"`: one with many Unicode classes uses more
+  of the payload's work budget than before, so check those inputs before
+  upgrading too. Upgrade every process that compiles or validates against a
+  schema before a schema uses one.
 - **Authentication:** the `cedar` backend accepts a caller's JWT only with
   the `typ` RFC 9068 gives an access token, `at+jwt` or `application/at+jwt`
   (in any ASCII case), and an `iat` claim, which may not be ahead of the
   node's clock by more than the 30-second leeway. A token that lacks either,
   one with a `typ` of `JWT` for instance, is refused as `Unauthenticated`, as
   an invalid token is. 0.4.x checked neither: an issuer whose tokens lack them
-  must issue tokens of that form first.
+  must issue tokens of that form first. A token already issued without them
+  and still held by a caller is refused by an upgraded node too: replace
+  such tokens, or let them expire, before the verifying nodes are upgraded,
+  as well as changing the issuer's future tokens.
 - **Authentication:** with the `cedar` backend and `jwks-url`, a node that
   cannot fetch the issuer's key set reports the PDP unavailable rather than
   the caller unauthenticated: an L1-guarded RPC fails with `Unavailable`, and
@@ -636,8 +662,9 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   `chainmanager.ReportEmitHealthFields` are functions that call their
   `wirecontract` package's function of the same name; in 0.4.x they were
   variables holding it. A call, and passing one as a function value, read as
-  before; assigning one, taking its address, or comparing it with `nil` no
-  longer compiles. Each is a function of its own, so its value is not the
+  before; assigning one or taking its address no longer compiles, and
+  comparing one with `nil` compiles but is always false (`go vet` reports
+  it). Each is a function of its own, so its value is not the
   `wirecontract` function's (`reflect` and `runtime.FuncForPC` tell them
   apart).
 - **Go API:** `emithealth.Store.Report` and `handler.EmitHealthReporter`'s
@@ -656,10 +683,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   format `"regex"` that nests so deep: check registered schemas and those
   inputs before upgrading, or set the variable to the depth they need on
   every process that compiles or validates against them.
-- **Go API:** `decisionrecord.Filter.Flush` with a context that has already
-  ended returns its error and keeps the window for the next `Flush`, where
-  0.4.x passed the window's summaries to its sink whatever the context said
-  and started the next window. A caller's
+- **Go API:** `decisionrecord.Filter.Flush` at `LevelSummary` with a context
+  that has already ended returns its error and keeps the window for the next
+  `Flush`, where 0.4.x passed the window's summaries to its sink whatever the
+  context said and started the next window. A caller's
   last `Flush` at shutdown passes a context the shutdown signal does not end,
   with a deadline of its own (see Changed).
 - **Go API:** with a context that can end, a panic in the writer or the
@@ -669,6 +696,47 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   compares the value (`==`, a type assertion) reads `WritePanic.Value`;
   `errors.Is` and `errors.As` reach an error value through `Unwrap`. With a
   context that cannot end, the panic is the value itself, as in 0.4.x.
+- **Go API:** `decisionrecord`: with a context that has already ended, the
+  sinks `NewJSONLines`, `NewLog` and their `Format` forms, and `Filter.Record`
+  at `LevelAll`, return an error wrapping the context's error and write
+  nothing; at `LevelRefusals` `Filter.Record` drops the record, with a
+  warning at most. 0.4.x wrote the record. A caller that records after its
+  request's context may have ended passes
+  `context.WithTimeout(context.WithoutCancel(ctx), d)`, a context the end of
+  the request does not end and that has a deadline of its own (see Changed).
+  The pipeline runtime's flush of the summary level now waits at most 10
+  seconds for the sink, with a context the shutdown signal does not end.
+- **Go API:** `schemaregistry.Service.Register` called directly in Go refuses
+  a schema body over 1 MiB with `ErrInvalidArgument` and stores nothing,
+  where 0.4.x took it; a caller keeps the body within 1 MiB. A client of the
+  network node was already bounded to 1 MiB for the whole request by the
+  transport (see Changed).
+- **Go API:** a resolver that returns the DID Document of another DID than the
+  one asked for is refused where 0.4.x used the document: `chainmanager`'s
+  subscribe and unsubscribe answer `Unavailable` and call no peer,
+  `vcresolver/batchresolver` derives no endpoint from it, and
+  `orgverify.Verify` and `Inspect` refuse it (see Fixed). A custom resolver
+  returns the document of the DID it was asked for. The resolvers of the
+  network node and the CLI already refused such a document.
+- **Go API:** `vc.ClassifyChain` with a nil credential returns an error that
+  is `vc.ErrChainEmpty`, where 0.4.x returned `ChainOrigin` for a chain of
+  that one nil credential (and panicked on a nil credential in a longer
+  chain).
+- **Schema:** an integer keyword of a JSON Schema (`minLength`, `maxLength`,
+  `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
+  `maxContains`) whose value is an integer above `math.MaxInt` is read as
+  `math.MaxInt`, under every draft that has the keyword (see Fixed). 0.4.x
+  read the low-order bits of such a number instead, so a schema with such a
+  keyword now refuses inputs a 0.4.x process accepted (or accepts inputs it
+  refused), and a 0.4.x process and this release can disagree on it: change
+  such a keyword to a value within `int`, on every process, before relying on
+  it.
+- **Wire:** a network error coded `Internal`, `Unknown` or `DataLoss`, a code
+  outside connect's own, or an error without a code, now carries a fixed text
+  with a reference (`server error (ref <16 hex digits>); the server's log has
+  the details`), not the error's own text. The code, details and metadata are
+  unchanged, and the node logs the error under the reference (see Changed). A
+  client that matched the text uses the code and the node's log reference.
 - **Go API:** `wireauth` moves from
   `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
   the RPCs of several services carry its proof, not the chain manager's
@@ -689,7 +757,10 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   expiry: `Use(ctx, signerDID, nonce, expiresAt)`; a store takes no nonce
   after its expiry (`ErrExpired`), so it may forget one after it. The
   report, audit, mirror and payload-store clients' `Config` take `Audience`
-  (`StoreAudience` for the payload store); the payload client's
+  (`StoreAudience` for the payload store), and require it: `New` accepts an
+  empty one, and then every call that signs a proof fails with
+  `wireauth.ErrMalformedProof` ("signerDID, audience, op, and nonce must be
+  non-empty") before anything is sent; the payload client's
   `ResolvePayload` keeps its 0.4.0 form, and takes each upstream's audience
   from `Config.UpstreamAudiences`, fetching from no endpoint without one
   (`ErrUnknownUpstream`).
@@ -727,12 +798,29 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   of its node objects may carry the same id; one with any other member, or with
   two node objects of one id, is refused.
 
+  Migration: a credential that does not fit is issued again by its issuer.
+  Editing the signed JSON in place breaks its proof, as the signature covers
+  every member. A re-issued credential has a new content address, so links
+  to the old one are made again.
+
 ### Documentation
 
 - `docs/protocol/services.md` (en/ja): the matching rule reads entries only
   from the subject's own document, and batch chain assembly's account says
   an issuer with no endpoint is retried while its retry budget remains, then
   dropped, and how the audit runner finalizes a chain that stops at the hole.
+- `vc`: `VerifyChainSigners` (its documentation and `vc/README.md`, en/ja)
+  says it verifies every signature in the chain whatever the links say and
+  has no bound on the chain's length: the caller bounds the chain, its length
+  and the time it allows, before it calls.
+- `docs/protocol/auth.md` (en/ja) says a verifier's clock stepped back while
+  the process runs reopens the acceptance window for nonces already swept, as
+  a restart does: the trusted-clock assumption holds for the whole life of
+  the process.
+- `provin.network.pipeline.vc-store-bearer` and `credential-origins`
+  (`reference.conf`, `docs/protocol/services.md`, en/ja): an `http` origin
+  receives the token in plaintext; name `https` origins except on a network
+  you trust (the quickstart's compose network uses `http`).
 - `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
   view binds the signer DID), D-w10 (nonces per signer), D-w11 (the fields'
   value grammar) and D-w12 (the view binds the audience), which the code

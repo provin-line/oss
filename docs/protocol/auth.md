@@ -126,7 +126,11 @@ Each RPC carries a proof over the request it authenticates:
   reset cannot re-admit pre-restart proofs (a guarantee that holds under a
   non-backward-stepping clock; a clock stepped back across a restart — NTP
   step, VM snapshot restore — can reopen the window, closed post-v0 with
-  the durable nonce store below). Inside the boot window this
+  the durable nonce store below). A verifier's clock stepped back while the
+  process runs does the same: a nonce the store has already swept is
+  accepted again while its proof is inside the window the stepped-back
+  clock reads, so the trusted-clock assumption holds for the whole life of the
+  process, not only across a restart. Inside the boot window this
   barrier also rejects a *legitimate* fresh proof; the handler returns a
   **retryable `Unavailable`** (never a permanent `Unauthenticated`), and a
   conforming peer recovers by a bounded, re-signing retry. On retry-budget

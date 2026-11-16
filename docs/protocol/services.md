@@ -154,6 +154,9 @@ endpoint is called without the credential, and a call that carries it
 (every CLI call to the registry included) follows no redirect, so it never
 reaches a server the named origin redirects to.
 
+A credential goes to an `http` origin in plaintext: name `https` origins,
+except on a network you trust (the quickstart's compose network uses `http`).
+
 ## Freeze boundary
 
 The **credential Data Integrity wire** (contexts, proof algorithm,
