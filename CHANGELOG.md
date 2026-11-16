@@ -386,9 +386,13 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 - Dependencies, from 0.4.0: `golang.org/x/net` 0.61.0 → 0.62.0 and
   `github.com/klauspost/compress` 1.20.1 → 1.20.2 (indirect), which carry
   the fixes for GO-2026-6866 and GO-2026-6860 (`x/net/html`) and
-  GO-2026-6865. `github.com/o3co/protobuf.interceptors` and its
-  `connectrpc` module 0.6.0 → 0.7.0 (see Breaking changes:
-  Authentication, Authorization answers).
+  GO-2026-6865. `golang.org/x/crypto` 0.58.0 → 0.59.0, which carries the fix
+  for GO-2026-5932 (the `openpgp` packages, which this module does not
+  import), with `golang.org/x/sys` 0.49.0 → 0.50.0 and `golang.org/x/text`
+  0.43.0 → 0.44.0 (indirect) that it requires.
+  `github.com/o3co/protobuf.interceptors` and its `connectrpc` module
+  0.6.0 → 0.7.0 (see Breaking changes: Authentication, Authorization
+  answers).
 
 ### Fixed
 

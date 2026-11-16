@@ -12,5 +12,5 @@ require (
 	github.com/cayleygraph/quad v1.3.0 // indirect
 	github.com/piprate/json-gold v0.9.1 // indirect
 	github.com/pquerna/cachecontrol v0.2.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
