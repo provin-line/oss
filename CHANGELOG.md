@@ -12,14 +12,40 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-17
+
+This release fixes three security advisories and binds an L2 wire proof to
+the node it was made for. It has breaking changes: read **Breaking changes**
+before upgrading.
+
 ### Security
 
 - **An L2 wire proof is accepted only by the node it was made for**
-  (GHSA: to be assigned; affects 0.1.0 to 0.4.0). The signed
+  ([GHSA-954g-5682-4235](https://github.com/provin-line/oss/security/advisories/GHSA-954g-5682-4235);
+  affects 0.1.0 to 0.4.0). The signed
   view binds the audience, the registry ID of the receiving node, and a
   node's verifier refuses a proof for another before it resolves the signer
   or records the nonce. Upgrading needs every node and pipeline that talk
   to each other to move together: read **Breaking changes**.
+- **`schema/local` reads a JSON Schema integer keyword as written, up to
+  `math.MaxInt`**
+  ([GHSA-mpg8-q8wr-vjxf](https://github.com/provin-line/oss/security/advisories/GHSA-mpg8-q8wr-vjxf);
+  affects 0.1.0 to 0.4.0). An
+  integer keyword (`minLength`, `maxLength`, `minItems`, `maxItems`,
+  `minProperties`, `maxProperties`, `minContains`, `maxContains`) above
+  `math.MaxInt` is read as `math.MaxInt`, and one whose number `big.Rat`
+  cannot read is a `LargeNumberError`. Before, a value of 2^63 or more was
+  compiled as another number.
+- **An `eddsa-rdfc-2022` credential's chain link is read as it is signed**
+  ([GHSA-hgg6-cmxw-9f88](https://github.com/provin-line/oss/security/advisories/GHSA-hgg6-cmxw-9f88);
+  affects 0.2.0 to 0.4.0). An `eddsa-rdfc-2022`
+  `PipelinePassCredential` must hold the members `vc` reads under their
+  names and in their forms, and no others, and no two of its node objects
+  may carry the same id. `ValidateWireForm` (and so
+  `Verify` and `VerifyChain`), `ValidateChainLinks`, `ValidateChainFrom` and
+  `VerifySourceCommitment` refuse one that does not; `ValidateWireForm`'s
+  documentation lists the form. `eddsa-jcs-2022` credentials are not
+  affected. Read **Breaking changes**.
 - **Go 1.26.11**: the module's `toolchain` and the `verification` module's
   are `go1.26.11`, and the `network`, `pipeline` and quickstart `provision`
   images build on `golang:1.26.11-alpine`, which carry the standard
@@ -484,20 +510,6 @@ change. The first frozen *API* surface is declared at the `1.0` line.
   against a `multipleOf` of 0 panicked. The schema package compiles every
   schema at a location the library checks against its metaschema, which
   refuses these values first, so its behaviour does not change.
-- `schema`: in a schema it compiles, an integer keyword (`minLength`,
-  `maxLength`, `minItems`, `maxItems`, `minProperties`, `maxProperties`,
-  `minContains`, `maxContains`) whose value is an integer above `math.MaxInt`
-  is read as `math.MaxInt`, under every draft that has the keyword
-  (`internal/jsonschema`'s change 14; a number `big.Rat` cannot read is a
-  `LargeNumberError` there, and the schema package's own bound on numbers
-  refuses it first).
-- `vc`: an `eddsa-rdfc-2022` `PipelinePassCredential` must hold the members
-  `vc` reads under their names and in their forms, and no others, and no two
-  of its node objects may carry the same id.
-  `ValidateWireForm` (and so `Verify` and `VerifyChain`), `ValidateChainLinks`,
-  `ValidateChainFrom` and `VerifySourceCommitment` refuse one that does not;
-  `ValidateWireForm`'s documentation lists the form. `eddsa-jcs-2022`
-  credentials are not affected.
 - `wireauth`: a `NonceStore` refuses, with `ErrExpired`, a nonce that
   reaches it after its proof's expiry, and the memory store keeps a nonce
   until that expiry.
@@ -2297,7 +2309,8 @@ Initial internal release — pinned for internal (private) deployment and soak.
 - The quickstart pins the `provin.auth` policy-verifier / auth-provider images
   and `AUTH_REF` to `v0.1.0` (built from provin.auth's matching tag).
 
-[Unreleased]: https://github.com/provin-line/oss/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/provin-line/oss/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/provin-line/oss/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/provin-line/oss/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/provin-line/oss/releases/tag/v0.3.0
 [0.2.0]: https://github.com/provin-line/oss/releases/tag/v0.2.0
