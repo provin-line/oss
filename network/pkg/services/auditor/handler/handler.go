@@ -4,10 +4,9 @@
 // validation and lookup live in the auditor.StatusService (AGENTS.md: handler = proto↔
 // domain + error mapping only).
 //
-// Coverage projection (slice-17i D-17i-2): each audited scope is its own ScopeVerdict
-// message; 17h-era records only ever evaluate the linear chain, so source_commitment is
-// never emitted (its absence == not evaluated). A linear-only verdict can never be served
-// as a full aggregate one.
+// Coverage projection: each audited scope is its own ScopeVerdict message, and
+// source_commitment is emitted only when the consumed set was evaluated (its absence ==
+// not evaluated). A linear-only verdict can never be served as a full aggregate one.
 package handler
 
 import (
@@ -20,9 +19,11 @@ import (
 
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/pagination"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 	"github.com/provin-line/oss/vc"
 )
@@ -100,15 +101,15 @@ func New(svc Service, evidence EvidenceRegistrar, v Verifier) *Handler {
 // before Verify — a malformed consumed set is a structural request defect,
 // same posture as the issued_at codec, checked before any signature work.
 func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[auditpb.RegisterEvidenceRequest]) (*connect.Response[auditpb.RegisterEvidenceResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	canonical, err := auditor.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
+	canonical, err := wirecontract.CanonicalizeConsumedSet(req.Msg.GetConsumedSourceAddresses())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	fields := auditor.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
+	fields := wirecontract.RegisterEvidenceFields(req.Msg.GetHeadVariantAddress(), canonical)
 	// No separate actor field: the proven signer_did is who gets recorded as
 	// the registering party (the querying actor IS the signer, nil authorizer).
 	if err := h.v.Verify(ctx, auditor.OpRegisterEvidence, fields, proof, nil); err != nil {
@@ -122,16 +123,16 @@ func (h *Handler) RegisterEvidence(ctx context.Context, req *connect.Request[aud
 
 // RegisterAuditHead verifies the L2 wireauth proof over head_variant_address
 // — RegisterEvidence's exact proof-then-delegate shape, minus the consumed
-// set this RPC never carries (auditor.RegisterAuditHeadFields signs only
+// set this RPC never carries (wirecontract.RegisterAuditHeadFields signs only
 // head_variant_address) — then delegates to the SAME write-path service's
 // receiptless RegisterHead (contrast RegisterEvidence, which delegates to
 // Register; see EvidenceRegistrar's own doc for how the two differ).
 func (h *Handler) RegisterAuditHead(ctx context.Context, req *connect.Request[auditpb.RegisterAuditHeadRequest]) (*connect.Response[auditpb.RegisterAuditHeadResponse], error) {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	fields := auditor.RegisterAuditHeadFields(req.Msg.GetHeadVariantAddress())
+	fields := wirecontract.RegisterAuditHeadFields(req.Msg.GetHeadVariantAddress())
 	// No separate actor field, same posture as RegisterEvidence: the
 	// querying actor IS the proven signer, nil authorizer.
 	if err := h.v.Verify(ctx, auditor.OpRegisterAuditHead, fields, proof, nil); err != nil {
@@ -164,7 +165,7 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 	// linear_chain is present whenever the spine was verified. The runner always records
 	// a recorded audit with Scope.LinearChain true (it walks head→origin before
 	// VerifyChain), so this field is in practice always present — an empty response is
-	// structurally unreachable. Overall is, in the 17h era, exactly the linear verdict.
+	// structurally unreachable. Overall is exactly the linear verdict.
 	//
 	// Unresolvable overrides EVERY confidence in this scope (overall + all three axes) to
 	// CONFIDENCE_UNRESOLVABLE: chain assembly never obtained the head's own content, so
@@ -184,11 +185,11 @@ func statusResponse(rec auditor.AuditRecord) *auditpb.GetAuditStatusResponse {
 			Notations: rec.Notations,
 		}
 	}
-	// source_commitment is emitted ONLY when the consumed-set was actually evaluated
-	// (slice-17o): its presence IS the coverage signal (17i D-17i-2), and the confidence maps
-	// the DISTINCT domain field (never Overall — that is the linear verdict). No axes:
-	// VerifySourceCommitment yields a single state outside the three axes. When the flag is
-	// false (17h-era or a downstream linear-only audit) the field stays absent.
+	// source_commitment is emitted ONLY when the consumed-set was actually evaluated: its
+	// presence IS the coverage signal, and the confidence maps the DISTINCT domain field
+	// (never Overall — that is the linear verdict). No axes: VerifySourceCommitment yields
+	// a single state outside the three axes. When the flag is false (a linear-only audit)
+	// the field stays absent.
 	if rec.Scope.SourceCommitmentEvaluated {
 		resp.SourceCommitment = &auditpb.ScopeVerdict{
 			Confidence: confidence(rec.SourceCommitment),
@@ -287,7 +288,7 @@ func mapError(err error) error {
 	switch {
 	// Malformed request (the evidence-write RPCs' issued_at codec). Wireauth's
 	// own structural sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-verification: CodeCanceled, not a server-side
 	// "unavailable". Precedes the wireautherr delegation below, which the
@@ -304,7 +305,7 @@ func mapError(err error) error {
 	}
 	switch {
 	// The head variant address is not (yet) admitted in the local VC store —
-	// the arbitrary-hash amplification guard (D1).
+	// the arbitrary-hash amplification guard.
 	case errors.Is(err, auditor.ErrHeadNotAdmitted):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	// A recorded receipt already pins a DIFFERENT canonical consumed set for

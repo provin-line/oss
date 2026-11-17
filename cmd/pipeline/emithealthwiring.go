@@ -1,6 +1,6 @@
 package main
 
-// EmitHealth reporter wiring (PR3b Task 7, Task 10 D4): this binary reports
+// EmitHealth reporter wiring: this binary reports
 // each by-reference PUBLISHER's stripped-publish health via
 // ChainService.ReportEmitHealth so a report-mode registry (cmd/network,
 // chainmanager.WithPublisherHealth backed by
@@ -9,9 +9,9 @@ package main
 // with no reporter ever calling in, every publisher reads NeverReported
 // forever, and advertise-without-reports=false then NEVER offers
 // by-reference for it. buildDeps (wiring.go) wires a PayloadStore
-// unconditionally, so — per D-6, "PayloadStore wired ⇒ every producing loop
-// dual-emits, no per-loop opt-out" — every producing loop this binary runs
-// is such a publisher.
+// unconditionally, and with a PayloadStore wired every producing loop
+// dual-emits (there is no per-loop opt-out), so every producing loop this
+// binary runs is such a publisher.
 //
 // Identity (IMPORTANT, and a deliberate departure from a looser "sign as the
 // loop's issuer" reading): the reported publisher_did — and the wireauth
@@ -38,10 +38,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"sync"
 	"time"
-
-	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -66,15 +65,16 @@ type emitHealthReportClient interface {
 type reportClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
+	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*reportclient.Client
 }
 
-func newReportClientFactory(signer crypto.Signer, baseURL, bearer string, httpClient connect.HTTPClient) *reportClientFactory {
-	return &reportClientFactory{signer: signer, baseURL: baseURL, bearer: bearer, httpClient: httpClient, clients: map[string]*reportclient.Client{}}
+func newReportClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *reportClientFactory {
+	return &reportClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*reportclient.Client{}}
 }
 
 // For returns the cached client signing/reporting as publisherDID, building
@@ -89,6 +89,7 @@ func (f *reportClientFactory) For(publisherDID string) *reportclient.Client {
 		Signer:     f.signer,
 		SignerDID:  publisherDID,
 		BaseURL:    f.baseURL,
+		Audience:   f.audience,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
@@ -125,7 +126,7 @@ const minAbsoluteEmitHealthCadence = 1 * time.Second
 // the first re-derives its OWN next interval from the REGISTRY's actually
 // returned TTL via cadenceFromReturnedTTL, below, since the registry (not
 // this binary's local config) is authoritative over how long a report stays
-// fresh (P2 Codex).
+// fresh.
 func emitHealthCadence(ttl time.Duration) time.Duration {
 	if c := ttl / 3; c > minEmitHealthCadence {
 		return c
@@ -170,7 +171,7 @@ func cadenceFromReturnedTTL(ttl time.Duration) time.Duration {
 // pipeline/transport.Loop.StrippedPublishHealthy and
 // pipeline/source/aggregate.Process.StrippedPublishHealthy both implement,
 // and pipeline/runtime.LoopMetrics.Stripped's concrete value satisfies
-// structurally whenever a loop dual-emits (D-6 — every producing loop does,
+// structurally whenever a loop dual-emits (every producing loop does,
 // since buildDeps always wires a PayloadStore). internal/netcompose.
 // StrippedPublishHealthSource is this binary's structurally-independent
 // counterpart (this binary must not import internal/netcompose; same
@@ -207,19 +208,18 @@ type emitHealthReporterSpec struct {
 }
 
 // alwaysHealthy is emitHealthReporterSpecsFor's fallback accessor for a
-// producing loop with no matching health source — defensive only: D-6
-// guarantees buildDeps always wires a PayloadStore, so every producing
-// loop's Stripped accessor is always populated in production; this exists so
-// a (should-be-impossible) gap reports the pre-D4 "always healthy" behavior
-// rather than a nil-func panic.
+// producing loop with no matching health source — defensive only: buildDeps
+// always wires a PayloadStore, so every producing loop dual-emits and its
+// Stripped accessor is always populated in production; this exists so
+// a (should-be-impossible) gap reports "always healthy" rather than a nil-func
+// panic.
 func alwaysHealthy() bool { return true }
 
 // emitHealthReporterSpecsFor pairs every producing loop's OutputSubject with
 // an accessor reading THAT loop's own producer handle's CURRENT
 // stripped-publish health (matched by loop config Name against metrics —
-// see emitHealthSourcesByName). Replaces the pre-fix behavior of hardcoding
-// healthy=true on every report regardless of the producer's actual state
-// (P1, converged finding from both reviewers).
+// see emitHealthSourcesByName), so a report carries the producer's actual
+// state rather than an unconditional healthy=true.
 func emitHealthReporterSpecsFor(loops []pipelineconfig.LoopConfig, metrics []pipelineruntime.LoopMetrics) []emitHealthReporterSpec {
 	refs := producingLoops(loops)
 	if len(refs) == 0 {
@@ -245,8 +245,7 @@ type emitHealthReporter struct {
 	publisherDID string
 	interval     time.Duration
 	// healthy reports the CURRENT stripped-publish health to send on the next
-	// tick (P1 fix — every report used to hardcode true regardless of the
-	// producer's actual state). nil is treated as unconditionally healthy —
+	// tick. nil is treated as unconditionally healthy —
 	// only a hand-built test reporter that does not care about this path
 	// leaves it nil; every reporter buildEmitHealthReporters constructs
 	// always sets one (via emitHealthReporterSpec.Healthy).
@@ -284,11 +283,11 @@ func (r *emitHealthReporter) run(ctx context.Context) {
 	}
 }
 
-// report makes one bounded ReportEmitHealth call, sending r.currentlyHealthy()
-// (P1 fix). The per-call timeout (r.interval) keeps a hung registry from
+// report makes one bounded ReportEmitHealth call, sending r.currentlyHealthy().
+// The per-call timeout (r.interval) keeps a hung registry from
 // stalling ctx-cancellation observance past the next tick. On success, the
 // REGISTRY's own returned TTL re-derives r's cadence for every SUBSEQUENT
-// tick (P2 Codex — cadenceFromReturnedTTL) and retunes ticker to match; a
+// tick (cadenceFromReturnedTTL) and retunes ticker to match; a
 // failed call leaves the cadence untouched (the last known-good interval is
 // the safest fallback for a registry that just proved unreachable).
 func (r *emitHealthReporter) report(ctx context.Context, ticker *time.Ticker) {
@@ -306,7 +305,7 @@ func (r *emitHealthReporter) report(ctx context.Context, ticker *time.Ticker) {
 }
 
 // producingLoopRef pairs a producing loop's config name with its own output
-// pipeline DID — both halves main.go's D9 boot preflight
+// pipeline DID — both halves main.go's boot preflight
 // (preflightPayloadRetainKeys, wiring.go) needs to name the loop a missing
 // payload-retain key belongs to; emitHealthReporterSpecsFor (below) needs
 // both halves too (the DID to report under, the name to bind the loop's
@@ -341,7 +340,7 @@ func producingLoops(loops []pipelineconfig.LoopConfig) []producingLoopRef {
 // this file's package doc) — at the given INITIAL cadence (retuned per
 // reporter thereafter from the registry's own returned TTL — see
 // emitHealthReporter.report's doc), sending spec.Healthy() on every tick
-// (P1 fix — see emitHealthReporterSpecsFor's doc).
+// (see emitHealthReporterSpecsFor's doc).
 func buildEmitHealthReporters(specs []emitHealthReporterSpec, reportClientFor func(publisherDID string) emitHealthReportClient, cadence time.Duration) []*emitHealthReporter {
 	reporters := make([]*emitHealthReporter, 0, len(specs))
 	for _, s := range specs {

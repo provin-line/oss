@@ -13,8 +13,9 @@ import (
 
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
@@ -29,7 +30,7 @@ const chunkSize = 256 * 1024
 // Serving is the authorize-then-serve boundary the handler depends on (defined
 // here to keep the dependency pointing inward). Serve returns the payload bytes
 // iff callerDID is admitted by an owner, else payloadresolver.ErrNotFound —
-// identical for a not-admitted caller and an absent hash (F9/F4).
+// identical for a not-admitted caller and an absent hash.
 // *payloadresolver.ServingBoundary satisfies it.
 type Serving interface {
 	Serve(ctx context.Context, hash, callerDID string) ([]byte, error)
@@ -59,7 +60,7 @@ func New(svc Serving, v Verifier) *Handler {
 // serving boundary (which admits the caller against the payload's owner set and
 // reads the bytes only on admission), then streams the bytes in order.
 func (h *Handler) ResolvePayload(ctx context.Context, req *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return mapError(err)
 	}
@@ -94,14 +95,14 @@ func (h *Handler) ResolvePayload(ctx context.Context, req *connect.Request[paylo
 //
 // Note there is deliberately NO PermissionDenied case: the serving boundary
 // collapses a not-admitted caller to ErrNotFound so the wire cannot distinguish
-// "present but forbidden" from "absent" (F9/F4). Because ErrNotFound carries a
+// "present but forbidden" from "absent". Because ErrNotFound carries a
 // constant message, the two cases are byte-identical on the wire.
 func mapError(err error) error {
 	switch {
 	// Malformed request (issued_at codec + domain-level argument errors).
 	// Wireauth's own structural sentinels are handled by the wireautherr
 	// delegation below.
-	case errors.Is(err, errMalformedIssuedAt),
+	case errors.Is(err, authproof.ErrMalformedIssuedAt),
 		errors.Is(err, payloadresolver.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	// Inbound caller hung up mid-resolution: CodeCanceled, not a server-side

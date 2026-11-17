@@ -4,7 +4,7 @@
 // interceptor enforces). ChainPeerService is the internet-facing L2 surface: it
 // carries NO L1 policy option — each request instead presents an AuthProof the
 // handler verifies in-band via the wireauth library. The split is a tested
-// descriptor contract asserted in both directions (slice-9 D-c1): policy option
+// descriptor contract asserted in both directions: policy option
 // present on every operator RPC, absent on every peer RPC, and an auth_proof
 // field present on every peer request.
 
@@ -35,7 +35,7 @@ const (
 
 // AuthProof is the wireauth Proof on the wire — the L2 authentication token a
 // peer presents on every ChainPeerService request. It maps 1:1 to
-// wireauth.Proof (slice-9 D-c2).
+// wireauth.Proof.
 type AuthProof struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// signer_did is the DID whose #auth key signed this proof.
@@ -50,7 +50,16 @@ type AuthProof struct {
 	// (next-B), rejecting any non-canonical form before verification.
 	IssuedAt string `protobuf:"bytes,3,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
 	// signature is the raw Ed25519 signature over the canonical signed view.
-	Signature     []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	Signature []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	// audience is the party the proof was signed for: the registry ID of the
+	// node the request is sent to. The signed view binds it, and a node accepts
+	// only a proof for its own audience.
+	Audience string `protobuf:"bytes,5,opt,name=audience,proto3" json:"audience,omitempty"`
+	// view_version is the version of the signed view the proof was made over,
+	// the view's "v". A node accepts only the versions it is configured to,
+	// and refuses any other before it resolves the signer; it never accepts
+	// version 1, which binds no audience.
+	ViewVersion   uint32 `protobuf:"varint,6,opt,name=view_version,json=viewVersion,proto3" json:"view_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,6 +120,20 @@ func (x *AuthProof) GetSignature() []byte {
 		return x.Signature
 	}
 	return nil
+}
+
+func (x *AuthProof) GetAudience() string {
+	if x != nil {
+		return x.Audience
+	}
+	return ""
+}
+
+func (x *AuthProof) GetViewVersion() uint32 {
+	if x != nil {
+		return x.ViewVersion
+	}
+	return 0
 }
 
 // Subscription is one established pipeline chain connection (mirrors store.Subscription).
@@ -255,9 +278,8 @@ func (x *AllowRule) GetPattern() string {
 	return ""
 }
 
-// Subscribe/Unsubscribe carry the last-slice connection flow (the most
-// decision-heavy part); their messages are intentionally minimal here and grow
-// additively (proto3-safe) when that flow lands.
+// Subscribe/Unsubscribe carry the subscriber side of the connection flow; their
+// messages are intentionally minimal and grow additively (proto3-safe).
 type SubscribeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SubscriberDid string                 `protobuf:"bytes,1,opt,name=subscriber_did,json=subscriberDid,proto3" json:"subscriber_did,omitempty"`
@@ -706,7 +728,7 @@ func (x *GetAllowListResponse) GetRules() []*AllowRule {
 
 type GetPublisherInfoRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof     *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	PublisherDid  string     `protobuf:"bytes,2,opt,name=publisher_did,json=publisherDid,proto3" json:"publisher_did,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -814,7 +836,7 @@ func (x *GetPublisherInfoResponse) GetSupportedPayloadDelivery() []string {
 
 type RegisterSubscriptionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof     *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	SubscriberDid string     `protobuf:"bytes,2,opt,name=subscriber_did,json=subscriberDid,proto3" json:"subscriber_did,omitempty"`
 	PublisherDid  string     `protobuf:"bytes,3,opt,name=publisher_did,json=publisherDid,proto3" json:"publisher_did,omitempty"`
@@ -955,7 +977,7 @@ func (x *RegisterSubscriptionResponse) GetPayloadDelivery() string {
 
 type DisconnectRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// auth_proof is the L2 wireauth token, verified in-handler (D-c1).
+	// auth_proof is the L2 wireauth token, verified in-handler.
 	AuthProof      *AuthProof `protobuf:"bytes,1,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
 	SubscriptionId string     `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -1113,8 +1135,11 @@ func (x *ReportEmitHealthRequest) GetAuthProof() *AuthProof {
 
 type ReportEmitHealthResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// ttl is how long this health report remains valid before a consumer must
-	// treat it as stale.
+	// ttl is how long a health report remains valid, from when the node
+	// received it, before a consumer must treat it as stale. The node keeps,
+	// for each publisher, the report with the latest auth_proof issued_at: a
+	// report made before the one it holds still succeeds and is not kept, and
+	// one made at the same second replaces it.
 	Ttl           *durationpb.Duration `protobuf:"bytes,1,opt,name=ttl,proto3" json:"ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1161,13 +1186,15 @@ var File_dplaax_chain_v1_chain_proto protoreflect.FileDescriptor
 
 const file_dplaax_chain_v1_chain_proto_rawDesc = "" +
 	"\n" +
-	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"{\n" +
+	"\x1bdplaax/chain/v1/chain.proto\x12\x0fdplaax.chain.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1ao3co/authz/v1/policy.proto\"\xba\x01\n" +
 	"\tAuthProof\x12\x1d\n" +
 	"\n" +
 	"signer_did\x18\x01 \x01(\tR\tsignerDid\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x1b\n" +
 	"\tissued_at\x18\x03 \x01(\tR\bissuedAt\x12\x1c\n" +
-	"\tsignature\x18\x04 \x01(\fR\tsignature\"\xf1\x02\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x1a\n" +
+	"\baudience\x18\x05 \x01(\tR\baudience\x12!\n" +
+	"\fview_version\x18\x06 \x01(\rR\vviewVersion\"\xf1\x02\n" +
 	"\fSubscription\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0esubscriber_did\x18\x02 \x01(\tR\rsubscriberDid\x12#\n" +

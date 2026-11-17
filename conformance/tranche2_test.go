@@ -29,13 +29,13 @@ import (
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
 	schemastore "github.com/provin-line/oss/network/pkg/services/schemaregistry/store"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	vcfilestore "github.com/provin-line/oss/network/pkg/services/vcresolver/filestore"
 	vcmemstore "github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/pipeline/contract"
 	"github.com/provin-line/oss/pipeline/sink"
 	"github.com/provin-line/oss/pipeline/transport/envelopecodec"
@@ -612,9 +612,8 @@ func runProcess(t *testing.T, v dplaaxVector) {
 // driven through the sink MUST record "verify" strictly before "write". A
 // refactor that terminated without verifying (write before, or without, verify)
 // reorders the trace to ["write", …] and fails here — the exact regression the
-// vector guards. Unblocked by the sink production/archival slice (PR #7), which
-// gave the sink its injectable Verifier/Writer seams; before it, no instrumented
-// sink runtime existed to drive.
+// vector guards. The sink's injectable Verifier/Writer seams make it possible to drive an
+// instrumented sink runtime.
 //
 // Two teeth beyond ordering: the driver asserts the sink verified the RECEIVED
 // credential (identity, not just that some verify ran — else a regression to
@@ -1010,6 +1009,7 @@ func runTransferRelationshipRecord(t *testing.T, v dplaaxVector) {
 		Op:          "RegisterSubscription",
 		ViewVersion: wireauth.ViewVersion,
 		SignerDID:   "did:dplaax:conf.example:org:sub",
+		Audience:    "conf.example",
 		Nonce:       "n-transfer-004",
 		IssuedAt:    "2026-07-11T12:00:00Z",
 		Signature:   []byte{0xde, 0xad, 0xbe, 0xef},
@@ -1104,7 +1104,7 @@ func runIdentityStore(t *testing.T, v dplaaxVector) {
 			}
 			body = b
 		case "legacy-put":
-			// The pre-slice layout: a body-only entry, no variants. Written
+			// The legacy layout: a body-only entry, no variants. Written
 			// straight to the backend because the façade has no surface that
 			// produces one — which is the point of the migration this vector
 			// pins.

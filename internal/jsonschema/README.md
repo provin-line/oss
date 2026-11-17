@@ -2,13 +2,15 @@
 
 This directory is a copy of the JSON Schema library
 [`github.com/santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema)
-with patches added: a work budget for validation, an error in place of a
-panic for a number `big.Rat` cannot read, compiling a schema in time
-about linear in its size (up to a factor of log n where `uniqueItems` sorts
-object names that share a long prefix, as `ValidateWithBudget` states), its
-check against its metaschema within a work budget,
-and a JSON pointer's array index read only as RFC 6901 writes one (Changes,
-below). The schema package (`schema/internal/schemadoc`) is its
+with patches added: a work budget for validation; an error for a number
+`big.Rat` cannot read, where upstream panics or drops the keyword; an
+integer keyword beyond `int` read as the nearest `int`, and one whose value
+is not an integer refused; a `multipleOf` not greater than 0 refused;
+compiling a schema in time about linear in its size (up to a factor of log n
+where `uniqueItems` sorts object names that share a long prefix, as
+`ValidateWithBudget` states); its check against its metaschema within a work
+budget; and a JSON pointer's array index read only as RFC 6901 writes one
+(Changes, below). The schema package (`schema/internal/schemadoc`) is its
 only user. It lives here, under its own import path, so that every module
 that imports `github.com/provin-line/oss` builds with the patches. A
 `replace` directive in go.mod would apply only when this module is the main
@@ -21,7 +23,7 @@ module.
 | Module | `github.com/santhosh-tekuri/jsonschema/v6` |
 | Version | `v6.0.3` |
 | Commit | `b0fc661f4939578bc429f408c18202573dbafcc4` |
-| Module zip | `h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=` (go.sum) |
+| Module zip | `h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=` (the Go checksum database, sum.golang.org) |
 | License | Apache License 2.0: [LICENSE](LICENSE), copied unchanged from the module. The module has no NOTICE file. |
 
 Copied: the library's non-test Go files, package `kind`, and the embedded
@@ -34,8 +36,9 @@ Every changed file says so at its top, and every changed statement is
 marked with the name of its change (`work budget`, `large number`,
 `compile index`, `resource index`, `subschema journal`, `dynamic anchor
 set`, `hash sign`, `metaschema budget`, `vocabulary cache`, `pointer
-index`, `reference index`), except the import paths. Each change from 4 on is a patch of its own, so it can be
-offered upstream on its own.
+index`, `reference index`, `number keyword`, `integer keyword`, `multiple
+of`), except the import paths. Each change from 4 on is a patch of its own,
+so it can be offered upstream on its own.
 
 1. **Import path.** `output.go`, `util.go` and `validator.go` import package
    `kind` as `github.com/provin-line/oss/internal/jsonschema/kind`.
@@ -46,16 +49,17 @@ offered upstream on its own.
    `Size() int` method) has each position of a string matched against it,
    and each value it compiles as format `regex`, charged by that size
    (`PatternInstructionsPerStep`, `PatternCompileStepsPerInstruction`); a
-   value checked as format `regex` is also charged by its length before it is
-   compiled (`PatternParseStepsPerByte`). Reading a number is charged by its
-   length and its exponent, and comparing it with a bound by the size of
-   both; two objects are compared by their names in order, so a validation
-   takes the same steps each time. New files: `budget.go`, `budget_test.go`,
-   `budget_internal_test.go`.
-   Changed lines in `validator.go`, `util.go`, `vocab.go`, `roots.go`,
-   `objcompiler.go` and `schema.go`.
-   [patches/work-budget.patch](patches/work-budget.patch) is this change as a
-   diff against upstream v6.0.3, with upstream's import path.
+   value checked as format `regex` is also charged by its length before it
+   is compiled (`PatternParseStepsPerByte`), and a value the engine refuses
+   by the size its error says it compiled first, when it says one (a
+   `Size() int` method). Reading a number is charged by its length and its
+   exponent, and comparing it with a bound by the size of both; two objects
+   are compared by their names in order, so a validation takes the same
+   steps each time. New files: `budget.go`, `budget_test.go`,
+   `budget_internal_test.go`. Changed lines in `validator.go`, `util.go`,
+   `vocab.go`, `roots.go`, `objcompiler.go` and `schema.go`.
+   [patches/work-budget.patch](patches/work-budget.patch) is this change as
+   a diff against upstream v6.0.3, with upstream's import path.
 3. **Large number.** A number `big.Rat` cannot read (such as `1e1000001`) is
    reported as a `kind.LargeNumber` error where upstream v6.0.3 reads a nil
    `big.Rat` and panics, or takes the number as unequal to every number:
@@ -74,10 +78,10 @@ offered upstream on its own.
    JSON, which v6.0.3 dropped.
 
    A `LargeNumber` is an ordinary assertion failure: `not` inverts it and
-   `if` steers on it. The compiler's reading of a number keyword is
-   unchanged: it takes a keyword whose number it cannot read as absent. The
-   schema package refuses such numbers, in a schema or a payload, before the
-   library reads them.
+   `if` steers on it. A number or integer keyword whose number the compiler
+   cannot read fails the compile (changes 13 and 14). The schema package
+   refuses such numbers, in a schema or a payload, before the library reads
+   them.
 
    The number keywords follow upstream's fix on its default branch, `boon`
    (commit `9ae86900`), and the kind `LargeNumber` is upstream's; the
@@ -144,6 +148,44 @@ offered upstream on its own.
     resource for the compile, so its target does not change. Changed lines
     in `compiler.go` and `objcompiler.go`; tests in `compile_test.go`.
     [patches/reference-index.patch](patches/reference-index.patch).
+13. **Number keyword.** A number keyword (`minimum`, `maximum`,
+    `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`) whose number
+    `big.Rat` cannot read (such as `1e1000001`) fails the compile with a
+    `*LargeNumberError`, which names the keyword's location and the number,
+    under every draft. Upstream v6.0.3 compiles such a keyword as absent, so
+    the schema accepts what the keyword would refuse. Where the library
+    checks a schema against its metaschema, the metaschema already refuses
+    such a `multipleOf` (change 3); it does not check a schema located below
+    json-schema.org, and there the compiler alone refuses it. Changed lines
+    in `objcompiler.go`; tests in `compile_test.go`.
+    [patches/number-keyword.patch](patches/number-keyword.patch).
+14. **Integer keyword.** An integer keyword (`minLength`, `maxLength`,
+    `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
+    `maxContains`) reads an integer above `math.MaxInt` as `math.MaxInt`, and
+    one below `math.MinInt` as `math.MinInt`, under every draft that has the
+    keyword; a number `big.Rat` cannot read is a `*LargeNumberError`. A
+    value that is not an integer (a number with a fraction, or a value that
+    is not a number) fails the compile with a `*NonIntegerError`, which names
+    the keyword's location and the value; upstream v6.0.3 compiles it as
+    absent. Where the library checks a schema against its metaschema, the
+    metaschema refuses it first; it does not check a schema located below
+    json-schema.org, and there the compiler alone refuses it. A number with
+    no fraction, such as `2.0`, is an integer.
+    `intKeyword` reads these keywords, and `intVal` goes. The change builds on
+    change 13's `numberKeyword` and `LargeNumberError`, so its patch applies
+    after change 13's. Changed lines in `objcompiler.go`; tests in
+    `compile_test.go`.
+    [patches/integer-keyword.patch](patches/integer-keyword.patch).
+15. **Multiple of.** A `multipleOf` whose number is not greater than 0
+    (such as `0` or `-1`) fails the compile with a `*NonPositiveError`,
+    which names the keyword's location and the number, under every draft:
+    every draft requires a number greater than 0. Upstream v6.0.3 compiles
+    it, and a number validated against a `multipleOf` of 0 panics in the
+    division. Where the library checks a schema against its metaschema, the
+    metaschema refuses it first; it does not check a schema located below
+    json-schema.org, and there the compiler alone refuses it. Changed lines
+    in `objcompiler.go`; tests in `compile_test.go`.
+    [patches/multiple-of.patch](patches/multiple-of.patch).
 
 Each patch from 4 on is a diff against upstream v6.0.3 with the patches
 before it applied, with upstream's import path.
@@ -153,8 +195,9 @@ commit above with its `testdata/JSON-Schema-Test-Suite` submodule, apply the
 patches in the order above (`work-budget`, `large-number`, `compile-index`,
 `resource-index`, `subschema-journal`, `dynamic-anchor-set`, `hash-sign`,
 `metaschema-budget`, `vocabulary-cache`, `pointer-index`,
-`reference-index`), and run `go test ./...` there. To run the test suite through the budget as well, have
-`suite_test.go` call `sch.ValidateWithBudget(test.Data, 1<<62)` in place of
+`reference-index`, `number-keyword`, `integer-keyword`, `multiple-of`),
+and run `go test ./...` there. To run the test suite through the budget as well,
+have `suite_test.go` call `sch.ValidateWithBudget(test.Data, 1<<62)` in place of
 `sch.Validate(test.Data)`.
 
 ## How the schema package uses it
@@ -174,9 +217,11 @@ or content assertion would bring the library's own decoding of input back.
 When upstream bounds its own work, by a budget or a way to stop a validation
 or a compile, releases a version that reports every number it cannot read
 as an error (the number keywords and the `uniqueItems` hash, in `Validate`
-and in `Compile`), compiles a schema in time linear in its size (changes
-4 to 8, 10 and 12), and reads an array index only as RFC 6901 writes one
-(change 11), switch the schema package to the upstream module and delete
-this directory. Until then, apply upstream releases here by copying
-them again and re-applying the changes above; drop a patch once a release
-carries its fix.
+and in `Compile`), reads an integer keyword beyond `int` as the nearest
+`int` and refuses one whose value is not an integer (change 14), refuses a
+`multipleOf` not greater than 0 (change 15), compiles a schema in time
+linear in its size (changes 4 to 8, 10 and 12), and reads an array index
+only as RFC 6901 writes one (change 11), switch the schema package to the
+upstream module and delete this directory. Until then, apply upstream
+releases here by copying them again and re-applying the changes above; drop
+a patch once a release carries its fix.

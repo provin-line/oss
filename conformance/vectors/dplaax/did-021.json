@@ -1,0 +1,9 @@
+{
+  "id": "did-021",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with a registry of 254 octets is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:org:acme"
+  },
+  "expect": "reject"
+}

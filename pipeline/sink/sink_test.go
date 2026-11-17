@@ -814,7 +814,7 @@ func TestProcess_Production_AllowList(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Receipt issuance (D-1): after a successful external write, a receipt-issuing
+// Receipt issuance: after a successful external write, a receipt-issuing
 // sink signs + registers a provin:sink-receipt over the consumed credential.
 // ---------------------------------------------------------------------------
 
@@ -909,7 +909,7 @@ func TestProcess_NoReceiptIssuerNoCall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Reject log (D-3): every reject path durably records a RejectRecord with a
+// Reject log: every reject path durably records a RejectRecord with a
 // closed-set reason. Post-acceptance failures (write) do NOT record.
 // ---------------------------------------------------------------------------
 

@@ -3,10 +3,12 @@ package vc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/provin-line/oss/crypto"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/resolver"
 )
 
@@ -55,7 +57,8 @@ type Verifier struct {
 	schemaResolver SchemaResolver
 }
 
-// VerifierOption configures a Verifier.
+// VerifierOption configures a Verifier. NewVerifier applies the options; a
+// Verifier is not reconfigured once it is in use.
 type VerifierOption func(*Verifier)
 
 // NewVerifier returns a Verifier verifying signatures through sigVerifier and
@@ -153,13 +156,65 @@ type SignerAuthenticityResult struct {
 	VerificationMethod string
 	// Notations carry advisory annotations (e.g. a Deprecated cryptosuite).
 	Notations []string
+	// Err is why State is not ConfidenceVerified, and nil exactly when it is.
+	// State is the verdict; Err does not change it, nor the other fields.
+	// errors.Is tells the cause. The evaluation stops at the first of these,
+	// in this order:
+	//
+	//   - no proof: failed, ErrUnsigned;
+	//   - the proof is outside the proof policy: its type or purpose, a
+	//     created time that does not parse, a member the signature does not
+	//     cover or a null @context, a credential that names no issuer, a
+	//     verificationMethod with no "#" or whose part before the first "#" is
+	//     not the issuer, or a cryptosuite no claim contract names: failed,
+	//     ErrProofPolicy;
+	//   - eddsa-rdfc-2022 before RegisterEdDSARDFC2022: failed,
+	//     ErrCryptosuiteNotRegistered;
+	//   - a proofValue that does not decode, or, with a LifecycleRegistry, a
+	//     phase it returns without error for the cryptosuite at proof.created
+	//     that is neither Active nor Deprecated: failed, ErrProofPolicy;
+	//   - the key source's IssuerKey (the Verifier's IssuerVerifier; for
+	//     VerifyChainSigners, its keys) returns an error wrapping
+	//     ErrIssuerNotFound: failed, wrapping that error;
+	//   - IssuerKey returns any other error, the context's included:
+	//     indeterminate, wrapping that error;
+	//   - IssuerKey returns a key whose ID is not the proof's
+	//     verificationMethod: failed, ErrIssuerNotFound;
+	//   - the proof does not verify under the key: failed, ErrSignatureInvalid;
+	//   - the proof verified, and the LifecycleRegistry returned an error for
+	//     the phase: indeterminate, wrapping that error (SuiteContract, Issuer
+	//     and VerificationMethod are set).
+	//
+	// So an established failure decided before the key is asked for wins over
+	// a transient key lookup, and one decided with the key wins over a
+	// lifecycle lookup that could not answer. Each condition's sentinel is its
+	// own, not its place in this order: were the checks made in another
+	// order, each would keep its sentinel, and the order would decide only
+	// which one a credential that meets several is reported under.
+	//
+	// Failed, Err matches exactly one of ErrUnsigned, ErrProofPolicy,
+	// ErrCryptosuiteNotRegistered, ErrIssuerNotFound and ErrSignatureInvalid:
+	// the one for the first condition above that the credential meets (for an
+	// established negative of the key source, the ErrIssuerNotFound its error
+	// wraps). Indeterminate, it matches none of them.
+	//
+	// An error of a component the caller passes (an IssuerVerifier or the
+	// IssuerKeys of VerifyChainSigners, the Verifier's resolver, which the
+	// default NewDIDDocumentIssuers reads, the signature verifier, a
+	// LifecycleRegistry) is wrapped as it is, so errors.Is also reaches what
+	// it wraps. If it wraps another sentinel of this package, errors.Is finds
+	// that one too: that is outside the promise above. Decide on State, and read Err for why. Its text is bounded,
+	// whatever the credential or the wrapped error holds.
+	Err error
 }
 
 // VerifySignerAuthenticity evaluates the signer-authenticity axis alone, for a
 // credential of any type: the proof policy, the issuer's key from the
 // IssuerVerifier (by default the assertionMethod key of the issuer's DID
 // document), the proof, and the cryptosuite lifecycle — the same evaluation,
-// through the same implementation, as Verify's axis.
+// through the same implementation, as Verify's axis, except that Verify reads
+// a PipelinePassCredential's issuer as a string only (an issuer written as an
+// object names none there) where this reads the id of an issuer object too.
 //
 // Verified establishes that Issuer signed, with VerificationMethod, a document
 // equivalent to this body under SuiteContract. Equivalent is not always
@@ -171,10 +226,12 @@ type SignerAuthenticityResult struct {
 //     not). ContractLegacyProvinEdDSAJCSInt64 keeps integers verbatim, so they
 //     are not alike there.
 //   - Under ContractW3CEdDSARDFC2022 the signature covers the RDF dataset the
-//     body expands to, not its JSON shape. Array order, duplicate entries, a
-//     single value or a one-element array, "id" or "@id", an IRI string or an
-//     object with that id, a compact or an expanded term, and a member whose
-//     value is an empty array all verify alike.
+//     body expands to, not its JSON shape. Array order, a single value or a
+//     one-element array, "id" or "@id", an IRI string or an object with that
+//     id, a compact or an expanded term, and a member whose value is an empty
+//     array all verify alike. A property that holds one value twice does not
+//     canonicalize (canon/urdna2015 refuses it), so a proof over it does not
+//     verify.
 //
 // It checks nothing else: not the credential's type, wire form, content,
 // validity period, status, or any chain it belongs to. A caller accepts only
@@ -184,6 +241,9 @@ type SignerAuthenticityResult struct {
 // issued into by nothing new — and only the key its type requires
 // (VerificationMethod), and then checks the type, the fields and the validity
 // on Body().
+//
+// A result that is not verified says why in Err. The error is for a call it
+// cannot evaluate: a nil credential, or a context already done.
 func (v *Verifier) VerifySignerAuthenticity(ctx context.Context, cred *Credential) (*SignerAuthenticityResult, error) {
 	if cred == nil {
 		return nil, errors.New("vc: nil credential")
@@ -191,7 +251,7 @@ func (v *Verifier) VerifySignerAuthenticity(ctx context.Context, cred *Credentia
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	res := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	res := v.signerAuthenticity(ctx, v.issuers, cred.Issuer(), cred.proof, cred.body)
 	return &res, nil
 }
 
@@ -279,58 +339,63 @@ func rawSubjectWellFormed(subject map[string]any) bool {
 // PipelinePassCredential through signerAuthenticity, the one implementation the
 // type-agnostic VerifySignerAuthenticity shares.
 func (v *Verifier) evalSignerAuthenticity(ctx context.Context, cred *PipelinePassCredential, notations *[]string, outContract *SuiteContract) ConfidenceState {
-	r := v.signerAuthenticity(ctx, cred.Issuer(), cred.proof, cred.body)
+	r := v.signerAuthenticity(ctx, v.issuers, cred.Issuer(), cred.proof, cred.body)
 	*notations = append(*notations, r.Notations...)
 	*outContract = r.SuiteContract
 	return r.State
 }
 
 // signerAuthenticity evaluates the signer-authenticity axis of a credential,
-// given its issuer, its raw wire proof (nil when unsigned) and its body: the typed
-// proof field policy, the FCoT obligations (extra-member rejection and
-// verificationMethod-names-the-issuer), the issuer's key from the
-// IssuerVerifier (which must be the key the verificationMethod names), the
+// given the key source, its issuer, its raw wire proof (nil when unsigned) and
+// its body: the typed proof field policy, the FCoT obligations (extra-member
+// rejection and verificationMethod-names-the-issuer), the issuer's key from
+// keys (which must be the key the verificationMethod names), the
 // proof under the exact suite contract, and the cryptosuite lifecycle phase at
-// proof.created. An IssuerVerifier error wrapping ErrIssuerNotFound is an
+// proof.created. A keys error wrapping ErrIssuerNotFound is an
 // established negative (failed); any other is transient (indeterminate — may
-// resolve later). The default's taxonomy: see NewDIDDocumentIssuers.
+// resolve later). The default's taxonomy: see NewDIDDocumentIssuers. Each
+// return sets Err as SignerAuthenticityResult.Err lists.
 //
 // It reads nothing of the credential's type or content, so it applies to a
 // credential of any type.
-func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawProof, body map[string]any) SignerAuthenticityResult {
-	failed := SignerAuthenticityResult{State: ConfidenceFailed}
-	indeterminate := SignerAuthenticityResult{State: ConfidenceIndeterminate}
+func (v *Verifier) signerAuthenticity(ctx context.Context, keys IssuerKeys, issuer string, rawProof, body map[string]any) SignerAuthenticityResult {
+	failed := func(err error) SignerAuthenticityResult {
+		return SignerAuthenticityResult{State: ConfidenceFailed, Err: err}
+	}
 	proof := proofView(rawProof)
 	if proof == nil {
-		return failed // unsigned
+		return failed(ErrUnsigned)
 	}
 	if proof.Type != proofType || proof.ProofPurpose != proofPurposeSign {
-		return failed
+		return failed(fmt.Errorf("%w: type %s and proofPurpose %s, not %q and %q",
+			ErrProofPolicy, errQuote(proof.Type), errQuote(proof.ProofPurpose), proofType, proofPurposeSign))
 	}
 	created, err := time.Parse(time.RFC3339, proof.Created)
 	if err != nil {
-		return failed
+		return failed(fmt.Errorf("%w: created %s is not an RFC 3339 time", ErrProofPolicy, errQuote(proof.Created)))
 	}
 	// FCoT: reject a proof carrying any member outside the typed six — extra
 	// members ride outside the signature and would be malleable if trusted.
-	for k := range rawProof {
-		if !allowedProofMembers[k] {
-			return failed
-		}
+	if k, ok := firstMemberOutside(rawProof); ok {
+		return failed(fmt.Errorf("%w: member %s is outside the signature", ErrProofPolicy, errQuote(k)))
 	}
 	// "@context": null is present-but-nil: after parsing it reads as absence,
 	// which classifies as the legacy row — where the mirror check cannot pin
 	// it. No contract accepts the shape (see DataIntegrityProof.UnmarshalJSON,
 	// which closes the typed path the same way).
 	if v, present := rawProof[keyContext]; present && v == nil {
-		return failed
+		return failed(fmt.Errorf("%w: @context is null", ErrProofPolicy))
 	}
 	// FCoT: the verificationMethod MUST be an absolute issuer#fragment reference
 	// naming the issuer; a bare DID, or a key fragment in another DID's document,
 	// must not be honoured.
 	vmDID, _, found := strings.Cut(proof.VerificationMethod, "#")
-	if issuer == "" || !found || vmDID != issuer {
-		return failed
+	if issuer == "" {
+		return failed(fmt.Errorf("%w: the credential names no issuer", ErrProofPolicy))
+	}
+	if !found || vmDID != issuer {
+		return failed(fmt.Errorf("%w: verificationMethod %s is not the issuer %s followed by #",
+			ErrProofPolicy, errQuote(proof.VerificationMethod), errQuote(issuer)))
 	}
 	// A proof no key can verify — one under a cryptosuite no claim contract
 	// names or this process has not registered (eddsa-rdfc-2022 until
@@ -338,11 +403,14 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	// established failure, decided before the lifecycle and issuer lookups, so
 	// that no lookup runs for it and a transient issuer-key error cannot make
 	// it indeterminate.
-	if !hasClaimContract(proof.Cryptosuite) || requireRegistered(proof.Cryptosuite) != nil {
-		return failed
+	if !hasClaimContract(proof.Cryptosuite) {
+		return failed(fmt.Errorf("%w: cryptosuite %s has no claim contract", ErrProofPolicy, errQuote(proof.Cryptosuite)))
+	}
+	if err := requireRegistered(proof.Cryptosuite); err != nil {
+		return failed(err)
 	}
 	if _, err := proof.ProofValueBytes(); err != nil {
-		return failed
+		return failed(wrapBounded(string(ErrProofPolicy), err, ErrProofPolicy))
 	}
 	// Cryptosuite lifecycle at proof.created (optional hardening layer; a nil
 	// registry means no lifecycle gating — a registered, non-no-op suite is
@@ -357,17 +425,26 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	if v.lifecycle != nil {
 		phase, phaseErr = v.lifecycle.PhaseAt(ctx, proof.Cryptosuite, created)
 		if phaseErr == nil && phase != PhaseActive && phase != PhaseDeprecated {
-			return failed // Sunset / Unknown fail closed
+			// Sunset / Unknown fail closed.
+			return failed(fmt.Errorf("%w: cryptosuite %s is neither Active nor Deprecated at %s",
+				ErrProofPolicy, errQuote(proof.Cryptosuite), created.UTC().Format(time.RFC3339)))
 		}
 	}
-	key, err := v.issuers.IssuerKey(ctx, &Credential{body: body, proof: rawProof})
+	key, err := keys.IssuerKey(ctx, &Credential{body: body, proof: rawProof})
 	switch {
 	case errors.Is(err, ErrIssuerNotFound):
-		return failed // established: no such issuer, or no usable key under the verificationMethod
+		// established: no such issuer, or no usable key under the verificationMethod
+		return failed(wrapBounded("vc: issuer key", err))
 	case err != nil:
-		return indeterminate // transient — may resolve later
+		// transient — may resolve later
+		return SignerAuthenticityResult{
+			State: ConfidenceIndeterminate,
+			Err:   wrapBounded("vc: issuer key", err),
+		}
 	case key.ID != proof.VerificationMethod:
-		return failed // a key of another method than the proof names is not the signer's
+		// a key of another method than the proof names is not the signer's
+		return failed(fmt.Errorf("vc: the issuer key is %s, not the proof's verificationMethod %s: %w",
+			errQuote(key.ID), errQuote(proof.VerificationMethod), ErrIssuerNotFound))
 	}
 	// Exact dispatch: the contract is resolved from the suite id, the proof
 	// shape, and the key encoding, and the canonicalizer follows from the
@@ -376,7 +453,7 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	// out (signer.suite.exact-dispatch).
 	contract, err := VerifyProofWithContract(v.sigVerifier, key.PublicKey, key.Encoding, proof, deepCopyMap(body))
 	if err != nil {
-		return failed
+		return failed(wrapBounded(string(ErrSignatureInvalid), err, ErrSignatureInvalid))
 	}
 	// The contract reaches the caller as a typed field, not a notation: it
 	// applies to every verdict, and Notations are for exceptions.
@@ -389,6 +466,7 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 	if v.lifecycle != nil {
 		if phaseErr != nil {
 			res.State = ConfidenceIndeterminate
+			res.Err = wrapBounded("vc: cryptosuite lifecycle", phaseErr)
 			return res
 		}
 		if phase == PhaseDeprecated {
@@ -398,6 +476,35 @@ func (v *Verifier) signerAuthenticity(ctx context.Context, issuer string, rawPro
 		}
 	}
 	return res
+}
+
+// The bounds of SignerAuthenticityResult.Err: what it quotes of the credential
+// (errQuoteLimit) and the text of an error it wraps (errWrapLimit), so its
+// length does not follow the credential's or an IssuerVerifier's.
+const (
+	errQuoteLimit = 128
+	errWrapLimit  = 512
+)
+
+// errQuote is s quoted within errQuoteLimit.
+func errQuote(s string) string { return excerpt.Quoted(s, errQuoteLimit) }
+
+// wrapBounded returns an error reading "<prefix>: <err's text within
+// errWrapLimit>" that unwraps to each of also and to err (excerpt.Wrap).
+func wrapBounded(prefix string, err error, also ...error) error {
+	return excerpt.Wrap(prefix, err, errWrapLimit, also...)
+}
+
+// firstMemberOutside returns the member of rawProof outside
+// allowedProofMembers that is least in byte order, and whether there is one.
+func firstMemberOutside(rawProof map[string]any) (string, bool) {
+	least, found := "", false
+	for k := range rawProof {
+		if !allowedProofMembers[k] && (!found || k < least) {
+			least, found = k, true
+		}
+	}
+	return least, found
 }
 
 // evalChainConsistency establishes the Owner responsible for the issuer
@@ -421,10 +528,11 @@ func (v *Verifier) evalChainConsistency(ctx context.Context, cred *PipelinePassC
 // monotonicity is ordering → ChainConsistency.
 //
 // chain MUST be in origin-first order (chain[0] is the origin, chain[len-1] the
-// head) — the order chainwalk produces before delegating here.
+// head) — the order chainwalk produces before delegating here. An empty chain,
+// or a nil credential in it, is an error that is ErrChainEmpty.
 func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredential) (*VerifyResult, error) {
 	if len(chain) == 0 {
-		return nil, errors.New("vc: empty chain")
+		return nil, chainEmptyError("vc: empty chain")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -436,6 +544,9 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	var notations []string
 	var headContract SuiteContract
 	for i, cred := range chain {
+		if cred == nil {
+			return nil, chainEmptyError("vc: nil credential")
+		}
 		r, err := v.Verify(ctx, cred)
 		if err != nil {
 			return nil, err
@@ -460,10 +571,8 @@ func (v *Verifier) VerifyChain(ctx context.Context, chain []*PipelinePassCredent
 	if firstBrokenLink(chain) != nil {
 		di = ConfidenceFailed // the links: no predecessor at origin, linkage, data flow, all-consumed
 	}
-	for n := 1; n < len(chain); n++ {
-		if !createdMonotonic(chain[n-1], chain[n]) {
-			cc = ConfidenceFailed // ordering
-		}
+	if firstOrderBreak(chain) != nil {
+		cc = ConfidenceFailed // ordering
 	}
 	acc = glbAxes(acc, AxisResult{
 		DataIntegrity:      di,
@@ -492,23 +601,6 @@ func minState(x, y ConfidenceState) ConfidenceState {
 		return x
 	}
 	return y
-}
-
-// createdMonotonic reports whether cur's proof.created is at or after prev's. A
-// missing or unparseable proof on either side is treated as non-monotonic
-// (the signer-authenticity axis surfaces the unsigned/malformed proof
-// separately).
-func createdMonotonic(prev, cur *PipelinePassCredential) bool {
-	pp, cp := prev.Proof(), cur.Proof()
-	if pp == nil || cp == nil {
-		return false
-	}
-	pt, err1 := time.Parse(time.RFC3339, pp.Created)
-	ct, err2 := time.Parse(time.RFC3339, cp.Created)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return !ct.Before(pt)
 }
 
 func containsString(s []string, want string) bool {

@@ -6,7 +6,7 @@
 package wireprofile
 
 // ByReferenceSubjectPrefix is the wire subject prefix a by-reference-mode
-// export carries (D-2): "byref." + publisherDID. Prefix, not suffix, is the
+// export carries: "byref." + publisherDID. Prefix, not suffix, is the
 // structurally collision-free choice — a producing loop's output subject is
 // always a dplaax pipeline DID (config-loader enforced, always starts with
 // "did:"), and a dplaax DID's registry segment may itself contain dots

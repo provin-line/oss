@@ -14,7 +14,7 @@ import (
 )
 
 // Compile-time guards: the concrete domain service satisfies BOTH the unwidened
-// read/admin Service and the new SubscriberService (D-s9), and the 1-arg
+// read/admin Service and the new SubscriberService, and the 1-arg
 // NewOperator call still compiles.
 var (
 	_ Service           = (*chainmanager.Service)(nil)
@@ -119,7 +119,7 @@ func TestOperatorHandler_Subscribe_ErrorMapping(t *testing.T) {
 	}
 }
 
-// mapError passes a wrapped remote ConnectRPC code through (D-s8): a remote
+// mapError passes a wrapped remote ConnectRPC code through: a remote
 // PermissionDenied surfaces as PermissionDenied, not a misleading Unavailable;
 // an opaque (non-connect) remote failure falls back to Unavailable.
 func TestMapError_RemotePeerPassthrough(t *testing.T) {

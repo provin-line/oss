@@ -12,6 +12,7 @@ import (
 	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // Direction values for store.Subscription. An empty stored value reads as
@@ -29,15 +30,14 @@ var (
 	ErrSubscriberUnconfigured = errors.New("chainmanager: subscriber side not configured")
 	// ErrRemotePeer wraps a failure of an outbound ChainPeerService call. The
 	// underlying *connect.Error is preserved in the chain so the handler can pass
-	// the remote code through (D-s8).
+	// the remote code through.
 	ErrRemotePeer = errors.New("chainmanager: remote peer call failed")
 	// ErrInvalidSubscriberDID is returned when the subscriber DID is not a
-	// parseable dplaax DID — a fast local fail-closed before any signed round-trip
-	// (D-s7).
+	// parseable dplaax DID — a fast local fail-closed before any signed round-trip.
 	ErrInvalidSubscriberDID = errors.New("chainmanager: invalid subscriber DID")
 	// ErrDuplicateSubscription is returned when Subscribe is called for a
 	// publisherDID this CM already holds a subscriber-direction subscription
-	// for, under ANY mode (D-4, authoritative half of the mixed-mode
+	// for, under ANY mode (the authoritative half of the mixed-mode
 	// invariant): both inline and by-reference remotes rename to the SAME
 	// local subject (see importTargets/AddImport below), so holding two
 	// subscriptions to one publisher at once would deliver duplicate/mixed
@@ -48,21 +48,34 @@ var (
 
 // DIDResolver resolves a DID to its DID Document — here, the publisher's, to read
 // its #chain-manager service endpoint. It mirrors wireauth.DIDResolver's shape so
-// the single concrete resolver (C2) satisfies both without an adapter; it is
+// the single concrete resolver satisfies both without an adapter; it is
 // declared in the domain to keep the dependency pointing inward.
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, did string) (*did.DIDDocument, error)
 }
 
+// Peer is the node at the other end of the subscriber's calls: the endpoint
+// the calls go to (its #chain-manager endpoint) and the audience their proofs
+// name (wireauth.AudienceForDID of the publisher DID whose document
+// publishes the endpoint). The two come from one source and travel together.
+type Peer struct {
+	Endpoint string
+	Audience string
+}
+
 // PeerClient is the outbound side of the connection flow: the RPCs this CM calls
-// on a remote publisher's ChainPeerService. The implementation signs each call
-// with wireauth and dials through an SSRF-guarded HTTP client (the domain holds
-// no crypto material). Disconnect returns store.ErrNotFound when the remote has
-// no such subscription, so teardown can treat it as already-done (idempotent).
+// on a remote publisher's ChainPeerService, at peer. The implementation signs
+// each call with wireauth for peer.Audience and dials peer.Endpoint through an
+// SSRF-guarded HTTP client (the domain holds no crypto material). Disconnect
+// returns store.ErrNotFound when the remote has no such subscription, so
+// teardown can treat it as already-done (idempotent).
 type PeerClient interface {
-	GetPublisherInfo(ctx context.Context, endpoint, subscriberDID, publisherDID string) (publishType string, modes []string, err error)
-	RegisterSubscription(ctx context.Context, endpoint, subscriberDID, publisherDID, requestedMode string) (remoteID string, connInfo map[string]string, publishType, agreedMode string, err error)
-	Disconnect(ctx context.Context, endpoint, remoteSubscriptionID string) error
+	GetPublisherInfo(ctx context.Context, peer Peer, subscriberDID, publisherDID string) (publishType string, modes []string, err error)
+	RegisterSubscription(ctx context.Context, peer Peer, subscriberDID, publisherDID, requestedMode string) (remoteID string, connInfo map[string]string, publishType, agreedMode string, err error)
+	Disconnect(ctx context.Context, peer Peer, remoteSubscriptionID string) error
 }
 
 // WithDIDResolver supplies the resolver the subscriber flow uses to find a
@@ -100,7 +113,7 @@ func (s *Service) endpointGuard() *core.URLGuard {
 // publisher's #chain-manager endpoint, SSRF-guard it, discover + negotiate the
 // payload mode, register over the remote ChainPeerService, wire the transport
 // import, and persist a subscriber-direction record. The infra/store mutations
-// are serialized under the Service mutex with compensation (D-s5): if AddImport
+// are serialized under the Service mutex with compensation: if AddImport
 // or the local persist fails after the remote already registered, the export the
 // remote created is best-effort torn down (RemoveImport + remote Disconnect) so
 // no orphan import nor dangling remote subscription survives.
@@ -114,19 +127,19 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	if err := requirePipelineDID(publisherDID); err != nil {
 		return "", err
 	}
-	// Fast local fail-closed on the subscriber DID before any signed round-trip
-	// (D-s7): a malformed DID would only burn a nonce and be rejected remotely.
+	// Fast local fail-closed on the subscriber DID before any signed round-trip:
+	// a malformed DID would only burn a nonce and be rejected remotely.
 	if _, err := dplaax.Parse(subscriberDID); err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrInvalidSubscriberDID, subscriberDID, err)
+		return "", fmt.Errorf("%w: %s: %v", ErrInvalidSubscriberDID, netexcerpt.ValueText(subscriberDID), err)
 	}
-	// Mixed-mode invariant, subscriber side (D-4, authoritative): reject before
+	// Mixed-mode invariant, subscriber side (authoritative): reject before
 	// any remote round-trip if a subscription to this publisher already exists,
 	// under any mode.
 	if err := s.rejectDuplicateSubscription(publisherDID); err != nil {
 		return "", err
 	}
 
-	endpoint, err := s.resolveEndpoint(ctx, publisherDID)
+	peer, err := s.resolveTarget(ctx, publisherDID)
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +149,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// normalizes to by-reference (the wire negotiation default), so it succeeds
 	// here exactly when the publisher serves payloads (offeredPayloadModes);
 	// otherwise it is rejected and the subscriber must request "inline".
-	_, modes, err := s.peer.GetPublisherInfo(ctx, endpoint, subscriberDID, publisherDID)
+	_, modes, err := s.peer.GetPublisherInfo(ctx, peer, subscriberDID, publisherDID)
 	if err != nil {
 		return "", fmt.Errorf("%w: get publisher info: %w", ErrRemotePeer, err)
 	}
@@ -149,7 +162,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		return "", err
 	}
 
-	remoteID, connInfo, publishType, agreedMode, err := s.peer.RegisterSubscription(ctx, endpoint, subscriberDID, publisherDID, requestedMode)
+	remoteID, connInfo, publishType, agreedMode, err := s.peer.RegisterSubscription(ctx, peer, subscriberDID, publisherDID, requestedMode)
 	if err != nil {
 		return "", fmt.Errorf("%w: register subscription: %w", ErrRemotePeer, err)
 	}
@@ -161,17 +174,17 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// fast-fail only): two concurrent Subscribes to the same publisher can both
 	// pass the unlocked check before either persists, and would import both
 	// mode subjects renamed onto the same local subject — the mixed-delivery
-	// state D-4 forbids. The loser compensates its already-committed remote
-	// registration (multi-agent-review convergent finding, 2026-07-12).
+	// state the mixed-mode invariant forbids. The loser
+	// compensates its already-committed remote registration.
 	if err := s.rejectDuplicateSubscription(publisherDID); err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", err
 	}
 
 	// The connection info is another organization's: it is held to the keys
 	// and characters this side uses before anything is wired or stored.
 	if err := checkConnectionInfo(connInfo); err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", fmt.Errorf("%w: %v", ErrRemotePeer, err)
 	}
 	remoteSubject, remoteAccountKey := importTargets(connInfo)
@@ -182,11 +195,11 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// consumed as if it were the publisher's output).
 	wantSubject, err := subjectForMode(publisherDID, agreedMode)
 	if err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", err
 	}
 	if remoteSubject != wantSubject {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", fmt.Errorf("%w: publisher returned import subject %q, want %q for mode %q", ErrRemotePeer, remoteSubject, wantSubject, agreedMode)
 	}
 	// Ref-count the shared import by remote subject (mirror the publisher export
@@ -194,10 +207,11 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// only the first should compensate by removing it.
 	first, err := s.isFirstImportForSubject(remoteSubject)
 	if err != nil {
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", err
 	}
-	// localSubject = publisherDID (D-4 rename), NOT remoteSubject: inline's
+	// localSubject = publisherDID (the rename onto one local subject), NOT
+	// remoteSubject: inline's
 	// remote is already publisherDID (a no-op rename), while by-reference's
 	// remote is ByReferenceSubjectPrefix+publisherDID — renaming it back to the
 	// plain publisherDID is what lets the consuming loop's ingress-subject
@@ -206,7 +220,7 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 	// config-side absorption; no new wire concept.
 	if err := s.infra.AddImport(remoteSubject, remoteAccountKey, publisherDID); err != nil {
 		// the remote already registered → undo it (best-effort, fresh context).
-		_ = s.peer.Disconnect(compensationCtx(ctx), endpoint, remoteID)
+		_ = s.peer.Disconnect(compensationCtx(ctx), peer, remoteID)
 		return "", fmt.Errorf("chainmanager: add import: %w", err)
 	}
 
@@ -225,12 +239,12 @@ func (s *Service) Subscribe(ctx context.Context, subscriberDID, publisherDID, re
 		// undo the remote registration always, and the local import only if we
 		// created it (a sibling subscriber still depends on a shared import).
 		// Compensation runs on a fresh context so a canceled caller still reaches
-		// the publisher (D-s5; Codex P2).
+		// the publisher.
 		cctx := compensationCtx(ctx)
 		if first {
 			_ = s.infra.RemoveImport(remoteSubject, remoteAccountKey)
 		}
-		_ = s.peer.Disconnect(cctx, endpoint, remoteID)
+		_ = s.peer.Disconnect(cctx, peer, remoteID)
 		return "", fmt.Errorf("chainmanager: persist subscription: %w", err)
 	}
 	return id, nil
@@ -263,16 +277,16 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 		return store.ErrNotFound
 	}
 
-	endpoint, err := s.resolveEndpoint(ctx, sub.PublisherDID)
+	peer, err := s.resolveTarget(ctx, sub.PublisherDID)
 	if err != nil {
 		return err
 	}
-	if err := s.peer.Disconnect(ctx, endpoint, sub.RemoteID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.peer.Disconnect(ctx, peer, sub.RemoteID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("%w: remote disconnect: %w", ErrRemotePeer, err)
 	}
 	remoteSubject, remoteAccountKey := importTargets(sub.ConnectionInfo)
 	// Ref-count: tear the shared import down only when this is the last subscriber
-	// for the subject (Codex P2; mirror the publisher export ref-count). This
+	// for the subject (mirrors the publisher export ref-count). This
 	// record is still stored, so count>=1; ==1 means it is the last.
 	count, err := s.countImportsForSubject(remoteSubject)
 	if err != nil {
@@ -289,7 +303,7 @@ func (s *Service) Unsubscribe(ctx context.Context, subscriptionID string) error 
 // compensationCtx returns a context detached from the caller's cancellation (but
 // preserving its values) for best-effort teardown after a remote side-effect has
 // already happened: a canceled/timed-out caller must not prevent the compensating
-// Disconnect/RemoveImport from reaching the publisher (D-s5). The detached
+// Disconnect/RemoveImport from reaching the publisher. The detached
 // context has no deadline; peerclient bounds every call to a publisher itself.
 func compensationCtx(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
@@ -321,21 +335,35 @@ func (s *Service) countImportsForSubject(remoteSubject string) (int, error) {
 	return n, nil
 }
 
-// resolveEndpoint resolves publisherDID to its #chain-manager endpoint and runs
-// the SSRF preflight.
-func (s *Service) resolveEndpoint(ctx context.Context, publisherDID string) (string, error) {
+// resolveTarget resolves publisherDID to the peer serving it: its
+// #chain-manager endpoint, after the SSRF preflight, with the audience of
+// publisherDID's node (wireauth.AudienceForDID). The registry that answers
+// for publisherDID's document serves its #chain-manager endpoint, so the
+// endpoint and the audience come from the same source; a document of another
+// DID is refused (ErrRemotePeer), so it is publisherDID's endpoint.
+func (s *Service) resolveTarget(ctx context.Context, publisherDID string) (Peer, error) {
+	audience, err := wireauth.AudienceForDID(publisherDID)
+	if err != nil {
+		return Peer{}, fmt.Errorf("%w: publisher DID: %w", ErrRemotePeer, err)
+	}
 	doc, err := s.resolver.Resolve(ctx, publisherDID)
 	if err != nil {
-		return "", fmt.Errorf("%w: resolve publisher DID: %v", ErrRemotePeer, err)
+		return Peer{}, fmt.Errorf("%w: resolve publisher DID: %v", ErrRemotePeer, err)
+	}
+	// resolver.Resolver does not promise the document's id: a document of
+	// another DID advertises that DID's endpoint, not the publisher's, so the
+	// publisher was not resolved.
+	if doc.ID() != publisherDID {
+		return Peer{}, fmt.Errorf("%w: resolve publisher DID: resolving %s returned the DID Document of %s", ErrRemotePeer, netexcerpt.ValueText(publisherDID), netexcerpt.ValueText(doc.ID()))
 	}
 	endpoint, err := resolveChainManagerEndpoint(doc, publisherDID)
 	if err != nil {
-		return "", err
+		return Peer{}, err
 	}
 	if err := checkEndpointAllowed(ctx, s.endpointGuard(), endpoint); err != nil {
-		return "", err
+		return Peer{}, err
 	}
-	return endpoint, nil
+	return Peer{Endpoint: endpoint, Audience: audience}, nil
 }
 
 // assertModeOffered rejects a requested mode the publisher does not list. An
@@ -382,14 +410,14 @@ func checkConnectionInfo(info map[string]string) error {
 
 // importTargets derives the AddImport/RemoveImport REMOTE-side arguments from
 // a publisher's connection_info — the local subject is NOT derived here (see
-// Subscribe: localSubject = publisherDID, D-4's rename). A richer subject
-// scheme beyond D-2's mode-scoped prefix is deferred (C2).
+// Subscribe: localSubject = publisherDID, the rename onto one local subject). A richer
+// subject scheme beyond the mode-scoped prefix is not implemented.
 func importTargets(connInfo map[string]string) (remoteSubject, remoteAccountKey string) {
 	return connInfo["subject"], connInfo["account"]
 }
 
 // rejectDuplicateSubscription enforces the subscriber-side, AUTHORITATIVE
-// half of the mixed-mode invariant (D-4): Subscribe is rejected if a
+// half of the mixed-mode invariant: Subscribe is rejected if a
 // subscriber-direction subscription to publisherDID already exists, under any
 // mode.
 func (s *Service) rejectDuplicateSubscription(publisherDID string) error {

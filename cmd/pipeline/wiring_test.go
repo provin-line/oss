@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/decisionrecord"
@@ -39,7 +39,6 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/auditor"
 	auditorfilestore "github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	audithandler "github.com/provin-line/oss/network/pkg/services/auditor/handler"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/storehandler"
 	"github.com/provin-line/oss/network/pkg/services/schemaregistry"
@@ -50,15 +49,15 @@ import (
 	vcresolverclient "github.com/provin-line/oss/network/pkg/services/vcresolver/client"
 	vchandler "github.com/provin-line/oss/network/pkg/services/vcresolver/handler"
 	vcresolvermemstore "github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	pipelineruntime "github.com/provin-line/oss/pipeline/runtime"
 	"github.com/provin-line/oss/vc"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
 // pipelineRuntimeConfigFrom — the transport guard + a basic field-level
-// round-trip (the full per-role field mapping originally mirrored
-// cmd/standalone's own runtimewiring_test.go golden test, now retired; this
-// remains a lighter pin, not a full golden-mapping fixture).
+// round-trip (the full per-role field mapping is not covered here; this is
+// a lighter pin, not a full golden-mapping fixture).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPipelineRuntimeConfigFrom_NonNATSTransportWithLoopsErrors(t *testing.T) {
@@ -165,7 +164,7 @@ func TestPipelineRuntimeConfigFrom_MapsEnvelopeLimits(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestAuditClientFactory_CachesPerDID(t *testing.T) {
-	f := newAuditClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newAuditClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:agg:process:a1")
 	if a1 != a2 {
@@ -426,6 +425,7 @@ func newWireHarness(t *testing.T) *wireHarness {
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: "poc.dplaax.dev",
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -484,7 +484,7 @@ func TestWireAuditRegistrar_Add_RoundTrip(t *testing.T) {
 		t.Fatalf("StoreVC: %v", err)
 	}
 
-	factory := newAuditClientFactory(h.signer, h.url, "", h.httpc)
+	factory := newAuditClientFactory(h.signer, h.url, "poc.dplaax.dev", "", h.httpc)
 	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
 	if err := registrar.Add(head); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -537,7 +537,7 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 		t.Fatalf("StoreVC: %v", err)
 	}
 
-	factory := newAuditClientFactory(h.signer, h.url, "", h.httpc)
+	factory := newAuditClientFactory(h.signer, h.url, "poc.dplaax.dev", "", h.httpc)
 	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
 	consumed := []string{addr("c"), addr("b")}
 	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, consumed); err != nil {
@@ -567,18 +567,18 @@ func TestWireReceiptWriter_Put_ResolvesVariantAndSignsAsRegistrant(t *testing.T)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// payloadClientFactory / wirePayloadStore — the D9 fix: RetainPayload
+// payloadClientFactory / wirePayloadStore — RetainPayload
 // requires owner_did == the wireauth-proven signer (storehandler's
 // errOwnerMismatch), so a node running more than one producing loop (each
 // with its OWN output subject) needs one signing client PER owner, not one
-// shared node-identity client. This harness proves the fix directly: a real
+// shared node-identity client. This harness proves it directly: a real
 // storehandler.Handler + wireauth.Verifier + memstore over httptest, driven
 // through wirePayloadStore for TWO DIFFERENT owner DIDs sharing ONE
 // keystore — both retains must succeed, each recorded under its OWN owner.
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPayloadClientFactory_CachesPerDID(t *testing.T) {
-	f := newPayloadClientFactory(nil, "http://example.invalid", "", http.DefaultClient, 0)
+	f := newPayloadClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient, 0, nil)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:src1")
 	if a1 != a2 {
@@ -623,10 +623,13 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 		resolver[owner] = authDoc(owner, kp.PublicKey)
 	}
 
+	// The owners are DIDs of registry "reg", whose node this is: the audience
+	// of their retains.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: "reg",
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -645,17 +648,17 @@ func newPayloadRetainHarness(t *testing.T, owners ...string) *payloadRetainHarne
 	return &payloadRetainHarness{store: store, ks: ks, url: srv.URL, httpc: srv.Client()}
 }
 
-// TestWirePayloadStore_SignsEachRetainAsItsOwnOwner is the D9 fix's core
+// TestWirePayloadStore_SignsEachRetainAsItsOwnOwner is the core
 // proof: ONE wirePayloadStore (backed by ONE payloadClientFactory, ONE
 // shared keystore) retains payloads for TWO DIFFERENT owner DIDs — the exact
 // topology a node running two producing loops with different output
-// subjects needs. Before the fix, ONE shared client signed every retain as a
+// subjects needs. A single shared client would sign every retain as a
 // single node identity, so at most one of these two calls could ever
 // satisfy storehandler's owner_did == proven-signer requirement; both must
 // now succeed, each recorded under its OWN owner.
 func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA, payloadOwnerB)
-	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
+	factory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	store := wirePayloadStore{factory: factory}
 
 	payloadA := []byte("bytes produced by src1's output subject")
@@ -685,7 +688,7 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 	}
 
 	// The factory must have cached (and reused) a distinct client per owner —
-	// never one shared client the way the pre-fix wiring did.
+	// never one shared client.
 	if factory.For(payloadOwnerA) == factory.For(payloadOwnerB) {
 		t.Error("factory returned the SAME client for two different owners")
 	}
@@ -693,11 +696,11 @@ func TestWirePayloadStore_SignsEachRetainAsItsOwnOwner(t *testing.T) {
 
 // TestWirePayloadStore_MissingOwnerKey_Errors proves a keystore that never
 // held a key for the claimed owner fails the retain (no silent bypass) —
-// the exact runtime symptom the D9 boot preflight (main.go) exists to catch
+// the exact runtime symptom the payload-retain boot preflight (main.go) exists to catch
 // before it ever reaches this wire call.
 func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 	h := newPayloadRetainHarness(t, payloadOwnerA) // payloadOwnerB's key is never provisioned
-	factory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
+	factory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	store := wirePayloadStore{factory: factory}
 
 	if _, err := store.Store(context.Background(), []byte("orphan bytes"), payloadOwnerB); err == nil {
@@ -706,12 +709,13 @@ func TestWirePayloadStore_MissingOwnerKey_Errors(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// payloadClientFactory's chunk size (P2 Codex fix, branch review): the
-// factory previously always used payloadclient.DefaultRetainChunkSize (256
-// KiB) regardless of pipeCfg.MaxRetainChunkSize, so a registry configured
-// with a SMALLER cap rejected every frame (ResourceExhausted), aborting the
-// whole emission. newPayloadRetainHarnessWithChunkCap reproduces production's
-// EXACT server-side mount (internal/netcompose/server.go's retainChunkCap :=
+// payloadClientFactory's chunk size: the factory must honor
+// pipeCfg.MaxRetainChunkSize rather than always using
+// payloadclient.DefaultRetainChunkSize (256 KiB), otherwise a registry
+// configured with a SMALLER cap rejects every frame (ResourceExhausted),
+// aborting the whole emission. newPayloadRetainHarnessWithChunkCap
+// reproduces production's EXACT server-side mount
+// (internal/netcompose/server.go's retainChunkCap :=
 // connect.WithReadMaxBytes(maxRetainChunkSize)) so this is a real end-to-end
 // proof, not just a Config struct-literal assertion.
 // ─────────────────────────────────────────────────────────────────────────
@@ -736,10 +740,13 @@ func newPayloadRetainHarnessWithChunkCap(t *testing.T, chunkCap int, owners ...s
 		resolver[owner] = authDoc(owner, kp.PublicKey)
 	}
 
+	// The owners are DIDs of registry "reg", whose node this is: the audience
+	// of their retains.
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: "reg",
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -759,9 +766,9 @@ func newPayloadRetainHarnessWithChunkCap(t *testing.T, chunkCap int, owners ...s
 }
 
 // TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize proves the
-// fix directly: a factory built with the DEFAULT (unconfigured) chunk size
+// configured chunk size is honored: a factory built with the DEFAULT (unconfigured) chunk size
 // sends 256 KiB frames regardless of a small server cap, tripping
-// ResourceExhausted on the very first chunk (pinning the PRE-FIX bug); a
+// ResourceExhausted on the very first chunk; a
 // factory built with pipeCfg.MaxRetainChunkSize (here, the same value as the
 // server's cap) keeps every frame under it, and the retain succeeds.
 func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
@@ -769,7 +776,7 @@ func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
 	h := newPayloadRetainHarnessWithChunkCap(t, chunkCap, payloadOwnerA)
 	payload := bytes.Repeat([]byte("x"), 10_000) // spans several chunks under chunkCap
 
-	defaultFactory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, 0)
+	defaultFactory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, 0, nil)
 	_, err := (wirePayloadStore{factory: defaultFactory}).Store(context.Background(), payload, payloadOwnerA)
 	if err == nil {
 		t.Fatal("Store with the default (unconfigured) chunk size against a small server cap: want an error, got nil (this pins the PRE-FIX bug)")
@@ -778,7 +785,7 @@ func TestPayloadClientFactory_HonorsConfiguredMaxRetainChunkSize(t *testing.T) {
 		t.Fatalf("Store with oversized default chunks: code = %v, want ResourceExhausted", connect.CodeOf(err))
 	}
 
-	configuredFactory := newPayloadClientFactory(h.ks, h.url, "", h.httpc, chunkCap)
+	configuredFactory := newPayloadClientFactory(h.ks, h.url, "reg", "", h.httpc, chunkCap, nil)
 	addr, err := (wirePayloadStore{factory: configuredFactory}).Store(context.Background(), payload, payloadOwnerA)
 	if err != nil {
 		t.Fatalf("Store with configured chunk size: %v", err)
@@ -814,12 +821,11 @@ func TestRetainChunkSizeFor(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// preflightPayloadRetainKeys — the D9 boot preflight (main.go's Boot guard
+// preflightPayloadRetainKeys — the payload-retain boot preflight (main.go's Boot guard
 // 5): every producing loop's own output subject must already have a #auth
 // key in the keystore BEFORE this binary starts its data plane, since a
 // missing key would otherwise only surface as a runtime RetainPayload
-// failure that aborts the whole emission (dataplane.go's payloadWiring,
-// D-6).
+// failure that aborts the whole emission (dataplane.go's payloadWiring).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestPreflightPayloadRetainKeys_AllKeysPresent_OK(t *testing.T) {
@@ -880,11 +886,11 @@ func TestPreflightPayloadRetainKeys_NoProducingLoops_OK(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// preflightWireOnlySignerKeys — the D9 extension (main.go's Boot guard 6,
-// branch review Important finding): nodeDID's own key (RegisterAuditHead /
-// PayloadResolver) and every DURABLE custody log's checkpoint-signer key,
-// both previously discoverable only at first use (see the function's own
-// doc for why filelog's checkpoint arming cannot catch this at boot).
+// preflightWireOnlySignerKeys — the main.go Boot guard 6 extension: nodeDID's
+// own key (RegisterAuditHead / PayloadResolver) and every DURABLE custody
+// log's checkpoint-signer key, both would otherwise be discoverable only at
+// first use (see the function's own doc for why filelog's checkpoint arming
+// cannot catch this at boot).
 // ─────────────────────────────────────────────────────────────────────────
 
 const (
@@ -1034,8 +1040,9 @@ func assertDistinctNonces(t *testing.T, nonces []string) {
 
 // flakyRetainHandler simulates the boot-window barrier for RetainPayload: the
 // first `fail` calls return CodeUnavailable (recording the metadata frame's
-// nonce first); later calls drain the stream and succeed with a fake content
-// address. It never delegates to a real storehandler — the retry-recovery
+// nonce first); later calls drain the stream and succeed, answering the
+// declared content address as a store does. It never delegates to a real
+// storehandler — the retry-recovery
 // proof needs only the nonce sequence and an eventual success, not real
 // persistence (that's already covered by TestWirePayloadStore_* above).
 type flakyRetainHandler struct {
@@ -1065,14 +1072,12 @@ func (h *flakyRetainHandler) RetainPayload(ctx context.Context, stream *connect.
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("boot window (fake)"))
 	}
 
-	var size int
 	for stream.Receive() {
-		size += len(stream.Msg().GetChunk())
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: fmt.Sprintf("sha256:fake-%d", size)}), nil
+	return connect.NewResponse(&payloadpb.RetainPayloadResponse{ContentAddress: meta.GetContentAddress()}), nil
 }
 
 // TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns is the plan's
@@ -1090,15 +1095,16 @@ func TestWirePayloadStore_Store_RetriesOnUnavailableAndResigns(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, payloadOwnerA)
 
-	factory := newPayloadClientFactory(ks, srv.URL, "", srv.Client(), 0)
+	factory := newPayloadClientFactory(ks, srv.URL, "reg", "", srv.Client(), 0, nil)
 	store := wirePayloadStore{factory: factory}
 
-	contentAddress, err := store.Store(context.Background(), []byte("payload racing the boot window"), payloadOwnerA)
+	payload := []byte("payload racing the boot window")
+	contentAddress, err := store.Store(context.Background(), payload, payloadOwnerA)
 	if err != nil {
 		t.Fatalf("Store: %v, want recovery via retry", err)
 	}
-	if contentAddress == "" {
-		t.Error("Store returned an empty content address")
+	if want := contentaddress.Of(payload).String(); contentAddress != want {
+		t.Errorf("Store = %q, want %q", contentAddress, want)
 	}
 	if len(handler.nonces) != 3 {
 		t.Fatalf("server saw %d RetainPayload attempts, want 3 (2 failures + 1 success)", len(handler.nonces))
@@ -1147,7 +1153,7 @@ func TestWireRetryingPayloadResolver_ResolvePayload_RetriesOnUnavailableAndResig
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireNodeDID)
 
-	factory := newPayloadClientFactory(ks, "", "", http.DefaultClient, 0)
+	factory := newPayloadClientFactory(ks, "", "", "", http.DefaultClient, 0, map[string]string{srv.URL: "poc.dplaax.dev"})
 	resolver := wireRetryingPayloadResolver{client: factory.For(wireNodeDID)}
 
 	got, err := resolver.ResolvePayload(context.Background(), srv.URL, addr("d"))
@@ -1218,7 +1224,7 @@ func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireNodeDID)
 
-	factory := newAuditClientFactory(ks, srv.URL, "", srv.Client())
+	factory := newAuditClientFactory(ks, srv.URL, "poc.dplaax.dev", "", srv.Client())
 	registrar := wireAuditRegistrar{client: factory.For(wireNodeDID)}
 
 	if err := registrar.Add(pipelineruntime.StoredHead{WireVariantID: "variant-1"}); err != nil {
@@ -1233,7 +1239,7 @@ func TestWireAuditRegistrar_Add_RetriesOnUnavailableAndResigns(t *testing.T) {
 // TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns
 // proves RegisterEvidence recovers via retry, each attempt re-signed. Put
 // also calls ResolveCredential first (over a real VCResolverService,
-// unwrapped — not in this task's loss-sensitive matrix), so this harness
+// unwrapped — not part of the loss-sensitive matrix), so this harness
 // mounts BOTH a real VCResolverService and the flaky AuditService on one mux.
 func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t *testing.T) {
 	vcSvc := vcresolver.New(vcresolver.NewVariantStore(vcresolvermemstore.NewBackend()), vcresolvermemstore.NewPool())
@@ -1257,7 +1263,7 @@ func TestWireReceiptWriter_Put_RetriesRegisterEvidenceOnUnavailableAndResigns(t 
 	ks := ksfilestore.New(t.TempDir())
 	provisionAuthKey(t, ks, wireAggregateIssuerDID)
 
-	factory := newAuditClientFactory(ks, srv.URL, "", srv.Client())
+	factory := newAuditClientFactory(ks, srv.URL, "poc.dplaax.dev", "", srv.Client())
 	writer := wireReceiptWriter{resolver: vcClient, factory: factory}
 
 	if err := writer.Put(head.BodyAddress, wireAggregateIssuerDID, []string{addr("c")}); err != nil {
@@ -1326,7 +1332,7 @@ func TestBuildDeps_ShowsTheBearerToNoServerTheVCStoreRedirectsTo(t *testing.T) {
 	}))
 	t.Cleanup(store.Close)
 	pipeCfg := &pipelineconfig.Config{VCStoreEndpoint: store.URL, VCStoreBearer: "node-token", MaxCredentialSize: 1 << 20, MaxRetainChunkSize: 1 << 20}
-	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme")
+	deps := buildDeps(pipeCfg, nil, core.NewURLGuard(core.WithAllowLoopback(true)), nil, "did:dplaax:poc.dplaax.dev:org:acme", mustOwnNodeAudience(t, pipeCfg, "did:dplaax:poc.dplaax.dev:org:acme"), mustUpstreamAudiences(t, pipeCfg))
 	if _, err := deps.ChainResolver.ResolveCredential(context.Background(), addr("a")); err == nil {
 		t.Error("a redirected fetch succeeded")
 	}

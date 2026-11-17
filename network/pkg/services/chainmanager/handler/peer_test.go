@@ -16,19 +16,20 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/keystore"
 	keyfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/evidence"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/tlog/filelog"
 )
 
 // spyVerifier records the (op, fields, proof) the handler passes and, optionally,
 // runs the authorizer or returns a preset error — letting the handler tests pin
-// the D-p4 view contract, the "handler actually calls Verify" contract (slice-9
-// D-c1), and the authorizer binding without a real signature.
+// the signed-view contract, the "handler actually calls Verify" contract, and the
+// authorizer binding without a real signature.
 type spyVerifier struct {
 	called    bool
 	gotOp     string
@@ -111,7 +112,7 @@ func (f *fakePeer) Disconnect(_ context.Context, _, _ string) error {
 const goodIssuedAt = "2026-06-17T12:00:00Z"
 
 func proofMsg(signer, issuedAt string) *chainpb.AuthProof {
-	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: issuedAt, Signature: []byte("sig")}
+	return &chainpb.AuthProof{SignerDid: signer, Nonce: "n1", IssuedAt: issuedAt, Signature: []byte("sig"), ViewVersion: wireauth.ViewVersion}
 }
 
 func TestPeerHandler_GetPublisherInfo_VerifyContract(t *testing.T) {
@@ -167,7 +168,7 @@ func TestPeerHandler_RegisterSubscription_VerifyContract(t *testing.T) {
 }
 
 // payload_delivery is signed verbatim — an empty requested mode must appear as an
-// empty string in the signed fields, not normalized to by-reference (D-p4).
+// empty string in the signed fields, not normalized to by-reference.
 func TestPeerHandler_RegisterSubscription_EmptyModeSignedVerbatim(t *testing.T) {
 	v := &spyVerifier{}
 	svc := &fakePeer{sub: &store.Subscription{ID: "s1"}}
@@ -323,6 +324,26 @@ var pubForEvidence = func() []byte {
 	}
 	return kp.PublicKey
 }()
+
+// The evidence records the view version the proof was verified under, the
+// proof's own, whatever version the verifier accepted.
+func TestPeerHandler_RecordsTheVerifiedViewVersion(t *testing.T) {
+	signer := "did:dplaax:reg:org:sub"
+	v := &spyVerifier{runAuth: true, authDoc: authDoc(signer, pubForEvidence)}
+	rec := &spyRecorder{}
+	h := handler.NewPeerWithEvidence(&fakePeer{sub: &store.Subscription{ID: "s1"}}, v, rec)
+	ap := proofMsg(signer, goodIssuedAt)
+	ap.ViewVersion = 7
+	if _, err := h.RegisterSubscription(context.Background(), connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
+		AuthProof:     ap,
+		SubscriberDid: signer, PublisherDid: "did:dplaax:reg:org:acme:pipeline:p1", PayloadDelivery: "inline",
+	})); err != nil {
+		t.Fatalf("RegisterSubscription: %v", err)
+	}
+	if !rec.called || rec.gotRec.ViewVersion != 7 {
+		t.Errorf("recorded %+v, want view version 7", rec.gotRec)
+	}
+}
 
 // A successful RegisterSubscription, with evidence configured, records the
 // resolved doc's #auth key material alongside the signed view — AFTER the
@@ -511,8 +532,9 @@ func (m evResolver) Resolve(_ context.Context, d string) (*did.DIDDocument, erro
 // a filelog, then reloaded across a restart — and the retained Record alone is
 // sufficient to reconstruct the JCS signed view (using rec.ViewVersion for the
 // "v" member) and re-verify the counterparty signature against the snapshotted
-// public key. This is RED without FIX 1: a zero ViewVersion serializes "v":0,
-// diverging from the "v":1 the signer used, so the signature fails to verify.
+// public key. A retained Record whose ViewVersion were left zero would
+// serialize "v":0, diverging from the "v":1 the signer used, so the signature
+// would fail to verify.
 func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	const (
@@ -537,7 +559,8 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 	verifier, err := wireauth.NewVerifier(wireauth.VerifierConfig{
 		Resolver: evResolver{subscriber: authDoc(subscriber, kp.PublicKey)},
 		Crypto:   ed25519.Verifier{},
-		Nonces:   wireauth.NewMemoryNonceStore(),
+		Nonces:   wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(func() time.Time { return signedAt })),
+		Audience: e2eAudience,
 		Clock:    func() time.Time { return signedAt.Add(time.Second) },
 		Epoch:    signedAt.Add(-time.Hour),
 	})
@@ -551,7 +574,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		"publisher_did":    publisher,
 		"payload_delivery": "inline",
 	}
-	proof, err := wireauth.Sign(signer, subscriber, "RegisterSubscription", fields, "n-closed-loop", signedAt)
+	proof, err := wireauth.Sign(signer, "RegisterSubscription", fields, wireauth.Claims{SignerDID: subscriber, Audience: e2eAudience, Nonce: "n-closed-loop", IssuedAt: signedAt})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -566,7 +589,7 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 
 	h := handler.NewPeerWithEvidence(&fakePeer{sub: &store.Subscription{ID: "s1"}}, verifier, evLog)
 	if _, err := h.RegisterSubscription(ctx, connect.NewRequest(&chainpb.RegisterSubscriptionRequest{
-		AuthProof:     &chainpb.AuthProof{SignerDid: subscriber, Nonce: proof.Nonce, IssuedAt: proof.IssuedAt.UTC().Format(time.RFC3339), Signature: proof.Signature},
+		AuthProof:     authproof.Encode(proof),
 		SubscriberDid: subscriber, PublisherDid: publisher, PayloadDelivery: "inline",
 	})); err != nil {
 		t.Fatalf("RegisterSubscription: %v (code %v)", err, connect.CodeOf(err))
@@ -586,10 +609,15 @@ func TestPeerHandler_RegisterSubscription_EvidenceReVerifiesAcrossRestart(t *tes
 		t.Fatalf("Get (restart): %v", err)
 	}
 
+	if rec.Audience != e2eAudience || rec.ViewVersion != 2 {
+		t.Errorf("record audience %q, view version %d; want %q, 2", rec.Audience, rec.ViewVersion, e2eAudience)
+	}
+
 	// Reconstruct the JCS signed view from the retained record ALONE and
 	// re-verify the counterparty signature against the snapshotted key.
 	view, err := jcs.Canonicalize(map[string]any{
 		"signerDID": rec.SignerDID,
+		"aud":       rec.Audience,
 		"op":        rec.Op,
 		"v":         rec.ViewVersion,
 		"nonce":     rec.Nonce,

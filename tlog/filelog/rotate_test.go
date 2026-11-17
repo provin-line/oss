@@ -641,8 +641,8 @@ func TestCheckpoint_AtomicSnapshotUnderConcurrentRotate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Heavy contention: many Checkpoint goroutines so that — on the pre-fix
-	// read-unlock-relock — at least one is descheduled inside the window
+	// Heavy contention: many Checkpoint goroutines so that — were the size read
+	// and the re-lock separate critical sections — at least one is descheduled inside the window
 	// between its size read and CheckpointAt's re-lock while a Rotate acquires
 	// the lock and truncates records to nil, making CheckpointAt(oldSize) fail
 	// out-of-range. The atomic snapshot must make that impossible.

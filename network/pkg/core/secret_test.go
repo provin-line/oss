@@ -49,7 +49,7 @@ func TestResolveSecret_SeamsUnsupported(t *testing.T) {
 }
 
 func TestResolveSecret_BareStringRejected(t *testing.T) {
-	// D4: an unschemed value is ambiguous; reject (fail-closed).
+	// An unschemed value is ambiguous; reject (fail-closed).
 	if _, err := core.ResolveSecret(context.Background(), "just-a-literal"); !errors.Is(err, core.ErrUnsupportedScheme) {
 		t.Errorf("bare string: want ErrUnsupportedScheme, got %v", err)
 	}

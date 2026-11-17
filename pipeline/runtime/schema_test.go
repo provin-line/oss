@@ -10,9 +10,7 @@ import (
 )
 
 // fakeSchemaGetter is a SchemaGetter backed by an in-memory map keyed by
-// "name@version"; a missing key returns ErrSchemaNotFound. (Relocated from
-// internal/netcompose's schemaresolver_test.go when boot-time schema-ref
-// resolution moved here — the netcompose copy of the resolver is gone.)
+// "name@version"; a missing key returns ErrSchemaNotFound.
 type fakeSchemaGetter struct {
 	schemas map[string]*Schema
 }

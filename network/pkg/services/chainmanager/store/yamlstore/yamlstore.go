@@ -6,7 +6,7 @@
 // {root}/allowlists/{registry}/{accountType}/{accountID}/{resourcePath…}.yaml —
 // because an AllowListStore carries no single-registry deployment context (unlike
 // the didregistry yamlstore, which omits the registry); omitting it would collide
-// two registries' identical accountType/accountID (slice-9 Codex Medium). Every
+// two registries' identical accountType/accountID. Every
 // DID-derived segment is safe-segment-validated before any path is built, so a
 // crafted segment can never escape root.
 //
@@ -15,8 +15,7 @@
 // contracts). Reads distinguish absent from corrupt: an absent subscription is
 // store.ErrNotFound and an absent allow-list is empty (default-distrust), but a
 // present-yet-unparseable file is a real error, never silently collapsed to
-// NotFound/empty — that would silently drop a subscription or trust config
-// (slice-9 Codex Medium).
+// NotFound/empty — that would silently drop a subscription or trust config.
 package yamlstore
 
 import (
@@ -29,6 +28,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/internal/yamlrecord"
 
 	"github.com/provin-line/oss/did/dplaax"
@@ -158,7 +158,7 @@ func (s *AllowListStore) path(pipelineDID string) (string, error) {
 		return "", fmt.Errorf("yamlstore: %w", err)
 	}
 	if !d.IsPipeline() {
-		return "", fmt.Errorf("yamlstore: %q is not a pipeline DID", pipelineDID)
+		return "", fmt.Errorf("yamlstore: %s is not a pipeline DID", netexcerpt.ValueText(pipelineDID))
 	}
 	segs := append([]string{d.Registry, d.AccountType, d.AccountID}, d.ResourcePath...)
 	for _, seg := range segs {
@@ -278,7 +278,7 @@ func fromAllowRecord(r allowRecord) []store.AllowRule {
 // component (the traversal guard lives here, not in callers).
 func safeSegment(s string) error {
 	if s == "" || s == "." || s == ".." || s != filepath.Base(s) || strings.ContainsAny(s, `/\`+"\x00") {
-		return fmt.Errorf("yamlstore: invalid path segment %q", s)
+		return fmt.Errorf("yamlstore: invalid path segment %s", netexcerpt.ValueText(s))
 	}
 	return nil
 }

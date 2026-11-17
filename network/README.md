@@ -71,10 +71,12 @@ posture.
   `pkg/auth` — the PEP that wires the o3co authorization interceptors against a
   configured policy-verifier (PDP). Token issuance and the policy decision are
   external (the dPLaaX `auth.provider` / `auth.policy-verifier` services);
-  `pkg/auth` itself decides no policy and verifies no JWT signature.
+  `pkg/auth` itself decides no policy and issues no token; it verifies the
+  bearer JWT only under the `cedar` backend, whose agent authenticates nothing
+  (see the PDP backends below).
 - **L2 (peer-facing)**: every ChainPeerService RPC carries an `AuthProof` — Ed25519
   signature over a JCS-canonicalized view, with nonce replay protection and a restart
-  epoch barrier. Implemented in `pkg/services/chainmanager/wireauth`. **There is no
+  epoch barrier. Implemented in `pkg/wireauth`. **There is no
   auth-off mode for L2.** L2 is independent of the PDP — it needs no policy-verifier.
 - **Evidence writes** (`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`):
   L1 + in-band wireauth — the PDP gate (the L1 policy option) decides whether the
@@ -99,18 +101,30 @@ backend is fail-closed (missing required config → the node does not boot):
 source — `cedar.jwt.jwks-url` (https; asymmetric algorithms) or `cedar.jwt.secret`
 (HS256, at least 32 bytes after decoding, written in `cedar.jwt.secret-encoding`:
 `utf8` (default) | `hex` | `base64`) — or the node does not boot. A token is
-accepted only with a valid signature, an unexpired `exp`, a passed-or-absent
-`nbf` (30 s leeway), the configured `iss`, an `aud` containing the configured
-audience and a non-empty `sub`.
+accepted only with the `typ` of an access token (`at+jwt` or
+`application/at+jwt`, RFC 9068, in any ASCII case), a valid signature, an
+unexpired `exp`, an `iat` not ahead of the node's clock, a passed-or-absent
+`nbf` (30 s leeway for all three), the configured `iss`, an `aud` containing
+the configured audience and a non-empty `sub`.
 
 With `jwks-url` the key set is cached for 10 minutes and refetched at most every
 30 seconds (also when a token names an unknown `kid`). While a refetch fails, the
 expired set still verifies tokens for the `kid`s it holds for another 30 minutes,
 so a key the issuer withdrew can stay trusted for up to 40 minutes during a JWKS
-outage; unknown `kid`s are refused. A JWKS outage (and any other token-check
-failure) reaches clients as `Unauthenticated` (push: 403, no wire retry), not
-`Unavailable`, because the Cedar endpoint turns every resolver error into an
-authentication failure.
+outage. A token for which the set the latest fetch returned has no key that
+fits (by `kid`, algorithm and use) is refused as `Unauthenticated` (push: 403, no
+wire retry), like any other token-check failure. When the latest fetch failed,
+for whatever reason (unreachable, a TLS failure, past the 5-second timeout, any
+status but 200, or a body over 1 MiB or not a key set), and the node holds no set
+within its grace, or one with no key that fits, the token has not been judged:
+clients get `Unavailable` (push: 503 with `Retry-After`). A fetch that retrying
+does not fix (a 404, a certificate the node does not trust) is `Unavailable`
+too, unlike a PDP's HTTP 500 below: the Cedar endpoint lets the token check only
+refuse the token or report that it cannot answer. Fetches start at least 30
+seconds apart, and until the next one starts a retry is answered from the latest
+completed fetch. An L1-guarded RPC whose own context ends while the node waits
+for the key set fails with `Canceled` / `DeadlineExceeded`, as on the other
+paths (push: 503, as for a key set it cannot fetch).
 
 A PDP reached over plaintext `http://` on anything but loopback is refused unless
 its `host:port` is listed in `provin.network.auth.plain-internal` (default empty).
@@ -141,6 +155,7 @@ but the DID grant needs an already-registered owner) and its production options.
 cmd/network/      binary: config load, DI wiring, mux registration
 config/           application.conf (operator layer)
 pkg/core/         merged config model, secret resolution, SSRF-resistant URL checks
-pkg/auth/         L1 JWT verification + authorization interceptor
+pkg/auth/         L1 PEP: authorization interceptors against the configured PDP; bearer-JWT check for cedar
+pkg/wireauth/     L2 wire proof: signs and verifies the in-band AuthProof
 pkg/services/     one package per service — see pkg/services/README.md
 ```

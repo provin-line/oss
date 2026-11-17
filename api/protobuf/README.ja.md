@@ -6,7 +6,8 @@ dplaax プロトコルの proto 定義。`buf` で管理。
 ## 名前空間
 
 ```
-dplaax.did.v1       DIDService, SignerService + DID Document / 委任メッセージ
+dplaax.did.v1       DIDService + DID Document / 委任メッセージ
+dplaax.signer.v1    SignerService（KMS モデルの Ed25519 署名; raw-bytes シーム）
 dplaax.schema.v1    SchemaService（不変、追記専用レジストリ）
 dplaax.chain.v1     ChainService（オペレーター向け）+ ChainPeerService（インターネット公開, L2 認証）
 dplaax.vc.v1        VCResolverService（来歴チェーン解決）

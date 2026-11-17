@@ -18,7 +18,7 @@ import (
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestReportClientFactory_CachesPerDID(t *testing.T) {
-	f := newReportClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newReportClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a")
 	if a1 != a2 {
@@ -31,9 +31,9 @@ func TestReportClientFactory_CachesPerDID(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// emitHealthCadence — pure TTL -> initial-interval derivation (unchanged by
-// the P2 fix: this seeds ONLY the reporter's first interval; every
-// subsequent one comes from cadenceFromReturnedTTL, below).
+// emitHealthCadence — pure TTL -> initial-interval derivation (this seeds ONLY
+// the reporter's first interval; every subsequent one comes from
+// cadenceFromReturnedTTL, below).
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestEmitHealthCadence(t *testing.T) {
@@ -55,7 +55,7 @@ func TestEmitHealthCadence(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// cadenceFromReturnedTTL (P2 Codex) — the REGISTRY's returned TTL re-derives
+// cadenceFromReturnedTTL — the REGISTRY's returned TTL re-derives
 // the reporter's cadence on every successful report, unlike emitHealthCadence
 // (which only ever seeds the initial value from this binary's own local
 // config).
@@ -128,7 +128,7 @@ func TestProducingLoops_EmptyLoopsYieldsEmpty(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// emitHealthSourcesByName / emitHealthReporterSpecsFor (P1 fix) — binding a
+// emitHealthSourcesByName / emitHealthReporterSpecsFor — binding a
 // reporter to ITS OWN producer's stripped-publish health accessor, matched
 // by loop name.
 // ─────────────────────────────────────────────────────────────────────────
@@ -208,9 +208,10 @@ func TestEmitHealthReporterSpecsFor_BindsEachProducerToItsOwnAccessor(t *testing
 }
 
 // TestEmitHealthReporterSpecsFor_NoMatchingSourceDefaultsHealthy proves the
-// defensive fallback: a producing loop with no matching metrics entry (a
-// should-be-impossible gap per D-6) reports healthy=true rather than
-// panicking on a nil func.
+// defensive fallback: a producing loop with no matching metrics entry
+// reports healthy=true rather than panicking on a nil func. Such a gap should
+// be impossible, because buildDeps always wires a PayloadStore, so every
+// producing loop dual-emits and has a metrics entry.
 func TestEmitHealthReporterSpecsFor_NoMatchingSourceDefaultsHealthy(t *testing.T) {
 	loops := []pipelineconfig.LoopConfig{
 		{Name: "src", Role: pipelineconfig.RoleSource, Source: pipelineconfig.SourceConfig{OutputSubject: "did:dplaax:reg:org:acme:pipeline:src"}},
@@ -232,8 +233,8 @@ func TestEmitHealthReporterSpecsFor_EmptyLoopsYieldsEmpty(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────────────
 // emitHealthReporter.run / .report — cadence + immediate-first-report +
-// stop-on-cancel + the P1 (current health) and P2 (registry-returned TTL
-// retunes cadence) fixes.
+// stop-on-cancel + sending the current health and retuning the cadence from the
+// registry-returned TTL.
 // ─────────────────────────────────────────────────────────────────────────
 
 type spiedReport struct {
@@ -276,7 +277,7 @@ func (s *spyEmitHealthClient) snapshot() []spiedReport {
 // closing the "degraded until the first interval elapses" boot gap; (2)
 // subsequent reports keep landing on r.interval (the spy's ttl is left at
 // its zero value, the "no usable TTL" no-op-cadence-change signal, so this
-// test's cadence stays exactly r.interval throughout — the P2 retuning path
+// test's cadence stays exactly r.interval throughout — the TTL retuning path
 // is exercised by its own dedicated test below); (3) run returns promptly
 // once ctx is cancelled; (4) every report carries the configured publisher
 // DID and healthy=true (the default nil-healthy accessor).
@@ -337,10 +338,10 @@ func TestEmitHealthReporter_StopsPromptlyEvenWithNoTickYet(t *testing.T) {
 	}
 }
 
-// TestEmitHealthReporter_SendsCurrentHealthEveryTick is the P1 (converged)
-// fix's core proof: a reporter whose producer turns unhealthy sends
-// healthy=false on the NEXT report, not the hardcoded true every prior
-// version sent regardless of the producer's actual state.
+// TestEmitHealthReporter_SendsCurrentHealthEveryTick is the core proof
+// that a reporter whose producer turns unhealthy sends
+// healthy=false on the NEXT report, not a hardcoded true sent regardless of
+// the producer's actual state.
 func TestEmitHealthReporter_SendsCurrentHealthEveryTick(t *testing.T) {
 	spy := &spyEmitHealthClient{}
 	var healthy atomic.Bool
@@ -389,8 +390,8 @@ func TestEmitHealthReporter_NilHealthyDefaultsTrue(t *testing.T) {
 	}
 }
 
-// TestEmitHealthReporter_RetunesCadenceFromReturnedTTL is the P2 (Codex)
-// fix's core proof: after a successful report, the reporter's cadence comes
+// TestEmitHealthReporter_RetunesCadenceFromReturnedTTL proves that,
+// after a successful report, the reporter's cadence comes
 // from the REGISTRY's returned TTL (via cadenceFromReturnedTTL), not the
 // fixed interval it was constructed with.
 func TestEmitHealthReporter_RetunesCadenceFromReturnedTTL(t *testing.T) {

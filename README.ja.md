@@ -3,7 +3,9 @@
 
 分散型データパイプラインエンジン — **dPLaaX protocol** の **`provin` wire profile**（参照実装）。すべてのデータ変換は W3C Verifiable Credential として暗号署名され、任意の参加者が独立に検証できる線形の来歴チェーンを形成する。DB 不要、YAML 駆動、セルフホスト可能。
 
-> **Status: PoC skeleton.** ディレクトリ構造と各レイヤーの規約は整備済み。インターフェースと実装は順次追加される。
+セルフホストでは、ノードの認可層も立てる必要がある: ノードは fail-closed で、policy decision point（PDP）を要する。認証付きの stack — 本物の `auth.provider` + policy-verifier + ノード + NATS を 1 コマンドで立て、record を `VERIFIED` の verdict まで進める — は [`deploy/quickstart/`](deploy/quickstart/README.md) を参照。PDP backend は差し替え可能（`o3co` | `opa` | `cedar` | `static`）。private ネットワーク上の plaintext `http://` の PDP は `provin.network.auth.plain-internal` に載せる必要がある。`static` は認可の許可リストであり、**認証ではない**（[network/README.ja.md](network/README.ja.md#pdp-backend-と認証の所在) 参照）。
+
+> **Status: PoC skeleton.** ディレクトリ構造と各レイヤーの規約は整備済み。インターフェースと実装は順次追加される。受け入れ済みの PoC のギャップは、コード上の該当箇所に記録され、P0 の slice に対して追跡される — 特に: audit evidence は credential の **body** の番地をキーにするため、verdict は、監査した受理済み variant のどれかを名指さない（`network/pkg/services/auditor/evidence.go`、P0-1 slice B/C）。また DID の lifecycle 書き込みは非トランザクションで、部分失敗の窓が既知である（`network/pkg/services/didregistry`、durable な tlog 基盤で閉じる）。
 
 ## 名前の使い分け
 
@@ -28,6 +30,7 @@ cmd/provin/     オペレーター CLI
 conformance/    provin profile 適合性 vector + harness（テスト専用）
 docs/           アーキテクチャ / コンセプト / プロトコル / DID
 scripts/        lint 衛生チェック（`make lint` から実行）
+verification/   実装の形式モデルと第三者の標準の vector（テスト専用の入れ子 module）
 ```
 
 上記以外のトップレベルディレクトリは **ライブラリパッケージ** — `network/`・`pipeline/`・`cmd/` が利用する純粋なドメインライブラリ群（→ [ライブラリパッケージ](#ライブラリパッケージ)）。
@@ -65,7 +68,7 @@ cmd/  network/  pipeline/          (コンシューマー)
 | `hoconconfig/` | 3 層 HOCON 設定ローダー |
 | `orgverify/` | DNS ベースの組織アイデンティティ検証 |
 | `keybinding/` | 鍵の結び付け（発行者が、受け手のために鍵を主体に結ぶ）と、発行者の失効の一覧（W3C の Bitstring Status List） |
-| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・拒否だけ・要約・なし） |
+| `decisionrecord/` | 判定する部品が判定ごとに出す記録と、出す水準（全件・受け入れ以外・要約・なし） |
 | `contentaddress/` | 中身の番地（`sha256:` と 64 字の小文字 hex）。自分の関数だけが作る型 |
 
 ライブラリ層内部の依存 DAG:
@@ -114,6 +117,29 @@ keybinding ──► vc, did, canon, crypto
 - **exported Go API と設定キー**は `0.x` の minor リリース間で変わりうる。
   最初に凍結される API 面は、機能セットの完成と実デプロイでの soak を経た
   `1.0` で宣言する。
+
+## 仕様への適合
+
+**provin OSS 0.5.0** は **dPLaaX spec v0.2.0-alpha.1** を追う。vendor する
+dPLaaX の vector はその tag のものとバイト単位で同じで、まだ走らせていない
+vector は、理由を付けて skip する（`conformance/allvectors_test.go`）。
+**provin wire profile v0.1 (draft)** を実装する。適合の主張は、このような
+バージョンの組としてのみ意味を持つ。
+
+その主張の確かめ方（機械的）:
+
+- dPLaaX の vector 一式（`dplaax/spec` の `vectors/`、カタログ全体）を
+  `conformance/vectors/dplaax/` に**バイト単位で**vendor し、`MANIFEST.sha256`
+  で pin して、**CI のゲート**にする — `go test ./conformance/` はすべての
+  push と PR で走る。spec の変更を取り込むのは意図した行為で、
+  `scripts/sync-spec-vectors.sh` と、vendor した差分の commit で行う。
+- 定期の、ゲートにしない crosscheck（`.github/workflows/spec-crosscheck.yml`）が、
+  加えて harness を `dplaax/spec` の **HEAD** に対して毎日走らせる — 実装が
+  spec を追うのであって、逆ではない。そこが赤なら、ここで追いつく作業であり、
+  ゲートではない。
+- provin profile の vector（`provin-line/profile.spec` の `vectors/`）も同じく
+  `conformance/vectors/provin/` に vendor する（`scripts/sync-profile-vectors.sh`、
+  専用の `MANIFEST.sha256`）。
 
 ## ライセンス
 

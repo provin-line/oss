@@ -28,5 +28,5 @@ One package per network service. Every service follows the same three-layer shap
 | `didregistry/` | DID lifecycle; owns the YAML DID/key stores |
 | `signer/` | Signing over `keystore`; no store of its own |
 | `schemaregistry/` | Immutable schemas; content-addressed version naming |
-| `chainmanager/` | Subscriptions, allow-lists, infra operators, L2 wireauth |
+| `chainmanager/` | Subscriptions, allow-lists, infra operators |
 | `vcresolver/` | VC store + async batch chain resolution |

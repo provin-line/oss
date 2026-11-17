@@ -1,0 +1,9 @@
+{
+  "id": "did-019",
+  "rule": "did.dplaax.syntax",
+  "description": "A string whose method name is in upper case is not a did:dplaax DID",
+  "input": {
+    "did": "did:DPLAAX:poc.dplaax.dev:org:acme"
+  },
+  "expect": "reject"
+}

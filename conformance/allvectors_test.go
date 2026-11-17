@@ -36,7 +36,8 @@ func registerSkip(family string, lo, hi int, reason string) {
 }
 
 func init() {
-	// Tranche 1 — pure-function families (drivers in dplaax_test.go).
+	// Tranche 1 — pure-function families (drivers in dplaax_test.go,
+	// did_test.go, keybinding_test.go and evidenceview_test.go).
 	registerRunner(runCanon, "canon", 1, 8)
 	registerRunner(runCred, "cred", 1, 32)
 	registerRunner(runCommitment, "commitment", 1, 11)
@@ -44,7 +45,9 @@ func init() {
 	registerRunner(runChainContinuity, "chain", 6, 8)
 	registerRunner(runConfidenceSynthesis, "confidence", 1, 3)
 	registerRunner(runConfidenceLifecycle, "confidence", 4, 6)
-	registerRunner(runDelegation, "delegation", 1, 5)
+	registerRunner(runDelegation, "delegation", 1, 8)
+	registerRunner(runDID, "did", 1, 31)
+	registerRunner(runKeybinding, "keybinding", 1, 54)
 	registerRunner(runSignerProof, "signer", 1, 2)
 	dplaaxRunners["signer-003"] = runSignerRegister
 	dplaaxRunners["identity-001"] = runIdentityDerivation
@@ -112,14 +115,19 @@ func init() {
 	// and runs it in its conformance harness (integration/conformance); this
 	// entry converts to a driver if a JWS grant surface ever lands here.
 	dplaaxSkips["auth-grant-kid-mismatch-001"] = "subject is the L1 DID-grant JWS path (three-way kid match at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
+	// The two LEGACY_DID_LOGIN@1 vectors of auth.grant.exact-method (a request
+	// naming no verification method, against a document with one and with two
+	// controller-matched methods) bind the same /oauth/token grant path.
+	dplaaxSkips["auth-grant-legacy-no-method-001"] = "subject is the L1 DID-grant JWS path (LEGACY_DID_LOGIN@1 with no named method at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
+	dplaaxSkips["auth-grant-legacy-no-method-ambiguous-001"] = "subject is the L1 DID-grant JWS path (LEGACY_DID_LOGIN@1 with no named method and two candidate methods at /oauth/token) — no JWS grant surface in this repo; provin-line/auth vendors and drives this vector in its conformance harness"
 	registerSkip("process", 1, 3, "blocked-on: no process-type/behavior classifier seam — the four-type catalog (process.catalog/chained.stateless/source.firstdrop) is a static deployment attribute, not a callable classifier")
 
 	// Vectors of rules whose SUBJECT does not exist in this implementation
 	// yet. They arrived here because vendoring is whole-corpus by design
 	// (scripts/sync-spec-vectors.sh mirrors the catalog; there is no partial
 	// adoption), so the catalog had outrun the harness silently — these
-	// entries are what makes that visible. Each converts to a driver in the
-	// slice that builds its subject; none is a judgment that the rule is
+	// entries are what makes that visible. Each converts to a driver once its
+	// subject is built; none is a judgment that the rule is
 	// unimportant.
 	registerSkip("claims-effect", 1, 2, "blocked-on: no effect-scope mapping or legacy receipt projection — both are surfaces of the P0-5 external-effect gate, unimplemented (spec transcribed 2026-07-15, catalog rules effect.*)")
 	registerSkip("effect", 1, 13, "blocked-on: no external-effect gate — the P0-5 subject (ReleaseAuthorization, quarantine entries, ObservationRecord/DecisionRecord, the effect state machine) is spec-only; the catalog transcription landed 2026-07-15 ahead of any implementation")

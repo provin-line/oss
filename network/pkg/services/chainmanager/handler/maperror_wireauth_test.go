@@ -7,7 +7,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // TestMapError_WireauthDelegation and TestPeerMapError_WireauthDelegation

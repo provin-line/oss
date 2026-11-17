@@ -16,7 +16,7 @@ import (
 var ErrInvalidArgument = errors.New("vcresolver: invalid argument")
 
 // Service stores VCs by content address and queues unresolved previousCredential
-// holes. The async batch resolver that drains the pool is a later slice; this
+// holes. The async batch resolver (batchresolver) drains the pool; this
 // service stores, serves, and enqueues.
 //
 // The store is the CONCRETE façade, not an interface: identity recomputation,
@@ -39,7 +39,7 @@ func New(store *VariantStore, pool Pool) *Service {
 // StoreVCResult is the identity a submission was admitted under: the body
 // address every successor links to, and the variant naming the exact signed
 // form those bytes are. It is a struct rather than two strings so the promotion
-// and evidence-view work (P0-1 slices B/C) can add what it learns without
+// and evidence-view work (P0-1) can add what it learns without
 // breaking every caller again.
 type StoreVCResult struct {
 	// BodyAddress is the content address of the proof-excluded body.
@@ -199,7 +199,7 @@ func (s *Service) ResolveVariant(ctx context.Context, bodyAddress, wireVariantID
 // the cursor, is not observed by that iteration. Every page is exact as of its
 // own call and the set only grows, so a caller needing a complete snapshot
 // re-lists until nothing new appears, or works from an evidence view that
-// commits its spine (P0-1 slice B).
+// commits its spine (P0-1).
 func (s *Service) ListVariants(ctx context.Context, bodyAddress, fromExclusive string, limit int) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err

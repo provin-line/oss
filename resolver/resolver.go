@@ -22,6 +22,9 @@ import (
 )
 
 // Resolver resolves a DID string to its DID Document.
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, so a
+// caller that gets a nil error uses the document without checking it for nil.
 type Resolver interface {
 	Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }

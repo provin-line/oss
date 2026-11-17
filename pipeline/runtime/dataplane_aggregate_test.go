@@ -11,10 +11,10 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// TestBuildSourceLoop_AggregateClaimRejected guards the slice-17k boot error
-// (D-17k-5 / spec-review rec): an ingest source loop signs via SignFirstDrop (N=0),
-// so the aggregate transformation-claim is not valid on it — the aggregate Source
-// Process runtime is a separate slice. The guard returns before touching the (nil)
+// TestBuildSourceLoop_AggregateClaimRejected guards the boot error: an ingest
+// source loop signs via SignFirstDrop (N=0), so the aggregate
+// transformation-claim is not valid on it — the aggregate Source Process
+// runtime is separate. The guard returns before touching the (nil)
 // conn/builder, so a legible boot error is produced rather than the raw vcdid
 // "aggregate requires SourceRootCanonical" construction error.
 func TestBuildSourceLoop_AggregateClaimRejected(t *testing.T) {

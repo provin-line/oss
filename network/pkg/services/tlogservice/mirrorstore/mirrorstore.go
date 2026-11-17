@@ -1,8 +1,7 @@
 // Package mirrorstore is the registry-side durable mirror of remote
-// signed-hash-chain logs (spec: 2026-07-19-tlog-custody.md, D-T4): custody,
-// not production. A background shipper on each pipeline process (D-T6)
-// replicates checkpoint-aligned segments here; this store never signs,
-// never synthesizes, and never re-derives a checkpoint — every Checkpoint
+// signed-hash-chain logs: custody, not production. A background shipper on
+// each pipeline process replicates checkpoint-aligned segments here; this
+// store never signs, never synthesizes, and never re-derives a checkpoint — every Checkpoint
 // value it serves is the exact REMOTE loop-signed value it was handed (all
 // six tlog.Checkpoint fields, including Signature and SignedBy).
 //
@@ -25,19 +24,18 @@
 // exact formula documented on tlog/tlog.go's Record.Hash and implemented
 // independently by tlog/filelog and tlog/memlog (each carries its own
 // unexported copy; import boundaries keep the implementations independent).
-// This package's copy is ChainHash, EXPORTED — Task 5's MirrorLogSegment
-// handler recomputes the identical chain head with it for D-T2 acceptance
-// rule 1, so the accept-time check and this store's own defense-in-depth
-// re-check can never silently disagree about the formula.
+// This package's copy is ChainHash, EXPORTED: segment acceptance recomputes the
+// chain head with it, and so does this store's own defense-in-depth re-check, so
+// the two can never silently disagree about the formula.
 //
-// Crash ordering (D-T4): AppendVerified fsyncs new records to the journal
+// Crash ordering: AppendVerified fsyncs new records to the journal
 // BEFORE it atomically replaces the checkpoint file (tmp + fsync + rename +
 // dir-fsync — see writeAtomic, mirroring every other durable store in this
 // repo). Reopen recovery in Open / openLogDir replay-verifies each log's
 // journal and truncates anything beyond the persisted checkpoint's Size:
 // those records were appended but never acked, so the shipper's resume
 // (cursored on AckedSize / GetMirrorState.acked_size, never
-// GetLogCheckpoint — D-T2 rule 6) reships them. A journal SHORTER than the
+// GetLogCheckpoint) reships them. A journal SHORTER than the
 // checkpoint's size, or one whose recorded chain at that size does not
 // match the checkpoint's Head, is damage this store cannot repair: that
 // one log is marked POISONED (every subsequent call for it errors) without
@@ -57,7 +55,7 @@
 // lock. Running two registry processes against the same
 // DataDir/tlog-mirrors root is not supported.
 //
-// Byte-identical replay of an already-acked segment (D-T2 rule 2) is
+// Byte-identical replay of an already-acked segment is
 // resolved by the CALLER, not here: AppendVerified has no from_index
 // parameter, so a request must already be reduced to an exact extension
 // (cp.Size == current acked size + len(records)) before it reaches this
@@ -83,7 +81,7 @@ import (
 // takes for an absent log.
 var ErrNotFound = errors.New("mirrorstore: no checkpoint recorded for that log")
 
-// ErrConflict is AppendSegment's D-T2 rule 1/2 "does not align" failure that
+// ErrConflict is AppendSegment's "does not align" failure that
 // is NOT a malformed-request error: a from_index gap ahead of the acked
 // size, a partial overlap with already-mirrored records (a replay whose
 // payloads do not byte-match what is already stored, or a range that extends
@@ -94,7 +92,7 @@ var ErrNotFound = errors.New("mirrorstore: no checkpoint recorded for that log")
 // the append itself holds (no torn read between "is this a replay?" and "commit").
 var ErrConflict = errors.New("mirrorstore: segment does not align with the mirrored log")
 
-// ErrSignerMismatch is AppendSegment's D-T3 first-writer-pin failure: a
+// ErrSignerMismatch is AppendSegment's first-writer-pin failure: a
 // segment whose checkpoint SignedBy differs from the SignedBy of the
 // checkpoint already stored for this log. The pin is enforced HERE, under the
 // same lock the append holds, so two concurrent INITIAL segments from
@@ -116,8 +114,8 @@ type logEntry struct {
 	poisonErr error
 }
 
-// Store is the registry-side mirror of remote emission/receipt/reject logs
-// (spec D-T4): one directory per log under root. See the package doc for
+// Store is the registry-side mirror of remote emission/receipt/reject logs:
+// one directory per log under root. See the package doc for
 // layout, crash ordering, and the single-process assumption.
 type Store struct {
 	mu   sync.RWMutex
@@ -164,7 +162,7 @@ func cloneCheckpoint(cp *tlog.Checkpoint) *tlog.Checkpoint {
 
 // AckedSize returns the number of records durably committed (appended AND
 // checkpointed) for logID — the acked_size cursor GetMirrorState serves
-// (D-T2 rule 6: the shipper's ONLY valid resume cursor; GetLogCheckpoint is
+// (the shipper's ONLY valid resume cursor; GetLogCheckpoint is
 // never used as one). A log this store has never mirrored returns (0,
 // nil): indistinguishable, by design, from a log that has shipped nothing
 // yet — a fresh shipper's very first call must be able to start at 0
@@ -184,7 +182,7 @@ func (s *Store) AckedSize(logID string) (uint64, error) {
 	return uint64(len(e.records)), nil
 }
 
-// Size is AckedSize under the name a read path expects: Task 5 pairs
+// Size is AckedSize under the name a read path expects: the read path pairs
 // Get(logID, index) with Size(logID) the same way every tlog.Log
 // implementation pairs its own Get/Size (tlog/tlog.go's Log interface) — a
 // caller enumerating [0, Size) never needs to reason about

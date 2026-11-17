@@ -10,10 +10,10 @@ import (
 )
 
 // Fail-open guard: every AuditService RPC must carry the o3co.authz.v1.policy option,
-// with the exact frozen resource/action values (D-17i-1). A missing option silently
+// with the exact frozen resource/action values. A missing option silently
 // disables the authorization check; a typo/swap would mis-route authorization while
 // passing a presence-only check. The wire-visible contract is frozen the moment
-// audit.proto is written (slice-17i Phase A), before any handler exists.
+// audit.proto is written, before any handler exists.
 func TestAuditService_RPCPolicies(t *testing.T) {
 	want := map[string]struct{ resource, action string }{
 		"GetAuditStatus":     {"audit", "read"},

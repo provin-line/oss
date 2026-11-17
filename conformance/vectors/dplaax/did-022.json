@@ -1,0 +1,12 @@
+{
+  "id": "did-022",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID with no resource path is an Owner, its own Owner",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme"
+  },
+  "expect": {
+    "level": "owner",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

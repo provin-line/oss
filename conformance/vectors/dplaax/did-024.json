@@ -1,0 +1,13 @@
+{
+  "id": "did-024",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID with resource path pipeline:<id>:process:<id> is a Process, its Pipeline the DID of its first five segments",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:x"
+  },
+  "expect": {
+    "level": "process",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme",
+    "pipeline": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+  }
+}

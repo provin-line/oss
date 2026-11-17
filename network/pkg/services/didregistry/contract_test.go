@@ -12,8 +12,8 @@ import (
 // Fail-open guard: every DIDService RPC must carry the o3co.authz.v1.policy
 // option. A missing option silently disables the authorization check, so this
 // catches an accidentally-unprotected RPC at build time — the wire-visible
-// authorization contract is frozen the moment did.proto is written (slice-4
-// Phase 1), before any handler exists.
+// authorization contract is frozen the moment did.proto is written, before any
+// handler exists.
 func TestDIDService_AllRPCsAnnotated(t *testing.T) {
 	methods := didpb.File_dplaax_did_v1_did_proto.Services().ByName("DIDService").Methods()
 	if methods.Len() != 9 {

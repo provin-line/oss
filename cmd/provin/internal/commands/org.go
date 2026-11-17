@@ -10,6 +10,7 @@ import (
 	"github.com/provin-line/oss/cmd/provin/internal/client"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/orgverify"
 	"github.com/provin-line/oss/resolver"
 )
@@ -225,7 +226,7 @@ func OrgGenerateTXT(ctx context.Context, env Env, cfg OrgGenerateTXTConfig) erro
 func orgOwnerDID(didStr string) (*dplaax.DID, error) {
 	parsed, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("parse %q: %w", didStr, err)
+		return nil, fmt.Errorf("parse %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	if err := dplaax.ValidateDID(parsed); err != nil {
 		return nil, err
@@ -275,7 +276,7 @@ type httpDoer interface {
 func (r *registryDocResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("resolve: parse %q: %w", didStr, err)
+		return nil, fmt.Errorf("resolve: parse %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	segs := append([]string{d.AccountType, d.AccountID}, d.ResourcePath...)
 	url := strings.TrimRight(r.registry, "/") + "/did/" + strings.Join(segs, "/") + "/did.json"
@@ -310,10 +311,12 @@ func (r *registryDocResolver) Resolve(ctx context.Context, didStr string) (*did.
 	if err := doc.UnmarshalJSON(body); err != nil {
 		return nil, fmt.Errorf("resolve: parse document for %s: %w", didStr, err)
 	}
-	// The resolver.Resolver contract requires the returned document's id to
-	// equal the requested DID — without this, a registry answering with a
-	// DIFFERENT identity's document would have its key fingerprinted, and a
-	// matching TXT record would yield a false `verified`.
+	// This resolver refuses a document whose id is not the requested DID.
+	// resolver.Resolver does not promise the id, and its org-command callers
+	// rely on it: they fingerprint the document's own #signing key, so a
+	// registry answering with a DIFFERENT identity's document would have that
+	// key fingerprinted, and a matching TXT record would yield a false
+	// `verified`.
 	if got := doc.ID(); got != didStr {
 		return nil, fmt.Errorf("resolve: registry returned document for %q, requested %q", got, didStr)
 	}

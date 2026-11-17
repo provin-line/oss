@@ -14,6 +14,7 @@ import (
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/vc"
 )
 
@@ -428,7 +429,7 @@ func newRecordingResolver(docs DocumentSource) *recordingResolver {
 func (r *recordingResolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return nil, fmt.Errorf("bundle: resolve %q: %w", didStr, err)
+		return nil, fmt.Errorf("bundle: resolve %s: %w", excerpt.Quoted(didStr, 128), err)
 	}
 	key := d.String()
 	if doc, ok := r.parsed[key]; ok {

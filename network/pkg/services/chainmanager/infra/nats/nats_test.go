@@ -15,7 +15,7 @@ import (
 var _ infra.Operator = (*natsop.Operator)(nil)
 
 // recorder is a fake JWTPublisher that captures every published account JWT so a
-// test can decode the resulting claims and count publish calls (D-n2: a no-op
+// test can decode the resulting claims and count publish calls (a no-op
 // mutation must NOT re-publish).
 type recorder struct {
 	calls []published
@@ -121,7 +121,7 @@ func TestAddExport_PublishesStreamExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddExport: %v", err)
 	}
-	// connection_info contract (D-n4): subject/account/url/publishType
+	// connection_info contract: subject/account/url/publishType
 	if ci["subject"] != "chain.pub1" || ci["account"] != accPub ||
 		ci["url"] != "nats://localhost:4222" || ci["publishType"] != "nats" {
 		t.Errorf("connection_info = %v", ci)
@@ -214,7 +214,7 @@ func TestRemoveImport_Symmetric_BySubjectAndAccount(t *testing.T) {
 	a2, _ := nkeys.CreateAccount()
 	a2Pub, _ := a2.PublicKey()
 	// two imports of the SAME subject from DIFFERENT accounts (the (subject,
-	// account) identity, D-n8): removing one must leave the other.
+	// account) identity): removing one must leave the other.
 	if err := o.AddImport("chain.shared", a1Pub, "local.a1"); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestRemoveImport_Symmetric_BySubjectAndAccount(t *testing.T) {
 
 // flaky is a JWTPublisher that fails the next Publish once, then succeeds,
 // counting successful publishes. It drives the rollback-on-publish-failure
-// contract (Codex P1): a failed publish must not commit the in-memory mutation,
+// contract: a failed publish must not commit the in-memory mutation,
 // so a retry re-attempts and converges.
 type flaky struct {
 	failNext bool
@@ -413,7 +413,7 @@ func TestNew_RejectsForeignIssuerStoredJWT(t *testing.T) {
 	opSeed, _ := op.Seed()
 	// A valid account JWT for THIS account, but signed by a DIFFERENT operator
 	// (foreign issuer). Absorbing it would launder an untrusted file into an
-	// authorized grant on the next mutation (Codex P1) — New must fail closed.
+	// authorized grant on the next mutation — New must fail closed.
 	foreignOp, _ := nkeys.CreateOperator()
 	token, err := jwt.NewAccountClaims(accPub).Encode(foreignOp)
 	if err != nil {

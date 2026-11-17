@@ -92,18 +92,14 @@ func loadEndpoints(cfg *hoconconfig.Config) ([]did.ServiceEndpoint, error) {
 	return out, nil
 }
 
-// validateRegistryID requires a value that is a valid did:dplaax segment by the
-// SAME grammar dplaax.Parse applies ([A-Za-z0-9._-], not all-dots): the id is
+// validateRegistryID requires a value dplaax.ValidateRegistry takes: the id is
 // the {registry} segment of every DID this server mints and resolves, so an id
 // dplaax.Parse would later reject must fail at boot, not at request time.
 func validateRegistryID(id string) error {
 	if id == "" {
 		return fmt.Errorf("must not be empty")
 	}
-	if !dplaax.IsSafeSegment(id) {
-		return fmt.Errorf("must be a valid did:dplaax segment ([A-Za-z0-9._-], not all dots): %q", id)
-	}
-	return nil
+	return dplaax.ValidateRegistry(id)
 }
 
 // validateEndpointID requires a non-empty fragment-safe id (it becomes the

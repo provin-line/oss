@@ -1,6 +1,11 @@
 package dplaax
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/provin-line/oss/internal/excerpt"
+)
 
 // supportedAccountTypes is the deployment's accepted account-type set.
 // Forward-compatible parsing keeps unknown types parseable; this gate is
@@ -8,12 +13,14 @@ import "fmt"
 var supportedAccountTypes = map[string]bool{"org": true}
 
 // ValidateDID performs semantic validation beyond syntax: account type
-// against the supported set (currently "org"), registry shape, and the
-// known-pattern rule. Parsers stay forward-compatible; this gate is where
-// the current deployment's policy lives.
+// against the supported set (currently "org"), a registry that is not empty,
+// and the known-pattern rule. It checks no segment against the syntax: a DID
+// a caller builds rather than parses is held to the syntax only by Parse.
+// Parsers stay forward-compatible; this gate is where the current
+// deployment's policy lives. Its refusals are not ErrSyntax.
 func ValidateDID(d *DID) error {
 	if !supportedAccountTypes[d.AccountType] {
-		return fmt.Errorf("did:%s: unsupported accountType %q (supported: org)", Method, d.AccountType)
+		return fmt.Errorf("did:%s: unsupported accountType %s (supported: org)", Method, excerpt.Quoted(d.AccountType, quoteLimit))
 	}
 	if d.Registry == "" {
 		return fmt.Errorf("did:%s: empty registry", Method)
@@ -28,14 +35,14 @@ func RequireKnownPattern(d *DID) error {
 	if d.IsOwner() || d.IsPipeline() || d.IsProcess() {
 		return nil
 	}
-	return fmt.Errorf("did:%s: resource path %v matches no known pattern (owner / pipeline / process)", Method, d.ResourcePath)
+	return fmt.Errorf("did:%s: resource path %s matches no known pattern (owner / pipeline / process)", Method, excerpt.Quoted(strings.Join(d.ResourcePath, ":"), quoteLimit))
 }
 
 // RequireOwner guards service entry points that require owner-level
 // authority.
 func RequireOwner(d *DID) error {
 	if !d.IsOwner() {
-		return fmt.Errorf("did:%s: owner-level authority required, got %s", Method, d.String())
+		return fmt.Errorf("did:%s: owner-level authority required, got %s", Method, excerpt.Quoted(d.String(), quoteLimit))
 	}
 	return nil
 }

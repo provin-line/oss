@@ -272,10 +272,10 @@ func TestDamagedJournal_InteriorBreakWithNoCheckpointPoisons(t *testing.T) {
 }
 
 // TestAppendVerified_CheckpointWriteFailureDoesNotAdvanceOrCorrupt covers
-// the review finding on append.go: a records-fsync that succeeds followed
-// by a checkpoint write that FAILS must not advance the live process's
-// view (AckedSize/Get/Checkpoint) past what is durably checkpointed, and
-// must not corrupt the on-disk journal for a subsequent retry.
+// append.go: a records-fsync that succeeds followed by a checkpoint write
+// that FAILS must not advance the live process's view
+// (AckedSize/Get/Checkpoint) past what is durably checkpointed, and must not
+// corrupt the on-disk journal for a subsequent retry.
 //
 // Fault-injection seam: after an initial successful append, the log
 // directory is made unwritable (0o500 — read+search, no write). Writing to
@@ -366,11 +366,11 @@ func TestAppendVerified_CheckpointWriteFailureDoesNotAdvanceOrCorrupt(t *testing
 	}
 }
 
-// TestAppendVerified_JournalAppendFailureRollsBack (P1-C) covers the review
-// finding on the appendJournal error path: a partial os.File.Write / Sync
-// failure leaves uncheckpointed bytes on disk; the write path must roll the
-// journal back to its pre-append size (or poison), never return leaving the
-// excess so a later retry re-appends duplicate indexes and poisons on reopen.
+// TestAppendVerified_JournalAppendFailureRollsBack covers the
+// appendJournal error path: a partial os.File.Write / Sync failure leaves
+// uncheckpointed bytes on disk; the write path must roll the journal back to
+// its pre-append size (or poison), never return leaving the excess so a later
+// retry re-appends duplicate indexes and poisons on reopen.
 //
 // Fault-injection seam: appendJournalFn is swapped for one that writes a
 // partial (newline-less) line to records.ndjson — exactly the byte state a
@@ -443,11 +443,11 @@ func TestAppendVerified_JournalAppendFailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestReopen_CheckpointOriginMismatchPoisons (F4) covers the reopen finding: a
-// log directory whose persisted checkpoint's Origin does NOT hash to that
-// directory's name (a copied/swapped/corrupted dir) must be poisoned on Open,
-// never served — otherwise a request for log B (whose dir the data now sits
-// under) is answered with log A's checkpoint + records.
+// TestReopen_CheckpointOriginMismatchPoisons covers reopen: a log directory
+// whose persisted checkpoint's Origin does NOT hash to that directory's name
+// (a copied/swapped/corrupted dir) must be poisoned on Open, never served —
+// otherwise a request for log B (whose dir the data now sits under) is
+// answered with log A's checkpoint + records.
 func TestReopen_CheckpointOriginMismatchPoisons(t *testing.T) {
 	root := t.TempDir()
 	st, err := Open(root)
@@ -486,17 +486,17 @@ func TestReopen_CheckpointOriginMismatchPoisons(t *testing.T) {
 	}
 }
 
-// TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison (R1) covers the
-// re-review regression the P1-C rollback introduced: a PRE-write appendJournal
-// failure (EMFILE / permission / open failure — nothing written, the journal
-// stays at preSize) must NOT poison the log. The unconditional truncate the
-// first P1-C cut performed could itself fail for the same transient reason and
-// then poison a perfectly healthy log for the process lifetime. A pre-write
-// failure is a clean, retryable error; a subsequent good append must succeed.
+// TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison: a PRE-write
+// appendJournal failure (EMFILE / permission / open failure — nothing
+// written, the journal stays at preSize) must NOT poison the log. A rollback
+// truncate there could itself fail for the same transient reason and then
+// poison a perfectly healthy log for the process lifetime, so none is
+// attempted. A pre-write failure is a clean, retryable error; a subsequent
+// good append must succeed.
 //
 // Fault-injection: records.ndjson is made read-only so that IF the code wrongly
-// attempts a rollback truncate, that truncate FAILS (the exact condition that
-// poisoned the log pre-fix); appendJournalFn is injected to fail without
+// attempts a rollback truncate, that truncate FAILS (the condition that
+// would poison the log); appendJournalFn is injected to fail without
 // writing, leaving the journal at preSize.
 func TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -562,13 +562,13 @@ func TestAppendVerified_PreWriteAppendFailureIsRetryableNotPoison(t *testing.T) 
 	}
 }
 
-// TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates (P2-F) covers
-// the review finding on writeCheckpointFile's ambiguous-durability case: when
+// TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates covers
+// writeCheckpointFile's ambiguous-durability case: when
 // writeAtomic renames checkpoint.json to the new size SUCCESSFULLY but its
 // trailing dir-fsync then fails, the checkpoint file ALREADY names the new
-// size. Blind-truncating the journal back to the old size (the pre-fix path)
+// size. Blind-truncating the journal back to the old size
 // leaves the checkpoint AHEAD of the records → poisoned-inconsistent on
-// restart. The fix POISONS the log this session and does NOT truncate, so a
+// restart. The store POISONS the log this session and does NOT truncate, so a
 // fresh reopen finds records and checkpoint consistent at the new size.
 //
 // Fault-injection seam: afterRenameDirSync is swapped for one that fails,
@@ -605,7 +605,7 @@ func TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates(t *testing.T) 
 
 	// checkpoint.json (renamed to 2) and the journal (untruncated at 2) are
 	// consistent on disk, so a FRESH reopen finds a healthy log at 2 — never
-	// checkpoint-ahead-of-records (which the pre-fix truncate produced).
+	// checkpoint-ahead-of-records (which a blind truncate would produce).
 	st2, err := Open(root)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -619,12 +619,11 @@ func TestAppendVerified_PostRenameFsyncFailurePoisonsNotTruncates(t *testing.T) 
 	}
 }
 
-// TestOpenFsyncsRootParent (finding #2) covers the review finding: Open
-// creates the mirror-store root with os.MkdirAll but never fsynced the
-// newly-created root's PARENT directory. A power loss right after a
-// segment is acked could then lose the whole mirror root's directory
-// entry. Prove the call happens (its only observable effect) by injecting
-// a failure and a path capture.
+// TestOpenFsyncsRootParent covers Open: it creates the mirror-store root with
+// os.MkdirAll and must also fsync the newly-created root's PARENT directory.
+// Otherwise a power loss right after a segment is acked could lose the whole
+// mirror root's directory entry. Prove the call happens (its only observable
+// effect) by injecting a failure and a path capture.
 func TestOpenFsyncsRootParent(t *testing.T) {
 	orig := fsyncRootParent
 	t.Cleanup(func() { fsyncRootParent = orig })

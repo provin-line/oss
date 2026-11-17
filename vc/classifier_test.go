@@ -246,8 +246,8 @@ func TestVerify_PresentNullContextIsRejected(t *testing.T) {
 	// and the proof sits outside the body hash, appending it to a stored legacy
 	// proof would change the wire bytes without changing the content address or
 	// breaking the signature: a malleable member, on the one row that cannot
-	// pin it. Both ForkW-1 reviewers converged on this; the fix is to refuse
-	// the shape outright — null is not absence, and no contract accepts it.
+	// pin it. The shape is therefore refused outright — null is not absence,
+	// and no contract accepts it.
 	signer, pub, doc := fixture(t)
 	proof, err := vc.CreateProof(signer, issuerDID, string(keystore.KeyIDSigning), vmID, doc, vc.CryptosuiteEdDSAJCS2022)
 	if err != nil {

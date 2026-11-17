@@ -86,8 +86,8 @@ type TlogServiceClient interface {
 	// exist").
 	ListLogRecords(context.Context, *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error)
 	// MirrorLogSegment ships one checkpoint-aligned segment of a producing
-	// loop's local emission log to the registry for durable custody (D-T1
-	// async mirror: sync-append stays rejected, so this call runs off the
+	// loop's local emission log to the registry for durable custody
+	// (an async mirror, not a synchronous append: this call runs off the
 	// per-emission hot path, on a background shipper's own schedule).
 	//
 	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
@@ -129,7 +129,7 @@ type TlogServiceClient interface {
 	// regresses — a valid but older checkpoint presented here is ignored and
 	// never replaces the current head.
 	//
-	// Caps (D-T2 rule 5): the segment is additionally bounded by
+	// Caps: the segment is additionally bounded by
 	// tlog-mirror.max-batch-records (default 256) and
 	// tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
 	// interaction — a batch over either cap is ResourceExhausted. This RPC is
@@ -237,8 +237,8 @@ type TlogServiceHandler interface {
 	// exist").
 	ListLogRecords(context.Context, *connect.Request[v1.ListLogRecordsRequest]) (*connect.Response[v1.ListLogRecordsResponse], error)
 	// MirrorLogSegment ships one checkpoint-aligned segment of a producing
-	// loop's local emission log to the registry for durable custody (D-T1
-	// async mirror: sync-append stays rejected, so this call runs off the
+	// loop's local emission log to the registry for durable custody
+	// (an async mirror, not a synchronous append: this call runs off the
 	// per-emission hot path, on a background shipper's own schedule).
 	//
 	// Trust model: L1 + in-band wireauth — the PDP gate (this policy option)
@@ -280,7 +280,7 @@ type TlogServiceHandler interface {
 	// regresses — a valid but older checkpoint presented here is ignored and
 	// never replaces the current head.
 	//
-	// Caps (D-T2 rule 5): the segment is additionally bounded by
+	// Caps: the segment is additionally bounded by
 	// tlog-mirror.max-batch-records (default 256) and
 	// tlog-mirror.max-batch-bytes (default 4 MiB), enforced before any store
 	// interaction — a batch over either cap is ResourceExhausted. This RPC is

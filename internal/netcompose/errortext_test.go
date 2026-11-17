@@ -54,11 +54,6 @@ var errorCases = []errorCase{
 	{"wrapped connect error", func() error {
 		return fmt.Errorf("outer %s: %w", strings.Repeat("o", 10<<10), longConnectError(connect.CodeNotFound))
 	}, connect.CodeNotFound},
-	{"plain error", func() error { return errors.New(strings.Repeat("p", 200<<10)) }, connect.CodeUnknown},
-	{"cancellation", func() error { return fmt.Errorf("%s: %w", strings.Repeat("c", 200<<10), context.Canceled) }, connect.CodeCanceled},
-	{"typed nil and a long sibling", func() error {
-		return errors.Join((*connect.Error)(nil), errors.New(strings.Repeat("n", 200<<10)))
-	}, connect.CodeUnknown},
 }
 
 // A text that is not UTF-8 reaches the caller as UTF-8 within
@@ -68,7 +63,7 @@ var errorCases = []errorCase{
 // internal instead.
 func TestErrorText_RepairsATextThatIsNotUTF8(t *testing.T) {
 	var failure func() error
-	bounded := echoServer(t, &failure, errorText())
+	bounded := echoServer(t, &failure, errorText(nil))
 	for _, text := range []string{"bad \xff", "bad " + strings.Repeat("é\xff", 100<<10)} {
 		failure = func() error {
 			ce := longConnectError(connect.CodeFailedPrecondition)
@@ -141,7 +136,7 @@ func received(t *testing.T, srv *httptest.Server, opts []connect.ClientOption) (
 // wire error, as they would without errorText.
 func TestErrorText_BoundsWhatTheCallerReceives(t *testing.T) {
 	var failure func() error
-	bounded := echoServer(t, &failure, errorText())
+	bounded := echoServer(t, &failure, errorText(nil))
 	plain := echoServer(t, &failure, connect.WithHandlerOptions())
 	for _, c := range errorCases {
 		failure = c.err
@@ -352,7 +347,8 @@ func (canceledPanics) Unwrap() error { return context.Canceled }
 // A handler's error whose Error method panics, in a connect error, holding
 // one or beside one, is answered in each protocol and from a unary and a
 // streaming RPC, with the code and the message below, instead of failing the
-// answer.
+// answer; one answered as Unknown gets the fixed text of a server error, and
+// logging it does not fail either.
 func TestErrorText_AnswersAnErrorWhoseTextPanics(t *testing.T) {
 	fits := func(code connect.Code) *connect.Error { return connect.NewError(code, errors.New("no such head")) }
 	for _, c := range []struct {
@@ -371,11 +367,11 @@ func TestErrorText_AnswersAnErrorWhoseTextPanics(t *testing.T) {
 			connect.CodeNotFound, "no such head"},
 		{"connect error in a wrapper that panics", func() error { return panickingWrapper{fits(connect.CodeAborted)} },
 			connect.CodeAborted, "no such head"},
-		{"panicking error", func() error { return panickingError{} }, connect.CodeUnknown, fmt.Sprint(panickingError{})},
-		{"cancellation in a wrapper that panics", func() error { return canceledPanics{} }, connect.CodeCanceled, fmt.Sprint(canceledPanics{})},
+		{"panicking error", func() error { return panickingError{} }, connect.CodeUnknown, ""},
+		{"cancellation in a wrapper that panics", func() error { return canceledPanics{} }, connect.CodeCanceled, ""},
 	} {
 		failure := c.err
-		bounded := echoServer(t, &failure, errorText())
+		bounded := echoServer(t, &failure, errorText(nil))
 		for _, pr := range protocols {
 			gotU, gotS := received(t, bounded, pr.opts)
 			for _, r := range []struct {
@@ -392,6 +388,9 @@ func TestErrorText_AnswersAnErrorWhoseTextPanics(t *testing.T) {
 				}
 				if msg := got.Message(); len(msg) > netexcerpt.TextLimit || !utf8.ValidString(msg) || c.message != "" && msg != c.message {
 					t.Errorf("%s: message %.80q, want %q", what, msg, c.message)
+				}
+				if (c.code == connect.CodeUnknown || c.code == connect.CodeCanceled) && !serverErrorText.MatchString(got.Message()) {
+					t.Errorf("%s: message %.80q, want the fixed text of a server error", what, got.Message())
 				}
 			}
 		}
@@ -425,12 +424,9 @@ func TestErrorText_AnswersAConnectErrorThatFitsAsWithoutIt(t *testing.T) {
 		{"wrapped connect error holding no error", func() error {
 			return fmt.Errorf("lookup: %w", withDetail(connect.NewError(connect.CodePermissionDenied, nil)))
 		}},
-		{"connect error holding a connect error", func() error {
-			return connect.NewError(connect.CodeInternal, withDetail(connect.NewError(connect.CodeNotFound, errors.New("no such head"))))
-		}},
 	} {
 		failure := c.err
-		bounded := echoServer(t, &failure, errorText())
+		bounded := echoServer(t, &failure, errorText(nil))
 		plain := echoServer(t, &failure, connect.WithHandlerOptions())
 		for _, pr := range protocols {
 			wantU, wantS := received(t, plain, pr.opts)
@@ -626,7 +622,7 @@ func envelope(b []byte) []byte {
 // that does not gets the same answer, in the Connect protocol over POST and
 // GET and in a stream. A change of connect's own codec shows here.
 func TestErrorText_JSONCodecAnswersAsConnectsOwn(t *testing.T) {
-	bounded := codecServer(t, errorText())
+	bounded := codecServer(t, errorText(nil))
 	plain := codecServer(t, connect.WithHandlerOptions())
 	for _, c := range codecCases {
 		for _, path := range []string{"/test.v1.Echo/Struct", "/test.v1.Echo/Descriptor"} {
@@ -651,7 +647,7 @@ func TestErrorText_JSONCodecAnswersAsConnectsOwn(t *testing.T) {
 // code connect's own codec gives and a text within netexcerpt.TextLimit
 // bytes, the words connect puts before the codec's error included.
 func TestErrorText_JSONCodecBoundsItsError(t *testing.T) {
-	bounded := codecServer(t, errorText())
+	bounded := codecServer(t, errorText(nil))
 	plain := codecServer(t, connect.WithHandlerOptions())
 	for _, body := range []string{`{} "` + longToken + `"`, `{"name":` + strings.Repeat("9", 200<<10) + `}`} {
 		u := connect.NewClient[rawRequest, descriptorpb.FileDescriptorProto](bounded.Client(), bounded.URL+"/test.v1.Echo/Descriptor", connect.WithCodec(rawJSONCodec{}))

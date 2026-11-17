@@ -3,6 +3,9 @@ package did
 // Error is the type of this package's sentinel errors. The sentinels are
 // constants, so no importer can reassign them; errors.Is matches them as it
 // matches any comparable error.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }

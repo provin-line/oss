@@ -99,10 +99,13 @@ func of(u *url.URL) (string, bool) {
 	}
 }
 
-// Confine returns a copy of c that follows no redirect, for a request that
+// Confine returns a copy of c that refuses every redirect, for a request that
 // carries a credential: the credential is shown to the origin the request was
 // made to, and to no server that origin redirects to (net/http forwards an
-// Authorization header to another port or a subdomain).
+// Authorization header to another port or a subdomain). The copy shares c's
+// Transport, so this holds over a Transport that sends each request as it is,
+// as net/http's does, not one that follows redirects itself. c must not be
+// nil.
 func Confine(c *http.Client) *http.Client {
 	confined := *c
 	confined.CheckRedirect = func(req *http.Request, _ []*http.Request) error {

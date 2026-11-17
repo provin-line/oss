@@ -3,6 +3,7 @@ package vc_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/provin-line/oss/vc"
@@ -102,8 +103,8 @@ func TestValidateChainFrom_BindsTheOriginInput(t *testing.T) {
 		}
 		err := vc.ValidateChainFrom([]*vc.PipelinePassCredential{o}, chainFixtureInput)
 		var linkErr *vc.ChainLinkError
-		if !errors.As(err, &linkErr) || linkErr.Index != 0 {
-			t.Errorf("%s: ValidateChainFrom = %v, want a *ChainLinkError at 0", name, err)
+		if !errors.As(err, &linkErr) || linkErr.Index != 0 || !errors.Is(err, vc.ErrChainLinkBroken) {
+			t.Errorf("%s: ValidateChainFrom = %v, want a *ChainLinkError at 0, which is ErrChainLinkBroken", name, err)
 		}
 	}
 	if err := vc.ValidateChainFrom([]*vc.PipelinePassCredential{origin, child}, foreignInput); err == nil {
@@ -166,6 +167,9 @@ func TestValidateChainLinks_BrokenLinks(t *testing.T) {
 			if linkErr.Index != tc.wantIndex || linkErr.Reason == "" {
 				t.Errorf("Index, Reason = %d, %q; want %d and a reason", linkErr.Index, linkErr.Reason, tc.wantIndex)
 			}
+			if !errors.Is(err, vc.ErrChainLinkBroken) || errors.Is(err, vc.ErrChainEmpty) {
+				t.Errorf("err = %v, want ErrChainLinkBroken and not ErrChainEmpty", err)
+			}
 			if !tc.wellFormed {
 				return
 			}
@@ -210,20 +214,56 @@ func TestValidateChainLinks_SourceCommitmentOfAnIssuerlessPredecessor(t *testing
 	}
 }
 
-// Nothing to link is an error of another kind than a broken link.
+// Nothing to link is an error of another kind than a broken link:
+// ErrChainEmpty. An empty origin input is the caller's argument, not the
+// chain: it is neither.
 func TestValidateChainLinksAndFrom_NothingToLink(t *testing.T) {
 	origin, _, _ := buildChainFixture(t, procAOrigin, procBSameOrg)
-	for name, err := range map[string]error{
-		"empty chain":          vc.ValidateChainLinks(nil),
-		"empty chain (from)":   vc.ValidateChainFrom(nil, chainFixtureInput),
-		"nil origin":           vc.ValidateChainLinks([]*vc.PipelinePassCredential{nil, origin}),
-		"nil successor":        vc.ValidateChainLinks([]*vc.PipelinePassCredential{origin, nil}),
-		"nil successor (from)": vc.ValidateChainFrom([]*vc.PipelinePassCredential{origin, nil}, chainFixtureInput),
-		"empty origin input":   vc.ValidateChainFrom([]*vc.PipelinePassCredential{origin}, ""),
+	for name, c := range map[string]struct {
+		err   error
+		empty bool
+	}{
+		"empty chain":          {vc.ValidateChainLinks(nil), true},
+		"empty chain (from)":   {vc.ValidateChainFrom(nil, chainFixtureInput), true},
+		"nil origin":           {vc.ValidateChainLinks([]*vc.PipelinePassCredential{nil, origin}), true},
+		"nil successor":        {vc.ValidateChainLinks([]*vc.PipelinePassCredential{origin, nil}), true},
+		"nil successor (from)": {vc.ValidateChainFrom([]*vc.PipelinePassCredential{origin, nil}, chainFixtureInput), true},
+		"empty origin input":   {vc.ValidateChainFrom([]*vc.PipelinePassCredential{origin}, ""), false},
 	} {
 		var linkErr *vc.ChainLinkError
-		if err == nil || errors.As(err, &linkErr) {
-			t.Errorf("%s: err = %v, want an error that is not a *ChainLinkError", name, err)
+		if c.err == nil || errors.As(c.err, &linkErr) || errors.Is(c.err, vc.ErrChainLinkBroken) {
+			t.Errorf("%s: err = %v, want an error that is not a *ChainLinkError nor ErrChainLinkBroken", name, c.err)
 		}
+		if errors.Is(c.err, vc.ErrChainEmpty) != c.empty {
+			t.Errorf("%s: err = %v, errors.Is ErrChainEmpty = %t, want %t", name, c.err, !c.empty, c.empty)
+		}
+	}
+	// Each text says what is missing, and where.
+	for err, want := range map[error]string{
+		vc.ValidateChainLinks(nil):                                       "vc: empty chain",
+		vc.ValidateChainLinks([]*vc.PipelinePassCredential{origin, nil}): "vc: chain credential 1 is nil",
+	} {
+		if err.Error() != want {
+			t.Errorf("err = %q, want %q", err, want)
+		}
+	}
+}
+
+// A *ChainLinkError is ErrChainLinkBroken wherever it is wrapped, and is
+// nothing else of this package's.
+func TestChainLinkError_IsErrChainLinkBroken(t *testing.T) {
+	e := &vc.ChainLinkError{Index: 1, Reason: "inputHash is not the predecessor's outputHash"}
+	wrapped := fmt.Errorf("wrapped: %w", e)
+	if !errors.Is(e, vc.ErrChainLinkBroken) || !errors.Is(wrapped, vc.ErrChainLinkBroken) {
+		t.Errorf("errors.Is(%v, ErrChainLinkBroken) = false", wrapped)
+	}
+	for _, other := range []error{vc.ErrChainEmpty, vc.ErrIssuerNotFound, vc.ErrSignatureInvalid} {
+		if errors.Is(wrapped, other) {
+			t.Errorf("errors.Is(%v, %v) = true", wrapped, other)
+		}
+	}
+	var got *vc.ChainLinkError
+	if !errors.As(wrapped, &got) || got != e {
+		t.Errorf("errors.As lost the *ChainLinkError")
 	}
 }

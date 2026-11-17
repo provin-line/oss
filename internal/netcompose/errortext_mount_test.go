@@ -28,6 +28,8 @@ import (
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	payloadpbconnect "github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	tlogpbconnect "github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
+	vcpb "github.com/provin-line/oss/gen/go/dplaax/vc/v1"
+	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 
 	"github.com/provin-line/oss/internal/httpserve"
 	"github.com/provin-line/oss/internal/netexcerpt"
@@ -217,7 +219,7 @@ func TestBuildHandler_BoundsTheTextOfAnUndecodableMirrorSegment(t *testing.T) {
 
 // An error a handler returns quoting a field of its request reaches the caller
 // within netexcerpt.TextLimit bytes, with its code: before L1 (the chain peer
-// surface), after it (DID resolution naming a registry it does not serve), and
+// surface), after it (a credential hash that is not a content address), and
 // from a server-streaming RPC, in each protocol.
 func TestBuildHandler_BoundsTheTextOfAHandlersError(t *testing.T) {
 	srv, _ := http2Assembled(t)
@@ -232,11 +234,37 @@ func TestBuildHandler_BoundsTheTextOfAHandlersError(t *testing.T) {
 			t.Errorf("%s RegisterSubscription: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
 		}
 
+		vcs := vcpbconnect.NewVCResolverServiceClient(srv.Client(), srv.URL, pr.opts...)
+		_, err = vcs.ResolveVC(ctx, bearer(connect.NewRequest(&vcpb.ResolveVCRequest{Hash: longToken})))
+		requireCutFrom(t, pr.name+" ResolveVC", err, len(longToken))
+		if code := requireBoundedText(t, pr.name+" ResolveVC", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ResolveVC: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
+		}
+
+		// A DID of the wrong kind is named by its head and length.
 		dids := didpbconnect.NewDIDServiceClient(srv.Client(), srv.URL, pr.opts...)
+		owner := "did:dplaax:" + registryID + ":org:" + longToken
+		_, err = dids.ListProcesses(ctx, bearer(connect.NewRequest(&didpb.ListProcessesRequest{PipelineDid: owner})))
+		if code := requireBoundedText(t, pr.name+" ListProcesses", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ListProcesses: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
+		}
+		if want := fmt.Sprintf("(%d bytes)", len(owner)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s ListProcesses: %.200v, want the DID named with its length %s", pr.name, err, want)
+		}
+
+		// A segment the DID grammar refuses is named by its head and length.
+		_, err = dids.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: "did:dplaax:" + registryID + ":org:" + longToken + "!"})))
+		if code := requireBoundedText(t, pr.name+" ResolveDID", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ResolveDID: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
+		}
+		if want := fmt.Sprintf("(%d bytes)", len(longToken)+1); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s ResolveDID: %.200v, want the segment named with its length %s", pr.name, err, want)
+		}
+		// A registry past the longest DNS name is refused as malformed, its
+		// text bounded.
 		_, err = dids.ResolveDID(ctx, bearer(connect.NewRequest(&didpb.ResolveDIDRequest{Did: "did:dplaax:" + longToken + ":org:x"})))
-		requireCutFrom(t, pr.name+" ResolveDID", err, len(longToken))
-		if code := requireBoundedText(t, pr.name+" ResolveDID", err); code != connect.CodePermissionDenied {
-			t.Errorf("%s ResolveDID: code %v, want %v", pr.name, code, connect.CodePermissionDenied)
+		if code := requireBoundedText(t, pr.name+" ResolveDID of a long registry", err); code != connect.CodeInvalidArgument {
+			t.Errorf("%s ResolveDID of a long registry: code %v, want %v", pr.name, code, connect.CodeInvalidArgument)
 		}
 
 		payloads := payloadpbconnect.NewPayloadServiceClient(srv.Client(), srv.URL, pr.opts...)

@@ -14,7 +14,7 @@ import (
 // encoder would not write.
 func rawHSToken(t *testing.T, payload string) string {
 	t.Helper()
-	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: testSecret}, (&jose.SignerOptions{}).WithType("JWT"))
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: testSecret}, (&jose.SignerOptions{}).WithType("at+jwt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func rawHSToken(t *testing.T, payload string) string {
 // claimsWith is a valid claims set with sub as given (a JSON string literal)
 // and extra members appended.
 func claimsWith(now time.Time, sub, extra string) string {
-	return fmt.Sprintf(`{"iss":%q,"aud":%q,"exp":%d,"sub":%s%s}`, testIssuer, testAudience, now.Add(time.Hour).Unix(), sub, extra)
+	return fmt.Sprintf(`{"iss":%q,"aud":%q,"exp":%d,"iat":%d,"sub":%s%s}`, testIssuer, testAudience, now.Add(time.Hour).Unix(), now.Unix(), sub, extra)
 }
 
 // The claims are read under canon.StrictDecoder's rules once the signature

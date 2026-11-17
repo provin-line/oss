@@ -3,7 +3,7 @@
 // hold DIDs, not keys; they call this service, and the registry process holds
 // the key material (via the keystore) and returns only the signature.
 //
-// Contract shape (slice-5 D-s1): both RPCs are a thin transport of the committed
+// Contract shape: both RPCs are a thin transport of the committed
 // crypto.Signer seam — they take the RAW bytes to sign and return the RAW
 // Ed25519 signature. Output encoding is the caller's concern, not this service's:
 // VC proofs are base58btc-multibase-encoded by the vc layer (vc.CreateProof does
@@ -12,7 +12,7 @@
 // a "sha256:<hex>" prehash or the output as multibase — that would force a
 // pointless decode round-trip on the client.
 //
-// Two RPCs, two domains (D-s2/D-s3): Sign and SignRaw are cryptographically
+// Two RPCs, two domains: Sign and SignRaw are cryptographically
 // identical (Ed25519 over the supplied bytes), but they are split so the two
 // signing domains carry distinct authorization policies (an operator can grant
 // VC-signing without granting wire-signing) and so each binds to its key
@@ -72,13 +72,13 @@ type SignerServiceClient interface {
 	// assertionMethod key — the VC proof-creation domain. data is the raw bytes to
 	// sign (e.g. the proof hashData vc.CreateProof builds); the returned signature
 	// is raw (the vc layer encodes it base58btc-multibase). key_id must be
-	// "signing"; any other value is rejected (D-s3).
+	// "signing"; any other value is rejected.
 	Sign(context.Context, *connect.Request[v1.SignRequest]) (*connect.Response[v1.SignResponse], error)
 	// SignRaw produces an Ed25519 signature over data with the DID's #auth
-	// authentication key — the L2 wire-signing domain (chainmanager wireauth).
+	// authentication key — the L2 wire-signing domain (network/pkg/wireauth).
 	// data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
 	// the returned signature is the raw 64-byte Ed25519 signature. key_id must be
-	// "auth"; any other value is rejected (D-s3).
+	// "auth"; any other value is rejected.
 	SignRaw(context.Context, *connect.Request[v1.SignRawRequest]) (*connect.Response[v1.SignRawResponse], error)
 }
 
@@ -130,13 +130,13 @@ type SignerServiceHandler interface {
 	// assertionMethod key — the VC proof-creation domain. data is the raw bytes to
 	// sign (e.g. the proof hashData vc.CreateProof builds); the returned signature
 	// is raw (the vc layer encodes it base58btc-multibase). key_id must be
-	// "signing"; any other value is rejected (D-s3).
+	// "signing"; any other value is rejected.
 	Sign(context.Context, *connect.Request[v1.SignRequest]) (*connect.Response[v1.SignResponse], error)
 	// SignRaw produces an Ed25519 signature over data with the DID's #auth
-	// authentication key — the L2 wire-signing domain (chainmanager wireauth).
+	// authentication key — the L2 wire-signing domain (network/pkg/wireauth).
 	// data is the raw bytes to sign (e.g. the JCS-canonicalized AuthProof view);
 	// the returned signature is the raw 64-byte Ed25519 signature. key_id must be
-	// "auth"; any other value is rejected (D-s3).
+	// "auth"; any other value is rejected.
 	SignRaw(context.Context, *connect.Request[v1.SignRawRequest]) (*connect.Response[v1.SignRawResponse], error)
 }
 

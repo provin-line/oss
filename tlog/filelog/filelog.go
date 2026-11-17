@@ -486,16 +486,14 @@ func (l *Log) Checkpoint(_ context.Context) (*tlog.Checkpoint, error) {
 // without a CheckpointSigner. size > the log's current committed length
 // is a clear error, never a silently truncated or zero-valued checkpoint.
 //
-// This is the tlog-custody mirror shipper's own capability (task-6
-// controller decision): the shipper ships cap-bounded batches, each
-// needing a checkpoint covering EXACTLY that batch's end (D-T2 acceptance
-// rule 1) — a boundary that is, in general, strictly before the log's
-// current head. It is deliberately NOT part of the tlog.Log contract:
-// memlog never signs at all, and the tlog-custody spec's v0 scope
-// excludes merklelog (per-segment identity is a named post-v0
-// limitation there), so requiring every implementation to provide it
-// would force a stub on implementations that structurally cannot honor
-// it. Callers detect the capability structurally (mirrors
+// This is the tlog-custody mirror shipper's own capability: the shipper
+// ships cap-bounded batches, each needing a checkpoint covering EXACTLY
+// that batch's end (the registry's chain-to-head rule) — a boundary that is,
+// in general, strictly before the log's current head. It is deliberately NOT
+// part of the tlog.Log contract: memlog never signs at all, and mirroring does
+// not cover merklelog (per-segment identity is a limitation there), so requiring
+// every implementation to provide it would force a stub on implementations that
+// structurally cannot honor it. Callers detect the capability structurally (mirrors
 // pipeline/transport's own intentLog precedent: a package-local interface
 // asserted against, never added to tlog.Log itself).
 //

@@ -1,0 +1,9 @@
+{
+  "id": "did-001",
+  "rule": "did.dplaax.syntax",
+  "description": "An Owner DID is a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme"
+  },
+  "expect": "accept"
+}

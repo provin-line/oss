@@ -24,9 +24,9 @@ type HoleError interface {
 }
 
 // HeadResolver loads a credential by content address from the LOCAL store — satisfied by
-// *vcresolver.Service (ResolveVC). The chain is assembled in-process; slice-17g already
-// fetched the predecessors. The Runner also uses it to check whether an unresolved hole
-// has since appeared in the store.
+// *vcresolver.Service (ResolveVC). The chain is assembled in-process from predecessors
+// the batch resolver has already fetched. The Runner also uses it to check whether an
+// unresolved hole has since appeared in the store.
 type HeadResolver interface {
 	ResolveVC(ctx context.Context, hash string) (*vc.PipelinePassCredential, error)
 }
@@ -44,7 +44,7 @@ type PoolLiveness interface {
 	Has(hash string) bool
 }
 
-// ReceiptReader reads the emit-time consumed-set receipt for an aggregate head (slice-17o):
+// ReceiptReader reads the emit-time consumed-set receipt for an aggregate head:
 // the exact source content addresses the emitting node folded into the head's SourceCommitment.
 // Satisfied by any ReceiptStore. Presence is the coverage gate — a head with no receipt
 // (wrapped ErrNotFound) is audited linear-only (a downstream/non-emitting node), never
@@ -86,12 +86,12 @@ type Runner struct {
 	cfg    Config
 	logger *log.Logger
 	now    func() time.Time
-	// Source-commitment audit (slice-17o), enabled via WithSourceCommitment. Both nil (the
-	// option unset) → linear-only audit, exactly the pre-17o behavior.
+	// Source-commitment audit, enabled via WithSourceCommitment. Both nil (the option
+	// unset) → linear-only audit.
 	receipts ReceiptReader
 	scv      SourceCommitmentVerifier
-	// Verdict-write counters behind VerdictCounts (P1-2 metrics): atomics because a metrics
-	// surface polls them from a different goroutine than the drain loop.
+	// Verdict-write counters behind VerdictCounts (the /metrics bridge): atomics because
+	// a metrics surface polls them from a different goroutine than the drain loop.
 	verdictVerified      atomic.Uint64
 	verdictFailed        atomic.Uint64
 	verdictIndeterminate atomic.Uint64
@@ -118,7 +118,7 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
-// WithSourceCommitment enables the consumed-set (SourceCommitment) audit step (slice-17o):
+// WithSourceCommitment enables the consumed-set (SourceCommitment) audit step:
 // for an aggregate head that has a local receipt, the runner gathers the consumed sources
 // from the local store and records a DISTINCT source-commitment verdict alongside the linear
 // one. Both args must be non-nil to take effect (a nil pair leaves the runner linear-only).
@@ -191,7 +191,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 	// A head already holding a FULLY terminal verdict (immutable content → stable) is dequeued
 	// without re-verifying — covers re-registration of a previously-audited head. A terminal
 	// linear verdict with a still-retryable source-commitment Indeterminate is NOT fully
-	// terminal: it must be re-audited so the consumed-set verdict can resolve (slice-17o).
+	// terminal: it must be re-audited so the consumed-set verdict can resolve.
 	// A DAMAGED prior verdict (non-ErrNotFound read error) falls through to a fresh audit:
 	// re-verifying from evidence and overwriting the record is repair, not trust in the file.
 	if rec, err := r.status.Get(c.HeadHash); err == nil && isTerminal(rec.Overall) && !scRetryable(rec) {
@@ -249,10 +249,10 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 	}
 
 	// A complete chain: build the verdict record. The linear verdict is verbatim from
-	// VerifyChain; the source-commitment verdict (slice-17o) is folded into the SAME record so
-	// a single Put lands both — never a linear write followed by a second source write, which a
-	// failure between could leave terminal-linear-only and permanently lose (Codex spec #2,
-	// D-17o-9). Only advance queue state once the verdict is durably recorded (Codex 17h).
+	// VerifyChain; the source-commitment verdict is folded into the SAME record so a single
+	// Put lands both — never a linear write followed by a second source write, which a
+	// failure between could leave terminal-linear-only and permanently lose. Only advance
+	// queue state once the verdict is durably recorded.
 	rec := AuditRecord{
 		Overall:   res.Overall,
 		Axes:      res.Axes,
@@ -273,7 +273,7 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 	case scRetryable(rec):
 		// Linear terminal but the consumed-set verdict is a still-resolving Indeterminate
 		// (incomplete receipt) — retain and re-audit, bounded by the attempt backstop so a
-		// permanently-missing source eventually finalizes (slice-17o, Codex P2).
+		// permanently-missing source eventually finalizes.
 		r.bumpOrDrop(c, "source-commitment indeterminate (incomplete receipt)", false)
 	default:
 		// Assembled but linear-Indeterminate (a non-hole reason) — bound by the attempt backstop.
@@ -282,10 +282,10 @@ func (r *Runner) auditOne(ctx context.Context, c AuditCandidate) {
 }
 
 // evaluateSourceCommitment folds the DISTINCT consumed-set verdict into rec when this head
-// is an aggregate emission with a local receipt (slice-17o). It returns true ONLY to signal
+// is an aggregate emission with a local receipt. It returns true ONLY to signal
 // a context cancellation mid-evaluation (the caller then records nothing and leaves the head
 // queued). With the capability disabled or no receipt present, it leaves rec linear-only.
-// Decision table (D-17o-6): no receipt → linear-only; corrupt receipt (an unreadable record
+// Decision table: no receipt → linear-only; corrupt receipt (an unreadable record
 // or a malformed entry) → fail-closed Failed (no verifier call — damage must not silently
 // downgrade the audit to linear-only); otherwise gather the resolvable subset and record the
 // VerifySourceCommitment result (a missing source reduces the set → Indeterminate).
@@ -329,7 +329,7 @@ func (r *Runner) evaluateSourceCommitment(ctx context.Context, headHash string, 
 		}
 		sources = append(sources, src)
 	}
-	// Incomplete receipt: do NOT trust the verifier over a SUBSET (Codex P1, Claude Important).
+	// Incomplete receipt: do NOT trust the verifier over a SUBSET.
 	// The Merkle root is over the full set, and DerivedFrom is issuer-granular — so a partial
 	// set can spuriously MATCH (false Verified) or, when a missing source shares an issuer with
 	// a resolved one, spuriously MISMATCH (false Failed). Record Indeterminate without calling
@@ -364,21 +364,21 @@ func (r *Runner) evaluateSourceCommitment(ctx context.Context, headHash string, 
 
 // scRetryable reports whether a recorded source-commitment verdict warrants another audit
 // pass — an incomplete-receipt Indeterminate that may become terminal once the missing
-// consumed source arrives (slice-17o). It keeps a terminal LINEAR verdict from prematurely
-// finalizing (dequeuing) a still-resolving consumed-set verdict (Codex P2, Claude Important).
+// consumed source arrives. It keeps a terminal LINEAR verdict from prematurely
+// finalizing (dequeuing) a still-resolving consumed-set verdict.
 func scRetryable(rec AuditRecord) bool {
 	return rec.Scope.SourceCommitmentEvaluated && rec.SourceCommitment == vc.ConfidenceIndeterminate
 }
 
 // scLocus names the audit locus in a source-commitment notation so a reader cannot mistake a
-// self-audit verdict for independent relying-party (consume-locus) coverage (D-17o-6).
+// self-audit verdict for independent relying-party (consume-locus) coverage.
 const scLocus = "source-commitment: self-audit (emit locus)"
 
 // handleHole records a synthetic Indeterminate for an assembly hole and decides liveness:
 // retain while the hole may yet resolve (now in the store, or still queued in the pool),
 // finalize and dequeue once the resolver has abandoned it (in neither). No attempt is
 // burned while the hole is still being worked — a deep, legitimately-assembling chain is
-// never wrongly dropped (D-17h-4).
+// never wrongly dropped.
 func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash string) {
 	named := netexcerpt.ValueText(holeHash)
 	if err := r.recordIndeterminate(c.HeadHash, "unresolved predecessor "+named); err != nil {
@@ -396,7 +396,7 @@ func (r *Runner) handleHole(ctx context.Context, c AuditCandidate, holeHash stri
 	// Absent from BOTH store and pool. This is usually an abandoned hole — but it can also be
 	// the sub-tick window inside StoreVC between a fetched predecessor becoming visible (Put)
 	// and its own predecessor being enqueued (pool.Add). Finalizing here on a single
-	// observation would wrongly drop a still-completing chain (Codex P2). So bound it by the
+	// observation would wrongly drop a still-completing chain. So bound it by the
 	// attempt grace instead: the transient window bumps at most once (the next tick the hole
 	// is queued again → no bump), while a genuinely abandoned hole accrues toward max-attempts.
 	r.bumpOrDrop(c, "predecessor "+named+" absent from store and pool", false)

@@ -16,14 +16,17 @@ import (
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/handler"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 const (
+	// nodeAudience is the audience of the serving node's verifier.
+	nodeAudience = "node.example"
+
 	nodeDID  = "did:dplaax:poc.dplaax.dev:org:consumer"
 	ownerPBA = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pa"
 )
@@ -94,6 +97,7 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -112,7 +116,7 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 	t.Cleanup(srv.Close)
 	return &harness{
 		svc:    svc,
-		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: srv.Client(), MaxBytes: maxBytes}),
+		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: srv.Client(), MaxBytes: maxBytes, UpstreamAudiences: map[string]string{srv.URL: nodeAudience}}),
 		url:    srv.URL,
 		allow:  allow,
 	}
@@ -136,12 +140,10 @@ func TestPayloadService_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestPayloadService_NotAdmitted denies a caller no owner admits (PermissionDenied).
-// TestPayloadService_NotAdmitted proves the F9/F4 existence-oracle closure: a
+// TestPayloadService_NotAdmitted proves there is no existence oracle: a
 // valid-signer-but-not-admitted caller gets the SAME client.ErrNotFound as a
-// well-formed miss (TestPayloadService_NotFound), so a caller who may not receive
-// the bytes cannot tell "present but forbidden" from "absent" — same code AND
-// same message on the wire (was CodePermissionDenied before P1-4d).
+// well-formed miss (TestPayloadService_NotFound), so a caller who may not
+// receive the bytes cannot tell "present but forbidden" from "absent".
 func TestPayloadService_NotAdmitted(t *testing.T) {
 	h := newHarness(t, 0)
 	delete(h.allow, ownerPBA) // node no longer admitted by the sole owner

@@ -8,6 +8,7 @@ package jsonschema_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"testing"
@@ -141,4 +142,265 @@ func TestCompile_ResolvesEachURLOnce(t *testing.T) {
 			t.Errorf("%s: 8 times the references and the location allocated %.0f times as much (%d, %d)", name, ratio, short, long)
 		}
 	}
+}
+
+// A number keyword whose number the compiler cannot read fails the compile
+// with a *LargeNumberError at the keyword, under draft 2020-12 and under draft
+// 4 (where exclusiveMinimum and exclusiveMaximum are booleans that make
+// minimum and maximum exclusive): it is not compiled as if the keyword were
+// absent. A number it can read is still a bound.
+func TestCompile_RefusesANumberKeywordItCannotRead(t *testing.T) {
+	const draft4 = `"$schema": "http://json-schema.org/draft-04/schema#", `
+	refused := func(t *testing.T, label string, err error, keyword string) {
+		t.Helper()
+		var lne *jsonschema.LargeNumberError
+		if !errors.As(err, &lne) || !strings.HasSuffix(lne.URL, "#"+keyword) {
+			t.Errorf("%s: %v, want a *LargeNumberError at %s", label, err, keyword)
+		}
+	}
+	for _, c := range []struct{ schema, keyword string }{
+		{`{"minimum": ` + large + `}`, "/minimum"},
+		{`{"maximum": -` + large + `}`, "/maximum"},
+		{`{"exclusiveMinimum": ` + large + `}`, "/exclusiveMinimum"},
+		{`{"exclusiveMaximum": -` + large + `}`, "/exclusiveMaximum"},
+		{`{"properties": {"a": {"minimum": ` + large + `}}}`, "/properties/a/minimum"},
+		{`{` + draft4 + `"minimum": ` + large + `}`, "/minimum"},
+		{`{` + draft4 + `"maximum": -` + large + `}`, "/maximum"},
+		{`{` + draft4 + `"minimum": ` + large + `, "exclusiveMinimum": true}`, "/minimum"},
+		{`{` + draft4 + `"maximum": -` + large + `, "exclusiveMaximum": true}`, "/maximum"},
+	} {
+		_, err := compile(c.schema)
+		refused(t, c.schema, err, c.keyword)
+	}
+
+	// The metaschema refuses such a multipleOf, but the library does not check
+	// a schema located below json-schema.org against it: there the compiler
+	// alone refuses it.
+	const loc = "https://json-schema.org/number-keyword.json"
+	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(`{"multipleOf": ` + large + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := jsonschema.NewCompiler()
+	if err := c.AddResource(loc, doc); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Compile(loc)
+	refused(t, "multipleOf below json-schema.org", err, "/multipleOf")
+
+	sch, err := compile(`{"minimum": 1e1000000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sch.Validate(5) == nil {
+		t.Error(`{"minimum": 1e1000000} accepts 5`)
+	}
+}
+
+// An integer keyword reads an integer above math.MaxInt as math.MaxInt, and
+// one below math.MinInt as math.MinInt, under every draft that has it; a
+// number big.Rat cannot read is a *LargeNumberError at the keyword, and a
+// value that is not an integer a *NonIntegerError.
+func TestCompile_ReadsAnIntegerKeywordBeyondIntAsTheNearestInt(t *testing.T) {
+	const above, below = "18446744073709551616", "-18446744073709551616" // ±2^64
+	for _, c := range []struct {
+		schema string
+		field  func(*jsonschema.Schema) *int
+		want   int
+	}{
+		{`{"minLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
+		{`{"minLength": 9223372036854775808}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
+		{`{"maxLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxLength }, math.MaxInt},
+		{`{"minItems": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinItems }, math.MaxInt},
+		{`{"maxItems": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxItems }, math.MaxInt},
+		{`{"minProperties": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinProperties }, math.MaxInt},
+		{`{"maxProperties": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxProperties }, math.MaxInt},
+		{`{"contains": {}, "minContains": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinContains }, math.MaxInt},
+		{`{"contains": {}, "maxContains": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxContains }, math.MaxInt},
+		{`{"$schema": "http://json-schema.org/draft-04/schema#", "minLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
+		{`{"minLength": 3}`, func(s *jsonschema.Schema) *int { return s.MinLength }, 3},
+		// 2^32 lies within int64 and above a 32-bit int.
+		{`{"minLength": 4294967296}`, func(s *jsonschema.Schema) *int { return s.MinLength }, int(min(int64(1)<<32, int64(math.MaxInt)))},
+	} {
+		sch, err := compile(c.schema)
+		if err != nil {
+			t.Errorf("%s: %v", c.schema, err)
+			continue
+		}
+		if got := c.field(sch); got == nil || *got != c.want {
+			t.Errorf("%s: read as %s, want %d", c.schema, intText(got), c.want)
+		}
+	}
+
+	// The metaschema refuses an integer keyword below zero and a number it
+	// cannot read, but the library does not check a schema located below
+	// json-schema.org against it: there the compiler alone reads them.
+	compileAt := func(schema string) (*jsonschema.Schema, error) {
+		const loc = "https://json-schema.org/integer-keyword.json"
+		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
+		if err != nil {
+			return nil, err
+		}
+		c := jsonschema.NewCompiler()
+		if err := c.AddResource(loc, doc); err != nil {
+			return nil, err
+		}
+		return c.Compile(loc)
+	}
+	for _, c := range []struct {
+		value string
+		want  int
+	}{
+		{below, math.MinInt},
+		// -2^32 lies within int64 and below a 32-bit int.
+		{"-4294967296", int(max(-int64(1)<<32, int64(math.MinInt)))},
+	} {
+		if sch, err := compileAt(`{"maxLength": ` + c.value + `}`); err != nil || sch.MaxLength == nil || *sch.MaxLength != c.want {
+			t.Errorf("maxLength %s below json-schema.org: %v, read as %s, want %d", c.value, err, intText(maxLengthOf(sch)), c.want)
+		}
+	}
+	for _, keyword := range []string{"minLength", "maxItems", "minProperties"} {
+		_, err := compileAt(`{"` + keyword + `": ` + large + `}`)
+		var lne *jsonschema.LargeNumberError
+		if !errors.As(err, &lne) || !strings.HasSuffix(lne.URL, "#/"+keyword) {
+			t.Errorf("%s %s below json-schema.org: %v, want a *LargeNumberError at /%s", keyword, large, err, keyword)
+		}
+	}
+
+	// The metaschema refuses an integer keyword whose value is not an
+	// integer; below json-schema.org the compiler alone refuses it, with a
+	// *NonIntegerError at the keyword, rather than reading it as absent. A
+	// number with no fraction is an integer.
+	for _, c := range []struct{ keyword, value string }{
+		{"minLength", "1.5"},
+		{"maxLength", "-0.5"},
+		{"minItems", "2.5"},
+		{"maxItems", `"5"`},
+		{"minProperties", "true"},
+		{"maxProperties", "null"},
+		{"minContains", "[1]"},
+		{"maxContains", `{"a": 1}`},
+	} {
+		schema := `{"` + c.keyword + `": ` + c.value + `}`
+		if c.keyword == "minContains" || c.keyword == "maxContains" {
+			schema = `{"contains": {}, "` + c.keyword + `": ` + c.value + `}`
+		}
+		_, err := compileAt(schema)
+		var nie *jsonschema.NonIntegerError
+		if !errors.As(err, &nie) || !strings.HasSuffix(nie.URL, "#/"+c.keyword) {
+			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError at /%s", schema, err, c.keyword)
+		}
+	}
+	if sch, err := compileAt(`{"minLength": 2.0}`); err != nil || sch.MinLength == nil || *sch.MinLength != 2 {
+		t.Errorf(`{"minLength": 2.0} below json-schema.org: %v, want it read as 2`, err)
+	}
+	// Under draft 4 and draft 2019-09 too.
+	for _, schema := range []string{
+		`{"$schema": "http://json-schema.org/draft-04/schema#", "minLength": 1.5}`,
+		`{"$schema": "https://json-schema.org/draft/2019-09/schema", "contains": {}, "minContains": 1.5}`,
+	} {
+		var nie *jsonschema.NonIntegerError
+		if _, err := compileAt(schema); !errors.As(err, &nie) {
+			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError", schema, err)
+		}
+	}
+	// A document made of Go values: a float64 with a fraction is refused.
+	c := jsonschema.NewCompiler()
+	const loc = "https://json-schema.org/integer-keyword-go.json"
+	if err := c.AddResource(loc, map[string]any{"minLength": 1.5}); err != nil {
+		t.Fatal(err)
+	}
+	var nie *jsonschema.NonIntegerError
+	if _, err := c.Compile(loc); !errors.As(err, &nie) {
+		t.Errorf("a float64 1.5 below json-schema.org: %v, want a *NonIntegerError", err)
+	}
+	// The error writes the value as JSON writes it, so a string reads as one.
+	if _, err := compileAt(`{"maxItems": "5"}`); err == nil || !strings.Contains(err.Error(), `"5"`) {
+		t.Errorf(`{"maxItems": "5"}: %v, want the value written as the string "5"`, err)
+	}
+	// Elsewhere, the metaschema refuses such a value before the compiler
+	// reads the keyword.
+	if _, err := compile(`{"minLength": 1.5}`); err == nil || errors.As(err, &nie) {
+		t.Errorf(`{"minLength": 1.5}: %v, want the metaschema's refusal`, err)
+	}
+}
+
+// A multipleOf not greater than 0 fails the compile with a *NonPositiveError
+// at the keyword, under every draft: every draft requires a number greater
+// than 0. The metaschema refuses such a multipleOf, but the library does not
+// check a schema located below json-schema.org against it: there the
+// compiler alone refuses it. A multipleOf greater than 0 is still a bound.
+func TestCompile_RefusesAMultipleOfNotGreaterThanZero(t *testing.T) {
+	compileAt := func(schema string) (*jsonschema.Schema, error) {
+		const loc = "https://json-schema.org/multiple-of.json"
+		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
+		if err != nil {
+			return nil, err
+		}
+		c := jsonschema.NewCompiler()
+		if err := c.AddResource(loc, doc); err != nil {
+			return nil, err
+		}
+		return c.Compile(loc)
+	}
+	for _, c := range []struct{ schema, keyword string }{
+		{`{"multipleOf": 0}`, "/multipleOf"},
+		{`{"multipleOf": 0.0}`, "/multipleOf"},
+		{`{"multipleOf": -0}`, "/multipleOf"},
+		{`{"multipleOf": -1}`, "/multipleOf"},
+		{`{"multipleOf": -0.5}`, "/multipleOf"},
+		{`{"properties": {"a": {"multipleOf": 0}}}`, "/properties/a/multipleOf"},
+		{`{"$schema": "http://json-schema.org/draft-04/schema#", "multipleOf": 0}`, "/multipleOf"},
+		{`{"$schema": "http://json-schema.org/draft-06/schema#", "multipleOf": 0}`, "/multipleOf"},
+		{`{"$schema": "http://json-schema.org/draft-07/schema#", "multipleOf": -2}`, "/multipleOf"},
+		{`{"$schema": "https://json-schema.org/draft/2019-09/schema", "multipleOf": 0}`, "/multipleOf"},
+	} {
+		_, err := compileAt(c.schema)
+		var npe *jsonschema.NonPositiveError
+		if !errors.As(err, &npe) || !strings.HasSuffix(npe.URL, "#"+c.keyword) {
+			t.Errorf("%s below json-schema.org: %v, want a *NonPositiveError at %s", c.schema, err, c.keyword)
+		}
+	}
+	// A document made of Go values: a float64 0 is refused.
+	c := jsonschema.NewCompiler()
+	const loc = "https://json-schema.org/multiple-of-go.json"
+	if err := c.AddResource(loc, map[string]any{"multipleOf": 0.0}); err != nil {
+		t.Fatal(err)
+	}
+	var npe *jsonschema.NonPositiveError
+	if _, err := c.Compile(loc); !errors.As(err, &npe) {
+		t.Errorf("a float64 0 below json-schema.org: %v, want a *NonPositiveError", err)
+	}
+	// The error writes the value as JSON writes it.
+	if _, err := compileAt(`{"multipleOf": -0.5}`); err == nil || !strings.Contains(err.Error(), "holds -0.5,") {
+		t.Errorf(`{"multipleOf": -0.5}: %v, want the value written as -0.5`, err)
+	}
+	// Elsewhere, the metaschema refuses such a value before the compiler
+	// reads the keyword.
+	if _, err := compile(`{"multipleOf": 0}`); err == nil || errors.As(err, &npe) {
+		t.Errorf(`{"multipleOf": 0}: %v, want the metaschema's refusal`, err)
+	}
+	sch, err := compileAt(`{"multipleOf": 0.5}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sch.Validate(1.5) != nil || sch.Validate(1.25) == nil {
+		t.Error(`{"multipleOf": 0.5} below json-schema.org: want 1.5 accepted and 1.25 refused`)
+	}
+}
+
+// intText is *p, or "nil".
+func intText(p *int) string {
+	if p == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*p)
+}
+
+// maxLengthOf is s.MaxLength, or nil for no schema.
+func maxLengthOf(s *jsonschema.Schema) *int {
+	if s == nil {
+		return nil
+	}
+	return s.MaxLength
 }

@@ -34,6 +34,10 @@ type DecisionRecordConfig struct {
 	SummaryWindow time.Duration
 }
 
+// summaryFlushTimeout is how long a flush of the summary level waits for the
+// sink, each window's and the last at shutdown alike.
+const summaryFlushTimeout = 10 * time.Second
+
 // decisionRecording is the node's delivery decision recorder: a Filter over
 // the configured sink, the file the sink writes to, and the flusher the
 // summary level needs.
@@ -42,10 +46,15 @@ type decisionRecording struct {
 	file   io.Closer
 	level  decisionrecord.Level
 	window time.Duration
+	// flushTimeout bounds each flush (summaryFlushTimeout).
+	flushTimeout time.Duration
 
 	quit chan struct{}
 	done chan struct{}
 	once sync.Once
+	// warnTurn lets one of the runtime's own warnings about a flush be
+	// written at a time (warnf).
+	warnTurn chan struct{}
 }
 
 // newDecisionRecording builds the recorder. A JSON-lines file is opened
@@ -66,7 +75,7 @@ func newDecisionRecording(cfg DecisionRecordConfig, logger *slog.Logger) (*decis
 	if cfg.Level == decisionrecord.LevelSummary && cfg.SummaryWindow <= 0 {
 		return nil, fmt.Errorf("runtime: decision record: summary window must be positive, got %s", cfg.SummaryWindow)
 	}
-	d := &decisionRecording{level: cfg.Level, window: cfg.SummaryWindow}
+	d := &decisionRecording{level: cfg.Level, window: cfg.SummaryWindow, flushTimeout: summaryFlushTimeout, warnTurn: make(chan struct{}, 1)}
 	var sk decisionrecord.Sink
 	if cfg.Level != decisionrecord.LevelNone {
 		switch cfg.Output {
@@ -121,7 +130,11 @@ func (d *decisionRecording) start(ctx context.Context) {
 }
 
 // stopAndFlush stops the flusher and writes the last window. Call it after
-// every loop has drained, so no record follows the final flush.
+// every loop has drained, so no record follows the final flush. Behind a sink
+// write, or a log write, that never ends it returns within two flush
+// deadlines: the flusher's flush under way, then the last. The runtime's
+// warning about the last flush (warnf) may still be being written when it
+// returns.
 func (d *decisionRecording) stopAndFlush(ctx context.Context) {
 	if d.level != decisionrecord.LevelSummary || d.quit == nil {
 		return
@@ -133,10 +146,46 @@ func (d *decisionRecording) stopAndFlush(ctx context.Context) {
 	})
 }
 
+// flush writes the window with a context that the shutdown signal does not
+// end and that has a deadline of flushTimeout, so that a sink write that
+// never ends holds neither the flusher nor shutdown for good. A flush that
+// reaches its deadline loses the counts not written by then (see
+// decisionrecord.Filter.Flush). The flusher's flush may run past the next
+// tick: the ticker then drops that tick, and the next window is longer. Its
+// warnings, of a flush that reaches its deadline or that the Filter refuses,
+// do not wait for the log (warnf).
 func (d *decisionRecording) flush(ctx context.Context) {
-	if err := d.filter.Flush(context.WithoutCancel(ctx), time.Now().UTC()); err != nil {
-		slog.Warn("runtime: decision record summary not flushed", "err", pipeexcerpt.ErrorText(err))
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.flushTimeout)
+	defer cancel()
+	if err := d.filter.Flush(fctx, time.Now().UTC()); err != nil {
+		d.warnf("runtime: decision record summary not flushed", "err", pipeexcerpt.ErrorText(err))
+		return
 	}
+	if fctx.Err() != nil {
+		d.warnf("runtime: decision record summary flush reached its deadline; the counts not written by then are lost", "deadline", d.flushTimeout)
+	}
+}
+
+// warnf writes one of the runtime's own warnings about a flush to the default
+// logger in a goroutine of its own, so that a log destination that does not
+// end a write holds neither the flusher nor shutdown; the node's decision
+// sink and its Filter may write to the same destination. One is written at a
+// time: a warning that comes while another is being written is dropped, so
+// at most one of these warnings waits on such a destination. A panic in the
+// log handler as one is written is dropped, as no caller waits for it.
+func (d *decisionRecording) warnf(msg string, args ...any) {
+	select {
+	case d.warnTurn <- struct{}{}:
+	default:
+		return
+	}
+	go func() {
+		defer func() {
+			_ = recover()
+			<-d.warnTurn
+		}()
+		slog.Warn(msg, args...)
+	}()
 }
 
 func (d *decisionRecording) close() error {

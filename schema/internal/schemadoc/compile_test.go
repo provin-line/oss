@@ -154,19 +154,18 @@ func TestCompile_RefusesURLsPastTheBoundInEveryDraft(t *testing.T) {
 // reference's URL once.) Each compiles but those refused by the metaschema,
 // the bound on pointers and URLs, or a pointer that does not resolve. (Sixteen
 // times the size takes about sixteen times as long; work in the square of the
-// size, about 256 times.)
+// size, about 256 times.) The two sizes are timed in turn, the best of each
+// kept, so a change in the machine's load falls on both; a ratio past the
+// bound three times over fails.
 func TestCompile_IsLinear(t *testing.T) {
-	timeOf := func(doc string, valid bool) time.Duration {
-		best := time.Hour
-		for range 3 {
-			start := time.Now()
-			_, err := schemadoc.Compile([]byte(doc))
-			best = min(best, time.Since(start))
-			if valid && err != nil {
-				t.Fatalf("%.60s…: %v", doc, err)
-			}
+	timeOf := func(t *testing.T, doc string, valid bool) time.Duration {
+		start := time.Now()
+		_, err := schemadoc.Compile([]byte(doc))
+		elapsed := time.Since(start)
+		if valid && err != nil {
+			t.Fatalf("%.60s…: %v", doc, err)
 		}
-		return best
+		return elapsed
 	}
 	items := func(n int, item func(i int) string) string {
 		parts := make([]string, n)
@@ -224,10 +223,20 @@ func TestCompile_IsLinear(t *testing.T) {
 		}, true},
 	} {
 		t.Run(strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
-			short, long := timeOf(c.shape(2000), c.valid), timeOf(c.shape(32000), c.valid)
-			if ratio := float64(long) / float64(max(short, time.Millisecond)); ratio > 48 {
-				t.Errorf("16 times the size took %.0f times as long (%v, %v)", ratio, short, long)
+			shortDoc, longDoc := c.shape(2000), c.shape(32000)
+			var ratio float64
+			var short, long time.Duration
+			for range 3 {
+				short, long = time.Hour, time.Hour
+				for range 3 {
+					short = min(short, timeOf(t, shortDoc, c.valid))
+					long = min(long, timeOf(t, longDoc, c.valid))
+				}
+				if ratio = float64(long) / float64(max(short, time.Millisecond)); ratio <= 48 {
+					return
+				}
 			}
+			t.Errorf("16 times the size took %.0f times as long (%v, %v)", ratio, short, long)
 		})
 	}
 }
@@ -330,5 +339,81 @@ func TestCompile_EscapesWhatItQuotesInAnError(t *testing.T) {
 		if strings.ContainsRune(err.Error(), '‮') {
 			t.Errorf("%s: %q holds U+202E as it is", name, err)
 		}
+	}
+}
+
+// A schema's Unicode classes are Unicode 15.0.0's on every toolchain: the
+// same schemas are admitted and refused (eleven \p{C} within the bound,
+// twelve past it), and the same payloads accepted (U+1C89, a letter from
+// Unicode 16.0 on, is unassigned).
+func TestCompile_ReadsUnicodeClassesAsUnicode15(t *testing.T) {
+	pattern := func(expr string) []byte {
+		return []byte(`{"type": "string", "pattern": "` + strings.ReplaceAll(expr, `\`, `\\`) + `"}`)
+	}
+	if _, err := schemadoc.Compile(pattern(strings.Repeat(`\p{C}`, 11))); err != nil {
+		t.Errorf(`eleven \p{C} refused: %v`, err)
+	}
+	if _, err := schemadoc.Compile(pattern(strings.Repeat(`\p{C}`, 12))); err == nil {
+		t.Error(`twelve \p{C} admitted`)
+	}
+	for expr, valid := range map[string]bool{`^\p{Cn}$`: true, `^\p{L}$`: false, `^[\p{Letter}\p{Nd}]$`: false} {
+		s, err := schemadoc.Compile(pattern(expr))
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if err := s.Validate([]byte(`"` + "Ᲊ" + `"`)); (err == nil) != valid {
+			t.Errorf("%s validates U+1C89: %v, want valid %v", expr, err, valid)
+		}
+	}
+}
+
+// Unicode classes that cancel in a class cost the table ranges read: one
+// pattern of them fits a small schema's total (2^14 and one per 4 bytes,
+// each pattern compiled twice, once as format "regex" for the metaschema),
+// and two do not, refused with the total's text, the text verification/vectors
+// matches to classify a refusal as a bound's.
+func TestCompile_ChargesUnicodeClassesThatCancel(t *testing.T) {
+	cancel := `[` + strings.Repeat(`\\p{C}\\P{C}`, 5) + `]`
+	one := `{"properties": {"a": {"pattern": "` + cancel + `"}}}`
+	two := `{"properties": {"a": {"pattern": "` + cancel + `"}, "b": {"pattern": "` + cancel + `x"}}}`
+	if _, err := schemadoc.Compile([]byte(one)); err != nil {
+		t.Errorf("one pattern refused: %v", err)
+	}
+	if _, err := schemadoc.Compile([]byte(two)); err == nil || !strings.Contains(err.Error(), "regexp: the schema's regular expressions, together, have more instructions than it is allowed") {
+		t.Errorf("two patterns: %v, want the total refused", err)
+	}
+}
+
+// Matching a pattern is charged by its program, whatever the Unicode tables
+// read for it: a class of the five letter categories matches a string of
+// 12,000 letters within the payload's budget, as \p{L} does.
+func TestValidate_MatchesAPatternByItsProgram(t *testing.T) {
+	letters := []byte(`"` + strings.Repeat("A", 12000) + `"`)
+	for _, pattern := range []string{`^[\\p{Lu}\\p{Ll}\\p{Lt}\\p{Lm}\\p{Lo}]+$`, `^\\p{L}+$`} {
+		s, err := schemadoc.Compile([]byte(`{"type": "string", "pattern": "` + pattern + `"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", pattern, err)
+		}
+		if err := s.Validate(letters); err != nil {
+			t.Errorf("%s against 12,000 letters: %v", pattern, err)
+		}
+	}
+}
+
+// Values checked as format "regex" that are refused once their Unicode
+// classes were read are charged what reading them cost: a payload of a
+// hundred such values is past its budget, where their bytes alone are not.
+func TestValidate_ChargesRefusedRegexValuesTheirCost(t *testing.T) {
+	s, err := schemadoc.Compile([]byte(`{"$schema": "http://json-schema.org/draft-07/schema#", "type": "array", "items": {"type": "string", "format": "regex"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, 100)
+	for i := range values {
+		values[i] = fmt.Sprintf(`"%s.{200}%d"`, strings.Repeat(`\\p{C}`, 11), i)
+	}
+	err = s.Validate([]byte(`[` + strings.Join(values, ",") + `]`))
+	if err == nil || !strings.Contains(err.Error(), "work budget") {
+		t.Errorf("%.200v, want the payload past its work budget", err)
 	}
 }

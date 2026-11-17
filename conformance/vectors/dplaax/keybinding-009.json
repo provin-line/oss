@@ -1,0 +1,93 @@
+{
+  "id": "keybinding-009",
+  "rule": "keybinding.status.entry",
+  "description": "A key binding whose entry the issuer's current list marks is rejected",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2",
+        "https://dplaax.dev/vc/v1",
+        "https://dplaax.dev/vc/branches/v1/keybinding/202611101543"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "KeyBindingCredential"
+      ],
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:00:00Z",
+      "validUntil": "2026-11-07T00:00:00Z",
+      "credentialStatus": {
+        "type": "BitstringStatusListEntry",
+        "statusPurpose": "revocation",
+        "statusListIndex": "7",
+        "statusListCredential": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list"
+      },
+      "credentialSubject": {
+        "id": "urn:acme:staff:42",
+        "kind": "staff",
+        "roles": [
+          "checker"
+        ],
+        "audience": "did:dplaax:poc.dplaax.dev:org:bank",
+        "keyClass": "passkey",
+        "key": {
+          "keyId": "credential-1",
+          "publicKeyJwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+          }
+        }
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:00:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    },
+    "status_list": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "BitstringStatusListCredential"
+      ],
+      "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:59:00Z",
+      "validUntil": "2026-11-06T01:59:00Z",
+      "credentialSubject": {
+        "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list-list",
+        "type": "BitstringStatusList",
+        "statusPurpose": "revocation",
+        "encodedList": "uH4sIAAAAAAAC_-3BMQEAAAwCoBlh_csawwf4AwAAAAAAAAAAAAAAAAAAAMZSU3ucLgBAAAA"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:59:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    },
+    "anchor": {
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "issuance_keys": [
+        "did:dplaax:poc.dplaax.dev:org:acme#issuer"
+      ],
+      "max_validity_seconds": 172800,
+      "max_status_age_seconds": 7200
+    },
+    "verifier": {
+      "audience": "did:dplaax:poc.dplaax.dev:org:bank",
+      "skew_seconds": 60
+    },
+    "at": "2026-11-06T01:00:00Z"
+  },
+  "expect": "reject"
+}

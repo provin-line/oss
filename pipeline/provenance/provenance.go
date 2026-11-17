@@ -84,10 +84,9 @@ type Verifier interface {
 }
 
 // ChainVerifier verifies a full credential chain from its head — the engine of the
-// async chain-audit runner (slice-17h), which assembles each consumed head's chain
-// from the local store and records a verdict out of band. (Real-time full ingress
-// verification was retired in slice-17j; chains are no longer walked synchronously on
-// the consume path.) Chain retrieval — walking previousCredential by content address —
+// async chain-audit runner, which assembles each consumed head's chain from the local
+// store and records a verdict out of band. (Chains are not walked synchronously on the
+// consume path.) Chain retrieval — walking previousCredential by content address —
 // is the implementation's concern; the verification semantics are vc.Verifier.VerifyChain's.
 //
 // Its errors keep the rule for a part's errors in package contract's doc.

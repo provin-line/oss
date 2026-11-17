@@ -98,7 +98,7 @@ func TestPool_Add_RejectsNonPositiveDepth(t *testing.T) {
 	}
 }
 
-// Has reports queued membership (the audit runner's liveness signal, slice-17h).
+// Has reports queued membership (the audit runner's liveness signal).
 func TestPool_Has(t *testing.T) {
 	p := memstore.NewPool()
 	if p.Has("h") {

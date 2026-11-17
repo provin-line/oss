@@ -179,24 +179,33 @@ func TestCanonicalize_CountsTheFormBeforeReadingTheIRIs(t *testing.T) {
 
 // canonicalSize takes time in the quads, not in the length of the IRIs they
 // name: a dataset whose quads name an IRI 16 times as long takes about as
-// long to count (at most 4 times; reading the IRIs would take about 16).
+// long to count (at most 4 times; reading the IRIs would take about 16). The
+// two lengths are timed in turn, the best of each kept, so a change in the
+// machine's load falls on both; a ratio past the bound three times over fails.
 func TestCanonicalSize_TakesTimeInTheQuads(t *testing.T) {
 	c := testContexts(t)
-	for name, shape := range longIRIShapes {
-		timeOf := func(length int) time.Duration {
-			ds := documentDataset(t, c, shape(4000, length))
-			best := time.Hour
-			for range 5 {
-				start := time.Now()
-				for range 100 {
-					canonicalSize(ds)
-				}
-				best = min(best, time.Since(start))
-			}
-			return best
+	timeOf := func(ds *ld.RDFDataset) time.Duration {
+		start := time.Now()
+		for range 100 {
+			canonicalSize(ds)
 		}
-		short, long := timeOf(25_000), timeOf(400_000)
-		if ratio := float64(long) / float64(max(short, time.Microsecond)); ratio > 4 {
+		return time.Since(start)
+	}
+	for name, shape := range longIRIShapes {
+		shortDS, longDS := documentDataset(t, c, shape(4000, 25_000)), documentDataset(t, c, shape(4000, 400_000))
+		var ratio float64
+		var short, long time.Duration
+		for range 3 {
+			short, long = time.Hour, time.Hour
+			for range 5 {
+				short = min(short, timeOf(shortDS))
+				long = min(long, timeOf(longDS))
+			}
+			if ratio = float64(long) / float64(max(short, time.Microsecond)); ratio <= 4 {
+				break
+			}
+		}
+		if ratio > 4 {
 			t.Errorf("%s: an IRI 16 times as long took %.1f times as long to count (%v, %v)", name, ratio, short, long)
 		}
 	}

@@ -1,8 +1,9 @@
 // Package decisionrecord is the record a deciding party — a gate, a boundary
 // stage, a delivery decision — writes for each decision it makes, and the
-// levels at which it is written: every decision, refused and unenforced
-// decisions only, counts per window, or none. Configuration defaults to every decision; this package has
-// no default level, so a level is in effect only when it is chosen. It is not
+// levels at which it is written: every decision, the decisions not accepted
+// (refused, held and unenforced) only, counts per window, or none.
+// Configuration defaults to every decision; this package has no default
+// level, so a level is in effect only when it is chosen. It is not
 // the record of used nonces a gate keeps to refuse replays; that is another
 // record with another purpose.
 //
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -26,20 +28,21 @@ import (
 
 	"github.com/provin-line/oss/canon/jcs"
 	"github.com/provin-line/oss/contentaddress"
+	"github.com/provin-line/oss/internal/excerpt"
 )
 
 // Outcome is what a decision decided. A record is written when the deciding
 // party decides, before what was decided on is carried out, by the deciding
-// party or by whoever it answers. A refused decision did not go ahead: the
-// deciding party enforces the check that refused. Of an accepted or
-// unenforced decision, a record does not say whether it went ahead, and a
-// reader takes it as one that may have.
+// party or by whoever it answers. A refused or held decision did not go
+// ahead: the deciding party enforces the check that refused or deferred it.
+// Of an accepted or unenforced decision, a record does not say whether it
+// went ahead, and a reader takes it as one that may have.
 type Outcome string
 
 const (
-	// Accepted: no check refused; the deciding party decided to accept what
-	// was decided on. If it refuses it afterwards, it records that too (see
-	// Record).
+	// Accepted: no check refused or deferred; the deciding party decided to
+	// accept what was decided on. If it refuses it afterwards, it records
+	// that too (see Record).
 	Accepted Outcome = "accepted"
 	// Refused: a check that the deciding party enforces refused; the deciding
 	// party refused what was decided on, and it did not go ahead.
@@ -48,20 +51,61 @@ const (
 	// enforcing refused; the deciding party did not enforce the refusal, so
 	// what was decided on may have gone ahead.
 	Unenforced Outcome = "unenforced"
+	// Held: a check the deciding party enforces deferred the decision; what
+	// was decided on has not gone ahead, and may later be decided again under
+	// another DecisionID. It was not refused, so its record has no RefusedAt.
+	// Only format v2 writes it (see FormatVersion).
+	Held Outcome = "held"
 )
 
+// quoteLimit is the most bytes an error here takes to quote a value it
+// refuses (internal/excerpt).
+const quoteLimit = 128
+
 // rank orders the outcomes: a decision has the outcome of its record of the
-// highest rank. An unknown outcome has none.
+// highest rank. Held is stronger than an acceptance, which it defers, and
+// weaker than a refusal, recorded or enforced. An unknown outcome has none.
 func rank(o Outcome) int {
 	switch o {
 	case Accepted:
 		return 1
-	case Unenforced:
+	case Held:
 		return 2
-	case Refused:
+	case Unenforced:
 		return 3
+	case Refused:
+		return 4
 	}
 	return 0
+}
+
+// Confidence is how far the hop a refusal is diagnosed at is established:
+// whether the deciding party named it before or after it verified the hop's
+// signature, or cannot name it. It grades the position only. It is another
+// scale from vc's ConfidenceState (failed, indeterminate, verified), the
+// verdict of a verification: ConfidenceVerified says that the hop's name is
+// established, not that what was decided on, or any verification of it, is
+// verified.
+type Confidence string
+
+const (
+	// ConfidenceClaimed: the hop is named by what was decided on, before its
+	// signature was verified.
+	ConfidenceClaimed Confidence = "claimed"
+	// ConfidenceVerified: the hop is named after its signature was verified.
+	ConfidenceVerified Confidence = "verified"
+	// ConfidenceUnknown: the check concerns a hop, but the deciding party
+	// cannot name it.
+	ConfidenceUnknown Confidence = "unknown"
+)
+
+// Position is where the refusal of a refused or unenforced decision is
+// diagnosed: a hop of what was decided on, one step it came through, in the
+// deciding party's terms. This package does not read Hop; as with Actors,
+// its meaning is the deciding party's.
+type Position struct {
+	Hop        string // the hop's ID; empty exactly when Confidence is ConfidenceUnknown
+	Confidence Confidence
 }
 
 // Evidence is one thing a decision was made on: its role (e.g. "approval",
@@ -80,39 +124,62 @@ type Evidence struct {
 // refusal. A
 // decision has the strongest outcome among its records, whatever the order
 // they are read in: it is refused when any of them is refused; otherwise
-// unenforced when any of them is unenforced; otherwise accepted.
+// unenforced when any of them is unenforced; otherwise held when any of them
+// is held; otherwise accepted.
 //
 // A writer follows one rule for the records of a decision: it records the
 // decision accepted any number of times, then unenforced or refused at most
 // once, and after that records nothing more of it; it makes each record only
 // once the previous one of the decision has been taken (Filter.Record
-// returned). The writer knows the outcome when it writes: refused when an
-// enforced check refused, unenforced when only checks it records without
-// enforcing did. Recording a decision accepted again changes nothing. A
-// writer that breaks the rule makes the summary level count the decision
-// more than once, or under the check of the first of its records of that
-// outcome, never under a weaker outcome than its strongest record; nothing
-// else changes: no decision's outcome, and no record.
+// returned). A held decision has one record, the held one: to decide again
+// what it deferred, the deciding party makes another decision, with another
+// DecisionID. The writer knows the outcome when it writes: refused when an
+// enforced check refused, held when an enforced check deferred, unenforced
+// when only checks it records without enforcing refused. Recording a decision
+// accepted again changes nothing. A record that a Filter's Record returned an
+// error for does not count under the rule for that Filter: through that
+// Filter, the writer may then record the decision Refused (see Filter). A
+// writer that breaks the rule makes the summary level count the decision more
+// than once, or under the check of the first of its records of that outcome,
+// never under a weaker outcome than its strongest record; nothing else
+// changes: no decision's outcome, and no record.
 type Record struct {
 	DecisionID string    // unique per decision; made by the deciding party (128 random bits, say)
 	Point      string    // the deciding party's ID: a gate's, a boundary's
 	At         time.Time // when the decision was made
 	Outcome    Outcome
-	Check      string            // the check that refused: a fixed name, required unless Accepted
+	Check      string            // the check that refused or deferred: a fixed name, required unless Accepted
 	Reason     string            // for people
 	Actors     []string          // whom the decision is attributed to (a gate: the signers)
 	Evidence   []Evidence        // what was decided on, in order
 	Attributes map[string]string // the deciding party's own fields
+
+	// RefusedAt is where the refusal of a refused or unenforced decision is
+	// diagnosed, when the deciding party can say: only with the outcome
+	// Refused or Unenforced. Format v2 only.
+	RefusedAt *Position
+	// VerifiedHops are the hops whose signatures the deciding party
+	// verified, in order, whatever the outcome. Format v2 only: of length 0
+	// (nil included), every format takes it and writes no member.
+	//
+	// RefusedAt and VerifiedHops are independent: a RefusedAt of
+	// ConfidenceVerified need not name one of the VerifiedHops, and this
+	// package does not relate the two.
+	VerifiedHops []string
 }
 
 // Validate checks the fields a reader keys on: a DecisionID and a Point, a
 // time within the years 0000–9999 (so it is written in RFC 3339 and sorts as
-// text), an outcome with a Check exactly when a check refused (Refused or
-// Unenforced), each Evidence a role and an address, each Actor and attribute name valid UTF-8 and not
-// empty. Filter.Record and every Sink here check it, whatever the level: a
-// malformed record is its writer's error. Text for people (Reason, attribute
-// values) is not refused for invalid UTF-8; it is written with the invalid
-// bytes replaced.
+// text), an outcome with a Check exactly when a check refused or deferred
+// (every outcome but Accepted), each Evidence a role and an address, each
+// Actor and attribute name valid UTF-8 and not empty; a RefusedAt only with
+// the outcome Refused or Unenforced, its Confidence one of the three, its Hop
+// empty exactly when the Confidence is ConfidenceUnknown and otherwise valid
+// UTF-8; each of the VerifiedHops valid UTF-8 and not empty. It checks them
+// whatever the format version. Filter.Record and every Sink here check it,
+// whatever the level: a malformed record is its writer's error. Text for
+// people (Reason, attribute values) is not refused for invalid UTF-8; it is
+// written with the invalid bytes replaced.
 func (r Record) Validate() error {
 	switch {
 	case r.DecisionID == "" || !utf8.ValidString(r.DecisionID):
@@ -124,9 +191,9 @@ func (r Record) Validate() error {
 	case !writableTime(r.At):
 		return fmt.Errorf("decisionrecord: time %v outside the years 0000–9999", r.At)
 	case rank(r.Outcome) == 0:
-		return fmt.Errorf("decisionrecord: record with outcome %q", r.Outcome)
+		return fmt.Errorf("decisionrecord: record with outcome %s", excerpt.Quoted(string(r.Outcome), quoteLimit))
 	case r.Outcome != Accepted && r.Check == "":
-		return fmt.Errorf("decisionrecord: record with outcome %s without the check that refused", r.Outcome)
+		return fmt.Errorf("decisionrecord: record with outcome %s without the check that refused or deferred", r.Outcome)
 	case r.Outcome == Accepted && r.Check != "":
 		return errors.New("decisionrecord: an acceptance with a refusing check")
 	case !utf8.ValidString(r.Check):
@@ -145,6 +212,25 @@ func (r Record) Validate() error {
 	for k := range r.Attributes {
 		if k == "" || !utf8.ValidString(k) {
 			return errors.New("decisionrecord: an attribute name that is empty or not UTF-8")
+		}
+	}
+	if p := r.RefusedAt; p != nil {
+		switch {
+		case r.Outcome != Refused && r.Outcome != Unenforced:
+			return fmt.Errorf("decisionrecord: a record with outcome %s and the position of a refusal", r.Outcome)
+		case p.Confidence != ConfidenceClaimed && p.Confidence != ConfidenceVerified && p.Confidence != ConfidenceUnknown:
+			return fmt.Errorf("decisionrecord: a position with confidence %s", excerpt.Quoted(string(p.Confidence), quoteLimit))
+		case p.Confidence == ConfidenceUnknown && p.Hop != "":
+			return errors.New("decisionrecord: a position of confidence unknown with a hop")
+		case p.Confidence != ConfidenceUnknown && p.Hop == "":
+			return fmt.Errorf("decisionrecord: a position of confidence %s without a hop", p.Confidence)
+		case !utf8.ValidString(p.Hop):
+			return errors.New("decisionrecord: a position whose hop is not UTF-8")
+		}
+	}
+	for _, h := range r.VerifiedHops {
+		if h == "" || !utf8.ValidString(h) {
+			return errors.New("decisionrecord: a verified hop that is empty or not UTF-8")
 		}
 	}
 	return nil
@@ -166,16 +252,16 @@ const maxCount int64 = 1<<53 - 1
 type Summary struct {
 	Point       string
 	From, Until time.Time
-	Counts      []Count // ordered by outcome, then check, each as text (accepted, refused, unenforced)
+	Counts      []Count // ordered by outcome, then check, each as text (accepted, held, refused, unenforced)
 }
 
 // Validate checks a summary as Record.Validate checks a record: a Point, a
 // window within the years 0000–9999 whose end is not before its start, and
 // each Count an outcome with a Check exactly when it counts decisions a check
-// refused (Refused or Unenforced), and N
-// from 0 to 2^53−1, the Counts ordered by outcome, then check, with no two
-// alike; outcomes and checks are compared as text, so accepted, refused,
-// unenforced. Every Sink here checks it.
+// refused or deferred (every outcome but Accepted), and N from 0 to 2^53−1,
+// the Counts ordered by outcome, then check, with no two alike; outcomes and
+// checks are compared as text, so accepted, held, refused, unenforced. Every
+// Sink here checks it.
 func (s Summary) Validate() error {
 	switch {
 	case s.Point == "" || !utf8.ValidString(s.Point):
@@ -190,7 +276,7 @@ func (s Summary) Validate() error {
 	for i, c := range s.Counts {
 		switch {
 		case rank(c.Outcome) == 0:
-			return fmt.Errorf("decisionrecord: count with outcome %q", c.Outcome)
+			return fmt.Errorf("decisionrecord: count with outcome %s", excerpt.Quoted(string(c.Outcome), quoteLimit))
 		case c.Outcome != Accepted && c.Check == "":
 			return fmt.Errorf("decisionrecord: count with outcome %s without its check", c.Outcome)
 		case c.Outcome == Accepted && c.Check != "":
@@ -237,16 +323,254 @@ type SummaryRecorder interface {
 // error from Record is what lets a decision be accepted, or passed with its
 // refusal unenforced, so a Sink returns nil only once the record is written
 // where it is kept (an unbuffered or synced writer).
+//
+// The sinks here return as soon as the call's context ends, without waiting
+// for a write to end: the error wraps ctx.Err(), so errors.Is matches
+// context.DeadlineExceeded or context.Canceled, and its text names the sink
+// and says either that the write did not start or that it may have started.
+// A record or summary whose context ended before its write started is not
+// written, then or later. A write that started cannot be stopped: it may
+// end, and be kept, after the call returned. A write that does not end may
+// hold back the sink's other writes until it ends; each of their calls still
+// returns at its own context's end. A write that never ends (an io.Writer or
+// a handler stuck for good) is not recovered, and each sink holds at most one
+// such write.
+//
+// With a context that cannot end (context.Background(), or one from
+// context.WithoutCancel), a call waits for its write, behind any write that
+// does not end, as in 0.4.0. A nil context is context.Background(). A panic
+// in the io.Writer or the handler reaches the caller. With a context that
+// cannot end, the write runs in the caller's goroutine, and the panic reaches
+// the caller as itself. With one that can, the write runs in a goroutine of
+// its own, and the panic reaches the caller as a *WritePanic holding its
+// value and the writer's stack, unless the call has returned at its context's
+// end before the sink handed the panic over; then the panic is dropped, and
+// the write counts as failed. An io.Writer or handler that calls
+// runtime.Goexit in the sink's own goroutine fails its write; in the caller's
+// goroutine, runtime.Goexit ends that goroutine, as it does anywhere, and the
+// call does not return. Either way, the sink writes again after it.
 type Sink interface {
 	Recorder
 	SummaryRecorder
+}
+
+// turn is a sink's right to write: one write at a time, waited for with a
+// context. A write keeps the turn until it has really ended.
+type turn chan struct{}
+
+func newTurn() turn { return make(turn, 1) }
+
+// run runs write while holding t, and returns its error. A nil ctx is
+// context.Background(). With a context that cannot end (ctx.Done() is nil),
+// write runs in the caller's goroutine, as under a mutex. Otherwise it runs
+// in a goroutine; when ctx ends first, run returns ctx's error: as notStarted
+// when ctx ended before t was taken, or when the goroutine has reported that
+// it found ctx ended right before write; and as maybeStarted when t was taken
+// and the goroutine has not reported, since it may by then have started write
+// or, finding ctx ended, may never start it. A write that started goes on,
+// gives t back when it ends, and its result is dropped. A panic in write
+// reaches the caller, as a *WritePanic when write ran in the goroutine,
+// unless run has returned at ctx's end before the goroutine reported it; then
+// it is dropped, a failed write. A write that calls runtime.Goexit in the
+// goroutine fails (goexited) and still gives t back.
+func (t turn) run(ctx context.Context, who string, write func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Done() == nil {
+		t <- struct{}{}
+		defer func() { <-t }()
+		return write()
+	}
+	select {
+	case t <- struct{}{}:
+	case <-ctx.Done():
+		return notStarted(who, ctx.Err())
+	}
+	done := make(chan writeResult, 1)
+	go func() {
+		var r writeResult
+		ended := false
+		// A write that calls runtime.Goexit ends this goroutine inside catch,
+		// so ended stays false: the deferred call reports the failure and
+		// still gives t back.
+		defer func() {
+			if !ended {
+				r = writeResult{err: goexited(who)}
+			}
+			<-t
+			done <- r
+		}()
+		// With t held, ctx is looked at once more right before write runs:
+		// a write whose context has ended by then does not start.
+		r = catch(func() error {
+			if err := ctx.Err(); err != nil {
+				return notStarted(who, err)
+			}
+			return write()
+		})
+		ended = true
+	}()
+	if r, ok := awaitResult(ctx, done); ok {
+		return r.result()
+	}
+	return maybeStarted(who, ctx.Err())
+}
+
+// runLate runs write while holding t, for a write that may come late: when t
+// is free it takes it whatever ctx says, and write gets ctx without its
+// cancellation, so it runs even after the caller has gone. Only when t is
+// held does runLate wait for it, and then no longer than ctx; it waits for
+// write no longer than ctx either. A nil ctx and one that cannot end are as
+// in run, and so is a panic in write. A write that calls runtime.Goexit in
+// the goroutine is lost, and still gives t back.
+func (t turn) runLate(ctx context.Context, write func(context.Context)) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Done() == nil {
+		t <- struct{}{}
+		defer func() { <-t }()
+		write(ctx)
+		return
+	}
+	select {
+	case t <- struct{}{}:
+	default:
+		select {
+		case t <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+	}
+	done := make(chan writeResult, 1)
+	go func() {
+		var r writeResult
+		defer func() {
+			<-t
+			done <- r
+		}()
+		r = catch(func() error {
+			write(context.WithoutCancel(ctx))
+			return nil
+		})
+	}()
+	if r, ok := awaitResult(ctx, done); ok {
+		_ = r.result()
+	}
+}
+
+// awaitResult waits for a write's result on done, no longer than ctx, and
+// reports whether it took one. A result that is there when ctx has ended is
+// taken: the wait ends without one only when the goroutine had not reported
+// by then.
+func awaitResult(ctx context.Context, done <-chan writeResult) (writeResult, bool) {
+	select {
+	case r := <-done:
+		return r, true
+	case <-ctx.Done():
+		select {
+		case r := <-done:
+			return r, true
+		default:
+			return writeResult{}, false
+		}
+	}
+}
+
+// WritePanic is what a call made here panics with when a write it waits for
+// panics in a goroutine of its own: a call to a sink made here (Record,
+// Summary), and a Filter's Record or Flush, through such a sink and for the
+// Filter's warnings. Value is what the io.Writer or the handler panicked with
+// (nil for panic(nil) under GODEBUG panicnil=1), and Stack that goroutine's
+// stack where it panicked, as runtime/debug.Stack writes it.
+//
+// A write runs in a goroutine of its own when the call's context can end. Its
+// panic reaches the call unless the call has returned at its context's end
+// before the panic was handed over; then the panic is dropped, and the write
+// counts as failed. With a context that cannot end (context.Background(), or
+// one from context.WithoutCancel), the write runs in the caller's goroutine,
+// and its panic reaches the caller as itself, with its own value and stack,
+// as in 0.4.0.
+type WritePanic struct {
+	Value any
+	Stack []byte
+}
+
+// Error writes the value the write panicked with and the writer's stack, so
+// a WritePanic nobody recovers shows where the write panicked.
+func (p *WritePanic) Error() string {
+	return fmt.Sprintf("decisionrecord: a write panicked: %v\n\n%s", p.Value, p.Stack)
+}
+
+// Unwrap is the value the write panicked with when it is an error, else nil.
+func (p *WritePanic) Unwrap() error {
+	err, _ := p.Value.(error)
+	return err
+}
+
+// goexited is the failure of a write that called runtime.Goexit in the
+// goroutine a sink writes in: it neither returned nor panicked.
+func goexited(who string) error {
+	return fmt.Errorf("decisionrecord: %s: the write called runtime.Goexit and failed", who)
+}
+
+// writeResult is how a write in a goroutine ended: its error, or the panic
+// it ended with.
+type writeResult struct {
+	err      error
+	panicked *WritePanic
+}
+
+// catch runs write and keeps how it ended as a writeResult: its error, or a
+// panic in it, with the stack of the goroutine it panicked in, taken while
+// that stack is still there. Whether write returned tells a panic from a
+// return, not the value recover gives, which is nil for panic(nil) under
+// GODEBUG panicnil=1. A write that calls runtime.Goexit ends the goroutine
+// inside catch, which then does not return.
+func catch(write func() error) (r writeResult) {
+	returned := false
+	defer func() {
+		if !returned {
+			v := recover()
+			r = writeResult{panicked: &WritePanic{Value: v, Stack: debug.Stack()}}
+		}
+	}()
+	err := write()
+	returned = true
+	return writeResult{err: err}
+}
+
+// result is r's error; when write panicked, result panics again, in the
+// caller's goroutine, with the *WritePanic that holds the value and the
+// writer's stack.
+func (r writeResult) result() error {
+	if r.panicked != nil {
+		panic(r.panicked)
+	}
+	return r.err
+}
+
+// notStarted is the error of a write that who did not start because the
+// context ended with err.
+func notStarted(who string, err error) error {
+	return fmt.Errorf("decisionrecord: %s: not written, the context ended before the write started: %w", who, err)
+}
+
+// maybeStarted is the error of a write that who may have started, and that
+// had not ended when the context ended with err: if it started, it goes on,
+// and may still be kept.
+func maybeStarted(who string, err error) error {
+	return fmt.Errorf("decisionrecord: %s: the context ended before the write was known to end; it may have started, and if so it goes on and may still be kept: %w", who, err)
 }
 
 // Level is how much a Filter writes.
 type Level string
 
 const (
-	LevelAll      Level = "all"
+	LevelAll Level = "all"
+	// LevelRefusals writes every decision that is not accepted: refused,
+	// held and unenforced.
 	LevelRefusals Level = "refusals"
 	LevelSummary  Level = "summary"
 	LevelNone     Level = "none"
@@ -279,17 +603,33 @@ var errNotMade = errors.New("decisionrecord: Filter not made by NewFilter")
 // without its record. A deciding party that must not pass one unrecorded
 // uses LevelAll. At LevelNone nothing is written. A Filter not made by
 // NewFilter returns an error from every call.
+//
+// Record and Flush return when the sink does once the context ends (see
+// Sink). At LevelAll, a record for which Record returned an error may still
+// be kept: its write may have started and end after the call returned, and a
+// writer or handler may keep a record and still return an error. A deciding
+// party that refuses the decision then, and wants a reader to see the
+// refusal, records the decision again, Refused, with the same DecisionID,
+// through the same Filter: a decision has the strongest outcome among its
+// records (see Record).
+//
+// A warning does not wait past the context either: when no warning is being
+// written, it is written, late if the context has ended; when one is, and
+// the context ends first, it is not written. A warning logger that does not
+// end holds back only the warnings after it, not the records.
 type Filter struct {
-	level Level
-	sink  Sink
-	warn  *slog.Logger
+	level    Level
+	sink     Sink
+	warn     *slog.Logger
+	warnTurn turn
 
 	mu      sync.Mutex
 	from    time.Time
 	windows map[string]*window // point → its tally since from
 }
 
-// outcomeCheck is what a Count counts: an outcome and its refusing check.
+// outcomeCheck is what a Count counts: an outcome and its refusing or
+// deferring check.
 type outcomeCheck struct {
 	outcome Outcome
 	check   string
@@ -297,10 +637,11 @@ type outcomeCheck struct {
 
 // window is one deciding party's tally at LevelSummary. It keeps the ids of
 // the decisions accepted in it only: an acceptance needs whatever the
-// deciding party checks for, while any caller can cause a refused or
+// deciding party checks for, while any caller can cause a refused, held or
 // unenforced record (where the deciding party records only), so the ids kept
-// are bounded by what the deciding party admits. A refusal or an unenforced
-// decision not accepted in it is counted as it comes and keeps no id. Its
+// are bounded by what the deciding party admits. A refused, held or
+// unenforced decision not accepted in it is counted as it comes and keeps no
+// id. Its
 // counts are keyed by outcome and check, fixed names of the deciding party.
 type window struct {
 	counts   map[outcomeCheck]int64
@@ -320,7 +661,7 @@ func NewFilter(level Level, sink Sink, warn *slog.Logger) (*Filter, error) {
 	if warn == nil {
 		warn = slog.Default()
 	}
-	f := &Filter{level: level, sink: sink, warn: warn}
+	f := &Filter{level: level, sink: sink, warn: warn, warnTurn: newTurn()}
 	f.resetWindow(time.Time{})
 	return f, nil
 }
@@ -357,9 +698,9 @@ func (f *Filter) Record(ctx context.Context, r Record) error {
 // count adds r to the window. A decision accepted in it is counted once, by
 // the strongest outcome of its records: a record of a stronger outcome moves
 // it there, with that record's check, and any other changes nothing. A
-// refused or unenforced record of a decision not accepted in the window is
-// counted as it comes and keeps no id: under the writer's rule (see Record)
-// a decision has at most one, so it is counted once.
+// refused, held or unenforced record of a decision not accepted in the
+// window is counted as it comes and keeps no id: under the writer's rule
+// (see Record) a decision has at most one, so it is counted once.
 func (f *Filter) count(r Record) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -393,13 +734,45 @@ func (f *Filter) count(r Record) {
 // fall in two windows is counted in each. It starts a new window at until. A
 // window without decisions writes nothing.
 // until must not be zero or before the window's start. At other levels it does
-// nothing. A sink's failure is a warning; the decisions do not change.
+// nothing. A sink's failure is a warning; the decisions do not change. A
+// context that has ended when Flush is called is an error wrapping its
+// ctx.Err(), and the window is kept, counts and all, for the next Flush.
+// When the context ends during a Flush, the window is not kept: a new one has
+// started. A summary whose write the sinks here have not started by then is
+// lost, as any summary a sink fails to write is (a warning at most, see
+// Filter); one whose write had started may still be kept. A sink not made
+// here keeps to its own behaviour. So that no summary of the last window is
+// lost to the shutdown signal, the last Flush, at shutdown, takes a context
+// that the signal does not end and that has a deadline of its own, as
+// context.WithTimeout(context.WithoutCancel(ctx), d). Without a deadline it
+// may wait for good behind a write that does not end. When the deadline
+// passes first, the counts not written by then are lost, as above. A write
+// that fails still loses its summary.
+//
+// A panic as Flush writes one point's summary, in the sink or in the handler
+// of the warning that the summary was not written, goes on to the caller as
+// it was raised, with its own stack, once Flush has written every point after
+// it; so does runtime.Goexit in the caller's goroutine, which then ends. Flush
+// calls the sink again after it panicked, so a sink not made here stays
+// callable after a panic, and the panic reaches the caller once those writes
+// have returned. Flush makes those calls, and writes their warnings, from a
+// goroutine of its own, not the caller's: one at a time, in the order of the
+// points, and it waits for them. A panic as one of those is a warning that
+// its point's summary was not written, with its value; a panic in that
+// warning's handler is dropped. A runtime.Goexit in that goroutine, as one of
+// those or as its warning, ends only it, and Flush goes on with the next point
+// in another. So neither a panic nor runtime.Goexit as one of those ends the
+// writing of the rest or the caller's goroutine: the first panic or
+// runtime.Goexit is the one that reaches the caller.
 func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 	if f == nil || f.level == "" {
 		return errNotMade
 	}
 	if f.level != LevelSummary {
 		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return fmt.Errorf("decisionrecord: flush with a context that has ended, the window kept for the next flush: %w", ctx.Err())
 	}
 	f.mu.Lock()
 	windows, from := f.windows, f.from
@@ -418,67 +791,223 @@ func (f *Filter) Flush(ctx context.Context, until time.Time) error {
 		points = append(points, p)
 	}
 	sort.Strings(points)
-	for _, p := range points {
-		s := Summary{Point: p, From: from, Until: until}
-		for k, n := range windows[p].counts {
-			if n > 0 {
-				s.Counts = append(s.Counts, Count{Outcome: k.outcome, Check: k.check, N: n})
-			}
+	// A panic, or runtime.Goexit, as one point's summary is written goes on
+	// to the caller as it is, its stack with it, once this deferred call has
+	// written the points after it (writeRest).
+	next := 0
+	defer func() {
+		if next < len(points) {
+			f.writeRest(ctx, windows, points[next+1:], from, until)
 		}
-		sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
-		if err := f.sink.Summary(ctx, s); err != nil {
-			f.warn.WarnContext(ctx, "decision record: summary not written", "point", p, "err", err)
-		}
+	}()
+	for ; next < len(points); next++ {
+		f.writeSummary(ctx, windows[points[next]], points[next], from, until)
 	}
 	return nil
+}
+
+// writeRest writes the summaries of points after one whose write panicked or
+// called runtime.Goexit, in order, from a goroutine of its own, and waits for
+// it. When runtime.Goexit, as one is written or as its warning is, ends that
+// goroutine, writeRest goes on with the next point in a new one, so only one
+// writes at a time, the caller's stack does not grow with them, and neither a
+// panic nor runtime.Goexit as one is written ends the writing of the rest or
+// reaches the caller. A panic as one is written is a warning that its summary
+// was not written, with its value; a panic in that warning's handler is
+// dropped.
+func (f *Filter) writeRest(ctx context.Context, windows map[string]*window, points []string, from, until time.Time) {
+	for len(points) > 0 {
+		ended := make(chan int, 1)
+		go func(points []string) {
+			next := 0
+			// runtime.Goexit as points[next] is written ends this goroutine
+			// there: the deferred call says where, and the next goroutine
+			// starts after it.
+			defer func() { ended <- next }()
+			for ; next < len(points); next++ {
+				p := points[next]
+				if v, panicked := panicOf(func() { f.writeSummary(ctx, windows[p], p, from, until) }); panicked {
+					panicOf(func() { f.warnf(ctx, "decision record: summary not written", "point", p, "panic", v) })
+				}
+			}
+		}(points)
+		points = points[min(<-ended+1, len(points)):]
+	}
+}
+
+// writeSummary writes the summary of point p's window w, from from until
+// until, warning when the sink fails to.
+func (f *Filter) writeSummary(ctx context.Context, w *window, p string, from, until time.Time) {
+	s := Summary{Point: p, From: from, Until: until}
+	for k, n := range w.counts {
+		if n > 0 {
+			s.Counts = append(s.Counts, Count{Outcome: k.outcome, Check: k.check, N: n})
+		}
+	}
+	sort.Slice(s.Counts, func(i, j int) bool { return countBefore(s.Counts[i], s.Counts[j]) })
+	if err := f.sink.Summary(ctx, s); err != nil {
+		f.warnf(ctx, "decision record: summary not written", "point", p, "err", err)
+	}
+}
+
+// panicOf runs fn and reports what it panicked with, if it did. Whether fn
+// returned tells a panic from a return, not the value recover gives, which
+// is nil for panic(nil) under GODEBUG panicnil=1.
+func panicOf(fn func()) (v any, panicked bool) {
+	returned := false
+	defer func() {
+		if !returned {
+			v, panicked = recover(), true
+		}
+	}()
+	fn()
+	returned = true
+	return nil, false
 }
 
 // notWritten warns that the sink did not write a record, at a level where
 // that does not change the decision.
 func (f *Filter) notWritten(ctx context.Context, err error) {
-	f.warn.WarnContext(ctx, "decision record: not written", "level", string(f.level), "err", err)
+	f.warnf(ctx, "decision record: not written", "level", string(f.level), "err", err)
 }
 
-// formatVersion is the version of the JSON form of records and summaries, the
-// "v" member of every line.
-const formatVersion = 1
+// warnf writes a warning, one at a time, without waiting past ctx: when no
+// warning is being written it is written, late if ctx has ended or ends
+// first; when one is being written and ctx ends before it does, it is not
+// written.
+func (f *Filter) warnf(ctx context.Context, msg string, args ...any) {
+	f.warnTurn.runLate(ctx, func(ctx context.Context) {
+		f.warn.WarnContext(ctx, msg, args...)
+	})
+}
+
+// FormatVersion is the version of the form in which the sinks here write
+// records and summaries: the "v" member of every line and log entry. The
+// version changes whenever any of these changes: a member, the form or the
+// meaning of a member's value, the set of values of "kind", "outcome" or
+// "confidence", and, in the log sink, an entry's message or level. Within a
+// version none of them changes. The values of "check" and the names in
+// "attributes" are the deciding party's, and grow whatever the version.
+type FormatVersion int
+
+const (
+	// FormatV1 is the form of 0.4.0: the outcomes accepted, refused and
+	// unenforced.
+	FormatV1 FormatVersion = 1
+	// FormatV2 adds the outcome held and a record's "refusedAt" and
+	// "verifiedHops".
+	FormatV2 FormatVersion = 2
+)
+
+// known reports whether the sinks here write format v.
+func (v FormatVersion) known() bool { return v == FormatV1 || v == FormatV2 }
+
+// Error is the type of this package's sentinel errors. The sentinels are
+// constants, so no importer can reassign them; errors.Is matches them as it
+// matches any comparable error.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
+// ErrNotInFormat reports a record or summary that a sink's format version
+// cannot express: in format v1, a held outcome, a RefusedAt, VerifiedHops, or
+// a count of held decisions. The sink writes nothing of it.
+const ErrNotInFormat Error = "decisionrecord: not expressible in this format version"
+
+// expressRecord is nil when format v expresses r, and otherwise names, as
+// ErrNotInFormat, a member it does not.
+func expressRecord(v FormatVersion, r Record) error {
+	if v != FormatV1 {
+		return nil
+	}
+	switch {
+	case r.Outcome == Held:
+		return fmt.Errorf("%w: format v1 has no outcome %s", ErrNotInFormat, Held)
+	case r.RefusedAt != nil:
+		return fmt.Errorf("%w: format v1 has no refusedAt", ErrNotInFormat)
+	case len(r.VerifiedHops) > 0:
+		return fmt.Errorf("%w: format v1 has no verifiedHops", ErrNotInFormat)
+	}
+	return nil
+}
+
+// expressSummary is expressRecord for a summary.
+func expressSummary(v FormatVersion, s Summary) error {
+	if v != FormatV1 {
+		return nil
+	}
+	for _, c := range s.Counts {
+		if c.Outcome == Held {
+			return fmt.Errorf("%w: format v1 has no outcome %s", ErrNotInFormat, Held)
+		}
+	}
+	return nil
+}
 
 // timeLayout is RFC 3339 in UTC with nine fraction digits, so that times sort
 // as text.
 const timeLayout = "2006-01-02T15:04:05.000000000Z"
 
-// NewJSONLines returns a sink writing each record and summary to w as one line
-// of RFC 8785 JSON, with "v" (the format version) and "kind" ("record" or
-// "summary"). Line breaks inside values are escaped, but U+2028 and U+2029 are
-// written as is (RFC 8785): a reader splits on "\n" only. A line is written
-// with one Write; after a failed Write, the next line starts with "\n", so a
+// NewJSONLines returns a sink writing each record and summary to w in format
+// v1 as one line of RFC 8785 JSON, with "v" (the format version) and "kind"
+// ("record" or "summary"). Line breaks inside values are escaped, but U+2028
+// and U+2029 are written as is (RFC 8785): a reader splits on "\n" only. A
+// line is written with one Write, and w gets one Write at a time: a Write
+// waits for the one before it to end, even when that one's call has
+// returned. After a failed Write, the next line starts with "\n", so a
 // partial line stays one unreadable line and the lines after it stay whole. A
-// nil w makes every write fail.
+// nil w makes every write fail. What format v1 cannot express is
+// ErrNotInFormat. NewJSONLines(w) is NewJSONLinesFormat(w, FormatV1).
 func NewJSONLines(w io.Writer) Sink {
-	return &jsonLines{w: w}
+	return &jsonLines{turn: newTurn(), w: w, v: FormatV1}
+}
+
+// NewJSONLinesFormat is NewJSONLines writing format v. A version the sinks
+// here do not write is an error.
+func NewJSONLinesFormat(w io.Writer, v FormatVersion) (Sink, error) {
+	if !v.known() {
+		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
+	}
+	return &jsonLines{turn: newTurn(), w: w, v: v}, nil
 }
 
 type jsonLines struct {
-	mu     sync.Mutex
-	w      io.Writer
+	turn turn
+	w    io.Writer
+	v    FormatVersion
+	// broken is set by a failed Write, so the next line starts on a line of
+	// its own. Only the holder of turn reads or sets it.
 	broken bool
 }
 
-func (j *jsonLines) Record(_ context.Context, r Record) error {
+func (j *jsonLines) Record(ctx context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	return j.write(recordMap(r))
+	m, err := recordMap(r, j.v)
+	if err != nil {
+		return err
+	}
+	return j.write(ctx, m)
 }
 
-func (j *jsonLines) Summary(_ context.Context, s Summary) error {
+func (j *jsonLines) Summary(ctx context.Context, s Summary) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	return j.write(summaryMap(s))
+	m, err := summaryMap(s, j.v)
+	if err != nil {
+		return err
+	}
+	return j.write(ctx, m)
 }
 
-func (j *jsonLines) write(m map[string]any) error {
+// write makes m's line before it waits for the turn, so the line is the
+// caller's record as given, whatever the caller changes after the call.
+func (j *jsonLines) write(ctx context.Context, m map[string]any) error {
 	if j.w == nil {
 		return errors.New("decisionrecord: no writer")
 	}
@@ -487,17 +1016,20 @@ func (j *jsonLines) write(m map[string]any) error {
 		return fmt.Errorf("decisionrecord: %w", err)
 	}
 	line := append(b, '\n')
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.broken {
-		line = append([]byte{'\n'}, line...)
-	}
-	if _, err := j.w.Write(line); err != nil {
+	return j.turn.run(ctx, "JSON lines sink", func() error {
+		out := line
+		if j.broken {
+			out = append([]byte{'\n'}, line...)
+		}
+		// broken holds until the Write succeeds, so a Write that fails or
+		// panics leaves the next line to start on a line of its own.
 		j.broken = true
-		return fmt.Errorf("decisionrecord: %w", err)
-	}
-	j.broken = false
-	return nil
+		if _, err := j.w.Write(out); err != nil {
+			return fmt.Errorf("decisionrecord: %w", err)
+		}
+		j.broken = false
+		return nil
+	})
 }
 
 // NewLog returns a sink writing each record and summary as one structured log
@@ -506,41 +1038,75 @@ func (j *jsonLines) write(m map[string]any) error {
 // handle one, is an error (at LevelAll, the decision is refused). A handler
 // that returns nil without keeping the entry cannot be detected here: at
 // LevelAll, use a handler whose nil means kept. A nil l makes every write
-// fail.
+// fail. An entry carries the members of a JSON line as its attributes, in
+// format v1, "v" included; what format v1 cannot express is ErrNotInFormat.
+// NewLog(l) is NewLogFormat(l, FormatV1).
 func NewLog(l *slog.Logger) Sink {
-	return logSink{l: l}
+	return logSink{turn: newTurn(), l: l, v: FormatV1}
 }
 
-type logSink struct{ l *slog.Logger }
+// NewLogFormat is NewLog writing format v. A version the sinks here do not
+// write is an error.
+func NewLogFormat(l *slog.Logger, v FormatVersion) (Sink, error) {
+	if !v.known() {
+		return nil, fmt.Errorf("decisionrecord: unknown format version %d", v)
+	}
+	return logSink{turn: newTurn(), l: l, v: v}, nil
+}
+
+type logSink struct {
+	turn turn
+	l    *slog.Logger
+	v    FormatVersion
+}
 
 func (s logSink) Record(ctx context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	return s.emit(ctx, "decision record", recordMap(r))
+	m, err := recordMap(r, s.v)
+	if err != nil {
+		return err
+	}
+	return s.emit(ctx, "decision record", m)
 }
 
 func (s logSink) Summary(ctx context.Context, sum Summary) error {
 	if err := sum.Validate(); err != nil {
 		return err
 	}
-	return s.emit(ctx, "decision summary", summaryMap(sum))
+	m, err := summaryMap(sum, s.v)
+	if err != nil {
+		return err
+	}
+	return s.emit(ctx, "decision summary", m)
 }
 
+// emit makes the entry before it waits for the turn, so the entry is the
+// caller's record as given; the handler's Enabled and Handle run with the
+// turn held.
 func (s logSink) emit(ctx context.Context, msg string, m map[string]any) error {
 	if s.l == nil {
 		return errors.New("decisionrecord: no logger")
 	}
-	h := s.l.Handler()
-	if !h.Enabled(ctx, slog.LevelInfo) {
-		return errors.New("decisionrecord: the logger does not take info entries")
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	h := s.l.Handler()
 	rec := slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0)
 	rec.Add(mapAttrs(m)...)
-	if err := h.Handle(ctx, rec); err != nil {
-		return fmt.Errorf("decisionrecord: %w", err)
-	}
-	return nil
+	return s.turn.run(ctx, "log sink", func() error {
+		if !h.Enabled(ctx, slog.LevelInfo) {
+			return errors.New("decisionrecord: the logger does not take info entries")
+		}
+		if err := ctx.Err(); err != nil {
+			return notStarted("log sink", err)
+		}
+		if err := h.Handle(ctx, rec); err != nil {
+			return fmt.Errorf("decisionrecord: %w", err)
+		}
+		return nil
+	})
 }
 
 func mapAttrs(m map[string]any) []any {
@@ -560,9 +1126,14 @@ func mapAttrs(m map[string]any) []any {
 // so that the record is written rather than lost.
 func text(s string) string { return strings.ToValidUTF8(s, "�") }
 
-func recordMap(r Record) map[string]any {
+// recordMap is r's members in format v, or ErrNotInFormat when v cannot
+// express one of them: no map of a version holds a member the version lacks.
+func recordMap(r Record, v FormatVersion) (map[string]any, error) {
+	if err := expressRecord(v, r); err != nil {
+		return nil, err
+	}
 	m := map[string]any{
-		"v":          formatVersion,
+		"v":          int(v),
 		"kind":       "record",
 		"decisionId": r.DecisionID,
 		"point":      r.Point,
@@ -596,10 +1167,28 @@ func recordMap(r Record) map[string]any {
 		}
 		m["attributes"] = attrs
 	}
-	return m
+	if p := r.RefusedAt; p != nil {
+		pm := map[string]any{"confidence": string(p.Confidence)}
+		if p.Hop != "" {
+			pm["hop"] = p.Hop
+		}
+		m["refusedAt"] = pm
+	}
+	if len(r.VerifiedHops) > 0 {
+		hops := make([]any, len(r.VerifiedHops))
+		for i, h := range r.VerifiedHops {
+			hops[i] = h
+		}
+		m["verifiedHops"] = hops
+	}
+	return m, nil
 }
 
-func summaryMap(s Summary) map[string]any {
+// summaryMap is recordMap for a summary.
+func summaryMap(s Summary, v FormatVersion) (map[string]any, error) {
+	if err := expressSummary(v, s); err != nil {
+		return nil, err
+	}
 	counts := make([]any, len(s.Counts))
 	for i, c := range s.Counts {
 		cm := map[string]any{"outcome": string(c.Outcome), "n": c.N}
@@ -609,11 +1198,11 @@ func summaryMap(s Summary) map[string]any {
 		counts[i] = cm
 	}
 	return map[string]any{
-		"v":      formatVersion,
+		"v":      int(v),
 		"kind":   "summary",
 		"point":  s.Point,
 		"from":   s.From.UTC().Format(timeLayout),
 		"until":  s.Until.UTC().Format(timeLayout),
 		"counts": counts,
-	}
+	}, nil
 }

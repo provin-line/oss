@@ -175,8 +175,9 @@ func New(next resolver.Resolver, cfg Config) (*Resolver, error) {
 
 // Resolve serves a fresh (within TTL) cached document when one exists and
 // delegates to next otherwise. Every hit returns a newly parsed document; a
-// miss returns next's result unchanged. Cache admission is best-effort and
-// never converts a successful resolution into an error.
+// miss returns next's result unchanged, so Resolve returns a document or an
+// error (the resolver.Resolver contract) as long as next does. Cache admission
+// is best-effort and never converts a successful resolution into an error.
 func (r *Resolver) Resolve(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	if raw, ok := r.lookup(didStr); ok {
 		// Parse under the hit bound; honor cancellation while waiting.

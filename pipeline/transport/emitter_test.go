@@ -136,7 +136,7 @@ func TestEmitter_Emit_AppendFailureAfterPublish_ReturnsNil(t *testing.T) {
 }
 
 // Emit outcomes are counted monotonically per emitter: every error return is
-// one failure, every nil return (primary delivered) one success — the P1-2
+// one failure, every nil return (primary delivered) one success — the
 // metrics wiring point, polled from a separate goroutine like
 // StrippedPublishFailures.
 func TestEmitter_EmitCounters_OutcomePerReturn(t *testing.T) {
@@ -188,8 +188,7 @@ func TestEmitter_EmitCounters_AppendFailureCountsSuccess(t *testing.T) {
 
 // A restart must not fork the sequence space: an Emitter constructed over a
 // log that already holds emission records resumes AFTER the last recorded
-// sequence — the durable log is the carrier of the discipline (tlog spec,
-// FCoT ✗2 / Codex High-1).
+// sequence — the durable log is the carrier of the discipline (tlog spec).
 func TestNewEmitter_ResumesSequenceFromLogTail(t *testing.T) {
 	tl := memlog.New()
 	for _, rec := range []string{
@@ -238,7 +237,7 @@ func TestNewEmitter_SequenceExhaustionFailsClosed(t *testing.T) {
 	}
 }
 
-// The restart composition the slice exists for: an emitter over a DURABLE
+// The restart composition: an emitter over a DURABLE
 // log, reopened, resumes the sequence — end to end over filelog, not a
 // seeded fake.
 func TestNewEmitter_ResumesOverReopenedFilelog(t *testing.T) {
@@ -329,7 +328,7 @@ func TestNewEmitter_NoReuseAcrossLossWindow(t *testing.T) {
 	}
 }
 
-// The first-event crash window (Codex High-1): an EMPTY log with a high-water
+// The first-event crash window: an EMPTY log with a high-water
 // of 1 must not resume at 1 — the empty-log early return would have reused it.
 func TestNewEmitter_EmptyLogHighWaterRecovers(t *testing.T) {
 	ctx := context.Background()

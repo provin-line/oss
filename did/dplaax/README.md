@@ -51,6 +51,13 @@ chain links are content commitments.
 - **Parser is syntax-only.** Semantic classification lives in methods
   (`IsOwner` / `IsPipeline` / `IsProcess`); new resource types add a classifier method
   and a case in the known-pattern validator — the parser does not change.
+- **A refusal of the syntax is `ErrSyntax`.** Every error of `Parse` and
+  `ValidateRegistry` is `ErrSyntax` under `errors.Is` (dplaax
+  `did.dplaax.syntax`); its text says what does not hold. The semantic gates
+  (`ValidateDID`, `RequireKnownPattern`, `RequireOwner`) refuse under other
+  rules, and their errors are not `ErrSyntax`. They take a parsed `*DID`:
+  `ValidateDID`'s refusal of an empty registry is for a DID a caller builds,
+  as one `Parse` returned has a registry.
 - Every segment is validated against a safe-segment rule (`[a-zA-Z0-9._-]+`, no
   dot-only segments) so DID segments can be used to build storage paths without
   path-traversal risk. Consumers must still call the exported safety check before

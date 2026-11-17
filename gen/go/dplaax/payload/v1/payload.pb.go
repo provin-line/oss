@@ -240,11 +240,17 @@ type RetainPayloadMetadata struct {
 	// auth_proof is the L2 wireauth token, verified in-handler — mirrors the
 	// proof-carrying shape of ResolvePayloadRequest above, reusing
 	// dplaax.chain.v1.AuthProof rather than redefining it (a redefinition
-	// would be a drift source). The proof covers owner_did and declared_size:
-	// the proven signer_did is authoritative over owner_did.
-	AuthProof     *v1.AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// would be a drift source). The proof covers owner_did, declared_size and
+	// content_address: the proven signer_did is authoritative over owner_did.
+	AuthProof *v1.AuthProof `protobuf:"bytes,3,opt,name=auth_proof,json=authProof,proto3" json:"auth_proof,omitempty"`
+	// content_address is the caller-declared address of the payload to
+	// follow, "sha256:" and the 64 lowercase hex digits of its SHA-256. The
+	// server computes the address of the bytes it receives and refuses them,
+	// keeping nothing, when it differs (InvalidArgument), as it does for
+	// declared_size.
+	ContentAddress string `protobuf:"bytes,4,opt,name=content_address,json=contentAddress,proto3" json:"content_address,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RetainPayloadMetadata) Reset() {
@@ -296,6 +302,13 @@ func (x *RetainPayloadMetadata) GetAuthProof() *v1.AuthProof {
 		return x.AuthProof
 	}
 	return nil
+}
+
+func (x *RetainPayloadMetadata) GetContentAddress() string {
+	if x != nil {
+		return x.ContentAddress
+	}
+	return ""
 }
 
 type RetainPayloadResponse struct {
@@ -358,12 +371,13 @@ const file_dplaax_payload_v1_payload_proto_rawDesc = "" +
 	"\x14RetainPayloadRequest\x12F\n" +
 	"\bmetadata\x18\x01 \x01(\v2(.dplaax.payload.v1.RetainPayloadMetadataH\x00R\bmetadata\x12\x16\n" +
 	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\a\n" +
-	"\x05frame\"\x94\x01\n" +
+	"\x05frame\"\xbd\x01\n" +
 	"\x15RetainPayloadMetadata\x12\x1b\n" +
 	"\towner_did\x18\x01 \x01(\tR\bownerDid\x12#\n" +
 	"\rdeclared_size\x18\x02 \x01(\x04R\fdeclaredSize\x129\n" +
 	"\n" +
-	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\"@\n" +
+	"auth_proof\x18\x03 \x01(\v2\x1a.dplaax.chain.v1.AuthProofR\tauthProof\x12'\n" +
+	"\x0fcontent_address\x18\x04 \x01(\tR\x0econtentAddress\"@\n" +
 	"\x15RetainPayloadResponse\x12'\n" +
 	"\x0fcontent_address\x18\x01 \x01(\tR\x0econtentAddress2y\n" +
 	"\x0ePayloadService\x12g\n" +

@@ -10,7 +10,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// ConsumeReason is the diagnostic outcome of a consume-locus verification (slice-17q),
+// ConsumeReason is the diagnostic outcome of a consume-locus verification,
 // carried alongside the vc.ConfidenceState verdict as a notation — NOT a second wire enum.
 type ConsumeReason string
 
@@ -35,20 +35,20 @@ var ErrInvalidConsumedHash = errors.New("auditor: invalid consumed hash")
 var ErrSourceNotFound = errors.New("auditor: source not found at resolver")
 
 // SourceResolver fetches one source credential by content address for consume-locus
-// verification (slice-17q). It is an AVAILABILITY seam, NOT a trust anchor: integrity comes
+// verification. It is an AVAILABILITY seam, NOT a trust anchor: integrity comes
 // from the credential's signature and vc.VerifySourceCommitment (fetch-location-independent),
 // so a SourceResolver may fetch from any endpoint that holds the signed source (a production
 // impl may fan out over the aggregate's DerivedFrom issuer endpoints, reusing the batch
 // resolver's DID->#vc-resolver discovery, or fetch from the emitter). This seam isolates the
 // deferred consumed-set discovery/transport policy — the verifier depends on the capability,
-// not a wire contract (no new proto/RPC is frozen here, slice-17q D-17q-2/4).
+// not a wire contract (no proto or RPC is fixed here).
 type SourceResolver interface {
 	Resolve(ctx context.Context, contentHash string) (*vc.PipelinePassCredential, error)
 }
 
 // ConsumeVerdict is a consume-locus verification result: the domain three-state plus a
 // diagnostic reason. State maps onto the same vc.ConfidenceState the AuditRecord carries, so
-// a recorded/served consume-locus verdict flows through the frozen 17i source_commitment
+// a recorded/served consume-locus verdict flows through the source_commitment
 // field with no wire reshape.
 type ConsumeVerdict struct {
 	State    vc.ConfidenceState
@@ -57,7 +57,7 @@ type ConsumeVerdict struct {
 }
 
 // ConsumeVerifier performs INDEPENDENT relying-party verification of an aggregate credential's
-// source commitment (slice-17q): given the consumed content hashes, it fetches each source via
+// source commitment: given the consumed content hashes, it fetches each source via
 // a SourceResolver and recomputes the signed SourceRoot ITSELF — never trusting the emitter's
 // self-reported verdict. Construct with NewConsumeVerifier.
 type ConsumeVerifier struct {
@@ -76,8 +76,7 @@ func NewConsumeVerifier(scv SourceCommitmentVerifier, src SourceResolver) (*Cons
 // Verify fetches the consumed sources and recomputes the aggregate's source commitment.
 //
 // It recomputes ONLY when the FULL supplied set fetched with no tamper — a partial set is
-// never fed to VerifySourceCommitment (the slice-17o P1 discipline: a subset can spuriously
-// match or mismatch). Outcomes:
+// never fed to VerifySourceCommitment (a subset can spuriously match or mismatch). Outcomes:
 //   - full fetch, no tamper -> VerifySourceCommitment result recorded VERBATIM (Verified /
 //     Failed=mismatch / Indeterminate=incomplete);
 //   - a fetched body's content hash != the requested hash (tamper) -> Failed/mismatch (short-circuit);

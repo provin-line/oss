@@ -5,13 +5,13 @@
 // signing to the injected crypto.Signer (in production, the registry's
 // keystore-backed signer; in tests, a fake or an in-memory one).
 //
-// Two signing domains, bound to their key relationship (slice-5 D-s3): Sign uses
+// Two signing domains, bound to their key relationship: Sign uses
 // the DID's #signing assertionMethod key (VC proof creation); SignRaw uses the
 // #auth authentication key (L2 wire-signing). The two are cryptographically
 // identical Ed25519 operations, kept separate so each carries its own
 // authorization policy and cannot be used to sign with the other domain's key.
 //
-// Output is raw signature bytes (D-s1): the multibase/proofValue framing for VC
+// Output is raw signature bytes: the multibase/proofValue framing for VC
 // proofs lives in the vc consumer, not here.
 package signer
 
@@ -66,7 +66,7 @@ func (s *Service) SignRaw(ctx context.Context, did, keyID string, data []byte) (
 }
 
 // sign validates the request fail-closed, then delegates to the seam. wantKeyID
-// is the only key ID this signing domain accepts (D-s3): a crossed binding
+// is the only key ID this signing domain accepts: a crossed binding
 // (e.g. the VC endpoint asked to sign with the auth key) is InvalidArgument, not
 // a silently honored signature.
 func (s *Service) sign(ctx context.Context, did, keyID string, data []byte, wantKeyID string) ([]byte, error) {

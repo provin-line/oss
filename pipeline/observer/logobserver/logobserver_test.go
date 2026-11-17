@@ -77,7 +77,7 @@ func TestOnProcessComplete_TerminatingSink(t *testing.T) {
 	}
 }
 
-// The core Codex-Medium case: a PASSED sink carrying a FAILED confidence must
+// The core case: a PASSED sink carrying a FAILED confidence must
 // log confidence, so the record cannot be mistaken for a verified success.
 func TestOnProcessComplete_PassedButFailedConfidence(t *testing.T) {
 	m := record(t, contract.ProcessEvent{

@@ -1,0 +1,12 @@
+{
+  "id": "did-026",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID with a one-segment resource path is none of the three",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:pipeline"
+  },
+  "expect": {
+    "level": "none",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

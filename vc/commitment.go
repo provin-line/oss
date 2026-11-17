@@ -182,6 +182,8 @@ func merkleTreeHash(leaves [][sha256.Size]byte) [sha256.Size]byte {
 //   - source set incomplete (claimed leaves not yet resolvable) →
 //     indeterminate; may resolve later
 //   - unknown SourceRootCanonical → failed (fail closed)
+//   - cred is signed under eddsa-rdfc-2022 and not in its closed form (see
+//     ValidateWireForm) → failed
 //   - chain-preserving credential none of whose gathered sources hashes to
 //     previousCredential, once the claimed issuer set is fully resolved →
 //     failed (all-consumed semantics: the triggering predecessor is part of
@@ -197,7 +199,7 @@ func (v *Verifier) VerifySourceCommitment(ctx context.Context, cred *PipelinePas
 	// Misuse guards, checked before any traversal (uniqueIssuers dereferences
 	// each source): nil inputs are caller wiring errors — a gather loop with
 	// unfilled slots — and must surface as errors, never panics. Mirrors the
-	// construction-side hardening in ComputeSourceRoot (17k).
+	// construction-side hardening in ComputeSourceRoot.
 	if cred == nil {
 		return ConfidenceFailed, errors.New("vc: nil credential")
 	}
@@ -205,6 +207,12 @@ func (v *Verifier) VerifySourceCommitment(ctx context.Context, cred *PipelinePas
 		if s == nil {
 			return ConfidenceFailed, fmt.Errorf("vc: nil source credential at index %d", i)
 		}
+	}
+	// An eddsa-rdfc-2022 credential not in its closed form is read no further.
+	// A source is read only for its issuer and its wire document, and a source
+	// in another form changes either, so the verdict is failed without it.
+	if checkRDFCClosedForm(cred) != nil {
+		return ConfidenceFailed, nil
 	}
 	claimed := cred.SourceCommitment()
 	if claimed == nil {

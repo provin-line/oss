@@ -228,13 +228,12 @@ func TestRetryOnUnavailable_CtxCanceled_StopsRetrying(t *testing.T) {
 	}
 }
 
-// TestRetryOnUnavailable_DeadlineBoundsHangingAttempt is FIX 1's core proof:
-// budget must bound a HANGING attempt() call in real wall-clock time, not
-// merely the retry DECISION between attempts. Before this fix, budget was
-// checked only via the injected clock between calls — an attempt() that
-// itself never returns (a stalled RPC; the guarded HTTP client only bounds
-// dialing, never the full round trip) could block retryOnUnavailable
-// forever. attempt here blocks on <-ctx.Done() and returns ctx.Err(), so the
+// TestRetryOnUnavailable_DeadlineBoundsHangingAttempt proves budget bounds a
+// HANGING attempt() call in real wall-clock time, not merely the retry
+// DECISION between attempts. The injected clock is checked only between
+// calls, so an attempt() that itself never returns (a stalled RPC; the
+// guarded HTTP client only bounds dialing, never the full round trip) would
+// block retryOnUnavailable forever without the deadline. attempt here blocks on <-ctx.Done() and returns ctx.Err(), so the
 // ONLY thing that can make it return is the dctx deadline
 // (context.WithTimeout(ctx, budget)) firing.
 //

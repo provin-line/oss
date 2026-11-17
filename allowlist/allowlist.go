@@ -1,11 +1,11 @@
 // Package allowlist matches a candidate DID against a trust pattern — the
 // admission decision behind a pipeline's allow-list. It is a distinct
-// responsibility from persistence (store): next-B's UpdateAllowList validation
-// and the last-slice connection-flow admission both consume it.
+// responsibility from persistence (store): the chain manager's UpdateAllowList
+// validation and its peer admission both consume it.
 //
-// A pattern is a dplaax DID glob, segment-aware over the ":"-delimited identifier
-// (D-c5): literal segments match exactly, "*" matches exactly one interior
-// segment, and a trailing "*" matches zero-or-more remaining segments (so
+// A pattern is a dplaax DID glob, segment-aware over the ":"-delimited identifier:
+// literal segments match exactly, "*" matches exactly one interior segment, and a
+// trailing "*" matches zero-or-more remaining segments (so
 // "did:dplaax:*:org:acme:*" matches the acme owner DID and everything beneath
 // it). The did:dplaax method prefix must be literal. path.Match is deliberately
 // not used: it treats ":" as an ordinary character, so its "*" would span
@@ -68,7 +68,8 @@ func ValidatePattern(pattern string) error {
 
 // parsePattern splits and validates a pattern into its segments. The method
 // prefix must be the literal "did:dplaax"; every remaining segment must be either
-// a bare "*" or a dplaax safe-segment literal; and a fixed pattern (one with no
+// a bare "*" or a dplaax safe-segment literal, a registry literal one
+// dplaax.ValidateRegistry takes; and a fixed pattern (one with no
 // trailing "*") must have a length that matches a dplaax DID arity, so it can
 // actually name a DID.
 func parsePattern(pattern string) ([]string, error) {
@@ -93,6 +94,10 @@ func parsePattern(pattern string) ([]string, error) {
 		if !dplaax.IsSafeSegment(seg) {
 			return nil, ErrInvalidPattern
 		}
+	}
+	// A literal registry that dplaax.ValidateRegistry refuses names no DID.
+	if reg := segs[len(methodPrefix)]; reg != "*" && dplaax.ValidateRegistry(reg) != nil {
+		return nil, ErrInvalidPattern
 	}
 	// A pattern with no trailing "*" matches only candidates of exactly its own
 	// length, so it must align to a valid dplaax DID arity — otherwise no DID can

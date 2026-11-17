@@ -59,12 +59,12 @@ var (
 )
 
 // BuildServer assembles the HTTP server, its listen function, and a serving-mode
-// label from the transport posture (F6). It serves TLS directly when
+// label from the transport posture. It serves TLS directly when
 // cert-file/key-file are configured (h2 over TLS via ALPN), else cleartext h2c.
 // The boot guard (core.LoadCoreConfig) has already ensured any non-loopback
 // cleartext listener was explicitly acknowledged. On both paths, and for HTTP/1
 // requests (also one asking to upgrade to h2c) and HTTP/2 streams alike, every
-// request passes boundReads (the F0 pre-Connect size bound and the body stall
+// request passes boundReads (the pre-Connect size bound and the body stall
 // bound) before handler; the shared HTTP2Server timeouts and maxHeaderBytes
 // apply on both.
 func BuildServer(coreCfg *core.CoreConfig, tlsConf *tls.Config, handler http.Handler, maxHTTPRequestBytes int) (*http.Server, func() error, string, error) {

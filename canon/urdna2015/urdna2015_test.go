@@ -218,7 +218,7 @@ func TestCanonicalize_NumericMember_Rejected(t *testing.T) {
 
 // A top-level array element that is not an object is rejected: JSON-LD
 // expansion silently drops free-floating scalars, so [{...}, "rider"] would
-// canonicalize identically to [{...}] — an unsigned rider (Codex P1).
+// canonicalize identically to [{...}] — an unsigned rider.
 func TestCanonicalize_TopLevelArrayScalar_Rejected(t *testing.T) {
 	c := w3cCanonicalizer(t)
 	node := map[string]any{

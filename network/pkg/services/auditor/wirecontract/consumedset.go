@@ -13,8 +13,8 @@ import (
 // set that is empty after dedup and, per member, enforces the FULL content-address grammar
 // (vc.IsContentAddress: "sha256:<64 lowercase hex>") — not merely a non-empty-string check. Both
 // auditor.ReceiptStore implementations (auditor.MemReceiptStore and filestore.ReceiptStore) call
-// this (via the auditor package's back-compat alias — PR3b Task 2 moved the definition into this
-// leaf package) so canonicalization cannot drift between them, and auditor.EvidenceService.Register
+// this (via the auditor package's back-compat alias of this leaf-package definition) so
+// canonicalization cannot drift between them, and auditor.EvidenceService.Register
 // calls it too, so an authorized RegisterEvidence caller cannot pin an irreversible first-write-wins
 // receipt with a malformed member — every reader downstream (GetConsumedSources, the
 // source-commitment auditor) would otherwise treat it as damage. The grammar's fixed length and
@@ -23,7 +23,7 @@ import (
 // "\n" (or vary in length) would let two DIFFERENT consumed sets join to the SAME signed bytes —
 // enforcing the grammar here is what rules that out, not an assumption at the join site.
 //
-// Moved out of the auditor service root into this leaf package (PR3b Task 2) so a client-only
+// It lives in this leaf package, not the auditor service root, so a client-only
 // consumer of the wire contract need not import the service root; the auditor package keeps a
 // var alias (see auditor/receipt.go) so existing call sites are unchanged.
 func CanonicalizeConsumedSet(hashes []string) ([]string, error) {

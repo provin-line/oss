@@ -8,12 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/o3co/protobuf.interceptors/endpoint"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	"github.com/provin-line/oss/did"
@@ -22,16 +25,21 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/auth"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/memstore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/storehandler"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // nodeDID signs every proof in this suite AND is the common-case owner_did
 // (a producing process retains its own emitted payload).
+// nodeAudience is the audience of the store node's verifier.
+const nodeAudience = "node.example"
+
 const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe-a"
 
 func jwk(pub []byte) map[string]any {
@@ -76,13 +84,21 @@ func signer(t *testing.T, subject string) (crypto.Signer, []byte) {
 // calls so a test can observe finalization without inspecting store internals.
 type spyWriter struct {
 	payloadresolver.PayloadWriter
-	commits int
-	aborts  int
+	commits  int
+	aborts   int
+	commitAs string
 }
 
+// Commit commits the bytes and returns their address, or commitAs in its
+// place when it is set: a store that answers another address than the one
+// the bytes have.
 func (w *spyWriter) Commit() (string, error) {
 	w.commits++
-	return w.PayloadWriter.Commit()
+	addr, err := w.PayloadWriter.Commit()
+	if err == nil && w.commitAs != "" {
+		return w.commitAs, nil
+	}
+	return addr, err
 }
 
 func (w *spyWriter) Abort() error {
@@ -95,8 +111,9 @@ func (w *spyWriter) Abort() error {
 // returns. It also satisfies storehandler.WriterStore structurally (the only
 // method that interface needs).
 type spyStore struct {
-	inner payloadresolver.Store
-	last  *spyWriter
+	inner    payloadresolver.Store
+	last     *spyWriter
+	commitAs string
 }
 
 func (s *spyStore) StoreWriter(ctx context.Context, ownerDID string) (payloadresolver.PayloadWriter, error) {
@@ -104,7 +121,7 @@ func (s *spyStore) StoreWriter(ctx context.Context, ownerDID string) (payloadres
 	if err != nil {
 		return nil, err
 	}
-	s.last = &spyWriter{PayloadWriter: w}
+	s.last = &spyWriter{PayloadWriter: w, commitAs: s.commitAs}
 	return s.last, nil
 }
 
@@ -118,7 +135,7 @@ type harness struct {
 	signer crypto.Signer
 	client *client.Resolver
 	url    string
-	httpc  connect.HTTPClient
+	httpc  *http.Client
 }
 
 func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOption) *harness {
@@ -129,6 +146,7 @@ func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOpti
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -150,7 +168,7 @@ func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOpti
 	return &harness{
 		store:  st,
 		signer: sgn,
-		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL}),
+		client: client.New(client.Config{Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, StoreAudience: nodeAudience}),
 		url:    srv.URL,
 		httpc:  httpc,
 	}
@@ -159,22 +177,17 @@ func newHarness(t *testing.T, maxPayloadSize uint64, opts ...connect.HandlerOpti
 // mustProof signs a RetainPayload metadata proof directly (bypassing
 // client.Resolver.Retain), for driving raw/malformed frame sequences the
 // high-level client would never produce.
-func mustProof(t *testing.T, sgn crypto.Signer, signerDID, ownerDID string, size uint64) *chainpb.AuthProof {
+func mustProof(t *testing.T, sgn crypto.Signer, signerDID, ownerDID string, size uint64, addr contentaddress.Address) *chainpb.AuthProof {
 	t.Helper()
 	nonce, err := wireauth.NewNonce()
 	if err != nil {
 		t.Fatalf("NewNonce: %v", err)
 	}
-	p, err := wireauth.Sign(sgn, signerDID, payloadresolver.OpRetainPayload, payloadresolver.RetainPayloadFields(ownerDID, size), nonce, time.Now())
+	p, err := wireauth.Sign(sgn, wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size, addr), wireauth.Claims{SignerDID: signerDID, Audience: nodeAudience, Nonce: nonce, IssuedAt: time.Now()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}
+	return authproof.Encode(p)
 }
 
 // TestRetainPayload_RoundTrip_HappyPath streams via the real client and reads
@@ -184,7 +197,7 @@ func TestRetainPayload_RoundTrip_HappyPath(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	payload := []byte("the produced data bytes, streamed incrementally over the wire")
 
-	addr, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	addr, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if err != nil {
 		t.Fatalf("Retain: %v", err)
 	}
@@ -210,12 +223,12 @@ func TestRetainPayload_RoundTrip_HappyPath(t *testing.T) {
 func TestRetainPayload_MultiChunkAssembly(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	small := client.New(client.Config{
-		Signer: h.signer, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url,
+		Signer: h.signer, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url, StoreAudience: nodeAudience,
 		RetainChunkSize: 16, // forces many frames for a payload well over 16 bytes
 	})
 	payload := bytes.Repeat([]byte("0123456789"), 20) // 200 bytes, 16-byte chunks
 
-	addr, err := small.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	addr, err := small.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if err != nil {
 		t.Fatalf("Retain: %v", err)
 	}
@@ -235,7 +248,7 @@ func TestRetainPayload_OwnerMismatch_PermissionDenied(t *testing.T) {
 	const claimedOwner = "did:dplaax:poc.dplaax.dev:org:other:pipeline:pipe-b"
 	payload := []byte("bytes claimed under someone else's owner_did")
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), claimedOwner, uint64(len(payload)))
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), claimedOwner, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("owner mismatch: code = %v (%v), want PermissionDenied", connect.CodeOf(err), err)
 	}
@@ -248,10 +261,10 @@ func TestRetainPayload_OwnerMismatch_PermissionDenied(t *testing.T) {
 func TestRetainPayload_WireauthFail_Unauthenticated(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	wrongSigner, _ := signer(t, nodeDID) // a DIFFERENT keypair than the one the verifier's resolver bound to nodeDID
-	bad := client.New(client.Config{Signer: wrongSigner, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url})
+	bad := client.New(client.Config{Signer: wrongSigner, SignerDID: nodeDID, HTTPClient: h.httpc, StoreEndpoint: h.url, StoreAudience: nodeAudience})
 
 	payload := []byte("bytes signed with the wrong key")
-	_, err := bad.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	_, err := bad.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("mismatched key: code = %v, want Unauthenticated", connect.CodeOf(err))
 	}
@@ -264,7 +277,7 @@ func TestRetainPayload_WireauthFail_Unauthenticated(t *testing.T) {
 func TestRetainPayload_ZeroDeclaredSize_InvalidArgument(t *testing.T) {
 	h := newHarness(t, 1<<20)
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(nil), nodeDID, 0)
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(nil), nodeDID, 0, contentaddress.Of(nil))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("declared_size=0: code = %v (%v), want InvalidArgument", connect.CodeOf(err), err)
 	}
@@ -281,7 +294,7 @@ func TestRetainPayload_CumulativeOverrun_ResourceExhausted_AbortObserved(t *test
 	h := newHarness(t, 1<<20)
 	payload := bytes.Repeat([]byte("x"), 100)
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, 50)
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, 50, contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Fatalf("overrun: code = %v (%v), want ResourceExhausted", connect.CodeOf(err), err)
 	}
@@ -301,7 +314,7 @@ func TestRetainPayload_Undershoot_InvalidArgument_AbortObserved(t *testing.T) {
 	h := newHarness(t, 1<<20)
 	payload := []byte("short")
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload))+10)
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload))+10, contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("undershoot: code = %v (%v), want InvalidArgument", connect.CodeOf(err), err)
 	}
@@ -320,7 +333,7 @@ func TestRetainPayload_DeclaredSizeExceedsQuota_ResourceExhausted(t *testing.T) 
 	h := newHarness(t, 10) // tiny quota
 	payload := []byte("this payload's declared size is above the tiny quota")
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Fatalf("quota: code = %v (%v), want ResourceExhausted", connect.CodeOf(err), err)
 	}
@@ -359,9 +372,10 @@ func TestRetainPayload_DoubleMetadata_InvalidArgument_AbortObserved(t *testing.T
 
 	meta := &payloadpb.RetainPayloadRequest{Frame: &payloadpb.RetainPayloadRequest_Metadata{
 		Metadata: &payloadpb.RetainPayloadMetadata{
-			OwnerDid:     nodeDID,
-			DeclaredSize: 5,
-			AuthProof:    mustProof(t, h.signer, nodeDID, nodeDID, 5),
+			OwnerDid:       nodeDID,
+			DeclaredSize:   5,
+			AuthProof:      mustProof(t, h.signer, nodeDID, nodeDID, 5, contentaddress.Of([]byte("12345"))),
+			ContentAddress: contentaddress.Of([]byte("12345")).String(),
 		},
 	}}
 	if err := stream.Send(meta); err != nil {
@@ -391,7 +405,7 @@ func TestRetainPayload_PerChunkReadCap_ResourceExhausted_AbortObserved(t *testin
 	h := newHarness(t, 1<<20, connect.WithReadMaxBytes(readCap))
 	payload := bytes.Repeat([]byte("y"), 5000) // one chunk frame (default RetainChunkSize) >> readCap
 
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Fatalf("per-chunk cap: code = %v (%v), want ResourceExhausted", connect.CodeOf(err), err)
 	}
@@ -400,7 +414,7 @@ func TestRetainPayload_PerChunkReadCap_ResourceExhausted_AbortObserved(t *testin
 	}
 }
 
-// --- P1-C: RetainPayload is mounted behind L1 authz IN ADDITION to the L2
+// --- RetainPayload is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises (newHarness deliberately mounts NO
 // L1 interceptor, isolating the wireauth layer). These tests add it back —
 // production's actual mounting (internal/netcompose.BuildHandler's
@@ -423,6 +437,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *har
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -444,7 +459,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *har
 		store:  st,
 		signer: sgn,
 		client: client.New(client.Config{
-			Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, Bearer: bearer,
+			Signer: sgn, SignerDID: nodeDID, HTTPClient: httpc, StoreEndpoint: srv.URL, StoreAudience: nodeAudience, Bearer: bearer,
 		}),
 		url:   srv.URL,
 		httpc: httpc,
@@ -459,7 +474,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule, bearer string) *har
 func TestRetain_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "payloads", Action: "retain"}}, "test-l1-token")
 	payload := []byte("l1-gated retain payload")
-	if _, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload))); err != nil {
+	if _, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload)); err != nil {
 		t.Fatalf("Retain with Bearer set: %v", err)
 	}
 }
@@ -470,8 +485,140 @@ func TestRetain_BearerPresented_L1Passes(t *testing.T) {
 func TestRetain_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "payloads", Action: "retain"}}, "")
 	payload := []byte("should never be retained")
-	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)))
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
+	}
+}
+
+// A retain whose bytes are not the ones its declared content address names
+// is refused before the store keeps them: InvalidArgument, the writer
+// Aborted, and nothing held at either address.
+func TestRetainPayload_ContentAddressMismatch_InvalidArgument_AbortObserved(t *testing.T) {
+	h := newHarness(t, 1<<20)
+	payload := []byte("the bytes the stream carries")
+	declared := contentaddress.Of([]byte("other bytes"))
+
+	_, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), declared)
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("mismatched content address: code = %v (%v), want InvalidArgument", connect.CodeOf(err), err)
+	}
+	if h.store.last == nil || h.store.last.aborts != 1 || h.store.last.commits != 0 {
+		t.Errorf("writer commits/aborts = %+v, want exactly one Abort and no Commit", h.store.last)
+	}
+	for _, addr := range []contentaddress.Address{declared, contentaddress.Of(payload)} {
+		if _, _, err := h.store.inner.Get(addr.String()); err == nil {
+			t.Errorf("the store holds %s after a refused retain", addr)
+		}
+	}
+}
+
+// sendRaw drives a raw RetainPayload stream: one metadata frame, then payload
+// as one chunk, and returns the call's error.
+func sendRaw(t *testing.T, h *harness, meta *payloadpb.RetainPayloadMetadata, payload []byte) error {
+	t.Helper()
+	raw := payloadpbconnect.NewPayloadStoreServiceClient(h.httpc, h.url)
+	stream := raw.RetainPayload(context.Background())
+	if err := stream.Send(&payloadpb.RetainPayloadRequest{Frame: &payloadpb.RetainPayloadRequest_Metadata{Metadata: meta}}); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("send metadata: %v", err)
+	}
+	if err := stream.Send(&payloadpb.RetainPayloadRequest{Frame: &payloadpb.RetainPayloadRequest_Chunk{Chunk: payload}}); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("send chunk: %v", err)
+	}
+	_, err := stream.CloseAndReceive()
+	return err
+}
+
+// A metadata frame whose content address is missing, or not spelled as an
+// address, is refused before any writer is opened.
+func TestRetainPayload_ContentAddressMissingOrMalformed_InvalidArgument(t *testing.T) {
+	payload := []byte("payload")
+	addr := contentaddress.Of(payload)
+	for name, declared := range map[string]string{
+		"missing":    "",
+		"malformed":  "sha256:not-hex",
+		"upper case": strings.ToUpper(addr.String()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, 1<<20)
+			err := sendRaw(t, h, &payloadpb.RetainPayloadMetadata{
+				OwnerDid:       nodeDID,
+				DeclaredSize:   uint64(len(payload)),
+				AuthProof:      mustProof(t, h.signer, nodeDID, nodeDID, uint64(len(payload)), addr),
+				ContentAddress: declared,
+			}, payload)
+			if connect.CodeOf(err) != connect.CodeInvalidArgument {
+				t.Fatalf("content address %q: code = %v (%v), want InvalidArgument", declared, connect.CodeOf(err), err)
+			}
+			if !strings.Contains(err.Error(), "content_address") {
+				t.Errorf("content address %q: %v, want the refusal to name content_address", declared, err)
+			}
+			if h.store.last != nil {
+				t.Errorf("a writer was opened for a frame refused before its proof: %+v", h.store.last)
+			}
+		})
+	}
+}
+
+// A proof that does not cover the frame's content address does not verify,
+// and the store keeps nothing: one signed over owner_did and declared_size
+// alone, and one signed for another address.
+func TestRetainPayload_ProofNotCoveringTheContentAddress_Unauthenticated(t *testing.T) {
+	payload := []byte("payload")
+	addr := contentaddress.Of(payload)
+	for name, proof := range map[string]func(*testing.T, *harness) *chainpb.AuthProof{
+		"without the address": func(t *testing.T, h *harness) *chainpb.AuthProof {
+			return proofWithoutAddress(t, h, uint64(len(payload)))
+		},
+		"for another address": func(t *testing.T, h *harness) *chainpb.AuthProof {
+			return mustProof(t, h.signer, nodeDID, nodeDID, uint64(len(payload)), contentaddress.Of([]byte("another")))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, 1<<20)
+			err := sendRaw(t, h, &payloadpb.RetainPayloadMetadata{
+				OwnerDid:       nodeDID,
+				DeclaredSize:   uint64(len(payload)),
+				AuthProof:      proof(t, h),
+				ContentAddress: addr.String(),
+			}, payload)
+			if connect.CodeOf(err) != connect.CodeUnauthenticated {
+				t.Fatalf("code = %v (%v), want Unauthenticated", connect.CodeOf(err), err)
+			}
+			if h.store.last != nil {
+				t.Errorf("a writer was opened for a proof that does not verify: %+v", h.store.last)
+			}
+		})
+	}
+}
+
+// proofWithoutAddress signs a RetainPayload proof as nodeDID over owner_did
+// and declared_size alone, without the content address.
+func proofWithoutAddress(t *testing.T, h *harness, size uint64) *chainpb.AuthProof {
+	t.Helper()
+	nonce, err := wireauth.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]any{"owner_did": nodeDID, "declared_size": strconv.FormatUint(size, 10)}
+	p, err := wireauth.Sign(h.signer, wirecontract.OpRetainPayload, fields, wireauth.Claims{SignerDID: nodeDID, Audience: nodeAudience, Nonce: nonce, IssuedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authproof.Encode(p)
+}
+
+// Retain refuses a store's answer that is not the address it declared: the
+// caller does not get an address other than the one its proof covers.
+func TestRetain_RefusesAnotherAddressInTheStoresAnswer(t *testing.T) {
+	h := newHarness(t, 1<<20)
+	h.store.commitAs = contentaddress.Of([]byte("other bytes")).String()
+	payload := []byte("payload")
+	got, err := h.client.Retain(context.Background(), bytes.NewReader(payload), nodeDID, uint64(len(payload)), contentaddress.Of(payload))
+	if err == nil {
+		t.Fatalf("Retain = %q, nil; want an error for the store's answer %q", got, h.store.commitAs)
+	}
+	if got != "" {
+		t.Errorf("Retain returned %q with its error, want \"\"", got)
 	}
 }

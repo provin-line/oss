@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestProdDeps_ExcludeBrokerServer is the automated guard for D-n7: the
+// TestProdDeps_ExcludeBrokerServer is the automated guard that the
 // production import graph of infra/nats must NOT contain the nats-server or the
 // nats.go client — those are test-only (the embedded isolation e2e). `go list
 // -deps` lists a package's NON-test dependencies, so any appearance here means a
@@ -27,7 +27,7 @@ func TestProdDeps_ExcludeBrokerServer(t *testing.T) {
 		dep := strings.TrimSpace(line)
 		for _, f := range forbidden {
 			if dep == f || strings.HasPrefix(dep, f+"/") {
-				t.Errorf("production deps of infra/nats include %q — broker pulled into the prod graph (D-n7)", dep)
+				t.Errorf("production deps of infra/nats include %q — broker pulled into the prod graph", dep)
 			}
 		}
 	}

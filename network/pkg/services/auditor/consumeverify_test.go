@@ -10,7 +10,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// --- fakes for the consume-locus verifier (slice-17q) ---
+// --- fakes for the consume-locus verifier ---
 
 type fakeSourceResolver struct {
 	byHash map[string]*vc.PipelinePassCredential
@@ -172,7 +172,7 @@ func TestConsumeVerify_FullFetch_VerifierFailed(t *testing.T) {
 }
 
 // Full fetch but the verifier returns Indeterminate (fetched set misses a claimed issuer) →
-// Indeterminate/incomplete — recorded VERBATIM (Codex #2).
+// Indeterminate/incomplete — recorded VERBATIM.
 func TestConsumeVerify_FullFetch_VerifierIncomplete(t *testing.T) {
 	cA, hA := srcCred(t, "did:example:a")
 	scv := &fakeSCV{state: vc.ConfidenceIndeterminate}
@@ -218,7 +218,7 @@ func TestConsumeVerify_Unavailable_Indeterminate(t *testing.T) {
 }
 
 // Context cancellation during resolve → abort: return the ctx error and NO verdict (matching
-// the emit-locus runner discipline, Codex #4).
+// the emit-locus runner discipline).
 func TestConsumeVerify_CtxCancel_AbortsNoVerdict(t *testing.T) {
 	_, hA := srcCred(t, "did:example:a")
 	scv := &fakeSCV{state: vc.ConfidenceVerified}

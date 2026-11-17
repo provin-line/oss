@@ -1,0 +1,304 @@
+diff --git a/compile_test.go b/compile_test.go
+index 0961a6e..139cd99 100644
+--- a/compile_test.go
++++ b/compile_test.go
+@@ -5,6 +5,7 @@ package jsonschema_test
+ import (
+ 	"errors"
+ 	"fmt"
++	"math"
+ 	"runtime"
+ 	"strings"
+ 	"testing"
+@@ -192,3 +193,147 @@ func TestCompile_RefusesANumberKeywordItCannotRead(t *testing.T) {
+ 		t.Error(`{"minimum": 1e1000000} accepts 5`)
+ 	}
+ }
++
++// An integer keyword reads an integer above math.MaxInt as math.MaxInt, and
++// one below math.MinInt as math.MinInt, under every draft that has it; a
++// number big.Rat cannot read is a *LargeNumberError at the keyword, and a
++// value that is not an integer a *NonIntegerError.
++func TestCompile_ReadsAnIntegerKeywordBeyondIntAsTheNearestInt(t *testing.T) {
++	const above, below = "18446744073709551616", "-18446744073709551616" // ±2^64
++	for _, c := range []struct {
++		schema string
++		field  func(*jsonschema.Schema) *int
++		want   int
++	}{
++		{`{"minLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
++		{`{"minLength": 9223372036854775808}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
++		{`{"maxLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxLength }, math.MaxInt},
++		{`{"minItems": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinItems }, math.MaxInt},
++		{`{"maxItems": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxItems }, math.MaxInt},
++		{`{"minProperties": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinProperties }, math.MaxInt},
++		{`{"maxProperties": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxProperties }, math.MaxInt},
++		{`{"contains": {}, "minContains": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinContains }, math.MaxInt},
++		{`{"contains": {}, "maxContains": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MaxContains }, math.MaxInt},
++		{`{"$schema": "http://json-schema.org/draft-04/schema#", "minLength": ` + above + `}`, func(s *jsonschema.Schema) *int { return s.MinLength }, math.MaxInt},
++		{`{"minLength": 3}`, func(s *jsonschema.Schema) *int { return s.MinLength }, 3},
++		// 2^32 lies within int64 and above a 32-bit int.
++		{`{"minLength": 4294967296}`, func(s *jsonschema.Schema) *int { return s.MinLength }, int(min(int64(1)<<32, int64(math.MaxInt)))},
++	} {
++		sch, err := compile(c.schema)
++		if err != nil {
++			t.Errorf("%s: %v", c.schema, err)
++			continue
++		}
++		if got := c.field(sch); got == nil || *got != c.want {
++			t.Errorf("%s: read as %s, want %d", c.schema, intText(got), c.want)
++		}
++	}
++
++	// The metaschema refuses an integer keyword below zero and a number it
++	// cannot read, but the library does not check a schema located below
++	// json-schema.org against it: there the compiler alone reads them.
++	compileAt := func(schema string) (*jsonschema.Schema, error) {
++		const loc = "https://json-schema.org/integer-keyword.json"
++		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(schema))
++		if err != nil {
++			return nil, err
++		}
++		c := jsonschema.NewCompiler()
++		if err := c.AddResource(loc, doc); err != nil {
++			return nil, err
++		}
++		return c.Compile(loc)
++	}
++	for _, c := range []struct {
++		value string
++		want  int
++	}{
++		{below, math.MinInt},
++		// -2^32 lies within int64 and below a 32-bit int.
++		{"-4294967296", int(max(-int64(1)<<32, int64(math.MinInt)))},
++	} {
++		if sch, err := compileAt(`{"maxLength": ` + c.value + `}`); err != nil || sch.MaxLength == nil || *sch.MaxLength != c.want {
++			t.Errorf("maxLength %s below json-schema.org: %v, read as %s, want %d", c.value, err, intText(maxLengthOf(sch)), c.want)
++		}
++	}
++	for _, keyword := range []string{"minLength", "maxItems", "minProperties"} {
++		_, err := compileAt(`{"` + keyword + `": ` + large + `}`)
++		var lne *jsonschema.LargeNumberError
++		if !errors.As(err, &lne) || !strings.HasSuffix(lne.URL, "#/"+keyword) {
++			t.Errorf("%s %s below json-schema.org: %v, want a *LargeNumberError at /%s", keyword, large, err, keyword)
++		}
++	}
++
++	// The metaschema refuses an integer keyword whose value is not an
++	// integer; below json-schema.org the compiler alone refuses it, with a
++	// *NonIntegerError at the keyword, rather than reading it as absent. A
++	// number with no fraction is an integer.
++	for _, c := range []struct{ keyword, value string }{
++		{"minLength", "1.5"},
++		{"maxLength", "-0.5"},
++		{"minItems", "2.5"},
++		{"maxItems", `"5"`},
++		{"minProperties", "true"},
++		{"maxProperties", "null"},
++		{"minContains", "[1]"},
++		{"maxContains", `{"a": 1}`},
++	} {
++		schema := `{"` + c.keyword + `": ` + c.value + `}`
++		if c.keyword == "minContains" || c.keyword == "maxContains" {
++			schema = `{"contains": {}, "` + c.keyword + `": ` + c.value + `}`
++		}
++		_, err := compileAt(schema)
++		var nie *jsonschema.NonIntegerError
++		if !errors.As(err, &nie) || !strings.HasSuffix(nie.URL, "#/"+c.keyword) {
++			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError at /%s", schema, err, c.keyword)
++		}
++	}
++	if sch, err := compileAt(`{"minLength": 2.0}`); err != nil || sch.MinLength == nil || *sch.MinLength != 2 {
++		t.Errorf(`{"minLength": 2.0} below json-schema.org: %v, want it read as 2`, err)
++	}
++	// Under draft 4 and draft 2019-09 too.
++	for _, schema := range []string{
++		`{"$schema": "http://json-schema.org/draft-04/schema#", "minLength": 1.5}`,
++		`{"$schema": "https://json-schema.org/draft/2019-09/schema", "contains": {}, "minContains": 1.5}`,
++	} {
++		var nie *jsonschema.NonIntegerError
++		if _, err := compileAt(schema); !errors.As(err, &nie) {
++			t.Errorf("%s below json-schema.org: %v, want a *NonIntegerError", schema, err)
++		}
++	}
++	// A document made of Go values: a float64 with a fraction is refused.
++	c := jsonschema.NewCompiler()
++	const loc = "https://json-schema.org/integer-keyword-go.json"
++	if err := c.AddResource(loc, map[string]any{"minLength": 1.5}); err != nil {
++		t.Fatal(err)
++	}
++	var nie *jsonschema.NonIntegerError
++	if _, err := c.Compile(loc); !errors.As(err, &nie) {
++		t.Errorf("a float64 1.5 below json-schema.org: %v, want a *NonIntegerError", err)
++	}
++	// The error writes the value as JSON writes it, so a string reads as one.
++	if _, err := compileAt(`{"maxItems": "5"}`); err == nil || !strings.Contains(err.Error(), `"5"`) {
++		t.Errorf(`{"maxItems": "5"}: %v, want the value written as the string "5"`, err)
++	}
++	// Elsewhere, the metaschema refuses such a value before the compiler
++	// reads the keyword.
++	if _, err := compile(`{"minLength": 1.5}`); err == nil || errors.As(err, &nie) {
++		t.Errorf(`{"minLength": 1.5}: %v, want the metaschema's refusal`, err)
++	}
++}
++
++// intText is *p, or "nil".
++func intText(p *int) string {
++	if p == nil {
++		return "nil"
++	}
++	return fmt.Sprint(*p)
++}
++
++// maxLengthOf is s.MaxLength, or nil for no schema.
++func maxLengthOf(s *jsonschema.Schema) *int {
++	if s == nil {
++		return nil
++	}
++	return s.MaxLength
++}
+diff --git a/objcompiler.go b/objcompiler.go
+index e432da9..25f4c45 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -3,6 +3,7 @@ package jsonschema
+ import (
+ 	"encoding/json"
+ 	"fmt"
++	"math"
+ 	"math/big"
+ 	"strconv"
+ )
+@@ -168,8 +169,12 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 			return err // number keyword
+ 		}
+ 
+-		s.MinLength = c.intVal("minLength")
+-		s.MaxLength = c.intVal("maxLength")
++		if s.MinLength, err = c.intKeyword("minLength"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
++		if s.MaxLength, err = c.intKeyword("maxLength"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
+ 		if pat := c.strVal("pattern"); pat != nil {
+ 			s.Pattern, err = c.c.roots.regexpEngine(*pat)
+ 			if err != nil {
+@@ -177,12 +182,20 @@ func (c *objCompiler) compileDraft4(s *Schema) error {
+ 			}
+ 		}
+ 
+-		s.MinItems = c.intVal("minItems")
+-		s.MaxItems = c.intVal("maxItems")
++		if s.MinItems, err = c.intKeyword("minItems"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
++		if s.MaxItems, err = c.intKeyword("maxItems"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
+ 		s.UniqueItems = c.boolean("uniqueItems")
+ 
+-		s.MaxProperties = c.intVal("maxProperties")
+-		s.MinProperties = c.intVal("minProperties")
++		if s.MaxProperties, err = c.intKeyword("maxProperties"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
++		if s.MinProperties, err = c.intKeyword("minProperties"); err != nil { // integer keyword
++			return err // integer keyword
++		} // integer keyword
+ 		if arr := c.arrVal("required"); arr != nil {
+ 			s.Required = toStrings(arr)
+ 		}
+@@ -281,8 +294,12 @@ func (c *objCompiler) compileDraft2019(s *Schema) error {
+ 
+ 	if c.hasVocab("validation") {
+ 		if s.Contains != nil {
+-			s.MinContains = c.intVal("minContains")
+-			s.MaxContains = c.intVal("maxContains")
++			if s.MinContains, err = c.intKeyword("minContains"); err != nil { // integer keyword
++				return err // integer keyword
++			} // integer keyword
++			if s.MaxContains, err = c.intKeyword("maxContains"); err != nil { // integer keyword
++				return err // integer keyword
++			} // integer keyword
+ 		}
+ 		if m := c.objVal("dependentRequired"); m != nil {
+ 			s.DependentRequired = map[string][]string{}
+@@ -522,13 +539,31 @@ func (c *objCompiler) numberKeyword(pname string) (*big.Rat, error) { // number
+ 	return nil, nil // number keyword
+ } // number keyword
+ 
+-func (c *objCompiler) intVal(pname string) *int {
+-	if n := c.numVal(pname); n != nil && n.IsInt() {
+-		n := int(n.Num().Int64())
+-		return &n
+-	}
+-	return nil
+-}
++// intKeyword reads the integer keyword pname: an integer within int as
++// itself, one above math.MaxInt as math.MaxInt, one below math.MinInt as
++// math.MinInt. A number big.Rat cannot read is a *LargeNumberError, and a
++// value that is not an integer is a *NonIntegerError.
++func (c *objCompiler) intKeyword(pname string) (*int, error) { // integer keyword
++	v, ok := c.obj[pname] // integer keyword
++	if !ok {              // integer keyword
++		return nil, nil // integer keyword
++	} // integer keyword
++	n, err := c.numberKeyword(pname) // integer keyword
++	if err != nil {                  // integer keyword
++		return nil, err // integer keyword
++	} // integer keyword
++	if n == nil || !n.IsInt() { // integer keyword
++		return nil, &NonIntegerError{URL: c.up.format(pname), Value: v} // integer keyword
++	} // integer keyword
++	i := math.MaxInt         // integer keyword
++	switch num := n.Num(); { // integer keyword
++	case num.IsInt64() && num.Int64() <= math.MaxInt && num.Int64() >= math.MinInt: // integer keyword
++		i = int(num.Int64()) // integer keyword
++	case num.Sign() < 0: // integer keyword
++		i = math.MinInt // integer keyword
++	} // integer keyword
++	return &i, nil // integer keyword
++} // integer keyword
+ 
+ func (c *objCompiler) objVal(pname string) map[string]any {
+ 	v, ok := c.obj[pname]
+@@ -569,8 +604,10 @@ func (e *InvalidRegexError) Error() string {
+ // -- number keyword
+ 
+ // LargeNumberError reports a number keyword (minimum, maximum,
+-// exclusiveMinimum, exclusiveMaximum, multipleOf) whose number big.Rat cannot
+-// read, such as 1e1000001, as kind.LargeNumber reports one in a value.
++// exclusiveMinimum, exclusiveMaximum, multipleOf) or an integer keyword
++// (minLength, maxLength, minItems, maxItems, minProperties, maxProperties,
++// minContains, maxContains) whose number big.Rat cannot read, such as
++// 1e1000001, as kind.LargeNumber reports one in a value.
+ type LargeNumberError struct { // number keyword
+ 	URL   string // number keyword
+ 	Value any    // number keyword
+@@ -580,6 +617,24 @@ func (e *LargeNumberError) Error() string { // number keyword
+ 	return fmt.Sprintf("number too large to parse %v at %q", e.Value, e.URL) // number keyword
+ } // number keyword
+ 
++// NonIntegerError reports an integer keyword (minLength, maxLength,
++// minItems, maxItems, minProperties, maxProperties, minContains,
++// maxContains) whose value is not an integer: a number with a fraction, or a
++// value that is not a number. A number with no fraction, such as 2.0, is an
++// integer.
++type NonIntegerError struct { // integer keyword
++	URL   string // integer keyword
++	Value any    // integer keyword
++} // integer keyword
++
++func (e *NonIntegerError) Error() string { // integer keyword
++	value := fmt.Sprint(e.Value)                     // integer keyword
++	if b, err := json.Marshal(e.Value); err == nil { // integer keyword
++		value = string(b) // integer keyword
++	} // integer keyword
++	return fmt.Sprintf("integer keyword holds %s, which is not an integer, at %q", value, e.URL) // integer keyword
++} // integer keyword
++
+ // --
+ 
+ func toStrings(arr []any) []string {

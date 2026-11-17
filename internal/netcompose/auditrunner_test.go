@@ -21,15 +21,8 @@ const ingressTestIssuer = "did:dplaax:reg:org:upstream:pipeline:p1:process:proc1
 // makeIngressCred builds a PipelinePassCredential for this file's runner tests.
 // When prevAddr is non-empty it is set as previousCredential in credentialSubject.
 //
-// Originally duplicated from cmd/standalone/ingressstore_test.go's helper of
-// the same name (Task 4 moved this file into internal/netcompose beside the
-// code it exercises, but that package's own tests still needed a copy too,
-// and identifiers declared in a _test.go file are invisible outside that
-// package's own test binary — there is no alias (compat.go or otherwise)
-// that reaches a _test.go symbol across a package boundary). cmd/standalone
-// is gone (PR3c), but this copy remains this package's own fixture. Kept
-// byte-for-byte equivalent to the original (only the issuer DID constant's
-// name changed, to avoid implying it is ingress-store-specific).
+// Identifiers declared in a _test.go file are invisible outside that
+// package's own test binary, so this package keeps its own fixture.
 func makeIngressCred(t *testing.T, prevAddr any) *vc.PipelinePassCredential {
 	t.Helper()
 	subject := map[string]any{"pipelineId": "p1", "processId": "proc1"}
@@ -60,7 +53,7 @@ func auditCfg(loops []pipelineconfig.LoopConfig) *pipelineconfig.Config {
 	}
 }
 
-// BuildAuditRunner builds unconditionally from its args now (Task 9): the "does this node
+// BuildAuditRunner builds unconditionally from its args: the "does this node
 // have a consuming loop" gate moved to the composition roots (cmd/network always
 // builds, since it never has a local loop to gate on). A
 // source-only or zero-loop config therefore returns a non-nil runner just like a
@@ -168,7 +161,8 @@ func TestAuditRunner_Integration_HoleLivenessFinalize(t *testing.T) {
 // (not a fake ChainVerifier): a complete single-credential chain whose head is unsigned
 // fails signer-authenticity, so VerifyChain returns Failed — the runner records it and
 // dequeues. This exercises the runner→real-chainwalk→real-verifier composition end to end
-// (the Verified path is the same runner code; a full DID graph is the capstones' job).
+// (the Verified path is the same runner code; a full DID graph is left to the
+// end-to-end tests).
 func TestAuditRunner_Integration_RealVerifyTerminal(t *testing.T) {
 	ctx := context.Background()
 	pool := memstore.NewPool()

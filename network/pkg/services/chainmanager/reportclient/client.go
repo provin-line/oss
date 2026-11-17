@@ -1,7 +1,7 @@
 // Package reportclient is the production network client for ChainService's
 // ReportEmitHealth RPC: a publisher self-reports its stripped-publish health
-// with a single wireauth-signed call and receives back the TTL that report
-// stays fresh for.
+// with a single wireauth-signed call and receives back the server's
+// configured TTL, how long a report the server keeps stays fresh.
 //
 // It reproduces the EXACT signed view the handler verifies by calling the
 // SAME shared builder the handler does — wirecontract.OpReportEmitHealth and
@@ -18,6 +18,7 @@ package reportclient
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"connectrpc.com/connect"
@@ -25,7 +26,8 @@ import (
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/internal/origin"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
 )
 
@@ -42,9 +44,20 @@ type Config struct {
 	// BaseURL is the ChainService operator endpoint (L1-authorized — distinct
 	// from the L2 ChainPeerService endpoint peerclient dials).
 	BaseURL string
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint, e.g. core.URLGuard.HTTPClient().
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call. ReportEmitHealth is mounted behind L1 authz IN ADDITION
 	// to the L2 wireauth proof (wirecontract.OpReportEmitHealth) this client
@@ -63,15 +76,21 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       chainpbconnect.ChainServiceClient
 }
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
-		svc: chainpbconnect.NewChainServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		audience:  cfg.Audience,
+		svc: chainpbconnect.NewChainServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
 }
@@ -96,11 +115,13 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // ReportEmitHealth reports healthy for publisherDID (the handler enforces
 // that this equals the configured SignerDID — see Config's doc) and returns
-// the TTL the server says this report stays fresh for. Any Connect error the
-// server returns is returned as-is (no swallowing), mirroring
-// auditclient.RegisterEvidence: the caller sees the real code (e.g.
-// PermissionDenied for a publisherDID that does not match the signing
-// identity).
+// the server's configured TTL: how long a report stays fresh from when the
+// server receives it. The server keeps the report made latest; a report made
+// before the one it holds still succeeds with the TTL but is not kept and
+// refreshes nothing. Any Connect error the server returns is returned as-is
+// (no swallowing), mirroring auditclient.RegisterEvidence: the caller sees
+// the real code (e.g. PermissionDenied for a publisherDID that does not match
+// the signing identity).
 func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, healthy bool) (time.Duration, error) {
 	ap, err := c.proof(wirecontract.ReportEmitHealthFields(publisherDID, healthy))
 	if err != nil {
@@ -118,22 +139,11 @@ func (c *Client) ReportEmitHealth(ctx context.Context, publisherDID string, heal
 }
 
 // proof signs wirecontract.OpReportEmitHealth over fields as the configured
-// identity and converts the wireauth.Proof to the wire AuthProof (issued_at
-// as canonical second-precision UTC RFC 3339 — the exact form the handler's
-// strict codec accepts).
+// identity, in the proof's one wire form (network/internal/authproof).
 func (c *Client) proof(fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, wirecontract.OpReportEmitHealth, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("reportclient: nonce: %w", err)
+		return nil, fmt.Errorf("reportclient: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, wirecontract.OpReportEmitHealth, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("reportclient: sign %s: %w", wirecontract.OpReportEmitHealth, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }

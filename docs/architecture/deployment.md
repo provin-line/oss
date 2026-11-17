@@ -51,8 +51,10 @@ output-subject identity for by-reference payload retain, because
 `PayloadStoreService.RetainPayload` enforces `owner_did == the
 wireauth-proven signer`; a client signing as one shared node identity could
 satisfy at most one loop's retains before every other loop's emission
-aborted. `cmd/pipeline` and `cmd/network` never import each other (AGENTS.md
-layer rule 2) — they interact over the wire only.
+aborted. `RetainPayload` also keeps the payload only when the bytes it
+receives have the content address the proof names. `cmd/pipeline` and
+`cmd/network` never import each other (AGENTS.md layer rule 2) — they
+interact over the wire only.
 
 Evidence writes land as ordinary wire RPCs (`AuditService.RegisterEvidence`,
 `PayloadStoreService.RetainPayload`, `ChainService.ReportEmitHealth`), so
@@ -66,7 +68,7 @@ read), which custodies and serves the verified prefix without ever
 re-signing it. **The shipper now rides `cmd/pipeline`**: that binary ships
 every durable custody log it opens — emission, sink-receipt, and sink-reject
 logs alike — each signed as that log's own checkpoint-signer identity, and
-tears down in a fixed order (tlog-custody spec D8): the data-plane loops
+tears down in a fixed order: the data-plane loops
 drain first, then each shipper gets ONE final flush attempt on a FRESH
 context (never the already-canceled shutdown signal's context) before the
 underlying log files close. A drain that cannot finish within its budget is
@@ -144,6 +146,79 @@ drops the ungranted subject. Nothing errors; the negative capstone tests pin
 exactly this behavior as the *security* posture, which is why the
 operational side needs this note.
 
+### 3. `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH` (the same in every process)
+
+A schema's regular expressions (`pattern`, the names of
+`patternProperties`, a value checked as format `"regex"`) nest their groups
+at most 8 deep; this environment variable sets another bound, from 1 to 32
+(`schema/README.md`). `cmd/network` and `cmd/pipeline` read it once at their
+start, and a value they do not accept stops them there. Processes with
+different values can disagree on the same schema: a network node registers
+a schema that a pipeline refuses, or the other way round. Leave it unset
+everywhere, or set the same value on every network node and pipeline. Keep
+the default and change it only on an inquiry: the bound drives the
+worst-case time of compiling a schema and of validating a payload.
+
+## Wire proof audience
+
+Every L2 wire proof names its **audience**: the registry ID of the node it
+is sent to ([auth.md § L2](../protocol/auth.md#l2--peer-wire-proof-wireauth),
+D-w12). A node accepts only proofs for its own
+`provin.network.registry.id`, compared exactly. A node needs no other
+setting for this.
+
+A pipeline takes each destination's audience from DIDs its configuration
+already holds:
+
+| destination | audience | override (optional) |
+| --- | --- | --- |
+| its own node (`vc-store-endpoint`) | one for every proof it sends there, decided at start: the registry segment every DID it signs those proofs as shares | `provin.network.pipeline.node-registry` |
+| a by-reference upstream (a loop's `upstream-endpoint`) | the registry segment of the loop's `ingress-subject`, or of an aggregate ingress's `subject` | `upstream-registry`, beside that `upstream-endpoint` |
+| a publisher's `#chain-manager` | the registry segment of the publisher DID | — |
+
+Set an override only when the node at that endpoint belongs to another
+registry. A wrong audience fails closed: the node refuses the call as
+`Unauthenticated`, naming the audience it expected. One `upstream-endpoint`
+named for two registries is a boot error, and so are a pipeline's own-node
+signers (its node DID, each producing loop's `output-subject` and issuer,
+each sink's receipt issuer) of two registries without `node-registry`: the
+node accepts one audience.
+
+The pairing of an endpoint with its audience is the configuration's: a wire
+proof does not show that the node at an endpoint is the one its audience
+names. When the two disagree, the node at the endpoint refuses the call, but
+it has received a proof that the named node accepts while the proof is fresh
+(the acceptance window, 60 s by default). So a `vc-store-endpoint` that points
+at another registry's node, with no `node-registry`, hands that node's
+operator proofs valid at your own node; an `upstream-endpoint` that is not
+the upstream's node does the same for the upstream. Point each endpoint at
+the node of the registry it is paired with, or set the override.
+
+Two constraints follow:
+
+- **A registry's `#chain-manager` endpoint is served by that registry's
+  node.** A registry's DID documents point their `#chain-manager` service at
+  the node whose `provin.network.registry.id` is that registry.
+- **One network process serves a registry's L2 surfaces.** The nonce store
+  is per process, so two processes with one registry ID would each accept a
+  proof once. Do not run active-active replicas of a network node.
+
+### Upgrading to view version 2
+
+The audience changed the signed view (`v` = 2), and a node accepts no
+other version. Upgrade every network node and every pipeline that talk to
+each other in one window. During the window, calls between upgraded and
+not-yet-upgraded processes are refused: an upgraded node answers a proof
+that carries no view version as `Unauthenticated` ("view version 0"), and
+a node not yet upgraded refuses a version 2 proof's signature. An upgraded
+node refuses a not-yet-upgraded pipeline's `RetainPayload` as
+`InvalidArgument` instead, since its first frame carries no content address.
+Subscriptions do not
+establish in the window, and a by-reference fetch that fails rejects,
+errors or drops its event as any fetch failure does, so stop by-reference
+consumption before the window or accept those events' loss. Relationship
+evidence written before the upgrade (view version 1) stays readable.
+
 ## Health endpoints
 
 - `GET /healthz` — **liveness**, static. Failing means "restart me".
@@ -155,6 +230,29 @@ operational side needs this note.
 
 Wire supervisors accordingly (e.g. Kubernetes `livenessProbe` → `/healthz`,
 `readinessProbe` → `/readyz`).
+
+## Server errors
+
+An RPC that fails inside the node, answered as `Internal`, `Unknown` or
+`DataLoss`, reaches its caller with that code and a fixed text, and so does
+an error the node's code returns without a code of its own, with the code
+connect gives it (`Canceled` for a cancellation or a reset connection,
+`DeadlineExceeded` for a deadline):
+
+```text
+server error (ref 3f9c2a7e1b4d5c60); the server's log has the details
+```
+
+The node logs at level `ERROR` (`WARN` for `Canceled` and
+`DeadlineExceeded`, often the caller's own doing) under that ref the error's
+own text (its head
+within 1,024 bytes and its length), the cause the text hides if any, the
+RPC's procedure, the code and the address the node sees (a proxy's, behind a
+TLS terminator), so a caller who reports the ref lets the operator find it.
+A code outside connect's own is answered the same way. The error's text can name the node's own
+state, such as a store's path in the data directory, and does not reach the
+caller. Every other code keeps its text: it says what the caller sent or must
+change, or, for `Unavailable`, that the call may be retried.
 
 ## TLS termination
 

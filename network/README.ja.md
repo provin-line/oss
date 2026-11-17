@@ -21,17 +21,40 @@ pipeline の永続 log は registry へミラーできる: pipeline はローカ
 
 ## 状態モデル: DB レス
 
-すべての永続状態は設定可能なデータディレクトリ以下の plain ファイルとして管理する: コントロールプレーンのレコード（DID ドキュメント、鍵、スキーマ、サブスクリプション、許可リスト）は YAML、VC ストア（credential、resolution pool、audit queue、verdict — `vcresolver/filestore` + `auditor/filestore`）はファイルバックの evidence ディレクトリ、保持した by-reference payload バイト列（`payloadresolver/filestore`）も専用のファイルバックストアを持つ。ノンスストア、インフラオペレーター状態、そして publisher ごとの emit-health レポート（`chainmanager/emithealth`、TTL ベース）はインメモリ（PoC 想定 — 再起動時の影響はサービスごとにドキュメント化済み）。ストレージは seam 越しに抽象化されており、ファイルを PostgreSQL に差し替えるのはフォークではなく Hub 側の置き換えで済む。
+すべての永続状態は設定可能なデータディレクトリ以下の plain ファイルとして管理する: コントロールプレーンのレコード（DID ドキュメント、鍵、スキーマ、サブスクリプション、許可リスト）は YAML、VC ストア（credential、resolution pool、audit queue、verdict — `vcresolver/filestore` + `auditor/filestore`）はファイルバックの evidence ディレクトリ、保持した by-reference payload バイト列（`payloadresolver/filestore`）は専用のファイルバックストア、pipeline emission log の検証済み prefix はそれを custody するファイルバックの mirror ストア（`tlogservice/mirrorstore`）。ノンスストア、インフラオペレーター状態、そして publisher ごとの emit-health レポート（`chainmanager/emithealth`、TTL ベース）はインメモリ（PoC 想定 — 再起動時の影響はサービスごとにドキュメント化済み）。ストレージは seam 越しに抽象化されており、ファイルを PostgreSQL に差し替えるのはフォークではなく Hub 側の置き換えで済む。
 
-VC ストアの seam は `vcresolver.VariantBackend` で、**意図的に意味論より下**に置いてある: backend は「名前の付いた bytes を置き、その名前が既に取られていたかを報告する」だけで、identity・canonical 検証・write-once 受入・body-only projection は、全 backend が背後に立つ `vcresolver.VariantStore` に 1 箇所だけ実装されている。（保持した by-reference payload バイト列 `payloadresolver/filestore` に加え、pipeline emission log の検証済み prefix を custody するファイルバックの mirror ストア `tlogservice/mirrorstore` も同様の構図。）したがって新しい substrate は 6 メソッドを実装すれば規則を継承し、規則を再約束する必要がない — そして 1 つ間違えて規則を弱めることもできない。backend が依然として負うのは storage にしか答えられないもの: atomic create、忠実な read-back、網羅的な listing。
+VC ストアの seam は `vcresolver.VariantBackend` で、**意図的に意味論より下**に置いてある: backend は「名前の付いた bytes を置き、その名前が既に取られていたかを報告する」だけで、identity・canonical 検証・write-once 受入・body-only projection は、全 backend が背後に立つ `vcresolver.VariantStore` に 1 箇所だけ実装されている。したがって新しい substrate は 6 メソッドを実装すれば規則を継承し、規則を再約束する必要がない — そして 1 つ間違えて規則を弱めることもできない。backend が依然として負うのは storage にしか答えられないもの: atomic create、忠実な read-back、網羅的な listing。
 
 audit-reachable conformance class（ソースコミットメント — [pipeline/source](../pipeline/source/README.ja.md) 参照）で deploy する場合は、加えて **永続** VC ストアが必須となる: 遡及監査は発行からはるかに後で claim された source クレデンシャルを解決するためである。`cmd/network` が配線するファイルバックのストアはこの保持義務を満たす（運用上のバックアップは別途必要）。インメモリストア（`vcresolver/memstore`）はテスト用スキャフォールドであり、満たすのは plain な PoC 想定のみである。
 
 ## 二層認証
 
-- **L1（オペレーター向け）**: `pkg/auth` が検証する Bearer JWT（JWKS/Ed25519 または HS256）。プロトコル内で宣言されたリソース + アクションのポリシーオプションに対して RPC ごとに適用。
-- **L2（ピア向け）**: ChainPeerService の全 RPC が `AuthProof` を持つ — JCS 正規化ビューに対する Ed25519 署名で、ノンスリプレイ保護と再起動エポックバリアを備える。`pkg/services/chainmanager/wireauth` に実装。**L2 に認証オフモードは存在しない。**
+- **L1（オペレーター向け）**: RPC ごとのポリシーオプション（リソース + アクション）を `pkg/auth` が強制する — 設定された policy-verifier（PDP）に対して o3co の認可インターセプターを配線する PEP。トークン発行とポリシー判定は外部（dPLaaX の `auth.provider` / `auth.policy-verifier` サービス）が担い、`pkg/auth` 自体はポリシーを決めず、トークンも発行しない。bearer JWT を検証するのは `cedar` backend の下だけで、その agent は何も認証しない（後述の「PDP backend と認証の所在」参照）。
+- **L2（ピア向け）**: ChainPeerService の全 RPC が `AuthProof` を持つ — JCS 正規化ビューに対する Ed25519 署名で、ノンスリプレイ保護と再起動エポックバリアを備える。`pkg/wireauth` に実装。**L2 に認証オフモードは存在しない。** L2 は PDP から独立しており、policy-verifier を必要としない。
 - **Evidence 書き込み**（`RegisterEvidence` / `RegisterAuditHead` / `RetainPayload` / `ReportEmitHealth`）: L1 + in-band wireauth — PDP ゲート（L1 のポリシーオプション）が「そもそも書き込みを許可するか」を判定し、リクエストはさらに wireauth `AuthProof` を運び、ハンドラーが in-band で検証する。証明された DID が authoritative。
+
+### PDP backend と認証の所在
+
+L1 認可は 3 者に分離されている: **トークン発行**（`auth.provider`）、**判定**（PDP）、**強制**（`pkg/auth`、ここではプロセス内）。ノードが依存するのは PDP だけで、`provin.network.auth.backend` で選ぶ — どの backend も fail-closed（必須の設定が欠けるとノードは起動しない）:
+
+| backend | 判定点 | 呼び出し元を認証するか |
+| --- | --- | --- |
+| `o3co`（default） | 外部の o3co `auth.policy-verifier` | **する** — JWT を検証する |
+| `opa` | 外部の Open Policy Agent | policy がトークンを確かめるならする |
+| `cedar` | 外部の Cedar-agent | **する** — ノードが bearer JWT を検証し（`provin.network.auth.cedar.jwt.*`）、その `sub` を agent に問う |
+| `static` | プロセス内の許可リスト | **しない** — bearer の*有無*だけを見て、有効性は見ない |
+
+`cedar` には `cedar.jwt.issuer` と `cedar.jwt.audience`、そして鍵の供給元をちょうど 1 つ — `cedar.jwt.jwks-url`（https。非対称アルゴリズム）または `cedar.jwt.secret`（HS256。デコード後 32 バイト以上、`cedar.jwt.secret-encoding` で表記を指定: `utf8`（default）| `hex` | `base64`）— 指定する必要があり、満たさないとノードは起動しない。トークンが受理されるのは、`typ` が access token のもの（`at+jwt` または `application/at+jwt`、RFC 9068、大文字小文字は ASCII の範囲で不問）であり、署名が有効で、`exp` が失効しておらず、`iat` がノードの時計より先でなく、`nbf` が経過済みか存在せず（3 つとも 30 秒の猶予）、`iss` が設定と一致し、`aud` に設定した audience を含み、`sub` が空でないときだけである。
+
+`jwks-url` を使うと、鍵集合は 10 分キャッシュされ、再取得は最短 30 秒間隔（トークンが未知の `kid` を名指したときも）。再取得が失敗している間は、期限切れの集合がそれが持つ `kid` のトークンをさらに 30 分検証し続けるため、発行者が撤回した鍵が JWKS の障害中に最大 40 分信頼されたままになりうる。直近の取得が返した集合にトークンに合う鍵（`kid`、アルゴリズム、用途で選ぶ）がないトークンは、ほかのトークン検査の失敗と同じく `Unauthenticated`（push: 403、wire retry なし）で拒否する。直近の取得が理由を問わず失敗し（到達不能、TLS の失敗、5 秒の timeout 超過、200 以外の status、1 MiB を超える body か鍵集合として読めない body）、ノードが猶予の内の集合を持たないか、持つ集合に合う鍵がないときは、トークンを判定していないので、クライアントには `Unavailable`（push: `Retry-After` 付きの 503）が届く。retry しても直らない失敗（404、ノードが信頼しない証明書）も、下の PDP の HTTP 500 と違って `Unavailable` になる。Cedar endpoint はトークンの検査に、拒否するか答えられないと報告するかの 2 つしか許さないためである。取得の開始は 30 秒以上あき、次の取得が始まるまでの retry は、直近に終わった取得の結果で答える。L1 で守られた RPC は、鍵集合を待つ間に自身の context が終わったら、ほかの経路と同じく `Canceled` / `DeadlineExceeded` で失敗する（push は、取得できない鍵集合のときと同じく 503）。
+
+loopback 以外の plaintext `http://` の PDP は、その `host:port` が `provin.network.auth.plain-internal`（default は空）に載っていない限り拒否される。載せた endpoint は private アドレスに解決されるときだけ到達される。だから、通過する通信の盗み見と改変から守られているネットワーク上の backend だけを載せること。不正な entry（`host:port` でない）や private でない IP リテラルは起動を失敗させ、ホスト名は接続のたびにアドレスを検査する。同じキーが `o3co`・`opa`・`cedar` に適用される。
+
+PDP が答えられない（到達不能、timeout、HTTP 429/502/503/504）とき、L1 で守られた RPC は ConnectRPC `Unavailable`（"authorization backend unavailable"）で失敗し、もう `Internal` にはならない。PDP が不正な答えを返す（HTTP 500、body の不正）場合は `Internal` のままである。`Unavailable` はクライアントが retry してよい拒否である。
+
+`static` は認可であって、**認証ではない**: perimeter がすでに認証している場合（単一テナント / dev）だけに使い、PDP が呼び出し元を識別すると期待される場所では使わない。設定のサーフェスは `pkg/auth/reference.conf` と backend ごとの godoc を参照。
+
+認証付きのセルフホスト — 本物の `auth.provider` + 本物の policy-verifier + ノード + NATS を 1 コマンドで立て、record を `VERIFIED` の audit verdict まで進める — は [`deploy/quickstart/`](../deploy/quickstart/README.md) を参照。その README は **first-owner bootstrap**（`RegisterOwner` は L1 で守られているが、DID の grant には登録済みのオーナーが要る、という鶏と卵）と、本番向けの選択肢も扱う。
 
 ## レイアウト
 
@@ -39,6 +62,7 @@ audit-reachable conformance class（ソースコミットメント — [pipeline
 cmd/network/      バイナリ: 設定ロード、DI ワイヤリング、マルチプレクサ登録
 config/           application.conf（オペレーターレイヤー）
 pkg/core/         マージ済み設定モデル、シークレット解決、SSRF 耐性 URL チェック
-pkg/auth/         L1 JWT 検証 + 認可インターセプター
+pkg/auth/         L1 PEP: 設定された PDP に対する認可インターセプター、cedar の bearer JWT の検証
+pkg/wireauth/     L2 のワイヤー証明: 帯域内の AuthProof の署名と検証
 pkg/services/     サービスごとに 1 パッケージ — pkg/services/README.md 参照
 ```

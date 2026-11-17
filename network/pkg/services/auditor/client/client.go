@@ -14,9 +14,9 @@
 // derivations cannot drift.
 //
 // It imports only the generated client, connect, crypto, and the auditor
-// service's wirecontract LEAF (op names + signed-view builders; PR3b Task 2
-// moved these out of the auditor service root so this client never pulls in
-// the root's store/runner/handler domain logic) — never the auditor service
+// service's wirecontract LEAF (op names + signed-view builders, kept out of
+// the auditor service root so this client never pulls in the root's
+// store/runner/handler domain logic) — never the auditor service
 // root itself, and never pipeline/ (AGENTS.md layer rule: network and
 // pipeline interact only over the wire).
 package client
@@ -24,7 +24,7 @@ package client
 import (
 	"context"
 	"fmt"
-	"time"
+	"net/http"
 
 	"connectrpc.com/connect"
 
@@ -32,8 +32,9 @@ import (
 	auditpb "github.com/provin-line/oss/gen/go/dplaax/audit/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/audit/v1/auditpbconnect"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
+	"github.com/provin-line/oss/internal/origin"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/auditor/wirecontract"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 )
 
 // Config configures a Client. Signer, SignerDID, BaseURL, and HTTPClient are
@@ -52,9 +53,20 @@ type Config struct {
 	// client always registers evidence with ONE node's own AuditService, so
 	// the endpoint is fixed at construction rather than passed per call.
 	BaseURL string
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client, e.g.
 	// core.URLGuard.HTTPClient(), for a non-local endpoint.
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call. Both RegisterEvidence and RegisterAuditHead are mounted
 	// behind L1 authz IN ADDITION to the L2 wireauth proof
@@ -76,15 +88,21 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       auditpbconnect.AuditServiceClient
 }
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
-		svc: auditpbconnect.NewAuditServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		audience:  cfg.Audience,
+		svc: auditpbconnect.NewAuditServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
 }
@@ -170,25 +188,14 @@ func (c *Client) RegisterAuditHead(ctx context.Context, headVariantID string) er
 	return err
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical
-// second-precision UTC RFC 3339 — the exact form the handler's strict codec
-// accepts). Shared by every write RPC this client signs (RegisterEvidence,
-// RegisterAuditHead) — op and fields are the only things that vary between
-// them.
+// proof signs op over fields as the configured identity, in the proof's one
+// wire form (network/internal/authproof). Shared by every write RPC this
+// client signs (RegisterEvidence, RegisterAuditHead) — op and fields are the
+// only things that vary between them.
 func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, op, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("auditor/client: nonce: %w", err)
+		return nil, fmt.Errorf("auditor/client: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("auditor/client: sign %s: %w", op, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }

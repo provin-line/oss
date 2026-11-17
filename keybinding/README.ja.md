@@ -10,6 +10,8 @@
 
 wire の書き方は 1 つ: 時刻は UTC で秒まで、一覧の番号は 10 進の文字列（JSON の数は、2 つの値が同じ正規形になりうるので使わない）、`roles` は重ならない名前の列、鍵は `keyId` と、`kty` ごとに RFC 7638 が hash する欄だけを持つ公開の JWK（Ed25519、P-256、RSA で、`crypto` の検査が受け付ける鍵）。
 
+結び付けの `@context` は、credentials v2、dplaax v1、dplaax の key binding の branch context の snapshot（`https://dplaax.dev/vc/branches/v1/keybinding/` と、凍結した時刻の 12 桁）の順で始まり、その後は絶対の URI だけ（URI の scheme と `:` で始まるもの。dplaax の `keybinding.context`）。`Issue` は snapshot `202611101543` を名指す。snapshot は URI の形で受けるので、どの snapshot でもよい。snapshot がどこにも無い結び付け（credentials v2 と dplaax v1、その後は絶対の URI だけ）は、`validFrom` が 2027-01-01T00:00:00Z より前のものだけ受ける。発行者がそれまでに snapshot を足せるようにするため。一覧の `@context` は credentials v2 で始まり、その後は絶対の URI だけ（dplaax の `keybinding.status-list.shape`）。証明は `@context` を書かれたとおりに署名し、context の文書は読まない。受け手は発行者より先に更新する: 0.4.x の検証は、snapshot を名指す結び付けを断る。
+
 今は確かめられない署名（発行者の文書が読めない）は `ErrSignatureUnestablished` で、`ErrSignature` ではない。偽物とせず、やり直す。
 
 ここにないもの: 発行者が何を結んでよいか（範囲の中の種類、役割、鍵の種類）と、鍵と署名の照合。どちらも呼ぶ側の務めで、`Binding` が要るものを運ぶ。

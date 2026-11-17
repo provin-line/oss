@@ -5,9 +5,9 @@
 //
 // Loops are a keyed map (key = loop name) because a node runs zero or more loops of
 // potentially different roles — the layer's responsibility is a SET of loops, not one
-// fixed loop. All four roles are implemented: "source" (external ingestion, 17b),
-// "sink" (terminating subscriber that verifies and writes out-of-network, 17c),
-// "chained" (verify-and-relay, 17d), and "aggregate" (N-ary pool + window, 17m).
+// fixed loop. All four roles are implemented: "source" (external ingestion),
+// "sink" (terminating subscriber that verifies and writes out-of-network),
+// "chained" (verify-and-relay), and "aggregate" (N-ary pool + window).
 // An unknown role remains a fail-closed boot error.
 package pipelineconfig
 
@@ -23,6 +23,7 @@ import (
 	"github.com/provin-line/oss/decisionrecord"
 	"github.com/provin-line/oss/did/dplaax"
 	"github.com/provin-line/oss/hoconconfig"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/internal/origin"
 	"github.com/provin-line/oss/vc"
 )
@@ -36,8 +37,7 @@ func init() {
 	hoconconfig.RegisterPackageReference("network/pipeline", referenceConf)
 }
 
-// Loop roles. slice-17c implements RoleSource (17b) and RoleSink; RoleChained is a
-// recognized-but-unsupported role (typed boot error) until 17d.
+// Loop roles: a loop takes one of these, and any other role is a boot error.
 const (
 	RoleSource    = "source"
 	RoleSink      = "sink"
@@ -54,16 +54,17 @@ const (
 
 // StrategyAdjacent is the only verification strategy a non-source loop may declare: verify
 // the immediately preceding credential. Full-chain verification is the async audit runner's
-// job (slice-17h); the real-time "full" strategy was retired in slice-17j.
+// job, so there is no real-time "full" strategy.
 const StrategyAdjacent = "adjacent"
 
 const (
 	pipelineKey        = "provin.network.pipeline"
 	loopsKey           = pipelineKey + ".loops"
 	vcStoreEndpointKey = pipelineKey + ".vc-store-endpoint"
+	nodeRegistryKey    = pipelineKey + ".node-registry"
 	// VCStoreBearerKey is the dotted config path for the outbound L1 bearer
 	// (VCStoreBearer). Exported so a caller that enforces its OWN presence
-	// requirement — cmd/network boot-validates it unconditionally (Task 9),
+	// requirement — cmd/network boot-validates it unconditionally,
 	// since its batch resolver always runs a peer-fetching client regardless of
 	// pipeCfg.HasConsumingLoop(), which is always false for that binary — can
 	// name the exact key in its own fatal message without duplicating the
@@ -119,9 +120,16 @@ type Config struct {
 	Loops []LoopConfig
 	// VCStoreEndpoint is the node-level VCResolverService base URL where producing
 	// loops publish issued credentials. Empty when the node publishes nothing.
-	// (Full-chain coverage is the async audit runner's job — slice-17h — which resolves
-	// over the local store, not this endpoint; slice-17j retired real-time "full".)
+	// (Full-chain coverage is the async audit runner's job, which resolves over the
+	// local store, not this endpoint.)
 	VCStoreEndpoint string
+	// NodeRegistry is the registry ID of this pipeline's node, the node at
+	// VCStoreEndpoint: the audience of every wire proof the pipeline sends
+	// that node. Optional: empty means the registry every DID the pipeline
+	// signs those proofs as shares (the node a pipeline publishes to is its
+	// own registry's node); when they are of more than one registry, the
+	// pipeline does not start without it.
+	NodeRegistry string
 	// VCStoreBearer is the L1 PDP token the VC-store client presents (the store sits
 	// behind the node's auth interceptors). Required whenever VCStoreEndpoint is set,
 	// and whenever any consuming loop runs (the async batch resolver presents the same
@@ -164,14 +172,14 @@ type Config struct {
 	// from MaxRetainChunkSize (a single frame). Sourced from reference.conf (no Go
 	// default); a non-positive value fails startup.
 	MaxRetainPayloadSize int
-	// TlogMirror tunes the D-T2 caps MirrorLogSegment enforces (tlog-custody
-	// spec, rule 5). Sourced from reference.conf; a non-positive value fails
+	// TlogMirror tunes the batch caps MirrorLogSegment enforces.
+	// Sourced from reference.conf; a non-positive value fails
 	// startup.
 	TlogMirror TlogMirrorConfig
 	// BatchResolver tunes the async chain-audit resolver (the Runner that drains the
 	// unresolved pool). Sourced from reference.conf; a non-positive value fails startup.
 	BatchResolver BatchResolverConfig
-	// AuditRunner tunes the async audit runner (slice-17h — verifies assembled chains and
+	// AuditRunner tunes the async audit runner (it verifies assembled chains and
 	// records verdicts). Sourced from reference.conf; a non-positive value fails startup.
 	AuditRunner AuditRunnerConfig
 	// DecisionRecord is how this node records its delivery decisions. Sourced
@@ -208,7 +216,7 @@ func (c *Config) HasConsumingLoop() bool {
 	return false
 }
 
-// AuditRunnerConfig is the node-level tuning for the async audit runner (slice-17h). All
+// AuditRunnerConfig is the node-level tuning for the async audit runner. All
 // values come from reference.conf (no Go defaults) and must be positive; the runner runs
 // only on a node with a consuming loop (the population that registers audit heads).
 type AuditRunnerConfig struct {
@@ -221,9 +229,9 @@ type AuditRunnerConfig struct {
 	MaxAttempts int
 }
 
-// TlogMirrorConfig is the node-level tlog-mirror tuning (tlog-custody spec).
+// TlogMirrorConfig is the node-level tlog-mirror tuning.
 // All values come from reference.conf (no Go defaults) and must be positive.
-// The two caps are D-T2 rule 5: read by BOTH sides (the registry-side
+// The two batch caps are read by BOTH sides (the registry-side
 // MirrorLogSegment handler is the primary enforcer; the client-side shipper
 // bounds its batches to the same values). FlushInterval is client-side only —
 // the mirror shipper's ticking cadence; no handler reads it.
@@ -244,7 +252,7 @@ type TlogMirrorConfig struct {
 	FlushInterval time.Duration
 }
 
-// BatchResolverConfig is the node-level tuning for the async batch resolver (slice-17g).
+// BatchResolverConfig is the node-level tuning for the async batch resolver.
 // All values come from reference.conf (no Go-side defaults) and must be positive; the
 // Runner runs only on a node with a consuming loop (it is the population that accumulates
 // unresolved holes), but the tuning is always loaded.
@@ -273,7 +281,7 @@ type IssuerConfig struct {
 type LoopConfig struct {
 	// Name is the loop's config key.
 	Name string
-	// Role selects the processor wiring: RoleSource | RoleSink (RoleChained → 17d).
+	// Role selects the processor wiring: RoleSource | RoleSink | RoleChained | RoleAggregate.
 	Role string
 	// IngressSubject is the subject the loop subscribes to for inbound events. For a
 	// sink it is the GRANTED upstream subject (the upstream source's output-subject /
@@ -321,11 +329,15 @@ type SourceConfig struct {
 type SinkConfig struct {
 	// Kind is the verdict policy: SinkObservationOnly | SinkProduction | SinkArchival.
 	Kind string
-	// VerificationStrategy is the ingress-credential verification depth (17c: adjacent).
+	// VerificationStrategy is the ingress-credential verification depth (adjacent).
 	VerificationStrategy string
 	// UpstreamEndpoint is the upstream publisher's serving boundary, stored with the
 	// verified ingress VC for audit reachability.
 	UpstreamEndpoint string
+	// UpstreamRegistry is the registry ID of the node at UpstreamEndpoint, which
+	// a by-reference fetch's proof names as its audience. Optional: empty means
+	// the registry of the upstream pipeline DID (IngressSubject).
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
 	// "inline" (default) or "by-reference". A by-reference sink dereferences a
 	// nil envelope payload from UpstreamEndpoint at consume time.
@@ -412,6 +424,9 @@ type ChainedConfig struct {
 	// Consuming side (mirrors SinkConfig minus Kind).
 	VerificationStrategy string
 	UpstreamEndpoint     string
+	// UpstreamRegistry is as SinkConfig.UpstreamRegistry, for this loop's
+	// IngressSubject.
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of the ingress:
 	// "inline" (default) or "by-reference".
 	PayloadDelivery string
@@ -428,6 +443,10 @@ type ChainedConfig struct {
 type AggregateIngress struct {
 	Subject          string
 	UpstreamEndpoint string
+	// UpstreamRegistry is the registry ID of the node at UpstreamEndpoint, which
+	// a by-reference fetch's proof names as its audience. Optional: empty means
+	// the registry of Subject.
+	UpstreamRegistry string
 	// PayloadDelivery is the agreed payload-delivery mode of this ingress:
 	// "inline" (default) or "by-reference".
 	PayloadDelivery string
@@ -486,6 +505,9 @@ func LoadPipelineConfig(cfg *hoconconfig.Config) (*Config, error) {
 		return nil, err
 	}
 	if out.VCStoreEndpoint, err = loadVCStoreEndpoint(cfg); err != nil {
+		return nil, err
+	}
+	if out.NodeRegistry, err = loadRegistry(cfg, nodeRegistryKey); err != nil {
 		return nil, err
 	}
 	if cfg.Has(VCStoreBearerKey) {
@@ -619,7 +641,7 @@ func loadAuditRunner(cfg *hoconconfig.Config) (AuditRunnerConfig, error) {
 	return ar, nil
 }
 
-// loadTlogMirror reads the D-T2 MirrorLogSegment caps plus the client-side
+// loadTlogMirror reads the MirrorLogSegment batch caps plus the client-side
 // shipper's flush cadence from the (layered) config. All three values live in
 // reference.conf (always present); each must be positive — a non-positive
 // override fails startup (no Go-side defaults).
@@ -646,8 +668,7 @@ func loadTlogMirror(cfg *hoconconfig.Config) (TlogMirrorConfig, error) {
 // validateTlogMirrorCap enforces a boot-time cross-key coherence invariant
 // between tlog-mirror.max-batch-bytes and max-credential-size: a single
 // mirrored record can be as large as max-credential-size (a sink-receipt
-// log entry carries a full credential — see the tlog-custody spec's D-T2
-// rule 5 doc), so a batch cap SMALLER than that could never ship such a
+// log entry carries a full credential), so a batch cap SMALLER than that could never ship such a
 // record, not even alone. Left unchecked, this would not surface as a
 // live-config drift but as a wedge on the very first boot that ever tries
 // to mirror a record near max-credential-size in size — the tlogship
@@ -808,15 +829,16 @@ func validateProducingIdentities(loops []LoopConfig) error {
 		d, err := dplaax.Parse(issuer)
 		if err != nil {
 			// loadIssuer already validated the shape; defensive.
-			return fmt.Errorf("pipeline: loop %q: issuer %q: %w", lc.Name, issuer, err)
+			return fmt.Errorf("pipeline: loop %q: issuer %s: %w", lc.Name, excerpt.Quoted(issuer, 128), err)
 		}
-		pipelineDID := d.PipelineDID()
-		if pipelineDID == nil {
-			// loadIssuer requires a process DID, which always has a pipeline
-			// ancestor; defensive against a future load-path change.
-			return fmt.Errorf("pipeline: loop %q: issuer %q has no pipeline ancestor", lc.Name, issuer)
+		if !d.IsProcess() {
+			// loadIssuer requires a process DID; defensive against a future
+			// load-path change. Only a Process has a Pipeline (dplaax
+			// did.dplaax.hierarchy), so PipelineDID is the issuer's Pipeline
+			// only for a Process.
+			return fmt.Errorf("pipeline: loop %q: issuer %s is not a Process DID", lc.Name, excerpt.Quoted(issuer, 128))
 		}
-		if pipelineDID.String() != subject {
+		if pipelineDID := d.PipelineDID(); pipelineDID.String() != subject {
 			return fmt.Errorf("pipeline: loop %q: issuer %q does not belong to output-subject %q — the issuer's pipeline DID must equal the output subject (a tlog checkpoint's signed_by must be verifiable against its log id)", lc.Name, issuer, subject)
 		}
 	}
@@ -851,7 +873,7 @@ func loadVCStoreEndpoint(cfg *hoconconfig.Config) (string, error) {
 // sourceKeys / sinkKeys / chainedKeys are the role-exclusive config keys. The loader
 // rejects keys from the OTHER roles' sets so a loop cannot silently carry fields it does
 // not use (e.g. an issuer block under a sink, or a sink block under a chained loop).
-// Source fields are top-level (17b shape); sink and chained fields nest under their block.
+// Source fields are top-level; sink and chained fields nest under their block.
 var (
 	sourceKeys    = []string{"output-subject", "issuer", "pipeline-id", "process-id", "transformation-claim", "schema-ref", "push-ingress"}
 	sinkKeys      = []string{"sink"}
@@ -1056,6 +1078,9 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 	if sc.UpstreamEndpoint, err = requireString(cfg, base+".sink.upstream-endpoint"); err != nil {
 		return sc, err
 	}
+	if sc.UpstreamRegistry, err = loadRegistry(cfg, base+".sink.upstream-registry"); err != nil {
+		return sc, err
+	}
 
 	if sc.PayloadDelivery, err = loadPayloadDelivery(cfg, base+".sink.payload-delivery", name); err != nil {
 		return sc, err
@@ -1130,7 +1155,7 @@ func loadSinkConfig(cfg *hoconconfig.Config, base, name string) (SinkConfig, err
 		// the receipt subject's pipeline/process ids are those segments.
 		d, perr := dplaax.Parse(issuer.DID)
 		if perr != nil || !d.IsProcess() {
-			return sc, fmt.Errorf("pipeline: loop %q: sink.receipt.issuer.did %q must be a process DID", name, issuer.DID)
+			return sc, fmt.Errorf("pipeline: loop %q: sink.receipt.issuer.did %s must be a process DID", name, excerpt.Quoted(issuer.DID, 128))
 		}
 		sc.Receipt = SinkReceiptConfig{
 			Issue:      true,
@@ -1241,7 +1266,7 @@ func loadClaim(cfg *hoconconfig.Config, key, name string) (vc.TransformationClai
 }
 
 // loadStrategy reads a verification-strategy that must be "adjacent"; anything else
-// (including the retired "full", slice-17j) is a typed boot error. Full-chain coverage is
+// (including "full") is a typed boot error. Full-chain coverage is
 // the async audit runner's job, not a real-time ingress strategy.
 func loadStrategy(cfg *hoconconfig.Config, key, name string) (string, error) {
 	s, err := requireString(cfg, key)
@@ -1290,6 +1315,9 @@ func loadChainedConfig(cfg *hoconconfig.Config, base, name string) (ChainedConfi
 		return cc, err
 	}
 	if cc.UpstreamEndpoint, err = requireString(cfg, cbase+".upstream-endpoint"); err != nil {
+		return cc, err
+	}
+	if cc.UpstreamRegistry, err = loadRegistry(cfg, cbase+".upstream-registry"); err != nil {
 		return cc, err
 	}
 	if cc.PayloadDelivery, err = loadPayloadDelivery(cfg, cbase+".payload-delivery", name); err != nil {
@@ -1384,6 +1412,9 @@ func loadAggregateConfig(cfg *hoconconfig.Config, base, name string) (AggregateC
 		if ing.UpstreamEndpoint, err = requireString(cfg, ibase+".upstream-endpoint"); err != nil {
 			return ac, err
 		}
+		if ing.UpstreamRegistry, err = loadRegistry(cfg, ibase+".upstream-registry"); err != nil {
+			return ac, err
+		}
 		if ing.PayloadDelivery, err = loadPayloadDelivery(cfg, ibase+".payload-delivery", name); err != nil {
 			return ac, err
 		}
@@ -1413,10 +1444,10 @@ func requireString(cfg *hoconconfig.Config, key string) (string, error) {
 func requirePipelineDID(didStr, loop, field string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("pipeline: loop %q: %s %q: %w", loop, field, didStr, err)
+		return fmt.Errorf("pipeline: loop %q: %s %s: %w", loop, field, excerpt.Quoted(didStr, 128), err)
 	}
 	if !d.IsPipeline() {
-		return fmt.Errorf("pipeline: loop %q: %s %q is not a pipeline DID", loop, field, didStr)
+		return fmt.Errorf("pipeline: loop %q: %s %s is not a pipeline DID", loop, field, excerpt.Quoted(didStr, 128))
 	}
 	return nil
 }
@@ -1424,10 +1455,26 @@ func requirePipelineDID(didStr, loop, field string) error {
 func requireProcessDID(didStr, loop, field string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("pipeline: loop %q: %s %q: %w", loop, field, didStr, err)
+		return fmt.Errorf("pipeline: loop %q: %s %s: %w", loop, field, excerpt.Quoted(didStr, 128), err)
 	}
 	if !d.IsProcess() {
-		return fmt.Errorf("pipeline: loop %q: %s %q is not a process DID", loop, field, didStr)
+		return fmt.Errorf("pipeline: loop %q: %s %s is not a process DID", loop, field, excerpt.Quoted(didStr, 128))
 	}
 	return nil
+}
+
+// loadRegistry reads an optional registry ID: the {registry} segment of a
+// did:dplaax DID, as dplaax.ValidateRegistry checks it. Absent is "".
+func loadRegistry(cfg *hoconconfig.Config, key string) (string, error) {
+	if !cfg.Has(key) {
+		return "", nil
+	}
+	v, err := cfg.String(key)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
+	}
+	if err := dplaax.ValidateRegistry(v); err != nil {
+		return "", fmt.Errorf("pipeline: config %s: %w", key, err)
+	}
+	return v, nil
 }

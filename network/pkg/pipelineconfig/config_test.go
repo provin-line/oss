@@ -86,8 +86,8 @@ func TestLoad_TlogMirrorFlushIntervalOverride(t *testing.T) {
 }
 
 // TestLoad_TlogMirrorMaxBatchBytesBelowMaxCredentialSize_Fails proves the
-// cross-key boot coherence check (task-6 controller amendment, closing the
-// backlog-wedge story): a single mirrored record can be as large as
+// cross-key boot coherence check, which keeps the mirror's backlog from
+// wedging: a single mirrored record can be as large as
 // max-credential-size (a sink-receipt log entry carries a full
 // credential), so a max-batch-bytes SMALLER than that could never ship
 // such a record even alone — this must fail boot, naming both keys, not
@@ -385,7 +385,7 @@ func TestLoad_ValidSource(t *testing.T) {
 }
 
 func TestLoad_AbsentSchemaRefIsEmpty(t *testing.T) {
-	// schema-ref is optional in slice-17b: omitting it is equivalent to "" and must load.
+	// schema-ref is optional: omitting it is equivalent to "" and must load.
 	body := strings.Replace(validSourceLoop, `schema-ref = ""`, "", 1)
 	cfg := loadWith(t, loopsConf(body))
 	pc, err := pipelineconfig.LoadPipelineConfig(cfg)

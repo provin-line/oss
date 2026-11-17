@@ -470,7 +470,7 @@ func TestGetOnADamagedLegacyOnlyBodyDoesNotReadAsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	bodyHex := strings.TrimPrefix(body, "sha256:")
-	// A legacy body: a flat slot and NO variants — the pre-slice layout.
+	// A legacy body: a flat slot and NO variants — the legacy layout.
 	if err := inner.WriteProjection(bodyHex, canonicalOf(t, cred)); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestGetServesTheSetWhenTheProjectionIsDamaged(t *testing.T) {
 }
 
 // TestLegacyOnlyBodyReadsAsAOneElementSet is identity-007's property: bytes
-// written before this slice existed are IN the set, without any migration pass
+// written under the legacy flat slot are IN the set, without any migration pass
 // having run. Reads consult the flat slot unconditionally, so nothing has to
 // be swept for old evidence to remain reachable.
 func TestLegacyOnlyBodyReadsAsAOneElementSet(t *testing.T) {
@@ -528,7 +528,7 @@ func TestLegacyOnlyBodyReadsAsAOneElementSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The pre-slice layout: a body-only entry and no variants.
+	// The legacy layout: a body-only entry and no variants.
 	if err := backend.WriteProjection(strings.TrimPrefix(body, "sha256:"), canonicalOf(t, cred)); err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func TestLegacyOnlyBodyReadsAsAOneElementSet(t *testing.T) {
 	}
 }
 
-// TestRollbackWrittenFlatIsNotLost is Codex's finding: an OLD binary, run
+// TestRollbackWrittenFlatIsNotLost pins that held evidence is kept: an OLD binary, run
 // against this store after a rollback, writes the flat slot without knowing
 // variants exist. Those bytes are held evidence. If the union were conditional
 // on "this body has no variants", the next put would refresh the projection
@@ -596,15 +596,13 @@ func TestRollbackWrittenFlatIsNotLost(t *testing.T) {
 }
 
 // TestListVariantIDsPagesAcrossAFlatOnlyCandidate exercises the merge's two
-// window branches, which had no coverage at all until a reviewer disabled
-// mergeFlatCandidate entirely and watched the test that claimed to cover them
-// keep passing.
+// window branches. Disabling mergeFlatCandidate entirely makes it fail.
 //
-// The vacuity was in the setup: it seeded the flat slot with a variant that had
-// ALSO been admitted normally, so the dedup check short-circuited and the
-// arithmetic below was never reached. The flat candidate here is admitted
-// NOWHERE else — the rollback shape, and the only shape in which the merge does
-// any work.
+// The setup matters: a flat slot seeded with a variant that had ALSO been
+// admitted normally would make the dedup check short-circuit, so the
+// arithmetic below would never be reached and the test would pass vacuously.
+// The flat candidate here is admitted NOWHERE else — the rollback shape, and
+// the only shape in which the merge does any work.
 //
 // Both branches matter for different reasons. Deferring (window full, candidate
 // sorts after it) must not drop the candidate — a later page has to reach it.
@@ -716,7 +714,7 @@ func TestGetRejectsACorruptProjection(t *testing.T) {
 	}
 }
 
-// TestAReadDoesNotDestroyARollbackWrittenVariant is Codex's P1, and it is the
+// TestAReadDoesNotDestroyARollbackWrittenVariant pins that a read never deletes evidence, the
 // worst class of bug this layer can have: a READ deleting evidence.
 //
 // After a rollback an older binary writes the flat slot without knowing about
@@ -791,11 +789,12 @@ func orderedVariantPair(t *testing.T) (low, high *vc.PipelinePassCredential) {
 	return b, a
 }
 
-// TestAMisfiledLegacyEntryIsNotAdoptedIntoTheWrongBody is Codex's P2.
+// TestAMisfiledLegacyEntryIsNotAdoptedIntoTheWrongBody pins that a legacy
+// entry filed under the wrong body is not adopted.
 //
 // Canonical bytes for a DIFFERENT body are perfectly well-formed, so a check
 // that only asks "are these canonical" adopts some other body's credential
-// into this body's variant set — and PutVariant reports success. The pre-slice
+// into this body's variant set — and PutVariant reports success. The legacy
 // store made exactly this check on read ("tampered or misfiled"); the variant
 // layer has to keep it.
 func TestAMisfiledLegacyEntryIsNotAdoptedIntoTheWrongBody(t *testing.T) {

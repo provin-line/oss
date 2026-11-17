@@ -10,7 +10,7 @@
 
 // Command provision lays down the operator-mode NATS trust material the
 // quickstart's broker and its two nodes (`network`, the control plane;
-// `pipeline`, the data plane — the separated topology, PR3c) consume — an
+// `pipeline`, the data plane — the separated topology) consume — an
 // operator trust root, the deployment's account, a system account with a
 // narrowed claims-push user, the account-claims JWTs in a resolver
 // directory, and a broker config running the directory resolver over that
@@ -360,7 +360,7 @@ type externalKeysExport struct {
 // submits ONLY these public halves to the registry over
 // IssuePipelineRequest/IssueProcessRequest's external_public_keys — the
 // registry never generates or holds a private key for either DID, matching
-// the tlog-custody trust model (the registry has no loop key).
+// the custody rule that the registry holds no loop key.
 //
 // Idempotent like the NATS material in provision, above: ensureSubjectKeys
 // (below) reuses an already-provisioned subject's keys rather than minting

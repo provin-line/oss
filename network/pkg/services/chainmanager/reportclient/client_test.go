@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,8 +22,11 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/reportclient"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
+
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
 
 const publisherDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
 
@@ -91,6 +95,7 @@ func newHarness(t *testing.T) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -110,7 +115,8 @@ func newHarness(t *testing.T) *harness {
 
 	return &harness{
 		store:  store,
-		client: reportclient.New(reportclient.Config{Signer: sgn, SignerDID: publisherDID, BaseURL: srv.URL, HTTPClient: srv.Client()}),
+		signer: sgn,
+		client: reportclient.New(reportclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: publisherDID, BaseURL: srv.URL, HTTPClient: srv.Client()}),
 		url:    srv.URL,
 	}
 }
@@ -171,7 +177,7 @@ func TestReportEmitHealth_PublisherMismatch_PermissionDenied(t *testing.T) {
 func TestReportEmitHealth_MismatchedKey_Unauthenticated(t *testing.T) {
 	h := newHarness(t)
 	wrongSigner, _ := signer(t, publisherDID) // a DIFFERENT keypair than the one bound to publisherDID above
-	bad := reportclient.New(reportclient.Config{Signer: wrongSigner, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient})
+	bad := reportclient.New(reportclient.Config{Audience: nodeAudience, Signer: wrongSigner, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient})
 
 	_, err := bad.ReportEmitHealth(context.Background(), publisherDID, true)
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
@@ -182,7 +188,7 @@ func TestReportEmitHealth_MismatchedKey_Unauthenticated(t *testing.T) {
 	}
 }
 
-// --- P1-C: ReportEmitHealth is mounted behind L1 authz IN ADDITION to the L2
+// --- ReportEmitHealth is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises (newHarness deliberately mounts NO
 // L1 interceptor, isolating the wireauth layer). These tests add it back —
 // production's actual mounting (internal/netcompose.BuildHandler's
@@ -203,6 +209,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -234,7 +241,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 // header.
 func TestReportEmitHealth_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
-	client := reportclient.New(reportclient.Config{
+	client := reportclient.New(reportclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient, Bearer: "test-l1-token",
 	})
 	if _, err := client.ReportEmitHealth(context.Background(), publisherDID, true); err != nil {
@@ -247,11 +254,59 @@ func TestReportEmitHealth_BearerPresented_L1Passes(t *testing.T) {
 // rejection code (Unauthenticated) passes through unmangled.
 func TestReportEmitHealth_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "chain", Action: "report-health"}})
-	client := reportclient.New(reportclient.Config{
+	client := reportclient.New(reportclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: publisherDID, BaseURL: h.url, HTTPClient: http.DefaultClient,
 	})
 	_, err := client.ReportEmitHealth(context.Background(), publisherDID, true)
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
 	}
+}
+
+// With a bearer, the client follows no redirect, whatever *http.Client it is
+// given: the bearer goes to BaseURL's origin only.
+func TestBearer_ShownToNoServerTheEndpointRedirectsTo(t *testing.T) {
+	url, counts := redirectingServer(t)
+	sgn, _ := signer(t, publisherDID)
+	c := reportclient.New(reportclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: publisherDID, BaseURL: url, HTTPClient: &http.Client{}, Bearer: "node-token"})
+	if _, err := c.ReportEmitHealth(context.Background(), publisherDID, true); err == nil {
+		t.Error("a redirected call succeeded")
+	}
+	if counts.hits.Load() == 0 || !counts.bearerShown.Load() {
+		t.Fatalf("the endpoint answered %d requests, bearer shown %v; want the call to reach it with the bearer", counts.hits.Load(), counts.bearerShown.Load())
+	}
+	if n := counts.followed.Load(); n != 0 {
+		t.Errorf("the client followed the redirect: the server it points to answered %d requests", n)
+	}
+}
+
+// redirectCounts is what redirectingServer saw: the requests its endpoint
+// answered, whether one carried a bearer, and the requests that reached the
+// server it redirects to.
+type redirectCounts struct {
+	hits        atomic.Int32
+	bearerShown atomic.Bool
+	followed    atomic.Int32
+}
+
+// redirectingServer answers every request with a redirect to a second server
+// on the same host, over HTTP/1.1, where net/http carries an Authorization
+// header on to the same host.
+func redirectingServer(t *testing.T) (string, *redirectCounts) {
+	t.Helper()
+	counts := &redirectCounts{}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.followed.Add(1)
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			counts.bearerShown.Store(true)
+		}
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+	return redirector.URL, counts
 }

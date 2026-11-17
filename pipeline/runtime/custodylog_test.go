@@ -50,13 +50,13 @@ func custodyIDs(cs []CustodyLog) []string {
 	return ids
 }
 
-// TestDataPlane_CustodyLogs_DurableEntries is the D6 capstone: a config with a
+// TestDataPlane_CustodyLogs_DurableEntries checks that a config with a
 // source loop plus a receipt-configured archival sink, with both TlogDir and
-// RejectLogDir set, must yield custody entries for the emission log, the
+// RejectLogDir set, yields custody entries for the emission log, the
 // sink-receipt log, and the sink-reject log — each labelled with the exact log
 // id it signs as and the issuer identity that signs its checkpoints (the SAME
 // identity the mirror shipper will later sign MirrorLogSegment wireauth proofs
-// as, D-T3). Tlogs() (the TlogService READ surface) must still exclude the
+// as). Tlogs() (the TlogService READ surface) must still exclude the
 // reject log — CustodyLogs() is a separate, custody-only registry.
 func TestDataPlane_CustodyLogs_DurableEntries(t *testing.T) {
 	url, accSeed := dpAccountServer(t)
@@ -98,7 +98,7 @@ func TestDataPlane_CustodyLogs_DurableEntries(t *testing.T) {
 
 	// Pin the FULL signer identity per entry (DID + KeyID + VerificationMethod)
 	// — the shipper signs MirrorLogSegment proofs as exactly this identity, and
-	// the registry's D-T3 check requires it to equal the checkpoint signer.
+	// the registry's check requires it to equal the checkpoint signer.
 	wantEmissionSigner := IssuerConfig{DID: dpIssuerDID, KeyID: string(keystore.KeyIDSigning), VerificationMethod: dpIssuerDID + "#signing"}
 	wantArchiveSigner := IssuerConfig{DID: dpArchiveReceiptIssr, KeyID: string(keystore.KeyIDSigning), VerificationMethod: dpArchiveReceiptIssr + "#signing"}
 	if c := byID[wantEmissionID]; c.Signer != wantEmissionSigner {
@@ -127,7 +127,7 @@ func TestDataPlane_CustodyLogs_DurableEntries(t *testing.T) {
 		}
 	}
 
-	// D-T5 unchanged: Tlogs() (the READ surface) still excludes the reject log.
+	// Tlogs() (the READ surface) still excludes the reject log.
 	if _, ok := dp.Tlogs()[wantRejectID]; ok {
 		t.Fatalf("reject log leaked into Tlogs() (the READ surface) under %q", wantRejectID)
 	}

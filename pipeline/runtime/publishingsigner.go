@@ -109,8 +109,8 @@ func (p *publishingSigner) publish(ctx context.Context, cred *vc.PipelinePassCre
 
 // publishIssuedCredential stores cred to the remote VC store and verifies the round-trip:
 // what the server recomputed must equal what was signed, else the store holds something
-// else. Shared by publishingSigner and the aggregate emissionRegistrar (slice-17o, which
-// reorders this publish to AFTER local self-audit registration — D-17o-3).
+// else. Shared by publishingSigner and the aggregate emissionRegistrar (which reorders
+// this publish to AFTER local self-audit registration).
 //
 // The VARIANT is what settles it. The content address covers the body only, so it matches
 // just as well when the store holds a different signed form of the same claims — which is

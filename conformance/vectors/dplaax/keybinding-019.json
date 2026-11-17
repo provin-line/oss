@@ -1,0 +1,77 @@
+{
+  "id": "keybinding-019",
+  "rule": "keybinding.status-list.monotonic",
+  "description": "A revocation list earlier than the held one is rejected as status-list-rewound",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "BitstringStatusListCredential"
+      ],
+      "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:29:00Z",
+      "validUntil": "2026-11-06T01:29:00Z",
+      "credentialSubject": {
+        "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list-list",
+        "type": "BitstringStatusList",
+        "statusPurpose": "revocation",
+        "encodedList": "uH4sIAAAAAAAA_-zAMQEAAAgCMG1A_7TE4NlyAAAAAAAAAAAAAAAAAAAAwNg3AAD__-xSDbMAQAAA"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:29:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    },
+    "held": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "BitstringStatusListCredential"
+      ],
+      "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:59:00Z",
+      "validUntil": "2026-11-06T01:59:00Z",
+      "credentialSubject": {
+        "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list-list",
+        "type": "BitstringStatusList",
+        "statusPurpose": "revocation",
+        "encodedList": "uH4sIAAAAAAAA_-zAMQEAAAgCMG1A_7TE4NlyAAAAAAAAAAAAAAAAAAAAwNg3AAD__-xSDbMAQAAA"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:59:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    },
+    "anchor": {
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "issuance_keys": [
+        "did:dplaax:poc.dplaax.dev:org:acme#issuer"
+      ],
+      "max_validity_seconds": 172800,
+      "max_status_age_seconds": 7200
+    },
+    "verifier": {
+      "skew_seconds": 60
+    },
+    "at": "2026-11-06T01:00:00Z"
+  },
+  "expect": {
+    "result": "reject",
+    "reason": "status-list-rewound"
+  }
+}

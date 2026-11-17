@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// TestProdDeps_NoAuditorRootInClient guards the architectural promise PR3b
-// Task 2 sets up: auditor/client depends on the auditor/wirecontract LEAF for
+// TestProdDeps_NoAuditorRootInClient guards the architectural promise that
+// auditor/client depends on the auditor/wirecontract LEAF for
 // its shared op names, signed-view builders, and consumed-set
 // canonicalization, never the auditor SERVICE ROOT (which carries the
 // receipt/status stores, the audit runner, and the rest of the server-side

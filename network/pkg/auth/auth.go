@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	o3coconnect "github.com/o3co/protobuf.interceptors/connectrpc"
@@ -34,19 +35,40 @@ import (
 // A backend that cannot answer (unreachable, timed out, overloaded) must
 // return an error wrapping interceptors.ErrBackendUnavailable: the RPC
 // interceptors report it as CodeUnavailable and the push receiver as 503, both
-// retryable. Any other error is a refusal or a fault, not an outage.
+// retryable. When the error also wraps the RPC's own context error and that
+// context has ended, the interceptors report CodeCanceled or
+// CodeDeadlineExceeded instead. Any other error is a refusal or a fault, not
+// an outage. The cedar backend counts a bearer-token check that cannot fetch
+// the issuer's key set, for whatever reason, as one that cannot answer: its
+// token check can only refuse a token or not answer.
 type Verifier interface {
 	Verify(ctx context.Context, resource, action string) error
 }
+
+// streamRecheckInterval is how often, at most, an open stream is checked
+// again. A stream is checked when it opens; after that, a message sent or
+// received at least this long after the last check began is checked before it
+// goes through. A permission withdrawn, or a token that expires, while a stream
+// is open ends the stream at the first message whose check is due, and a
+// payload of many frames costs a check per interval, not one per frame.
+const streamRecheckInterval = 5 * time.Second
 
 // Interceptors returns the ordered authorization interceptor chain for a
 // ConnectRPC handler: the policy-option interceptor (reads the proto option into
 // context) MUST precede the verification interceptor (reads the policy from
 // context and calls the verifier), and this constructor guarantees that order.
+// A unary RPC is checked once; a stream is checked when it opens and then at
+// most once every five seconds, on a message (see streamRecheckInterval).
 func Interceptors(verifier Verifier) []connect.Interceptor {
+	return interceptorsRecheckingEvery(verifier, streamRecheckInterval)
+}
+
+// interceptorsRecheckingEvery is Interceptors with a stream checked again at
+// most once per d.
+func interceptorsRecheckingEvery(verifier Verifier, d time.Duration) []connect.Interceptor {
 	return []connect.Interceptor{
 		o3coconnect.PolicyOptionInterceptor(),
-		o3coconnect.VerificationInterceptor(verifier),
+		o3coconnect.VerificationInterceptor(verifier, o3coconnect.WithStreamRecheckInterval(d)),
 	}
 }
 

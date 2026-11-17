@@ -100,10 +100,10 @@ func TestStatusStore_AbandonedRoundTrip(t *testing.T) {
 }
 
 // The RESOLUTION-outcome marker (AuditRecord.Unresolvable) survives the disk
-// round-trip too — this is the P1-B fix: verdictEnvelope previously had no
-// field for it, so Put silently dropped it and every restarted (or simply
-// file-store-backed) node served CONFIDENCE_INDETERMINATE for a head the
-// runner had actually given up resolving, never CONFIDENCE_UNRESOLVABLE.
+// round-trip too: verdictEnvelope has a field for it. Without one, Put would
+// drop it, and every restarted (or simply file-store-backed) node would serve
+// CONFIDENCE_INDETERMINATE for a head the runner had given up resolving,
+// never CONFIDENCE_UNRESOLVABLE.
 func TestStatusStore_UnresolvableRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s, err := filestore.NewStatusStore(dir)
@@ -206,11 +206,12 @@ func TestReceiptStore_RoundTripRestartDamaged(t *testing.T) {
 	}
 }
 
-// The frozen contract (D1): Put canonicalizes (sort, dedup) and is first-write-wins. A
-// canonically-identical replay (including a permuted one) is an idempotent no-op — this is
-// what makes aggregate re-emit retries safe. A canonically-different Put is a conflict: the
-// recorded set is pinned by the first successful write and never silently changes, and the
-// pin survives a restarted store instance over the same directory.
+// The frozen contract: Put canonicalizes (sort, dedup) and is first-write-wins.
+// A canonically-identical replay (including a permuted one) is an idempotent
+// no-op — this is what makes aggregate re-emit retries safe. A
+// canonically-different Put is a conflict: the recorded set is pinned by the
+// first successful write and never silently changes, and the pin survives a
+// restarted store instance over the same directory.
 func TestReceiptStore_CanonicalizationAndFirstWriteWins(t *testing.T) {
 	dir := t.TempDir()
 	s, err := filestore.NewReceiptStore(dir)

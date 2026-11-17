@@ -1,0 +1,41 @@
+{
+  "id": "auth-grant-legacy-no-method-ambiguous-001",
+  "rule": "auth.grant.exact-method",
+  "description": "LEGACY_DID_LOGIN@1 request naming no verification method against a document with two controller-matched methods: with no signed id there is no single candidate, and the grant MUST fail closed even though the first method verifies the signature",
+  "input": {
+    "did": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001",
+    "did_document": {
+      "id": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001",
+      "verificationMethod": [
+        {
+          "id": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001#key-1",
+          "type": "JsonWebKey2020",
+          "controller": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "x": "16A3Eg2f7Uzj4PB0Re9PsgFO9kNA6zTSJy4lRExwiBY",
+            "kty": "OKP"
+          }
+        },
+        {
+          "id": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001#key-2",
+          "type": "JsonWebKey2020",
+          "controller": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "x": "C4I8XCJMlDc3E9tN3qPVe4Qa3ljrFjQXDIM4HIAgm6s",
+            "kty": "OKP"
+          }
+        }
+      ]
+    },
+    "request": {
+      "did": "did:dplaax:registry.test.local:org:auth-grant-legacy-no-method-ambiguous-001",
+      "jws": "eyJhbGciOiJFZERTQSJ9.eyJkaWQiOiJkaWQ6ZHBsYWF4OnJlZ2lzdHJ5LnRlc3QubG9jYWw6b3JnOmF1dGgtZ3JhbnQtbGVnYWN5LW5vLW1ldGhvZC1hbWJpZ3VvdXMtMDAxIiwidGltZXN0YW1wIjoiMjAyNi0wNy0xN1QwMDowMDowMC4wMDBaIiwibm9uY2UiOiJmaXhlZC1ub25jZS1hdXRoLWdyYW50LWxlZ2FjeS1uby1tZXRob2QtYW1iaWd1b3VzLTAwMSJ9.7wVCokD_gHTgdoS8oU968rW4NC31o-Dx5u_P65x8k8W3zjJDNAeo_36mqSJX38IRnkqSDKl5rMjy3f-U_BLGAA"
+    }
+  },
+  "expect": {
+    "status": 400,
+    "error": "invalid_grant"
+  }
+}

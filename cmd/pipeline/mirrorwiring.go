@@ -1,11 +1,11 @@
 package main
 
-// Mirror-shipper wiring (PR3b Task 7, tlog-custody spec D-T6): this binary
+// Mirror-shipper wiring: this binary
 // wires one tlogship.Shipper per durable custody log pipeline/runtime.
 // Runtime.CustodyLogs() reports — every local durable log this node opened,
-// sink-reject logs included (D6) — shipping through a
+// sink-reject logs included — shipping through a
 // network/pkg/services/tlogservice/client.Client signed as that SPECIFIC
-// log's own checkpoint signer identity (tlog-custody spec D-T3: checkpoint
+// log's own checkpoint signer identity (checkpoint
 // signer == wireauth signer). A node whose loops span several local
 // identities (a source issuer, an archival sink's receipt/reject issuer, an
 // aggregate's own issuer) needs one signing client per identity, mirroring
@@ -14,9 +14,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
-
-	"connectrpc.com/connect"
 
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/network/pkg/pipelineconfig"
@@ -30,15 +29,16 @@ import (
 type mirrorClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
+	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*tlogserviceclient.Client
 }
 
-func newMirrorClientFactory(signer crypto.Signer, baseURL, bearer string, httpClient connect.HTTPClient) *mirrorClientFactory {
-	return &mirrorClientFactory{signer: signer, baseURL: baseURL, bearer: bearer, httpClient: httpClient, clients: map[string]*tlogserviceclient.Client{}}
+func newMirrorClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *mirrorClientFactory {
+	return &mirrorClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*tlogserviceclient.Client{}}
 }
 
 // For returns the cached client signing as signerDID, building and caching
@@ -53,6 +53,7 @@ func (f *mirrorClientFactory) For(signerDID string) *tlogserviceclient.Client {
 		Signer:     f.signer,
 		SignerDID:  signerDID,
 		BaseURL:    f.baseURL,
+		Audience:   f.audience,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
@@ -73,7 +74,7 @@ func (f *mirrorClientFactory) forClient(signerDID string) tlogship.MirrorClient 
 // (pipeline/runtime.Runtime.CustodyLogs — every durable local log this node
 // opened, reject logs included), each shipping through
 // mirrorClientFor(entry's checkpoint-signer DID). Caps and FlushInterval come
-// from tm (provin.network.pipeline.tlog-mirror, tlog-custody spec D-T2/D-T6).
+// from tm (provin.network.pipeline.tlog-mirror).
 // mirrorClientFor is a function value (not the concrete *mirrorClientFactory)
 // so tests can supply a spy without a live wire round trip. An empty custody
 // (the memlog unit-test fallback, or a config with no durable logs

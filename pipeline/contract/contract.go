@@ -63,8 +63,7 @@ const (
 	VerificationNone
 	// VerificationAdjacent — verify the immediately preceding VC (mandatory
 	// at every Pipeline-conformant ingress boundary). Full-chain verification is
-	// the async audit runner's job (slice-17h), not a real-time ingress strategy
-	// (slice-17j retired the real-time "full" strategy).
+	// the async audit runner's job, not a real-time ingress strategy.
 	VerificationAdjacent
 )
 

@@ -18,15 +18,15 @@ import (
 var appendJournalFn = appendJournal
 
 // AppendVerified durably extends the mirror for logID with records — a
-// segment the CALLER (the MirrorLogSegment handler, Task 5) has already
+// segment the CALLER (the MirrorLogSegment handler) has already
 // verified for signature, caller identity, and from_index alignment
-// against GetMirrorState.acked_size (D-T2 rules 1-3, 6). AppendVerified
+// against GetMirrorState.acked_size. AppendVerified
 // re-enforces, as defense in depth, every rule the store itself is able to
 // check from its own state:
 //
 //   - exact-extend: cp.Size must equal the current acked size plus
-//     len(records) — no ahead-checkpoints, no gaps (D-T2 rule 1/2 restated
-//     at the storage layer). A request that does not fit this arithmetic
+//     len(records) — no ahead-checkpoints, no gaps (the same alignment rule
+//     restated at the storage layer). A request that does not fit this arithmetic
 //     was never a fresh exact-extend; the handler is expected to have
 //     already resolved any overlap/replay before calling here — see the
 //     package doc's "Byte-identical replay" paragraph. (The race-free
@@ -34,7 +34,7 @@ var appendJournalFn = appendJournal
 //     the Service now calls; AppendVerified stays the exact-extend +
 //     monotonicity entry point the store's own tests exercise directly.)
 //   - the recomputed chain head (continuing from the stored tail through
-//     records, via ChainHash) must equal cp.Head (D-T2 rule 1).
+//     records, via ChainHash) must equal cp.Head.
 //   - cp.Origin must equal logID (mirrors
 //     tlogservice.Service.Checkpoint's existing origin-agreement check for
 //     local logs — a checkpoint signed for a DIFFERENT log id must never
@@ -47,7 +47,7 @@ var appendJournalFn = appendJournal
 //     STALE checkpoint. If the chain already recorded at cp.Size still
 //     matches cp.Head, it is valid-but-outdated and is IGNORED — the call
 //     returns the store's current (unregressed) acked size, a no-op
-//     success (D-T2 rule 4). If it does not match, that is a genuine
+//     success. If it does not match, that is a genuine
 //     conflict (two different signed heads claim the same size) and the
 //     call fails loudly.
 //   - the zero-new-records, equal-size-equal-head case (a checkpoint
@@ -111,10 +111,10 @@ func (s *Store) AppendVerified(logID string, records [][]byte, cp *tlog.Checkpoi
 
 // AppendSegment atomically resolves one MirrorLogSegment against the store's
 // current acked size UNDER THE SAME LOCK the durable append holds, so a
-// concurrent identical retry can never observe a torn intermediate size
-// (D-T2 rule 2). It is the entry point tlogservice.Service.MirrorSegment
-// calls; the fromIndex the caller has verified structurally (overflow,
-// cp.Size == fromIndex + len) is resolved here against the live acked size:
+// concurrent identical retry can never observe a torn intermediate size.
+// It is the entry point tlogservice.Service.MirrorSegment calls; the fromIndex
+// the caller has verified structurally (overflow, cp.Size == fromIndex + len)
+// is resolved here against the live acked size:
 //
 //   - fromIndex == acked: exact extend (append + checkpoint durably).
 //   - fromIndex < acked, records byte-identical to the stored overlap, and
@@ -128,8 +128,8 @@ func (s *Store) AppendVerified(logID string, records [][]byte, cp *tlog.Checkpoi
 // hole: with the acked read and the append split across two calls, two
 // overlapping identical requests could both read the same acked size, the
 // first commit as an extend, and the second then fail the exact-extend
-// arithmetic with a plain error (mapped to Internal) instead of the replay
-// no-op success D-T2 rule 2 requires.
+// arithmetic with a plain error (mapped to Internal) instead of succeeding
+// as a no-op, as a replay must.
 func (s *Store) AppendSegment(logID string, fromIndex uint64, records [][]byte, cp *tlog.Checkpoint) (uint64, error) {
 	if err := validateCheckpoint(logID, cp); err != nil {
 		return 0, err
@@ -188,7 +188,7 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 		tail = currentRecords[currentAcked-1].Hash
 	}
 
-	// First-writer signer PIN (D-T3), enforced atomically under s.mu: once a
+	// First-writer signer PIN, enforced atomically under s.mu: once a
 	// checkpoint is stored, every later segment — extend OR replay — MUST
 	// carry the same SignedBy. Doing this in the store (rather than a Service
 	// read-then-check before the append) is what closes the concurrency hole:
@@ -202,7 +202,7 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 	}
 
 	if fromIndex != nil {
-		// --- Atomic segment resolution (D-T2 rule 2). Race-free: the acked
+		// --- Atomic segment resolution. Race-free: the acked
 		// size is read here, under the same lock the append below holds.
 		switch {
 		case *fromIndex > currentAcked:
@@ -224,7 +224,7 @@ func (s *Store) appendLocked(logID string, fromIndex *uint64, records [][]byte, 
 						ErrConflict, logID, *fromIndex+uint64(i))
 				}
 			}
-			// D-T2 rule 1 applies to a replay too: even byte-identical records
+			// The chain-head check applies to a replay too: even byte-identical records
 			// arrive under a genuinely-signed checkpoint whose Head must equal
 			// the recorded chain head at cp.Size. Without this a pinned signer
 			// could replay with an ARBITRARY (still-signed) Head and have the

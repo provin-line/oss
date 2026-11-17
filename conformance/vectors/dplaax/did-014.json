@@ -1,0 +1,9 @@
+{
+  "id": "did-014",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with a non-ASCII character is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acmé"
+  },
+  "expect": "reject"
+}

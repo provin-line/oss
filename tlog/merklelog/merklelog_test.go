@@ -401,7 +401,7 @@ func TestCrossKATWithSourceCommitment(t *testing.T) {
 	}
 }
 
-// Regression (Codex P1): appending AFTER a reopen must append, not overwrite
+// Regression: appending AFTER a reopen must append, not overwrite
 // the journal start — the reopened handle's offset must not matter.
 func TestAppendAfterReopen(t *testing.T) {
 	ctx := context.Background()
@@ -440,7 +440,7 @@ func TestAppendAfterReopen(t *testing.T) {
 	}
 }
 
-// Regression (Codex P2): a right-origin in-range checkpoint whose head does
+// Regression: a right-origin in-range checkpoint whose head does
 // not commit to this log's state is refused by the Prover.
 func TestProverRefusesForeignHead(t *testing.T) {
 	ctx := context.Background()

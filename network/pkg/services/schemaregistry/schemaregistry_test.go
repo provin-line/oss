@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,7 +150,7 @@ func TestRegister_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-// D2: a body that is not a valid, self-contained JsonSchema is rejected at
+// A body that is not a valid, self-contained JsonSchema is rejected at
 // Register and never enters the registry.
 func TestRegister_RejectsInvalidSchemaBody(t *testing.T) {
 	svc := newService(t)
@@ -169,6 +170,50 @@ func TestRegister_RejectsInvalidSchemaBody(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Errorf("rejected schemas leaked into the registry: %d", len(all))
+	}
+}
+
+// schemaOfSize is a valid JsonSchema exactly n bytes long.
+func schemaOfSize(t *testing.T, n int) []byte {
+	t.Helper()
+	const head, tail = `{"type":"object","description":"`, `"}`
+	pad := n - len(head) - len(tail)
+	if pad < 0 {
+		t.Fatalf("no schema of %d bytes", n)
+	}
+	return []byte(head + strings.Repeat("x", pad) + tail)
+}
+
+// A schema body is at most 1 MiB: one of exactly that size is admitted, one
+// byte more is refused and nothing is stored.
+func TestRegister_BodyIsAtMostOneMiB(t *testing.T) {
+	const bound = 1 << 20
+	svc := newService(t)
+	if _, err := svc.Register(context.Background(), "reading", "JsonSchema", schemaOfSize(t, bound), ""); err != nil {
+		t.Fatalf("a %d-byte schema: %v", bound, err)
+	}
+
+	svc = newService(t)
+	if _, err := svc.Register(context.Background(), "reading", "JsonSchema", schemaOfSize(t, bound+1), ""); !errors.Is(err, schemaregistry.ErrInvalidArgument) {
+		t.Fatalf("a %d-byte schema: got %v, want ErrInvalidArgument", bound+1, err)
+	}
+	all, err := svc.List(context.Background(), "reading", true, true)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("a refused schema was stored: %d", len(all))
+	}
+}
+
+// The size is checked before the body is read as a schema: an oversized body
+// that is not JSON is refused for its size.
+func TestRegister_SizeIsCheckedBeforeTheBodyIsRead(t *testing.T) {
+	svc := newService(t)
+	body := []byte(strings.Repeat("{", 1<<20+1))
+	_, err := svc.Register(context.Background(), "reading", "JsonSchema", body, "")
+	if !errors.Is(err, schemaregistry.ErrInvalidArgument) || !strings.Contains(err.Error(), "beyond the bound of 1048576") {
+		t.Errorf("got %v, want ErrInvalidArgument naming the size bound", err)
 	}
 }
 

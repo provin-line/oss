@@ -24,7 +24,7 @@ func mustAddrs(ss ...string) []netip.Addr {
 }
 
 func TestCheckURL_BlocksByIPLiteral(t *testing.T) {
-	g := core.NewURLGuard() // private blocked by default (D1)
+	g := core.NewURLGuard() // private blocked by default
 	blocked := []string{
 		"http://127.0.0.1/",                // loopback v4
 		"http://[::1]/",                    // loopback v6

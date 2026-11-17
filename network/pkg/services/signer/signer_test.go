@@ -101,7 +101,7 @@ func TestSignRaw_WireDomain_RoundTrip(t *testing.T) {
 	}
 }
 
-// --- D-s3 crossed bindings: each endpoint rejects the other domain's key ------
+// --- crossed bindings: each endpoint rejects the other domain's key ------
 
 func TestSign_RejectsAuthKey(t *testing.T) {
 	svc, _ := svcWithKey(t, keystore.KeyIDSigning)

@@ -249,7 +249,7 @@ var (
 // Config holds construction-time configuration for a Sink Process runtime.
 type Config struct {
 	// Strategy must be VerificationAdjacent (the only ingress verification a sink runs;
-	// full-chain audit is the async audit runner's job, slice-17h).
+	// full-chain audit is the async audit runner's job).
 	Strategy contract.VerificationStrategy
 	// Kind is the deployed sink's handling discipline. Must be non-Unknown.
 	Kind contract.SinkKind
@@ -566,7 +566,7 @@ func (p *Processor) Process(ctx context.Context, input []byte) (*contract.Result
 	// failure: the receipt path only ADDS an audit trail, and its local-before-
 	// remote ordering means a "remote-visible but no local trail" state cannot
 	// occur. A receipt failure is StatusErrored — the "write-done, receipt-absent"
-	// residual is detectable via audit not_found + tlog diff (spec D-1).
+	// residual is detectable via audit not_found + tlog diff.
 	if p.cfg.Receipts != nil {
 		if err := p.cfg.Receipts.IssueReceipt(ctx, cred); err != nil {
 			if isCtxErr(err) {

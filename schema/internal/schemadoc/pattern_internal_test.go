@@ -41,7 +41,7 @@ func TestPatternSize_IsAtLeastTheProgram(t *testing.T) {
 func TestPrescan_AcceptsOnlyTheSharedGrammar(t *testing.T) {
 	accepted := []string{
 		``, `a`, `abc`, `.`, `^a$`, `a|b|`, `(a)`, `(?:a)`, `(?<name>a)`, `(?<_n1>a)`,
-		`a*`, `a+`, `a?`, `a*?`, `a+?`, `a??`, `a{3}`, `a{2,}`, `a{2,5}`, `a{2,5}?`, `a{0}`, `a{10}`, `a{0,10}`, `a{10,}`, `(ab)*`, `[a-z]+`,
+		`a*`, `a+`, `a?`, `a*?`, `a+?`, `a??`, `a{3}`, `a{2,}`, `a{2,5}`, `a{2,5}?`, `a{0}`, `a{10}`, `a{0,10}`, `a{10,}`, `a{3,3}`, `a{9,10}`, `a{1000}`, `a{0,1000}`, `a{1000,}`, `(ab)*`, `[a-z]+`,
 		`\d\D\w\W\s\S`, `\bfoo\B`, `\t\n\v\f\r`, `\x41`, `\p{L}`, `\P{Lu}`, `\p{Nd}+`,
 		`\^\$\\\.\*\+\?\(\)\[\]\{\}\|\/`,
 		`[abc]`, `[^abc]`, `[a-z0-9_]`, `[a-a]`, `[\x41-\x41]`, `[!->]`, `[\t-\r]`, `[-a]`, `[a-]`, `[\d\w\s]`, `[\]\[\-\\]`, `[\x41-\x5A]`, `[\p{L}\p{Nd}_-]`, `[(?i)]`, `[.*+?|^$]`,
@@ -52,17 +52,17 @@ func TestPrescan_AcceptsOnlyTheSharedGrammar(t *testing.T) {
 		`\Qa\E`, `\Q[\E(?i)a`, `\pL`, `\p{l}`, `\p{Greek}`, `\p{^L}`, `\p{Script=Greek}`, `\p{L`, `\p`,
 		`\uFFFF`, `\x{41}`, `\x4`, `\0`, `\1`, `\k<n>`, `\cA`, `\a`, `\e`, `\z`, `\A`, `\C`,
 		`[b-a]`, `[\x42-\x41]`, `[>-!]`, `[\.-\(]`,
-		`[]`, `[^]`, `[]a]`, `[[:alpha:]]`, `[a[b]`, `[\b]`, `[\d-z]`, `[a-\w]`, `[a`, `a]`, `a}`, `a{`, `a{,3}`, `a{x}`, `{3}`, `a{01}`, `a{00}`, `a{1,02}`, `a{0,01}`,
+		`[]`, `[^]`, `[]a]`, `[[:alpha:]]`, `[a[b]`, `[\b]`, `[\d-z]`, `[a-\w]`, `[a`, `a]`, `a}`, `a{`, `a{,3}`, `a{x}`, `{3}`, `a{01}`, `a{00}`, `a{1,02}`, `a{0,01}`, `a{2,1}`, `0{1,0}`, `a{10,9}`, `a{100,99}`, `a{1001}`, `0{8000}`, `a{0,1001}`, `a{1001,}`, `a{99999999999}`,
 		`*a`, `a**`, `a+*`, `(*a)`, `|*`, `^*`, `$+`, `\b?`, `(a`, `a)`, `(?:a`, `a\`,
 		"[" + strings.Repeat("[:a", 100) + "]", "[\xbf]", "a\xff",
 	}
 	for _, expr := range accepted {
-		if err := prescan(expr); err != nil {
+		if _, _, err := prescan(expr); err != nil {
 			t.Errorf("%q refused: %v", expr, err)
 		}
 	}
 	for _, expr := range refused {
-		if err := prescan(expr); err == nil {
+		if _, _, err := prescan(expr); err == nil {
 			t.Errorf("%.40q accepted", expr)
 		}
 	}
@@ -74,18 +74,19 @@ func TestPrescan_WhatItAcceptsGoReads(t *testing.T) {
 	for _, expr := range []string{
 		`^[a-zA-Z\d][a-zA-Z\d._+()-]{0,254}$`, `(?<name>a)\k`, `[\p{L}\p{Nd}_-]+`, `\x41[\x41-\x5A]`, `a{2,5}?`, `[-a]|[a-]`,
 	} {
-		if prescan(expr) != nil {
+		goExpr, _, err := prescan(expr)
+		if err != nil {
 			continue
 		}
-		if _, err := syntax.Parse(expr, syntax.Perl); err != nil {
+		if _, err := syntax.Parse(goExpr, syntax.Perl); err != nil {
 			t.Errorf("%q: the scan accepts it, Go does not: %v", expr, err)
 		}
 	}
 }
 
-// The Unicode classes an expression names are counted by the ranges Go's
-// parser copies from their tables, and an expression whose classes hold more
-// than maxPatternSize ranges is refused.
+// The Unicode classes an expression names are counted by the ranges of their
+// pinned tables, and an expression whose classes hold more than
+// maxPatternSize ranges is refused.
 func TestPrescan_BoundsUnicodeClasses(t *testing.T) {
 	letters := unicodeClassRanges("L")
 	if letters < 100 {
@@ -96,7 +97,7 @@ func TestPrescan_BoundsUnicodeClasses(t *testing.T) {
 	for expr, refused := range map[string]bool{
 		within: false, past: true, `[` + past + `]`: true, strings.Repeat(`\P{L}`, maxPatternSize/letters+1): true,
 	} {
-		if err := prescan(expr); (err != nil) != refused {
+		if _, _, err := prescan(expr); (err != nil) != refused {
 			t.Errorf("%.40q: %v, want refused %v", expr, err, refused)
 		}
 	}
@@ -107,27 +108,37 @@ func TestPrescan_BoundsUnicodeClasses(t *testing.T) {
 // scan accepts and ends in one it refuses, so the scan reads all of it.
 // (Sixteen times as long takes about sixteen times as long; a scan that
 // searched the rest of the expression at each step would take about 256
-// times.)
+// times.) The two lengths are timed in turn, the best of each kept, so a
+// change in the machine's load falls on both; a ratio past the bound three
+// times over fails.
 func TestPrescan_IsLinear(t *testing.T) {
 	timeOf := func(s string) time.Duration {
-		best := time.Hour
-		for range 5 {
-			start := time.Now()
-			for range 20 {
-				prescan(s)
-			}
-			best = min(best, time.Since(start))
+		start := time.Now()
+		for range 20 {
+			prescan(s)
 		}
-		return best
+		return time.Since(start)
 	}
 	for _, unit := range []string{"a", "[a-z]", "(?:a)", "(a)", "a{2,5}", `\x41`, `[\x41-\x5A]`, `\d\w`, "a|", "[^a]", `\.`, "[-a]"} {
-		if err := prescan(strings.Repeat(unit, 2000)); err != nil {
+		if _, _, err := prescan(strings.Repeat(unit, 2000)); err != nil {
 			t.Fatalf("%q: %v", unit, err)
 		}
-		short := timeOf(strings.Repeat(unit, 2000) + "(?i)")
-		long := timeOf(strings.Repeat(unit, 32000) + "(?i)")
-		if ratio := float64(long) / float64(max(short, time.Microsecond)); ratio > 64 {
-			t.Errorf("%q: 16 times as long took %.0f times as long", unit, ratio)
+		shortExpr := strings.Repeat(unit, 2000) + "(?i)"
+		longExpr := strings.Repeat(unit, 32000) + "(?i)"
+		var ratio float64
+		var short, long time.Duration
+		for range 3 {
+			short, long = time.Hour, time.Hour
+			for range 5 {
+				short = min(short, timeOf(shortExpr))
+				long = min(long, timeOf(longExpr))
+			}
+			if ratio = float64(long) / float64(max(short, time.Microsecond)); ratio <= 64 {
+				break
+			}
+		}
+		if ratio > 64 {
+			t.Errorf("%q: 16 times as long took %.0f times as long (%v, %v)", unit, ratio, short, long)
 		}
 	}
 }
@@ -137,15 +148,16 @@ func TestPrescan_IsLinear(t *testing.T) {
 // guard included, has at most patternSize + onePassGuardSize instructions.
 func parsesWithinItsSize(t *testing.T, expr string) {
 	t.Helper()
-	if prescan(expr) != nil {
+	goExpr, _, err := prescan(expr)
+	if err != nil {
 		return
 	}
-	parsed, err := syntax.Parse(expr, syntax.Perl)
+	parsed, err := syntax.Parse(goExpr, syntax.Perl)
 	if err != nil {
 		t.Errorf("%q: the scan accepts it, Go does not parse it: %v", expr, err)
 		return
 	}
-	guarded, err := syntax.Parse(onePassGuard+"(?:"+expr+")", syntax.Perl)
+	guarded, err := syntax.Parse(onePassGuard+"(?:"+goExpr+")", syntax.Perl)
 	if err != nil {
 		t.Errorf("%q: Go does not parse it guarded: %v", expr, err)
 		return
@@ -166,7 +178,7 @@ func TestPrescan_WhatItAcceptsGoParsesWithinItsSize(t *testing.T) {
 	pieces := []string{
 		"a", "b", "é", ".", "^", "$", "|", "(", ")", "(?:", "(?<n", ">", "[", "]", "[^", "-", "\\", "\\d", "\\w", "\\s",
 		"\\b", "\\B", "\\x41", "\\x4", "\\p{L}", "\\P{Nd}", "\\p{", "{", "}", ",", "0", "1", "2", "*", "+", "?", ":", "=", "!",
-		"\\t", "\\.", "\\[", "\\]", "\\-", "\\/", "\\{", "(?i)",
+		"\\t", "\\.", "\\[", "\\]", "\\-", "\\/", "\\{", "(?i)", "\\p{Letter}", "\\P{digit}", "\\p{letter}",
 	}
 	rng := rand.New(rand.NewPCG(1, 2))
 	accepted := 0
@@ -176,7 +188,7 @@ func TestPrescan_WhatItAcceptsGoParsesWithinItsSize(t *testing.T) {
 			b.WriteString(pieces[rng.IntN(len(pieces))])
 		}
 		expr := b.String()
-		if prescan(expr) == nil {
+		if _, _, err := prescan(expr); err == nil {
 			accepted++
 		}
 		parsesWithinItsSize(t, expr)
@@ -188,7 +200,7 @@ func TestPrescan_WhatItAcceptsGoParsesWithinItsSize(t *testing.T) {
 
 func FuzzPrescan(f *testing.F) {
 	for _, expr := range []string{
-		`^[a-zA-Z\d][a-zA-Z\d._+()-]{0,254}$`, `[\p{L}\p{Nd}_-]+`, `\x41[\x41-\x5A]`, `a{2,5}?`, `[-a]|[a-]`, `(?<name>a)(?:b|c)*`,
+		`^[a-zA-Z\d][a-zA-Z\d._+()-]{0,254}$`, `[\p{L}\p{Nd}_-]+`, `\x41[\x41-\x5A]`, `a{2,5}?`, `[-a]|[a-]`, `(?<name>a)(?:b|c)*`, `\p{Letter}+`, `[\P{digit}_]`,
 	} {
 		f.Add(expr)
 	}
@@ -261,13 +273,13 @@ func TestPrescan_BoundsTheNestingOfGroups(t *testing.T) {
 		return strings.Repeat(open, depth) + "a" + strings.Repeat(")", depth)
 	}
 	for _, open := range []string{"(", "(?:"} {
-		if err := prescan(nest(open, maxGroupDepth)); err != nil {
+		if _, _, err := prescan(nest(open, maxGroupDepth)); err != nil {
 			t.Errorf("%q %d deep: %v", open, maxGroupDepth, err)
 		}
-		if err := prescan(nest(open, maxGroupDepth+1)); err == nil {
+		if _, _, err := prescan(nest(open, maxGroupDepth+1)); err == nil {
 			t.Errorf("%q %d deep accepted", open, maxGroupDepth+1)
 		}
-		if err := prescan(strings.Repeat(nest(open, maxGroupDepth), 100)); err != nil {
+		if _, _, err := prescan(strings.Repeat(nest(open, maxGroupDepth), 100)); err != nil {
 			t.Errorf("100 groups of %q %d deep, one after another: %v", open, maxGroupDepth, err)
 		}
 	}
@@ -276,8 +288,10 @@ func TestPrescan_BoundsTheNestingOfGroups(t *testing.T) {
 // Parsing and compiling an expression, refused or not, allocates memory
 // linear in its length, however its groups nest and however small the
 // program it compiles to: groups nested deep, and a body repeated {0} times,
-// which compiles to almost nothing but is parsed twice.
+// which compiles to almost nothing but is parsed twice. It holds at the
+// deepest bound the setting allows, maxGroupDepthCeiling.
 func TestCompileRegexpWithin_AllocatesLinearlyInTheLength(t *testing.T) {
+	atMaxGroupDepth(t, maxGroupDepthCeiling)
 	deep := func(depth int) string { return strings.Repeat("(?:a*", depth) + strings.Repeat(")", depth) }
 	for name, expr := range map[string]string{
 		"4,000 groups nested, repeated {0} times":       deep(4000) + "{0}",

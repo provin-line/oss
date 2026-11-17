@@ -1,11 +1,7 @@
 package main
 
-// Copied from cmd/standalone/push.go (PR3b Task 6, since retired — PR3c): the
-// HTTP push-ingest mount + per-route policy, unchanged. Duplicated rather
-// than imported — the retired cmd/standalone's copy was unexported to
-// package main of a DIFFERENT binary, and this binary could not import
-// cmd/standalone. cmd/standalone no longer exists, so this is now the only
-// copy.
+// The HTTP push-ingest mount + per-route policy. Unexported to package main,
+// so no other binary shares it.
 
 import (
 	"errors"

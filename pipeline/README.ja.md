@@ -33,7 +33,7 @@ contract/        Pipeline Contract — 公開コントラクト。外部アダ�
                  Custom プロセスはここで表現される（専用ディレクトリなし）。
 chained/         Chained Process ランタイム（filter / converter ステップ、VC 署名）
 source/          Source Process メカニクス（ingest/ + aggregate/）
-sink/            Sink Process（コンソール参照実装）
+sink/            Sink Process（console + file 参照実装）
 provenance/      共有メカニクス：VC 署名・検証プロバイダ
 observer/        共有メカニクス：プロセスイベントオブザーバ（ログ、VC ストア）
 transport/       共有メカニクス：pub-sub 抽象（NATS 実装；Hub スワップポイント）
@@ -43,4 +43,4 @@ transport/       共有メカニクス：pub-sub 抽象（NATS 実装；Hub ス�
 
 ## 参照実装と拡張アダプタ
 
-本リポジトリは参照実装（`apipush`、`console`）のみを提供する。ベンダー・エコシステムアダプタ（EDC、Kafka、SNS など）は、`contract/` を実装した**別リポジトリ**に置く。このコントラクトの安定性を保つことが、本レイヤーの主要な API 義務である。
+本リポジトリは参照実装（`apipush`、`console`、`file`）のみを提供する。ベンダー・エコシステムアダプタ（EDC、Kafka、SNS など）は、`contract/` を実装した**別リポジトリ**に置く。このコントラクトの安定性を保つことが、本レイヤーの主要な API 義務である。

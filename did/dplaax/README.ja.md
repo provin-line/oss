@@ -25,4 +25,5 @@ registry domain 自体は discovery 機構であって trust anchor ではない
 ## 規約
 
 - **パーサーは構文のみを担う。** 意味的な分類は `IsOwner`・`IsPipeline`・`IsProcess` メソッドが担う。新しいリソース型を追加する際は分類メソッドと既知パターンバリデータのケースを追加すればよく、パーサー自体は変更しない。
+- **構文の断りは `ErrSyntax`。** `Parse` と `ValidateRegistry` の error はすべて、`errors.Is` で `ErrSyntax` に当たる（dplaax の規則 `did.dplaax.syntax`）。何が満たされないかは error の文が言う。意味のゲート（`ValidateDID`・`RequireKnownPattern`・`RequireOwner`）は別の規則で断り、その error は `ErrSyntax` に当たらない。ゲートが受けるのは parse した後の `*DID` で、`ValidateDID` が空の registry を断るのは呼び手が組み立てた DID に対してである（`Parse` が返した DID には registry がある）。
 - すべてのセグメントは安全セグメントルール（`[a-zA-Z0-9._-]+`、ドットのみのセグメントは不可）に対してバリデーションされる。これにより DID セグメントをストレージパスの構築に使用してもパストラバーサルのリスクがない。コンシューマはパスを組み立てる前に exported された安全性チェックを必ず呼び出すこと。

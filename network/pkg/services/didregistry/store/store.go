@@ -1,6 +1,8 @@
 // Package store defines the persistence contracts of the DID registry
 // service. Implementations (store/yamlstore) hold no validation logic; they
-// build filesystem paths only from safety-checked DID segments.
+// build filesystem paths only from safety-checked DID segments, and refuse
+// the arguments the contract below says they refuse (a nil, a DID of the
+// wrong shape), which is not a check of what the DID registry accepts.
 //
 // Private keys are NOT stored here — key custody goes through
 // keystore.
@@ -50,22 +52,21 @@ type DIDSummary struct {
 // LifecycleEvent is one append-only record in a DID's lifecycle log. It is a
 // plain persistence shape: the store holds no validation or chaining logic.
 // The service builds events (it owns the clock and the hash chain) and the
-// store only appends them in order. Fields follow slice-4 D-d4.
+// store only appends them in order.
 type LifecycleEvent struct {
-	// EventType is the lifecycle transition. Slice-4 produces "register" /
-	// "revoke"; "bind" / "rotate" arrive with later slices. It is a string so
-	// new types are additive and no dead enum value ships.
+	// EventType is the lifecycle transition; the service produces "register" and
+	// "revoke". It is a string so new types are additive and no dead enum value
+	// ships.
 	EventType string
 	// DIDDocSnapshot is the canonical-JCS hash ("sha256:<hex>") of the DID
 	// Document body at the time of the event — the integrity-protected snapshot.
 	DIDDocSnapshot string
 	// OutwardSnapshot is the opaque raw bytes of a caller-submitted outward DID
-	// document (B7); nil when none was submitted.
+	// document; nil when none was submitted.
 	OutwardSnapshot []byte
-	// WitnessSource records how the outward binding was witnessed:
-	// "self-asserted" now, "registry-resolved" once registry-side resolution
-	// (D-d4 part A) lands. Present from the start so that later addition is
-	// purely additive and old caller-submitted snapshots stay distinguishable.
+	// WitnessSource records how the outward binding was witnessed. The service
+	// records "self-asserted": the binding as the caller submitted it. It is a
+	// string, so a record of another source keeps the same shape.
 	WitnessSource string
 	// WitnessedAt is the registry receipt time, injected by the service via its
 	// clock seam (not read from the caller).
@@ -100,16 +101,26 @@ func (e LifecycleEvent) CanonicalMap() map[string]any {
 // DIDStore persists DID Documents and their delegations across the
 // owner → pipeline → process hierarchy.
 type DIDStore interface {
+	// SaveOwner, SavePipeline and SaveProcess store d's document, and a
+	// Pipeline's or a Process's delegation. Each refuses a nil DID, document
+	// or delegation with an error and stores nothing: a nil reaching the
+	// store is a caller bug.
 	SaveOwner(d *dplaax.DID, doc *did.DIDDocument) error
 	SavePipeline(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 	SaveProcess(d *dplaax.DID, doc *did.DIDDocument, dlg *delegation.DelegationCredential) error
 
+	// Resolve returns d's document: a non-nil document or a non-nil error,
+	// never both nil, as resolver.Resolver's Resolve does.
 	Resolve(d *dplaax.DID) (*did.DIDDocument, error)
+	// ResolveDelegation returns d's delegation: a non-nil delegation or a
+	// non-nil error, never both nil.
 	ResolveDelegation(d *dplaax.DID) (*delegation.DelegationCredential, error)
 
 	UpdateStatus(d *dplaax.DID, status DIDStatus) error
 	GetStatus(d *dplaax.DID) (DIDStatus, error)
 
+	// ListPipelines and ListProcesses list the children of owner and of
+	// pipeline; each refuses a nil DID with an error, a caller bug.
 	ListPipelines(owner *dplaax.DID) ([]DIDSummary, error)
 	ListProcesses(pipeline *dplaax.DID) ([]DIDSummary, error)
 

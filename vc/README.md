@@ -37,11 +37,22 @@ then every function that issues or verifies, and every `Verifier`, refuses a
 proof of the suite: the functions with an error that wraps
 `vc.ErrCryptosuiteNotRegistered` and names `vc.RegisterEdDSARDFC2022`, a
 `Verifier` by finding signer authenticity failed, before it looks up the
-issuer. Once it is called, an issuer uses the suite when it names it to
+issuer, with the same error in `SignerAuthenticityResult.Err`. Once it is called, an issuer uses the suite when it names it to
 `CreateProof` or `WithCryptosuite`. No package of this module calls it
 (`scripts/check-rdfc-registration.sh`). Its canonicalizer must pass an **IRI
 expansion probe** when it is registered — the process panics rather than serve
 broken canonicalization.
+
+A `PipelinePassCredential` signed under `eddsa-rdfc-2022` holds the members
+`vc` reads under their names and in their forms, and no others; no two of its
+node objects share an id (an id written as a compact IRI and one written in
+full are the same id). `ValidateWireForm`, the chain links and `VerifySourceCommitment` refuse one
+that does not; the closed form is in `ValidateWireForm`'s documentation, and
+holds the members dplaax's `PipelinePassCredential` JSON Schema defines (a
+member the schema adds is added to it). Its `Hash` and `WireVariantID` are
+of the JSON as received: under this suite, JSON forms that expand alike have
+different ones, so neither is the signed credential's identity.
+`eddsa-jcs-2022` credentials are not affected.
 
 ## Chain topology — linear invariant
 
@@ -88,7 +99,11 @@ broken canonicalization.
   that canonicalizes, under the reported suite contract, as this body does; the
   caller checks its own type's rules (type, fields, validity period, which of
   the issuer's keys may sign) — see the method's documentation for the values
-  canonicalization does not tell apart.
+  canonicalization does not tell apart. A verdict that is not verified says
+  why in `Err`, which `errors.Is` tells apart: `ErrUnsigned`,
+  `ErrProofPolicy`, `ErrCryptosuiteNotRegistered`, `ErrIssuerNotFound`,
+  `ErrSignatureInvalid`, or, for an indeterminate verdict, the error of the
+  lookup that could not answer.
 - Chain classification (orthogonal to confidence): `ChainOrigin` /
   `ChainSingleOwnerDerived` / `ChainMultiOwnerDerived` — who signed and how many
   trust boundaries were crossed, not how the data was produced.
@@ -101,7 +116,24 @@ broken canonicalization.
   between credentials (and that the origin claims no predecessor);
   `ValidateChainFrom` also binds the origin's `inputHash` to a given input. They
   run the same link checks as `VerifyChain`. A prefix of a linked chain is
-  linked, so they do not detect a missing tail.
+  linked, so they do not detect a missing tail. A broken link is
+  `ErrChainLinkBroken` (a `*ChainLinkError` with the credential's index), and
+  a chain with nothing to link (empty, or with a nil credential)
+  `ErrChainEmpty`, as from `VerifyChain` and `ClassifyChain`.
+- A chain by its keys alone: `Verifier.VerifyChainSigners` takes an
+  `IssuerKeys` (the key half of `IssuerVerifier`; any `IssuerVerifier` is
+  one) and returns the chain's links, the order of its proofs' created times
+  (`ErrChainOrder`, a `*ChainOrderError` with the later credential's index
+  and the index of the credential the reported defect is in, `FaultIndex`)
+  and each credential's signer verdict, contract included, with `State`
+  folding them into one verdict. It establishes no Owner, so it fits
+  credentials whose issuers are not Process DIDs; the caller accepts only the
+  contract and the issuers and keys it requires of each credential, and checks
+  what the method's documentation lists as not established. It verifies every
+  signature in the chain whatever the links say, and has no bound on the
+  chain's length: the caller bounds the chain, its length and the time it
+  allows (a context with a deadline, which the method checks before each
+  credential), before it calls.
 - Source-commitment checking (`VerifySourceCommitment`) is deliberately **outside the
   three normative axes** and the per-event path: it is an on-demand audit operation.
   Source credentials are gathered asynchronously (VC resolver, counterparties'

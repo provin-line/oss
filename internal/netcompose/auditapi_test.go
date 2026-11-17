@@ -27,7 +27,7 @@ import (
 // auditServer stands up the assembled mux with AuditService mounted behind a static
 // authorizer granting {audit, read}, and returns the SHARED status store the audit
 // runner would write — so a test can Put a verdict and read it back over the RPC,
-// exercising the same instance both planes share (D-17i-7).
+// exercising the same instance both planes share.
 func auditServer(t *testing.T) (*httptest.Server, *auditor.MemStatusStore) {
 	t.Helper()
 	status := auditor.NewMemStatusStore()
@@ -35,7 +35,7 @@ func auditServer(t *testing.T) (*httptest.Server, *auditor.MemStatusStore) {
 }
 
 // auditServerWith mounts BuildHandler behind the {audit, read} authorizer over the GIVEN
-// status store, so a caller that shares the store with a live audit runner (slice-17r) can
+// status store, so a caller that shares the store with a live audit runner can
 // read a runner-produced verdict back over the RPC. The resolver/vcSvc are BuildHandler's own
 // (GetAuditStatus reads only the status store).
 func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Server {
@@ -65,8 +65,8 @@ func auditServerWith(t *testing.T, status *auditor.MemStatusStore) *httptest.Ser
 }
 
 // A verdict recorded by the runner is served over the mounted AuditService with its
-// coverage intact: linear_chain present + VERIFIED, source_commitment ABSENT (the 17h-era
-// linear-only coverage — a reader can never mistake it for a full aggregate verdict).
+// coverage intact: linear_chain present + VERIFIED, source_commitment ABSENT (the linear-only
+// coverage — a reader can never mistake it for a full aggregate verdict).
 func TestAuditAPI_ServesRecordedVerdict(t *testing.T) {
 	srv, status := auditServer(t)
 	headHash := "sha256:" + strings.Repeat("a", 64)

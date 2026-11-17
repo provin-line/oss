@@ -1,12 +1,10 @@
 package httpserve_test
 
-// Relocated from cmd/standalone/main_test.go (PR3c: cmd/standalone retired).
 // These tests exercise httpserve.BuildServer and httpserve.HTTP2Server
-// directly — package-generic behavior with no cmd/standalone-specific
-// composition, and (before this move) the ONLY test coverage either
-// function had anywhere in the repo: cmd/network and cmd/pipeline both call
-// BuildServer from their own main(), but neither carried its own unit test
-// for the TLS/h2c server-construction contract itself.
+// directly — package-generic behavior, and the only test coverage either
+// function has: cmd/network and cmd/pipeline both call BuildServer from
+// their own main(), but neither carries its own unit test for the TLS/h2c
+// server-construction contract itself.
 
 import (
 	"crypto/ed25519"
@@ -31,8 +29,7 @@ import (
 
 // The HTTP/2 (h2c) server the connection is hijacked into must carry its own
 // stall defenses: http.Server's timeouts do not reach HTTP/2 streams, so a
-// regression to zero here would reopen the slow-stream DoS (adversarial-review
-// F7 / Codex Issue 7).
+// regression to zero here would reopen the slow-stream DoS.
 func TestH2CServer_HasStallTimeouts(t *testing.T) {
 	s := httpserve.HTTP2Server()
 	if s.IdleTimeout <= 0 {
@@ -47,7 +44,7 @@ func TestH2CServer_HasStallTimeouts(t *testing.T) {
 }
 
 // buildServer's TLS path serves a real HTTP/2-over-TLS round-trip; the cleartext
-// path serves h2c. This pins the F6 transport-posture wiring (ConfigureServer +
+// path serves h2c. This pins the transport-posture wiring (ConfigureServer +
 // ListenAndServeTLS + ALPN) beyond field assertions.
 func TestBuildServer_TLSPath_ServesHTTPS(t *testing.T) {
 	certFile, keyFile := writeSelfSignedCert(t)

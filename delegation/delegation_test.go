@@ -22,6 +22,9 @@ const (
 	processDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc1"
 )
 
+// The sentinel is a constant: this line stops compiling if it is not.
+const _ = delegation.ErrNotForIdentity
+
 type memKeyStore struct{ keys map[string][]byte }
 
 func newMemKeyStore() *memKeyStore { return &memKeyStore{keys: map[string][]byte{}} }
@@ -375,5 +378,170 @@ func TestVerify_UndecodableProofValueRefusedBeforeResolution(t *testing.T) {
 	}
 	if r.calls != 0 {
 		t.Errorf("resolved the issuer %d times, want 0", r.calls)
+	}
+}
+
+// VerifyFor takes a delegation as authority only for the identity its subject
+// names, byte for byte (dplaax delegation.use.subject-bound): not for another
+// identity under the same Owner, not for a Process under a delegated
+// Pipeline, and not for a spelling that differs only in case.
+func TestVerifyFor(t *testing.T) {
+	signer, r := fixture(t, ownerDID)
+	verify := func(t *testing.T, subject, target string) error {
+		t.Helper()
+		cred, err := delegation.Build(signer, ownerDID, delegation.DelegationSubject{ID: subject, DelegatedBy: ownerDID})
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		return delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, cred, target)
+	}
+	const pipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1"
+	if err := verify(t, processDID, processDID); err != nil {
+		t.Errorf("for the identity it names: %v", err)
+	}
+	if err := verify(t, pipelineDID, pipelineDID); err != nil {
+		t.Errorf("a pipeline's delegation for that pipeline: %v", err)
+	}
+	for name, c := range map[string]struct{ subject, target string }{
+		"another process of the owner":           {processDID, "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:proc2"},
+		"a process under the delegated pipeline": {pipelineDID, pipelineDID + ":process:proc1"},
+		"the subject in another case":            {processDID, strings.ToUpper(processDID[:len("did:dplaax:")]) + processDID[len("did:dplaax:"):]},
+		"the subject's segment in another case":  {processDID, strings.Replace(processDID, "proc1", "Proc1", 1)},
+		"no identity":                            {processDID, ""},
+		"the subject and a space":                {processDID, processDID + " "},
+	} {
+		if err := verify(t, c.subject, c.target); !errors.Is(err, delegation.ErrNotForIdentity) {
+			t.Errorf("%s: %v, want ErrNotForIdentity", name, err)
+		}
+	}
+	// A delegation Verify refuses is refused for the identity it names too,
+	// with Verify's error.
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred.Proof.ProofValue = "z" + strings.Repeat("1", 86)
+	verr := delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	if err := delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, cred, processDID); err == nil || verr == nil || err.Error() != verr.Error() {
+		t.Errorf("a forged delegation for the identity it names: %v, want Verify's refusal %v", err, verr)
+	}
+	if err := delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, nil, processDID); err == nil {
+		t.Error("no delegation: accepted, want an error")
+	}
+}
+
+// A delegation presented for another identity resolves nothing: the subject
+// is compared before Verify reaches the resolver.
+func TestVerifyFor_ResolvesNothingForAnotherIdentity(t *testing.T) {
+	signer, _ := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &countingResolver{}
+	if err := delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, cred, ownerDID+":pipeline:p1:process:other"); !errors.Is(err, delegation.ErrNotForIdentity) || r.calls != 0 {
+		t.Errorf("for another identity: %v after %d resolutions, want ErrNotForIdentity after none", err, r.calls)
+	}
+	if delegation.VerifyFor(context.Background(), ed25519.Verifier{}, r, cred, processDID); r.calls == 0 {
+		t.Error("for the identity it names, the issuer was not resolved")
+	}
+}
+
+// A subject that is neither a Pipeline nor a Process is named within a bound,
+// however long it is.
+func TestVerify_NamesASubjectOfTheWrongKindWithinABound(t *testing.T) {
+	signer, r := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	cred.CredentialSubject.ID = "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 64<<10)
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	if err == nil || len(err.Error()) > 300 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(cred.CredentialSubject.ID))) {
+		t.Errorf("Verify(an Owner as subject): %.200v (%d bytes), want an error naming the subject's head and length", err, len(fmt.Sprint(err)))
+	}
+}
+
+// substitutingResolver returns one document whatever is asked.
+type substitutingResolver struct{ doc *did.DIDDocument }
+
+func (s substitutingResolver) Resolve(context.Context, string) (*did.DIDDocument, error) {
+	return s.doc, nil
+}
+
+// Verify names the DIDs it refuses within a bound, however long they are: a
+// delegatedBy that is not the issuer (either side), a subject under another
+// Owner, a verificationMethod naming another DID, and the document of
+// another DID.
+func TestVerify_NamesTheDIDsItRefusesWithinABound(t *testing.T) {
+	long := "did:dplaax:poc.dplaax.dev:org:" + strings.Repeat("x", 64<<10)
+	signer, r := fixture(t, ownerDID)
+	other, _ := (ed25519.Generator{}).Generate()
+	for name, c := range map[string]struct {
+		mutate func(*delegation.DelegationCredential)
+		r      *local.Resolver
+		sub    *did.DIDDocument
+		named  string
+	}{
+		"a long delegatedBy": {mutate: func(c *delegation.DelegationCredential) { c.CredentialSubject.DelegatedBy = long }, named: long},
+		"a long issuer":      {mutate: func(c *delegation.DelegationCredential) { c.Issuer = long }, named: long},
+		"a subject under another, long Owner": {
+			mutate: func(c *delegation.DelegationCredential) { c.CredentialSubject.ID = long + ":pipeline:p1" },
+			named:  long + ":pipeline:p1",
+		},
+		"a verificationMethod of another, long DID": {
+			mutate: func(c *delegation.DelegationCredential) { c.Proof.VerificationMethod = long + "#signing" },
+			named:  long + "#signing",
+		},
+		"the document of another, long DID": {sub: signingDocAs(long, ownerDID, other.PublicKey), named: long},
+		"a long proof type":                 {mutate: func(c *delegation.DelegationCredential) { c.Proof.Type = long }, named: long},
+		"a long proof purpose":              {mutate: func(c *delegation.DelegationCredential) { c.Proof.ProofPurpose = long }, named: long},
+		"a long cryptosuite":                {mutate: func(c *delegation.DelegationCredential) { c.Proof.Cryptosuite = long }, named: long},
+		"a long created time":               {mutate: func(c *delegation.DelegationCredential) { c.Proof.Created = long }, named: long},
+		"a long type":                       {mutate: func(c *delegation.DelegationCredential) { c.Type = []string{long} }, named: long},
+		// What another package's error quotes is bounded with that error's
+		// text: named is empty, as the length written is that text's.
+		"a long issuer with no document": {mutate: func(c *delegation.DelegationCredential) {
+			c.Issuer, c.CredentialSubject.DelegatedBy = long, long
+			c.CredentialSubject.ID = long + ":pipeline:p1"
+			c.Proof.VerificationMethod = long + "#signing"
+		}},
+		"a long fragment": {mutate: func(c *delegation.DelegationCredential) {
+			c.Proof.VerificationMethod = ownerDID + "#" + strings.Repeat("f", 64<<10)
+		}},
+	} {
+		cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		if c.mutate != nil {
+			c.mutate(cred)
+		}
+		var res interface {
+			Resolve(context.Context, string) (*did.DIDDocument, error)
+		} = r
+		if c.sub != nil {
+			res = substitutingResolver{c.sub}
+		}
+		err = delegation.Verify(context.Background(), ed25519.Verifier{}, res, cred)
+		if err == nil || len(err.Error()) > 1024 || (c.named != "" && !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(c.named)))) {
+			t.Errorf("%s: %.300v (%d bytes), want an error naming the DID's head and length", name, err, len(fmt.Sprint(err)))
+		}
+	}
+}
+
+// A created time that does not parse is named within a bound, and the parse
+// error stays reachable.
+func TestVerify_KeepsTheCreatedTimesParseError(t *testing.T) {
+	signer, r := fixture(t, ownerDID)
+	cred, err := delegation.Build(signer, ownerDID, sampleSubject())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	cred.Proof.Created = strings.Repeat("c", 64<<10)
+	err = delegation.Verify(context.Background(), ed25519.Verifier{}, r, cred)
+	var pe *time.ParseError
+	if !errors.As(err, &pe) || len(err.Error()) > 1024 {
+		t.Errorf("err = %.200v (%d bytes), want a bounded error wrapping a *time.ParseError", err, len(fmt.Sprint(err)))
 	}
 }

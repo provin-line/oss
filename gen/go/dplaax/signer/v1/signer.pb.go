@@ -3,7 +3,7 @@
 // hold DIDs, not keys; they call this service, and the registry process holds
 // the key material (via the keystore) and returns only the signature.
 //
-// Contract shape (slice-5 D-s1): both RPCs are a thin transport of the committed
+// Contract shape: both RPCs are a thin transport of the committed
 // crypto.Signer seam — they take the RAW bytes to sign and return the RAW
 // Ed25519 signature. Output encoding is the caller's concern, not this service's:
 // VC proofs are base58btc-multibase-encoded by the vc layer (vc.CreateProof does
@@ -12,7 +12,7 @@
 // a "sha256:<hex>" prehash or the output as multibase — that would force a
 // pointless decode round-trip on the client.
 //
-// Two RPCs, two domains (D-s2/D-s3): Sign and SignRaw are cryptographically
+// Two RPCs, two domains: Sign and SignRaw are cryptographically
 // identical (Ed25519 over the supplied bytes), but they are split so the two
 // signing domains carry distinct authorization policies (an operator can grant
 // VC-signing without granting wire-signing) and so each binds to its key

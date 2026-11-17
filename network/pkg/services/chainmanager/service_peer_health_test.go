@@ -35,7 +35,7 @@ func offersByReference(modes []string) bool {
 
 // A configured health gate suppresses by-reference advertisement when unhealthy,
 // even on a payload-serving node — so a node whose stripped-publish emission is
-// failing stops advertising a mode it can no longer honestly serve (D-5).
+// failing stops advertising a mode it can no longer honestly serve.
 func TestPeer_PublisherInfo_ByReferenceHealthGate(t *testing.T) {
 	for _, healthy := range []bool{true, false} {
 		svc := gatedServing(t, healthy)

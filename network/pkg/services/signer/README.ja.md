@@ -10,7 +10,7 @@ Proto: `dplaax.signer.v1`（`SignerService`）。
 | RPC | Input | Output | 鍵 | Authz | Used by |
 |---|---|---|---|---|---|
 | `Sign` | 生バイト | 生 Ed25519 署名 | `#signing` | `signer:sign-vc` | VC プルーフ生成（パイプラインプロベナンス） |
-| `SignRaw` | 生バイト | 生 64 バイト Ed25519 署名 | `#auth` | `signer:sign-wire` | L2 ワイヤー署名（chainmanager wireauth） |
+| `SignRaw` | 生バイト | 生 64 バイト Ed25519 署名 | `#auth` | `signer:sign-wire` | L2 ワイヤー署名（`network/pkg/wireauth`） |
 
 ## 生バイト seam
 
@@ -22,7 +22,7 @@ Proto: `dplaax.signer.v1`（`SignerService`）。
 
 ## 利用方法
 
-production の `crypto.Signer` は `client.New(SignerServiceClient)` — keyID で dispatch し（server 束縛の逆: `signing` → `Sign`、`auth` → `SignRaw`）、生署名を返す。コンシューマー（pipeline runtime、chainmanager wireauth）はこのアダプタ / コンシューマー側の絞り込みインターフェースを通じて依存する — サービスパッケージ自体には依存しない（サービス間インポートサイクルを回避）。`client` パッケージは生成 client・`crypto`・`keystore` 鍵 ID 契約のみを import する。
+production の `crypto.Signer` は `client.New(SignerServiceClient)` — keyID で dispatch し（server 束縛の逆: `signing` → `Sign`、`auth` → `SignRaw`）、生署名を返す。コンシューマー（pipeline runtime、`network/pkg/wireauth`）はこのアダプタ / コンシューマー側の絞り込みインターフェースを通じて依存する — サービスパッケージ自体には依存しない（サービス間インポートサイクルを回避）。`client` パッケージは生成 client・`crypto`・`keystore` 鍵 ID 契約のみを import する。
 
 ## プロトコル必須ではなく deployment パターン
 

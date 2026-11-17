@@ -1,0 +1,9 @@
+{
+  "id": "did-007",
+  "rule": "did.dplaax.syntax",
+  "description": "A registry need not be a well-formed host name: a 64-octet label is accepted",
+  "input": {
+    "did": "did:dplaax:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:org:acme"
+  },
+  "expect": "accept"
+}

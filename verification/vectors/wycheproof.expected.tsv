@@ -1,0 +1,33 @@
+# file	tcId	accept|refuse	error (a refusal's: a package's error, or - for none, the verifier answering false)	reason — the vectors whose expected outcome is not their own valid/invalid; every acceptable vector is listed. Written from the contracts before the run.
+ed25519_test.json	152	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	153	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	154	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	155	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	156	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	157	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	158	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	159	refuse	ed25519.ErrSmallOrder	small-order public key (ed25519.ValidatePublicKey, ErrSmallOrder)
+ed25519_test.json	160	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	161	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	162	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	163	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	164	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	165	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	166	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	167	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	168	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	169	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	170	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	171	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	172	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	173	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	174	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	175	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	176	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	177	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	178	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	179	accept	-	mixed-order key; the standard library's equation holds
+ed25519_test.json	180	accept	-	mixed-order key; the standard library's equation holds
+rsa_signature_2048_sha256_test.json	8	refuse	-	DigestInfo without its NULL parameter (strict PKCS #1 v1.5, rsa.VerifyPKCS1v15)
+rsa_signature_3072_sha256_test.json	8	refuse	-	DigestInfo without its NULL parameter (strict PKCS #1 v1.5, rsa.VerifyPKCS1v15)
+rsa_signature_4096_sha256_test.json	8	refuse	-	DigestInfo without its NULL parameter (strict PKCS #1 v1.5, rsa.VerifyPKCS1v15)

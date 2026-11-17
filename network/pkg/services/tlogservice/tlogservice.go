@@ -14,10 +14,10 @@ import (
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/network/pkg/didresolver"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 )
 
@@ -27,8 +27,8 @@ var (
 	// ErrNotFound is a log id no producing loop on this node owns, and (once
 	// a mirror store is wired) no mirror has ever heard of either.
 	ErrNotFound = errors.New("tlogservice: no emission log with that id")
-	// ErrInvalidArgument points at wirecontract.ErrInvalidArgument — moved
-	// into the leaf wirecontract package (PR3b Task 2) because
+	// ErrInvalidArgument points at wirecontract.ErrInvalidArgument, defined
+	// in the leaf wirecontract package because
 	// UnframeRecordPayloads (the wire framing codec, now in that leaf) must
 	// return the SAME sentinel value this package's own validation uses (a
 	// malformed range parameter, an unparseable log id, or a structurally
@@ -42,12 +42,12 @@ var (
 	// chainmanager/handler.OperatorHandler's "not wired" posture for an
 	// optional RPC dependency (CodeUnimplemented at the handler).
 	ErrMirrorNotConfigured = errors.New("tlogservice: this node has no mirror store configured")
-	// ErrIdentityMismatch is MirrorSegment's D-T3 identity-enforcement
+	// ErrIdentityMismatch is MirrorSegment's identity-enforcement
 	// failure: an invalid/unverifiable checkpoint signature, a
 	// wireauth-proven caller that does not equal the checkpoint's
 	// SignerBase, a process whose pipeline ancestor does not match the log
 	// owner, or a signer that conflicts with the log's already-pinned
-	// signer. One sentinel for the whole D-T3 bucket — every sub-case maps
+	// signer. One sentinel for the whole bucket — every sub-case maps
 	// to the same connect code (PermissionDenied).
 	ErrIdentityMismatch = errors.New("tlogservice: mirror segment: caller identity does not satisfy the log's writer binding")
 	// ErrCapExceeded points at wirecontract.ErrCapExceeded — see
@@ -56,7 +56,7 @@ var (
 	// value CheckBatchCaps does). See wirecontract.ErrCapExceeded for the
 	// full doc.
 	ErrCapExceeded = wirecontract.ErrCapExceeded
-	// ErrMirrorConflict is MirrorSegment's D-T2 rule 1/2 failure that is NOT
+	// ErrMirrorConflict is MirrorSegment's alignment failure that is NOT
 	// a malformed-request error: a gap ahead of the acked size, a partial
 	// overlap with already-mirrored records (a replay whose payloads do not
 	// byte-match what is already stored), or a recomputed chain head that
@@ -65,7 +65,7 @@ var (
 )
 
 // MirrorStore is the consumer-side view of mirrorstore.Store this Service
-// depends on for its D-T2/D-T4 mirror-custody surface (dependency inverted,
+// depends on for its mirror-custody surface (dependency inverted,
 // narrowest interface for what MirrorSegment/MirrorState/Checkpoint/Records
 // actually call). *mirrorstore.Store satisfies it structurally.
 //
@@ -83,16 +83,19 @@ type MirrorStore interface {
 }
 
 // DIDResolver resolves a DID to its document — the read view MirrorSegment
-// needs to verify a checkpoint's OWN signature (D-T3), independent of
+// needs to verify a checkpoint's OWN signature, independent of
 // whichever resolver already checked the wireauth proof itself. Same method
 // shape as wireauth.DIDResolver on purpose: the composition root passes the
 // SAME concrete resolver instance to both (*didresolver.Resolver satisfies
 // this interface directly).
+//
+// Resolve returns a non-nil document or a non-nil error, never both nil, as
+// resolver.Resolver's Resolve does.
 type DIDResolver interface {
 	Resolve(ctx context.Context, did string) (*did.DIDDocument, error)
 }
 
-// MirrorConfig bundles the D-T4 mirror store and D-T3 identity-enforcement
+// MirrorConfig bundles the mirror store and identity-enforcement
 // dependencies MirrorSegment/MirrorState need beyond the static log map. A
 // nil *MirrorConfig to New keeps the map-only behavior: MirrorSegment/
 // MirrorState both return ErrMirrorNotConfigured rather than touching
@@ -105,12 +108,12 @@ type MirrorConfig struct {
 	// RPCs use.
 	DIDResolver DIDResolver
 	// Ancestry answers "which pipeline issued this process DID" for an
-	// emission log's writer binding (D-T3).
+	// emission log's writer binding.
 	Ancestry logident.PipelineAncestry
 	// Crypto verifies a checkpoint's signature bytes against a resolved
 	// public key.
 	Crypto crypto.Verifier
-	// MaxBatchRecords / MaxBatchBytes are the D-T2 rule 5 caps
+	// MaxBatchRecords / MaxBatchBytes are the mirror's batch caps
 	// (pipelineconfig.TlogMirrorConfig).
 	MaxBatchRecords int
 	MaxBatchBytes   int
@@ -118,7 +121,7 @@ type MirrorConfig struct {
 
 // Service serves the node's emission logs: the static map of local
 // producing loops, and — when mirror is non-nil — the durable mirror store
-// as a SECOND source behind it (D-T4). Reads check the map first: a log
+// as a SECOND source behind it. Reads check the map first: a log
 // this node still runs locally is served from its live signer, never a
 // possibly-lagging mirror copy.
 type Service struct {
@@ -128,7 +131,7 @@ type Service struct {
 
 // New returns a Service over the node's log registry (log id → log; the map
 // is captured as-is, the node builds it once at boot) and, when mirror is
-// non-nil, the D-T4 mirror-custody surface.
+// non-nil, the mirror-custody surface.
 func New(logs map[string]tlog.Log, mirror *MirrorConfig) *Service {
 	return &Service{logs: logs, mirror: mirror}
 }
@@ -157,7 +160,7 @@ func (s *Service) Checkpoint(ctx context.Context, logID string) (*tlog.Checkpoin
 	if s.mirror != nil {
 		if custodyOnly(logID) {
 			// A mirrored sink-reject log is custodied but NEVER served through
-			// TlogService reads (D-T3/D-T5: today's never-served posture —
+			// TlogService reads (the never-served posture —
 			// operator tooling reads the mirror store directly). It stays fully
 			// available to the WRITE/STATE paths (MirrorSegment / MirrorState),
 			// so custody still works; only this read fallback refuses it.
@@ -236,7 +239,7 @@ func (s *Service) Records(ctx context.Context, logID string, start uint64, count
 
 // custodyOnly reports whether logID names a log that is mirrored for custody
 // but MUST NOT be served through TlogService's read RPCs (GetLogCheckpoint /
-// ListLogRecords) — today only the sink-reject kind (spec D-T3/D-T5: reject
+// ListLogRecords) — today only the sink-reject kind (reject
 // logs are receipt-issuer-signed evidence, custodied and readable by operator
 // tooling straight off the mirror store, but never exposed to a tlog:read
 // principal). The WRITE/STATE paths (MirrorSegment / MirrorState / the store's
@@ -250,7 +253,7 @@ func custodyOnly(logID string) bool {
 }
 
 // CheckBatchCaps validates a MirrorLogSegment batch's record count and summed
-// byte length against the D-T2 rule 5 caps — the SINGLE cap-policy definition,
+// byte length against the mirror's batch caps — the SINGLE cap-policy definition,
 // owned by the service (the caps + the ErrCapExceeded sentinel never leave the
 // domain layer). The handler calls it with the cheap structural sizes
 // (len(payloads), sum of lengths) BEFORE hashing payloads or verifying the
@@ -272,7 +275,7 @@ func (s *Service) CheckBatchCaps(recordCount, totalBytes int) error {
 }
 
 // DecodeSegment unframes a MirrorLogSegment request's record_payloads_framed
-// blob into the ordered payload list, bounded by this service's D-T2 caps —
+// blob into the ordered payload list, bounded by this service's batch caps —
 // the BOUNDED pre-auth guard the handler runs before hashing payloads or
 // verifying the wireauth proof. UnframeRecordPayloads enforces the count/byte
 // caps DURING the scan, so a hostile blob is rejected before a [][]byte larger
@@ -293,7 +296,7 @@ func (s *Service) DecodeSegment(framed []byte) ([][]byte, error) {
 }
 
 // MirrorState returns the registry's durable mirror size for logID — the
-// shipper's resume cursor (GetMirrorState, D-T2 rule 6). logID is
+// shipper's resume cursor (GetMirrorState). logID is
 // identity-parsed (logident.Kind) before touching the store: a malformed id
 // is ErrInvalidArgument, never routed to a lookup that would report "0,
 // nothing mirrored" for garbage input.
@@ -310,9 +313,9 @@ func (s *Service) MirrorState(logID string) (uint64, error) {
 // MirrorSegmentInput is one MirrorLogSegment call's decoded arguments
 // (proto → domain conversion happens in the handler; this is domain-only).
 // CallerDID is the wireauth-proven signer DID — verified by the handler's
-// Verifier BEFORE this method is ever called (D-T2 rule "wireauth covers
-// the payload list"/acceptance rule 1's proof check). MirrorSegment trusts
-// it as AUTHENTICATED but not yet AUTHORIZED: authorization (D-T3) is this
+// Verifier BEFORE this method is ever called (the proof must cover the
+// payload list, via segment_digest). MirrorSegment trusts
+// it as AUTHENTICATED but not yet AUTHORIZED: authorization is this
 // method's own job.
 type MirrorSegmentInput struct {
 	LogID      string
@@ -322,20 +325,20 @@ type MirrorSegmentInput struct {
 	CallerDID  string
 }
 
-// MirrorSegment implements D-T2's MirrorLogSegment acceptance rules 1
-// (chain-to-head + the checkpoint's own signature, D-T3), 2 (exact-extend/
-// gap/overlap/replay), 4 (caps, "rule 5" in the spec's own numbering), and 6
-// (store append) — rule 1's WIREAUTH half (the proof over log_id,
+// MirrorSegment implements MirrorLogSegment's acceptance rules:
+// chain-to-head plus the checkpoint's own signature, exact-extend/gap/
+// overlap/replay resolution, the batch caps, and the store append. The
+// WIREAUTH half of the chain-to-head rule (the proof over log_id,
 // from_index, checkpoint.head, segment_digest) is verified by the handler
-// BEFORE this is ever called. Enforced in this exact order (task-5 brief):
+// BEFORE this is ever called. Enforced in this exact order:
 //
-//  1. identity (D-T3): checkpoint signature, caller-vs-signer equality,
+//  1. identity: checkpoint signature, caller-vs-signer equality,
 //     per-kind ancestry/equality, first-segment signer pinning —
 //     ErrIdentityMismatch (PermissionDenied).
-//  2. caps (rule 5) — ErrCapExceeded (ResourceExhausted).
+//  2. caps — ErrCapExceeded (ResourceExhausted).
 //  3. overflow / checkpoint.size alignment (pure, race-free) —
 //     ErrInvalidArgument.
-//  4. store.AppendSegment (rules 1, 2, 6): the alignment-against-live-acked
+//  4. store.AppendSegment: the alignment-against-live-acked
 //     resolution (exact-extend / gap / partial-overlap / byte-identical
 //     replay) AND the chain-to-head recompute happen INSIDE the store, under
 //     the same lock the durable append holds, so a concurrent identical retry
@@ -389,20 +392,20 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 
 	// Alignment against the store's live acked size — the exact-extend /
 	// gap / partial-overlap / byte-identical-replay resolution AND the
-	// chain-to-head recompute (D-T2 rules 1/2) — happens INSIDE the store,
+	// chain-to-head recompute — happens INSIDE the store,
 	// under the same lock the durable append holds. Splitting it across a
 	// separate AckedSize read here and a later append opened a race: two
 	// overlapping identical requests could both read the same acked size,
 	// the first commit as an extend, and the second then fail the
 	// exact-extend arithmetic with a plain (Internal-mapped) error instead
-	// of the replay no-op success D-T2 rule 2 requires. AppendSegment
+	// of succeeding as a no-op, as a replay must. AppendSegment
 	// resolves all four outcomes atomically and returns mirrorstore.ErrConflict
 	// for every "does not align" shape (gap, overlap, chain-head mismatch).
 	newAcked, err := s.mirror.Store.AppendSegment(in.LogID, in.FromIndex, in.Records, in.Checkpoint)
 	if err != nil {
 		switch {
 		case errors.Is(err, mirrorstore.ErrSignerMismatch):
-			// D-T3 signer-pin failure resolved atomically in the store — a
+			// Signer-pin failure resolved atomically in the store — a
 			// writer-binding violation, same connect code as verifyMirrorIdentity's.
 			return 0, fmt.Errorf("%w: mirror segment %q: %v", ErrIdentityMismatch, in.LogID, err)
 		case errors.Is(err, mirrorstore.ErrConflict):
@@ -414,7 +417,7 @@ func (s *Service) MirrorSegment(ctx context.Context, in MirrorSegmentInput) (uin
 	return newAcked, nil
 }
 
-// verifyMirrorIdentity implements D-T3's STATELESS identity checks: it
+// verifyMirrorIdentity implements the STATELESS identity checks: it
 // verifies the checkpoint's OWN signature against its SignedBy key, requires
 // the wireauth-proven caller to equal the checkpoint's signer base DID, and
 // applies the per-kind writer-binding predicate (emission: ancestry;

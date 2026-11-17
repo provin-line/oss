@@ -1,0 +1,39 @@
+{
+  "id": "keybinding-025",
+  "rule": "keybinding.status-list.content-hash",
+  "description": "A revocation list's content hash covers the members the catalog does not define, as it covers every other member but encodedList's compression",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "BitstringStatusListCredential"
+      ],
+      "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:59:00Z",
+      "validUntil": "2026-11-06T01:59:00Z",
+      "credentialSubject": {
+        "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list-list",
+        "type": "BitstringStatusList",
+        "statusPurpose": "revocation",
+        "encodedList": "uH4sIAAAAAAAA_-zAMQEAAAgCMG1A_7TE4NlyAAAAAAAAAAAAAAAAAAAAwNg3AAD__-xSDbMAQAAA",
+        "description": "Revocations of ACME staff key bindings"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:59:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      },
+      "name": "Key bindings of ACME staff"
+    }
+  },
+  "expect": {
+    "contentHash": "sha256:c7443ca0e5091d1ec9ec85ce3af680273670bdf097b35559ecb21f65ff6e3d79"
+  }
+}

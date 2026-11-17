@@ -1,10 +1,10 @@
 // dplaax.audit.v1 is the read surface for the async chain auditor's per-head
 // verdicts: a consumer fetches the latest recorded audit status for a consumed
-// chain head (by content address). The verdict-producing runner is slice-17h;
-// this is the read API (slice-17i).
+// chain head (by content address). The async audit runner produces the
+// verdicts; this is their read API.
 //
-// Coverage principle (load-bearing, slice-17i D-17i-2): the response carries a
-// per-scope verdict, never a bare "overall" and never a top-level axes block. A
+// Coverage principle (load-bearing): the response carries a per-scope
+// verdict, never a bare "overall" and never a top-level axes block. A
 // linear-chain-only verdict can therefore never be read as a full aggregate
 // (consumed-set) verdict — message presence of source_commitment IS the coverage
 // signal (absent == not evaluated). A conforming aggregate consumer computes
@@ -47,14 +47,14 @@ service AuditService {
   }
   // GetConsumedSources returns one page of the recorded receipt for a head:
   // the content addresses of the source credentials the emitting boundary
-  // consumed (the emit-locus record, slice-17o). NotFound means NO RECEIPT
+  // consumed (the emit-locus record). NotFound means NO RECEIPT
   // RECORDED FOR THIS HEAD ON THIS NODE — a coverage fact (the head's audit
   // here is linear-only), never a claim that the credential is intrinsically
   // linear; callers distinguishing "unknown head" from "linear coverage" use
   // GetAuditStatus. Paged because a consumed set has no bounded size (an
   // aggregate window folds every input); ordering is lexicographic (the
   // receipt is a set — storage order is not contractual). This is the
-  // consumed-set exposure slice-17q deferred: it feeds independent
+  // consumed-set exposure: it feeds independent
   // consume-locus verification, aggregate-complete archive export, and
   // recall joins across aggregate boundaries. Recall composition note: the
   // ListAuditStatuses × GetConsumedSources join is audited-head-complete —
@@ -64,18 +64,17 @@ service AuditService {
     option (o3co.authz.v1.policy) = {resource: "audit", action: "read"};
   }
   // RegisterEvidence records the ADMITTED bytes' variant identity and the
-  // source addresses it consumed, for a subsequent audit pass to pick up
-  // (slice-17i evidence write surface, D7). Trust model: L1 + in-band
-  // wireauth — the PDP gate (this policy option) decides whether the caller
-  // may register evidence at all; the request additionally carries a
-  // wireauth AuthProof the handler verifies in-band, and the proven DID IS
-  // RECORDED alongside the receipt as the registering party — an AUDIT-TRAIL
-  // fact, always available to a later inspection of who registered this
-  // evidence. This recording is NOT an ownership check: RegisterEvidence
+  // source addresses it consumed, for a subsequent audit pass to pick up. Trust
+  // model: L1 + in-band wireauth — the PDP gate (this policy option) decides
+  // whether the caller may register evidence at all; the request additionally
+  // carries a wireauth AuthProof the handler verifies in-band, and the proven
+  // DID IS RECORDED alongside the receipt as the registering party — an
+  // AUDIT-TRAIL fact, always available to a later inspection of who registered
+  // this evidence. This recording is NOT an ownership check: RegisterEvidence
   // does not verify any relationship between the proven DID and the
-  // credential's own issuer/process DID, so it does not reject a proof from
-  // a signer who never emitted the head. Binding the recorded registrant to
-  // head OWNERSHIP is a later contract stage, once the process/pipeline DID
+  // credential's own issuer/process DID, so it does not reject a proof from a
+  // signer who never emitted the head. Binding the recorded registrant to head
+  // OWNERSHIP is a later contract stage, once the process/pipeline DID
   // relationship this would need to check is itself designed.
   //
   // Admission and persistence key on DIFFERENT identities of the same head
@@ -100,7 +99,7 @@ service AuditService {
   // sink-receipt heads, where no aggregate consumed set exists to record.
   // Contrast with RegisterEvidence: that RPC REQUIRES a non-empty consumed
   // set and writes an irreversible first-write-wins consumed-set receipt
-  // (D1, aggregate emission evidence); this RPC writes no receipt at all —
+  // (aggregate emission evidence); this RPC writes no receipt at all —
   // a head registered here surfaces via GetAuditStatus but never via
   // GetConsumedSources (NotFound, same as any other linear-only coverage).
   // Use RegisterEvidence instead when the head is an aggregate's output and

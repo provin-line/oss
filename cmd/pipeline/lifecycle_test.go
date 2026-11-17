@@ -1,6 +1,6 @@
 package main
 
-// TDD for PR3b Task 7 (D8 ordered shutdown): proves run's shutdown sequence
+// Proves run's shutdown sequence
 // actually happens in the documented order — HTTP drains, THEN loops drain,
 // THEN shippers stop ticking, THEN each shipper gets ONE final flush on a
 // FRESH (non-cancelled) context, THEN the data plane closes — and that a
@@ -39,7 +39,7 @@ func newLoopbackServer(t *testing.T, handler http.Handler) (srv *http.Server, li
 	return srv, func() error { return srv.Serve(ln) }, "http://" + ln.Addr().String()
 }
 
-// TestRun_OrderedShutdown_FinalDrainGetsFreshContext is the D8 capstone: a
+// TestRun_OrderedShutdown_FinalDrainGetsFreshContext is the end-to-end ordered-shutdown test: a
 // SIGTERM-style ctx cancellation must (1) let an in-flight HTTP request
 // finish before anything else proceeds, (2) drain the data-plane loops only
 // after that, (3) stop the shipper's periodic ticking only after THAT, then
@@ -119,7 +119,7 @@ func TestRun_OrderedShutdown_FinalDrainGetsFreshContext(t *testing.T) {
 		t.Fatalf("event order = %v, want %v", got, want)
 	}
 
-	// The core D8 property: no recorded mirror-client call — including the
+	// The core property: no recorded mirror-client call — including the
 	// final Drain-time call, made well after ctx/loopCtx/shipCtx were all
 	// already cancelled — ever observed an already-cancelled context.
 	if spy.anyCallSawCanceledCtx() {
@@ -140,7 +140,7 @@ func TestRun_OrderedShutdown_FinalDrainGetsFreshContext(t *testing.T) {
 	}
 }
 
-// TestRun_TimedOutFinalDrain_LogsAndExitsZero proves the D8 timeout posture:
+// TestRun_TimedOutFinalDrain_LogsAndExitsZero proves the timeout posture:
 // a shipper whose registry never accepts a segment cannot finish its final
 // flush within budget — this is NOT a shutdown failure. run must still
 // return nil (exit zero), having logged the documented message (the local

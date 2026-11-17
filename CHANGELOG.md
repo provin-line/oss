@@ -12,6 +12,860 @@ change. The first frozen *API* surface is declared at the `1.0` line.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-17
+
+This release fixes three security advisories and binds an L2 wire proof to
+the node it was made for. It has breaking changes: read **Breaking changes**
+before upgrading.
+
+### Security
+
+- **An L2 wire proof is accepted only by the node it was made for**
+  ([GHSA-954g-5682-4235](https://github.com/provin-line/oss/security/advisories/GHSA-954g-5682-4235);
+  affects 0.1.0 to 0.4.0). The signed
+  view binds the audience, the registry ID of the receiving node, and a
+  node's verifier refuses a proof for another before it resolves the signer
+  or records the nonce. Upgrading needs every node and pipeline that talk
+  to each other to move together: read **Breaking changes**.
+- **`schema/local` reads a JSON Schema integer keyword as written, up to
+  `math.MaxInt`**
+  ([GHSA-mpg8-q8wr-vjxf](https://github.com/provin-line/oss/security/advisories/GHSA-mpg8-q8wr-vjxf);
+  affects 0.1.0 to 0.4.0). An
+  integer keyword (`minLength`, `maxLength`, `minItems`, `maxItems`,
+  `minProperties`, `maxProperties`, `minContains`, `maxContains`) above
+  `math.MaxInt` is read as `math.MaxInt`, and one whose number `big.Rat`
+  cannot read is a `LargeNumberError`. Before, a value of 2^63 or more was
+  compiled as another number.
+- **An `eddsa-rdfc-2022` credential's chain link is read as it is signed**
+  ([GHSA-hgg6-cmxw-9f88](https://github.com/provin-line/oss/security/advisories/GHSA-hgg6-cmxw-9f88);
+  affects 0.2.0 to 0.4.0). An `eddsa-rdfc-2022`
+  `PipelinePassCredential` must hold the members `vc` reads under their
+  names and in their forms, and no others, and no two of its node objects
+  may carry the same id. `ValidateWireForm` (and so
+  `Verify` and `VerifyChain`), `ValidateChainLinks`, `ValidateChainFrom` and
+  `VerifySourceCommitment` refuse one that does not; `ValidateWireForm`'s
+  documentation lists the form. `eddsa-jcs-2022` credentials are not
+  affected. Read **Breaking changes**.
+- **Go 1.26.11**: the module's `toolchain` and the `verification` module's
+  are `go1.26.11`, and the `network`, `pipeline` and quickstart `provision`
+  images build on `golang:1.26.11-alpine`, which carry the standard
+  library's fix for GO-2026-6859 (`net/http`).
+
+### Added
+
+- **Configuration:** `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH`, the bound on how
+  deep a schema's regular expressions' groups nest (`pattern`, the names of
+  `patternProperties`, a value checked as format `"regex"`): a decimal
+  integer from 1 to 32, 8 when unset or empty. It is read once, as a program
+  that imports `schema` or `schema/local` starts, directly or through another
+  package of the module (`pipeline/chained`, `pipeline/runtime`,
+  `network/pkg/services/schemaregistry`; `cmd/network` and `cmd/pipeline`),
+  and a value it does not accept stops the program there with a panic naming
+  the variable. Keep the default and change it only on an
+  inquiry: the bound drives the worst-case time of compiling a schema and of
+  validating a payload (`schema/README.md`), and processes with different
+  settings can disagree on the same schema.
+- `contentaddress.Hasher` (`NewHasher`, `Write`, `Address`): the address of
+  bytes written to it a part at a time, as `Of` makes it of bytes held at
+  once, for bytes that arrive in parts without holding them all. The zero
+  `Hasher` is ready to use. `Address`, `Of` and `Parse` do not change.
+- `decisionrecord.WritePanic`: what a call to a sink made here, or to a
+  `Filter`, panics with when a write it waits for panics in a goroutine of
+  its own: the value and the writer's stack, both in its text; `Unwrap`
+  gives the value when it is an error.
+- `decisionrecord`: format v2 of records and summaries, beside format v1,
+  which `NewJSONLines` and `NewLog` keep writing as 0.4.0 does: the same
+  lines, byte for byte, and the same log entries.
+  `NewJSONLinesFormat` and `NewLogFormat` take the version (`FormatVersion`,
+  `FormatV1`, `FormatV2`). Format v2 adds the outcome `Held` (a check the
+  deciding party enforces deferred the decision; it ranks above accepted and
+  below unenforced and refused, and `LevelRefusals` writes it), a refused or
+  unenforced record's `RefusedAt` (a `Position`: the hop its refusal is
+  diagnosed at, with its `Confidence`, how far that hop is established), and
+  a record's `VerifiedHops` (the hops whose signatures were verified). A
+  format v1 sink refuses what format v1 cannot express with
+  `ErrNotInFormat`, a constant of the new type `decisionrecord.Error`, and
+  writes nothing of it. The README states when the version changes.
+- `delegation.VerifyFor` checks a delegation as authority for one identity:
+  its `credentialSubject.id` is that identity's DID, byte for byte, and
+  `Verify` accepts it. A delegation presented for another identity (another
+  under the same Owner, or a Process under a delegated Pipeline) is
+  `delegation.ErrNotForIdentity`, refused before anything is resolved (dplaax
+  `delegation.use.subject-bound`). The sentinel is a constant of the new type
+  `delegation.Error`, as `did.Error` and `vc.Error` are, so no importer can
+  reassign it.
+- `keybinding.StatusListContentHash` computes a revocation list's content
+  hash from its credential, as the dplaax rule
+  `keybinding.status-list.content-hash` defines it and `VerifyStatusList`
+  compares it. It checks the list's shape, not its signature: an equal hash
+  says two lists have the same content, not that either is the issuer's.
+- `vc`: a signer-authenticity verdict that is not verified says why.
+  `SignerAuthenticityResult.Err` is nil exactly when `State` is verified;
+  otherwise `errors.Is` tells the cause: `vc.ErrUnsigned`,
+  `vc.ErrProofPolicy`, `vc.ErrCryptosuiteNotRegistered`,
+  `vc.ErrIssuerNotFound` or `vc.ErrSignatureInvalid` for a failed verdict,
+  and the issuer verifier's or the lifecycle registry's own error for an
+  indeterminate one. The field's documentation lists each condition and the
+  order they are decided in: a failed verdict's `Err` matches exactly one of
+  these sentinels, the one for the first condition met, and an indeterminate
+  one's none of them. An error of a component the caller passes (an issuer
+  verifier or `VerifyChainSigners`' `IssuerKeys`, a resolver, a signature
+  verifier, a lifecycle registry) is
+  wrapped as it is, so another sentinel of `vc` it wraps is found too; that
+  is outside the promise. `State` and the other fields are unchanged, and so
+  are `Verify`'s and `VerifyChain`'s verdicts.
+- `vc`: the chain-link checks tell their failures apart without reading
+  text. `ValidateChainLinks` and `ValidateChainFrom` return an error that is
+  `vc.ErrChainLinkBroken` for a broken link (a `*ChainLinkError`, which now
+  matches it under `errors.Is`) and `vc.ErrChainEmpty` for an empty chain
+  or a nil credential. `VerifyChain`'s, `ClassifyChain`'s and
+  `VerifyChainSigners`' errors for an empty chain or a nil credential match
+  `vc.ErrChainEmpty` too. The texts these calls gave before are kept;
+  `ClassifyChain`'s for a nil credential is new (see Fixed). A broken link is
+  still a failed data-integrity verdict of `VerifyChain`, not an error.
+- `vc`: `Verifier.VerifyChainSigners` verifies a chain by its keys alone, for
+  a consumer whose credentials' issuers are not Process DIDs under an
+  Owner. It takes an `IssuerKeys`, the key half of `IssuerVerifier` (which
+  now embeds it, with the same methods), and returns a `ChainSignersResult`:
+  the links (as `ValidateChainLinks` checks them), the order of the proofs'
+  created times (`vc.ErrChainOrder`, a `*ChainOrderError` whose `Index` is
+  the later credential of the first pair out of order and whose
+  `FaultIndex` is the credential the reported defect is in; its
+  documentation gives the order a pair's defects are reported in) and each
+  credential's signer
+  verdict, its suite contract included, with `State` folding the three into
+  one verdict (a check added later is folded into it). It establishes no
+  Owner; its documentation lists what a caller still checks. `VerifyChain` is
+  unchanged.
+- `did/dplaax`: `ValidateRegistry` checks a registry ID as `Parse` checks a
+  DID's registry segment (the safe-segment rule and `MaxRegistryLen`); it is
+  not a DNS-name check. `(*DID).Pipeline` returns a Process's Pipeline, and
+  false for any other DID (dplaax `did.dplaax.hierarchy`); `PipelineDID`
+  stays a truncation of the resource path.
+- `did/dplaax`: `Error`, the type of its sentinels, and `ErrSyntax`. Every
+  refusal of `Parse` and `ValidateRegistry` is `ErrSyntax` under `errors.Is`
+  (dplaax `did.dplaax.syntax`), its text unchanged, so a caller that wraps
+  it with `%w` keeps it. The refusals of `ValidateDID`, `RequireKnownPattern`
+  and `RequireOwner` are not `ErrSyntax`.
+- `delegation`: a sentinel for each kind of check `Verify` makes, constants
+  of `delegation.Error`: `ErrMalformed` (dplaax `delegation.shape`),
+  `ErrOwnerBinding` (`delegation.binding`), `ErrProofPolicy`
+  (`delegation.proof`), `ErrScoped` (`delegation.scope`), and, for the
+  issuer's key and signature, `ErrIssuerNotFound`, `ErrSignatureInvalid` and
+  `ErrSignatureUnestablished`. `Verify` attaches exactly one of them to each
+  refusal, and so does `VerifyFor` to each refusal other than
+  `ErrNotForIdentity`; the texts are unchanged. The documentation lists the
+  checks each covers. An empty issuer or subject id is `ErrMalformed`, and a
+  present one that is not the DID the rule asks for is `ErrOwnerBinding`.
+  `ErrSignatureUnestablished` is a resolution of the issuer that gave no
+  definite answer, that returned neither a document nor an error, or that
+  returned the document of another DID: the one a caller may retry.
+  `ErrIssuerNotFound` is the resolver answering `resolver.ErrNotFound`, or a
+  document with no key usable for assertion under the proof's
+  `verificationMethod`. An error another package returned stays reachable, a
+  resolver's and a signature verifier's as they return it; if such an error
+  is a sentinel of `delegation` under `errors.Is`, that one is found too,
+  beside the one `Verify` attaches.
+- `verification/`: a test-only Go module, outside the root module, with
+  Tamarin models of the L2 wire proof (`wireauth.spthy`) and of where a node
+  shows its bearer (`bearerorigins.spthy`), their negative controls, and CI
+  that runs them on pull requests that change them (`formal.yml`).
+- Optional pipeline config keys `node-registry` (the registry of the
+  pipeline's own node, at `vc-store-endpoint`) and, beside a loop's
+  `upstream-endpoint`, `upstream-registry`: the registry ID of the node at
+  that endpoint, where it is not the one derived from the configuration's
+  DIDs (`docs/architecture/deployment.md`, "Wire proof audience").
+- `wireauth.AudienceForDID`: the audience of the node that serves a DID,
+  the one place a sender derives an audience from a DID.
+- `wireauth.Error`, the type of `wireauth`'s sentinel errors, as in `did`
+  and `vc`.
+- `didregistry.Error`, the type of `didregistry`'s sentinel errors, and
+  `didregistry.ErrUnavailable`: a check an issuing request needs could not
+  be completed now, which the DID service answers with `Unavailable`.
+- `payloadresolver/client.ErrUnknownUpstream`: `ResolvePayload` refuses
+  with it an upstream endpoint to which `Config.UpstreamAudiences` gives no
+  audience, before anything is sent.
+- `verification/vectors`: third-party standard vectors through the product's
+  own code — Wycheproof (Ed25519, ECDSA P-256, RSA PKCS #1 v1.5) through
+  `crypto/{ed25519,es256,rs256}`, RFC 8785 through `canon/jcs`, and the
+  JSON-Schema-Test-Suite (draft 2020-12) through `schema/local` — pinned by
+  SHA-256, with the outcomes that differ from a vector's own listed with
+  their reasons, and the CI job `vectors`, which runs them on every change.
+
+### Changed
+
+- `schemaregistry.Service.Register` refuses a schema body longer than 1 MiB
+  with `ErrInvalidArgument`, before it parses the body, and stores nothing. A
+  node already bounded the whole request to 1 MiB in its transport, so its
+  clients see no change; a caller that uses the `Service` directly gets this
+  new refusal.
+- `network/pkg/services/payloadresolver`: the proof of a `RetainPayload` call
+  binds the payload's content address, and the store keeps the payload only
+  when the bytes it receives have that address (see Breaking changes).
+- The L1 interceptors (`auth.Interceptors`) check a stream when it opens and
+  then on a message sent or received at least 5 seconds after the last check
+  began, not on every message; a unary RPC is checked once, as before. A
+  `RetainPayload` of many chunk frames is checked about once per 5 seconds
+  of its transfer, not once per frame. A permission withdrawn, or a token
+  that expires, while a stream is open ends it at the first such message.
+- `ReportEmitHealth`: a node keeps, for each publisher, the report made
+  latest by its proof's `issued_at`, whatever order reports arrive in;
+  before, it kept the report that arrived last. A report made before the one
+  on record is ignored and gives no freshness, and the call still succeeds
+  with the TTL; one made at the same second replaces it. A report stays
+  fresh for `provin.network.chain.emit-health.ttl` from when the node
+  received it, as before.
+- `didregistry/store.DIDStore`'s contract says `Resolve` returns a non-nil
+  document or a non-nil error, and `ResolveDelegation` a non-nil delegation
+  or a non-nil error, never both nil; `yamlstore` keeps it, and so the
+  registry's own store resolver keeps `resolver.Resolver`'s. A store that
+  answers with neither is outside the contract. With one, the DID service's
+  `ResolveDID` and `ResolveDelegation` answer `null` as the document or the
+  delegation, with no error, and so does `UpdateStatus` for a DID already
+  revoked; revoking a DID records the revocation and then panics before its
+  lifecycle event is appended, so a later request for it answers `null`
+  with no error and the event is never appended; re-registering an owner
+  already registered panics; and issuing a Pipeline or Process is refused
+  as `Unavailable`. The contract also says the saves (`SaveOwner`,
+  `SavePipeline`, `SaveProcess`) refuse a nil DID, document or delegation
+  with an error and store nothing, and `ListPipelines` and `ListProcesses` a
+  nil DID: a nil reaching the store is a caller bug (see Fixed).
+- `didregistry.Service.ResolveDID` returns a non-nil document or a non-nil
+  error, never both nil, as the store's `Resolve` returns it, and
+  `ResolveDelegation` a non-nil delegation or a non-nil error, as the store's
+  `ResolveDelegation` returns it. `tlogservice/logident.DIDResolver` and
+  `didregistry/handler`'s `Resolver` and `Service` state the same.
+- `resolver.Resolver`'s contract says `Resolve` returns a non-nil document or
+  a non-nil error, never both nil, so a caller that gets a nil error uses the
+  document without checking it for nil. The module's resolvers keep it:
+  `resolver/local`, `network/pkg/didresolver`, the CLI's registry resolver
+  and the bundle's archive and export resolvers by what they return, and
+  `resolver/cache`, `appraisal/inputcapture.DIDResolver` and the registry's
+  own store resolver as long as what they pass through does. The DID
+  resolver interfaces that `wireauth`, `tlogservice`, `chainmanager` and
+  `vcresolver/batchresolver` declare state the same contract. A resolver
+  that returns neither is outside the contract: some of the module's callers
+  panic on it, and `delegation` refuses it (see Fixed).
+- The network node answers an RPC that fails inside it, as `Internal`,
+  `Unknown` or `DataLoss`, with that code and the fixed text `server error
+  (ref <16 hex digits>); the server's log has the details`, and logs under
+  that ref at level `ERROR` the error's own text (its head within 1,024
+  bytes and its length), the cause the text hides if any, the procedure,
+  the code and the address the node sees. A code outside connect's own is
+  answered the same way, and so is an error that carries no code of its
+  own, with the code connect gives it (`Canceled` or `DeadlineExceeded`,
+  logged at `WARN`, for a cancellation, a reset connection or a deadline).
+  Before, the caller received the error's own
+  text, which could name the node's state, such as a store's path in the
+  data directory. Other codes keep their text
+  (`docs/architecture/deployment.md`, "Server errors").
+- `decisionrecord`: the sinks `NewJSONLines`, `NewLog` and their `Format`
+  forms return as soon as the call's context ends, without waiting for a
+  write to end, with an error wrapping `ctx.Err()` that names the sink and
+  says either that the write did not start or that it may have started.
+  Before, a writer or handler that did not return held the call, and every
+  call after it. A record whose context ended before its write started is
+  not written, then or later; a write that started may end, and be kept,
+  after the call returned. A write that never ends is not recovered: each
+  sink holds at most one. With a context that cannot end, a call waits for
+  its write as before.
+  - At `LevelAll`, a record for which `Filter.Record` returned an error may
+    still be kept: its write may have started, or the writer or handler may
+    have kept it and still returned an error. A deciding party that wants a
+    reader to see the refusal records the decision again, `Refused`, with
+    the same `DecisionID`, through the same `Filter`.
+  - A panic in the writer or the handler reaches the caller: as itself with
+    a context that cannot end (the write runs in the caller's goroutine),
+    and as a `*decisionrecord.WritePanic`, holding the value and the
+    writer's stack, with one that can, unless the call has returned at its
+    context's end before the sink handed the panic over. Then the panic is
+    dropped and the write counts as failed. A `Filter`'s warnings are
+    written the same way.
+  - A writer or handler that calls `runtime.Goexit` in the sink's own
+    goroutine (a context that can end) fails its write, and the sink writes
+    again after it; a `Filter`'s warning whose handler does so is lost, and
+    the `Filter` warns again after it. In the caller's goroutine,
+    `runtime.Goexit` ends that goroutine, as it does anywhere.
+  - A nil context is `context.Background()`.
+  - A `Filter`'s warning that a sink failed does not wait past the context:
+    it is written late, or, when another warning is being written and the
+    context ends first, not at all.
+  - `Filter.Flush` with a context that has already ended returns its error
+    and keeps the window for the next `Flush`; before, it passed the
+    window's summaries to its sink whatever the context said and started the
+    next window. When the context ends
+    during a `Flush`, a summary whose write has not started is lost, with a
+    warning at most; so that none of the last window is lost to the
+    shutdown signal, the last `Flush` at shutdown takes a context that the
+    signal does not end and that has a deadline of its own, as
+    `context.WithTimeout(context.WithoutCancel(ctx), d)`. Without a
+    deadline it may wait for good behind a write that does not end.
+  - `NewJSONLines` gives its writer one `Write` at a time, even after a call
+    has returned before its `Write` ended.
+- `pipeline/runtime`: at the summary level, each window's flush of the
+  decision records and the last at shutdown wait at most 10 s for the sink,
+  with a context the shutdown signal does not end; a flush that reaches that
+  bound warns that the counts not written by then are lost. The runtime writes
+  its own warnings about a flush one at a time, in a goroutine of their own,
+  and drops one that comes while another is being written, so a log that never
+  ends a write, which the node's log sink may share, holds them no longer
+  either: the decision records' flushes hold shutdown no longer than two flush
+  deadlines. Before, a sink write that never ended held the flusher, and
+  shutdown, for good.
+- `schema`: a JSON Schema `pattern` may name a Unicode general category by a
+  long name or alias as well as by its short name, spelled as ECMA-262 spells
+  them (`\p{Letter}`, `\p{Decimal_Number}`, `\p{digit}` …, read as `\p{L}`,
+  `\p{Nd}`). Another spelling (`\p{letter}`, `\p{Uppercase Letter}`), a
+  property other than a general category (`\p{Greek}`, `\p{Any}`) and the
+  `\p{gc=…}` and `\p{General_Category=…}` forms are still refused.
+- `schema`: the Unicode general categories in a JSON Schema `pattern`, in the
+  names of `patternProperties` and in a value checked as format `"regex"` hold
+  the code points Unicode 15.0.0 gives them, from tables generated from the
+  Unicode Character Database 15.0.0 itself (`internal/ucd`), whatever Unicode
+  version the Go toolchain carries. Before, the toolchain's `unicode` tables
+  decided them (go1.26.10: Unicode 15.0.0; go1.27: Unicode 17.0.0). So a
+  schema accepts the same strings, and is admitted or refused alike, with
+  every toolchain. Their ranges count toward the bound on a regular expression
+  (8,192) as the pinned table holds them, joined where they touch: `\p{C}`
+  counts 712, where 0.4.x counted the entries of the toolchain's table (805
+  with go1.26.10, 832 with go1.27). A pattern near the bound may be admitted
+  here and refused by 0.4.x (see Breaking changes).
+- `keybinding`: `Issue` names the dplaax key-binding branch context
+  (`https://dplaax.dev/vc/branches/v1/keybinding/202611101543`) in a
+  binding's `@context`, after credentials v2 and dplaax v1. `VerifyBinding`
+  accepts a binding whose `@context` begins with those three in that order
+  (any snapshot of the branch context, by its URI's form) followed only by
+  absolute URIs (a URI scheme and a colon first), and a binding with no
+  snapshot (credentials v2 and dplaax v1, then only absolute URIs) while its
+  `validFrom` is before 2027-01-01T00:00:00Z. A status list's `@context`
+  begins with credentials v2, followed only by absolute URIs. Before, a
+  binding's `@context` had to be exactly credentials v2 and dplaax v1, and a
+  list's exactly credentials v2 (dplaax `keybinding.context`,
+  `keybinding.status-list.shape`). **Upgrade relying parties before
+  issuers:** a 0.4.x verifier refuses a binding this release issues, and this
+  release accepts every binding a 0.4.x issuer made; an issuer still on
+  0.4.x upgrades before it issues a binding valid from
+  2027-01-01T00:00:00Z, which this release refuses without the branch
+  context.
+- `did/dplaax`: `Parse` refuses a DID whose registry segment is longer than
+  `MaxRegistryLen` (253) octets, the longest DNS name (dplaax
+  `did.dplaax.syntax`). The registry server's `provin.network.registry.id`,
+  the pipeline's `node-registry` and `upstream-registry`, and the chain's
+  `registry-base-urls` keys are refused at boot past that bound, and so is an
+  allowlist pattern's literal registry, each through
+  `dplaax.ValidateRegistry` (the configuration loaders' refusals carry its
+  text; the allowlist's is still `ErrInvalidPattern`), so no node names or
+  derives an audience a verifier would refuse. A handler that receives
+  such a DID (the registry's DID service among them) answers
+  `InvalidArgument`, where it answered `PermissionDenied` for a registry
+  that is not its own.
+- `did/dplaax`: `Parse`'s error quotes at most 128 bytes of what it refuses,
+  with the length of a longer input. The pipeline's own-node audience and
+  the `vc` Verifier's issuer check now carry that error as the reason a DID
+  does not parse.
+- An error that refuses a DID for its form (it does not parse, or is not the
+  Owner, Pipeline or Process it must be, or `did/dplaax.ValidateDID` refuses
+  its account type or resource path) quotes at most 128 bytes of that DID,
+  with the length of a longer one, in the CLI, the pipeline and network
+  configuration, the network services, `bundle`, `delegation` and `vc`.
+- `delegation.Verify` quotes the delegatedBy, issuer, subject,
+  verificationMethod and resolved document id it refuses, and the proof's
+  type, purpose, cryptosuite and created time and the credential's type, at
+  most 128 bytes each, and the text of another package's error it wraps (the
+  resolver's, the DID document's, the proof's) within 512 bytes; `errors.Is`
+  and `errors.As` still reach the wrapped error. `vc`'s default
+  `IssuerVerifier` (`NewDIDDocumentIssuers`) names the issuer and a
+  substituted document's id within the same bound and bounds the text of the
+  error it wraps, and the Owner check names the issuer and both Owners within
+  it.
+- `didregistry`: registering an Owner names what its document's checks refuse
+  (the proof's type, purpose, cryptosuite, created time, verificationMethod
+  and an unsigned member's name, a key reference, a verification method's
+  id) at most 128 bytes each, and the text of another package's error it
+  reports (reading the key, verifying the proof, parsing the created time)
+  within 1,024 bytes, quoted; `errors.Is` still reaches a key error it
+  wraps. `UpdateStatus` names a status it does not take within 128 bytes,
+  and says that only `revoked` is accepted.
+- `didregistry`: issuing a Pipeline or Process checks its delegation through
+  `delegation.VerifyFor`. A delegation whose owner's document the registry
+  cannot read now is `ErrUnavailable` (Connect `Unavailable`): see Breaking
+  changes. Every other delegation VerifyFor refuses is still
+  `ErrUnauthorized` (Connect `PermissionDenied`); the refusal's text, which
+  clients see in that status, is VerifyFor's.
+- Conformance: this release follows dPLaaX spec `v0.2.0-alpha.1`. The
+  vendored dPLaaX vectors are that tag's 235, byte for byte, and the README's
+  "Specification conformance" names the pair. `keybinding-001`..`keybinding-054`
+  run through `keybinding.Verifier` and `StatusListContentHash`.
+- Conformance: `did-001`..`did-031` run. Whether `did/dplaax.Parse` accepts
+  each DID (dplaax `did.dplaax.syntax`), and, for one it accepts, the level
+  `IsOwner`, `IsPipeline` and `IsProcess` give it, its `OwnerDID`, and its
+  `Pipeline`, which a Process alone has (`did.dplaax.hierarchy`).
+- Conformance: a reject vector of the `keybinding`, `did`, `delegation` and
+  `claims-coverage` families passes only when it is refused with the
+  sentinel its rule names: `did-008`..`did-021` (`did.dplaax.syntax`) with
+  `did/dplaax.ErrSyntax`, `delegation-002`..`delegation-005` with
+  `delegation.ErrOwnerBinding`, `ErrProofPolicy` and `ErrScoped`, and a
+  `keybinding` vector also at the step that refuses it. Guard tests check
+  that the tables tie every reject vector of these families, and nothing
+  else, and a `claims-coverage` view that does not decode fails its
+  vector.
+- Dependencies, from 0.4.0: `golang.org/x/net` 0.61.0 → 0.62.0 and
+  `github.com/klauspost/compress` 1.20.1 → 1.20.2 (indirect), which carry
+  the fixes for GO-2026-6866 and GO-2026-6860 (`x/net/html`) and
+  GO-2026-6865. `golang.org/x/crypto` 0.58.0 → 0.59.0, which carries the fix
+  for GO-2026-5932 (the `openpgp` packages, which this module does not
+  import), with `golang.org/x/sys` 0.49.0 → 0.50.0 and `golang.org/x/text`
+  0.43.0 → 0.44.0 that it requires (in `verification`, `golang.org/x/text`
+  alone, indirect).
+  `github.com/o3co/protobuf.interceptors` and its `connectrpc` module
+  0.6.0 → 0.7.0 (see Breaking changes: Authentication, Authorization
+  answers).
+
+### Fixed
+
+- `decisionrecord`: a panic as `Filter.Flush` writes one point's summary, in
+  the sink or in the handler of the warning that the summary was not written,
+  no longer loses the other points' summaries without a warning: `Flush`
+  writes every point after it, then the panic goes on to the caller as it was
+  raised, with its own stack (and so does `runtime.Goexit` in the caller's
+  goroutine, which then ends). `Flush` calls the sink for those points, and
+  the warning handler for their warnings, from a goroutine of its own, not the
+  caller's: one call at a time, in the order of the points, and it waits for
+  them. A panic as one of those writes is a warning that its point's summary
+  was not written, with its value. A `runtime.Goexit` in that goroutine, as
+  one of them or as its warning, ends only it, and `Flush` goes on with the
+  next point in another. So neither a panic nor `runtime.Goexit` there ends the
+  writing of the rest or the caller's goroutine, the first panic or
+  `runtime.Goexit` is the one that reaches the caller, and the caller's stack
+  does not grow with them. `Flush` calls a sink again after it panicked, so a
+  sink not made here stays callable after a panic.
+- `chainmanager`: subscribing to a publisher, and unsubscribing from one,
+  refuse a resolved DID Document whose id is not the publisher's DID, as a
+  failure to resolve the publisher (`ErrRemotePeer`, which the operator API
+  answers `Unavailable`), and call no peer. Before, they took the
+  `#chain-manager` endpoint that document advertised. The resolver the
+  network node passes refuses such a document already.
+- `vcresolver/batchresolver`: deriving an issuer's `#vc-resolver` endpoint
+  refuses a resolved DID Document whose id is not the issuer's DID, so no
+  issuer-derived endpoint is fetched from, and the entry follows the policy
+  for a derivation that found no endpoint: retried while its retry budget
+  remains, then dropped. Before, it fetched the predecessor from the
+  endpoint that document advertised. The resolver the network node passes
+  refuses such a document already.
+- `orgverify`: `Verify` and `Inspect` refuse a DID Document whose id is not
+  the Owner DID they asked for. `Verify` answers `unreachable`
+  (`doc_fetch_failed`), naming both DIDs, and `Inspect` reports it as the
+  document's error, with neither the document nor its key's fingerprint.
+  Before, they fingerprinted that document's key as the Owner's. The
+  resolver the CLI's org commands pass refuses such a document already. A
+  resolver that answers with neither a document nor an error is refused the
+  same way; before, `Verify` returned an error for it, and `Inspect`
+  reported neither a document nor an error. Both write a resolver's error
+  within 512 bytes of its text.
+- `didregistry/store/yamlstore`: the saves refuse a nil DID or document,
+  and `SavePipeline` and `SaveProcess` a nil delegation, with an error, and
+  store nothing. Before, a nil DID panicked, a nil document was stored as
+  `null`, which `Resolve` read back as an empty document with no error, and
+  a nil delegation was not stored, so `ResolveDelegation` answered
+  `store.ErrNotFound` for a Pipeline or Process the store held.
+  `ListPipelines` and `ListProcesses` refuse a nil DID with an error, as its
+  other methods do, where they panicked. The DID service passes none of
+  these, so it is not affected.
+- `schema`: compiling a regular expression costs the size of its program or,
+  where they are more, the ranges of the Unicode tables read for its Unicode
+  classes; one refused after its Unicode classes were read (its program too
+  large, or a form Go refuses) costs the ranges read. A schema's regular
+  expressions together are charged that cost, and so is a payload's work
+  budget for each value checked as format `"regex"`. Before, only the program
+  was charged, and an expression refused after its Unicode classes were read
+  was charged nothing. Matching a string against a pattern is charged by its
+  program, as before. Once the ranges read pass what is left of a schema's
+  total, the tables are no longer read.
+- `delegation.Verify` and `VerifyFor` refuse, with
+  `delegation.ErrSignatureUnestablished`, a resolver that returns neither a
+  document nor an error for the issuer. Before, they panicked.
+- `vc.ClassifyChain` refuses a nil credential with an error that is
+  `vc.ErrChainEmpty`. Before, it classified a chain of one nil credential as
+  an origin, and a nil credential in a longer chain panicked.
+- `internal/jsonschema` fails the compile of a schema whose `minimum`,
+  `maximum`, `exclusiveMinimum` or `exclusiveMaximum` holds a number `big.Rat`
+  cannot read (such as `1e1000001`), under every draft; it compiled such a
+  keyword as absent, and so did `multipleOf` where the library skips the
+  metaschema check. The schema package refuses these numbers before the
+  library reads them, so its behaviour does not change.
+- `internal/jsonschema` fails the compile of a schema whose integer keyword
+  (`minLength`, `maxLength`, `minItems`, `maxItems`, `minProperties`,
+  `maxProperties`, `minContains`, `maxContains`) holds a value that is not an
+  integer (a number with a fraction, or a value that is not a number), with a
+  `*NonIntegerError`, under every draft that has the keyword, where the
+  library reads it; where the library skips the metaschema check, it compiled
+  such a keyword as absent. A number with no fraction, such as `2.0`, is an
+  integer. The schema package compiles every schema at a location the library
+  checks against its metaschema, which refuses these values first, so its
+  behaviour does not change.
+- `internal/jsonschema` fails the compile of a schema whose `multipleOf`
+  holds a number not greater than 0 (such as `0` or `-1`), with a
+  `*NonPositiveError`, under every draft; where the library skips the
+  metaschema check, it compiled such a keyword, and a number validated
+  against a `multipleOf` of 0 panicked. The schema package compiles every
+  schema at a location the library checks against its metaschema, which
+  refuses these values first, so its behaviour does not change.
+- `wireauth`: a `NonceStore` refuses, with `ErrExpired`, a nonce that
+  reaches it after its proof's expiry, and the memory store keeps a nonce
+  until that expiry.
+
+### Breaking changes
+
+- **Wire:** the L2 signed view is version 2,
+  `{signerDID, aud, op, v, nonce, issuedAt, fields}`, and `AuthProof` gains
+  field 5, `audience`, and field 6, `view_version`, the version of the view
+  it was signed over. A node refuses a proof of a view version it does not
+  accept, or of none, before it resolves the signer, and accepts no version
+  1 proof; a node not yet upgraded refuses a version 2 proof: upgrade every
+  network node and pipeline that talk to each other in one window
+  (`docs/architecture/deployment.md`, "Upgrading to view version 2"). One
+  network process serves a registry's L2 surfaces.
+- **Wire:** `PayloadStoreService.RetainPayload`'s first frame carries field 4
+  of `RetainPayloadMetadata`, `content_address`, the payload's address
+  (`sha256:` and 64 lowercase hex digits), and its proof's fields cover it
+  with `owner_did` and `declared_size`. The store refuses a first frame
+  without it, or with one not spelled as an address, and refuses bytes whose
+  address is not the declared one before it keeps them (`InvalidArgument`). A
+  store not yet upgraded refuses a client of this release, and this release's
+  store refuses an older client: they move together, in the window the view
+  version 2 entry above names. An older client, which sends no
+  `content_address`, is refused `InvalidArgument`, not the `Unauthenticated`
+  ("view version 0") of that entry.
+- **Go API:** `payloadresolver/client`'s `(*Resolver).Retain` takes the
+  payload's content address, `Retain(ctx, rd, ownerDID, size, addr)`, as the
+  caller declares its size, and refuses a zero one before it sends anything.
+  A store's answer naming another address than `addr` is an error.
+  `payloadresolver/wirecontract.RetainPayloadFields`, and its alias
+  `payloadresolver.RetainPayloadFields`, take the content address too. The
+  alias is a function, no longer a variable: it cannot be assigned, and its
+  address cannot be taken.
+- **Configuration:** a pipeline whose configuration names one
+  `upstream-endpoint` for two registries (the by-reference ingresses at that
+  endpoint derive, or override with `upstream-registry`, different
+  audiences) does not start: one endpoint is one node
+  (`docs/architecture/deployment.md`, "Wire proof audience"). Only
+  by-reference ingresses count; an inline ingress fetches nothing and names
+  no audience. Nor does a pipeline that signs its own node's proofs as DIDs
+  of two registries (its node DID, a producing loop's output subject or
+  issuer, a sink's receipt issuer) without `node-registry`: it decides one
+  audience for its node at start, and that node accepts one. A
+  `vc-store-endpoint` or an `upstream-endpoint` served by a node of another
+  registry starts, and then every call the pipeline signs for that endpoint
+  fails as `Unauthenticated`, until `node-registry` or `upstream-registry`
+  names that registry. A publisher's `#chain-manager` endpoint must be served
+  by the node whose `provin.network.registry.id` is the registry of the
+  publisher's DID: the call names that registry as its audience.
+- **Wire and configuration:** a DID whose registry segment is longer than
+  253 octets (`did/dplaax.MaxRegistryLen`) does not parse, so this release
+  refuses such a DID that 0.4.x accepted, wherever it reads one. A registry
+  server whose `provin.network.registry.id` is such a registry, and a chain
+  configuration whose `registry-base-urls` names one, do not start. The
+  registry's DID service answers
+  such a DID `InvalidArgument`, where it answered `PermissionDenied` for a
+  registry that is not its own. An allowlist pattern whose literal registry
+  is longer than 253 octets is invalid (`ErrInvalidPattern`) as well.
+
+  Migration: a DID already issued under a longer registry cannot be renamed
+  by configuration, as the registry is part of the DID; such a DID must be
+  issued again under a registry of at most 253 octets, and every registry
+  the configuration and the allowlists name must be within that bound before
+  the upgrade.
+- **Wire:** a key binding this release issues names the dplaax key-binding
+  branch context in its `@context`, after credentials v2 and dplaax v1, and
+  a 0.4.x relying party refuses it: it takes only a binding whose `@context`
+  is exactly those two. This release accepts every binding a 0.4.x issuer
+  made while its `validFrom` is before 2027-01-01T00:00:00Z, and refuses a
+  binding without the branch context whose `validFrom` is
+  2027-01-01T00:00:00Z or later.
+
+  Migration: upgrade relying parties before issuers, and every issuer before
+  it issues a binding valid from 2027-01-01T00:00:00Z. A binding a 0.4.x
+  issuer has already issued with a `validFrom` of 2027-01-01T00:00:00Z or
+  later is refused by this release, and upgrading its issuer does not repair
+  it: issue such a binding again.
+
+  The two context documents of the v0 credential wire freeze that a key
+  binding names (credentials v2, dplaax `vc/v1`) are unchanged, and a
+  binding a 0.4.x issuer made, valid from before 2027-01-01T00:00:00Z, still
+  verifies: the branch context this change adds after them is not among the
+  contexts the declaration pins, so it does not amend the freeze.
+- **Wire:** the registry's `IssuePipeline` and `IssueProcess` answer
+  `Unavailable` when the owner's document, which the delegation is verified
+  against, cannot be read now: the store fails, returns the document of
+  another DID, or returns neither a document nor an error. 0.4.x answered
+  `PermissionDenied` for the first two; for the third, its delegation check
+  read the nil document and panicked in the handler, which nothing in the
+  node recovers, so the request ended with no answer. A client may retry
+  `Unavailable`; a delegation the registry refuses is still
+  `PermissionDenied`.
+- **Schema:** a JSON Schema `pattern` may name a Unicode general category by a
+  long name or alias (`\p{Letter}`), which 0.4.x refuses: a schema that does
+  is accepted here and refused by a 0.4.x process. Likewise, a pattern's
+  Unicode classes count toward the bound on a regular expression (8,192) by
+  the ranges of the pinned Unicode 15.0.0 tables, joined where they touch
+  (`\p{C}`: 712), where 0.4.x counts the entries of the toolchain's tables
+  (805 with go1.26.10): a pattern near the bound may be accepted here and
+  refused by a 0.4.x process. And a 0.4.x process built with a toolchain of a
+  later Unicode version (go1.27: Unicode 17.0.0) reads categories by that
+  version: a pattern there may accept a string this release refuses (U+1C89, a
+  letter from Unicode 16.0 on, is unassigned here), or refuse one it accepts.
+  And an expression's Unicode classes cost the ranges of the tables read for
+  them where those are more than its program, so a schema with many Unicode
+  classes uses more of its regular expressions' total: a few schemas a 0.4.x
+  process accepts are refused here, among them a schema a process holds when
+  it registers it again at its start (`schema/local`'s `Add` compiles it):
+  check those schemas before upgrading. The same cost applies to a payload
+  value checked as format `"regex"`: one with many Unicode classes uses more
+  of the payload's work budget than before, so check those inputs before
+  upgrading too. Upgrade every process that compiles or validates against a
+  schema before a schema uses one.
+- **Authentication:** the `cedar` backend accepts a caller's JWT only with
+  the `typ` RFC 9068 gives an access token, `at+jwt` or `application/at+jwt`
+  (in any ASCII case), and an `iat` claim, which may not be ahead of the
+  node's clock by more than the 30-second leeway. A token that lacks either,
+  one with a `typ` of `JWT` for instance, is refused as `Unauthenticated`, as
+  an invalid token is. 0.4.x checked neither: an issuer whose tokens lack them
+  must issue tokens of that form first. A token already issued without them
+  and still held by a caller is refused by an upgraded node too: replace
+  such tokens, or let them expire, before the verifying nodes are upgraded,
+  as well as changing the issuer's future tokens.
+- **Authentication:** with the `cedar` backend and `jwks-url`, a node that
+  cannot fetch the issuer's key set reports the PDP unavailable rather than
+  the caller unauthenticated: an L1-guarded RPC fails with `Unavailable`, and
+  the pipeline's push endpoint answers 503 with `Retry-After`. That is the
+  case when the latest fetch failed, for whatever reason (unreachable, a TLS
+  failure, past its 5-second timeout, any status but 200, or a body over
+  1 MiB or not a key set), and the node holds no key set within its grace, or
+  one with no key that fits the token (by key id, algorithm and use).
+  Fetches start at least 30 seconds apart, and until the next one starts a
+  retry is answered from the latest completed fetch. A token the set the
+  latest fetch returned has no key for, and every other failed token check,
+  stay `Unauthenticated` (push: 403). 0.4.x answered `Unauthenticated`
+  (push: 403) for a key set it could not fetch as well. An L1-guarded RPC
+  whose own context ends while the node waits for the key set fails with
+  `Canceled` or `DeadlineExceeded`, as on the other paths (push: 503, as for
+  a key set it cannot fetch); 0.4.x answered `Unauthenticated` (push: 403)
+  there too.
+- **Authorization answers:** a PDP answer in which a JSON object names a key
+  twice, at any depth, has no single reading and is not read: a `200` from
+  the `o3co` policy verifier, OPA or the Cedar agent in that form allows
+  nothing and is a malformed answer, `Internal` (push: 403).
+- **Go API:** the `Config.HTTPClient` of `auditor/client`,
+  `chainmanager/reportclient`, `schemaregistry/client`, `tlogservice/client`
+  and `payloadresolver/client` is an `*http.Client`, not a
+  `connect.HTTPClient`, and must not be nil (`New` panics on nil where it
+  confines). With `Bearer` set, the first four send through a copy of it
+  that refuses every redirect, so the bearer goes to `BaseURL`'s origin
+  only; before, the client given was used as it was. Without `Bearer` they
+  use it as given. `payloadresolver/client`'s store client refuses every
+  redirect whether or not `Bearer` is set, as it did before for an
+  `*http.Client` and now for every client. This holds over a `Transport`
+  that sends each request as it is, as net/http's does. A caller that passed
+  another `connect.HTTPClient` passes an `*http.Client` whose `Transport`
+  does not follow redirects itself.
+- **Go API:** `auditor.RegisterEvidenceFields`,
+  `auditor.RegisterAuditHeadFields`, `auditor.CanonicalizeConsumedSet`,
+  `tlogservice.MirrorLogSegmentFields`, `tlogservice.SegmentDigest`,
+  `tlogservice.FrameRecordPayloads`, `tlogservice.UnframeRecordPayloads` and
+  `chainmanager.ReportEmitHealthFields` are functions that call their
+  `wirecontract` package's function of the same name; in 0.4.x they were
+  variables holding it. A call, and passing one as a function value, read as
+  before; assigning one or taking its address no longer compiles, and
+  comparing one with `nil` compiles but is always false (`go vet` reports
+  it). Each is a function of its own, so its value is not the
+  `wirecontract` function's (`reflect` and `runtime.FuncForPC` tell them
+  apart).
+- **Go API:** `emithealth.Store.Report` and `handler.EmitHealthReporter`'s
+  `Report` take when the report was made and when it was received,
+  `Report(publisherDID string, healthy bool, madeAt, receivedAt time.Time)`;
+  in 0.4.x they took one time, when the report was recorded. The store
+  orders reports by `madeAt` and measures freshness from `receivedAt`. A
+  caller passes both, and another implementation of `EmitHealthReporter`
+  takes both.
+- **Schema:** a regular expression whose groups nest more than 8 deep is
+  refused, where 0.4.x accepts them up to 32 deep
+  (`PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH` sets the bound, up to 32). A schema
+  a 0.4.x process accepts with such a pattern is refused here, among them a
+  schema a process holds when it registers it again at its start
+  (`schema/local`'s `Add` compiles it), and so is a payload value checked as
+  format `"regex"` that nests so deep: check registered schemas and those
+  inputs before upgrading, or set the variable to the depth they need on
+  every process that compiles or validates against them.
+- **Go API:** `decisionrecord.Filter.Flush` at `LevelSummary` with a context
+  that has already ended returns its error and keeps the window for the next
+  `Flush`, where 0.4.x passed the window's summaries to its sink whatever the
+  context said and started the next window. A caller's
+  last `Flush` at shutdown passes a context the shutdown signal does not end,
+  with a deadline of its own (see Changed).
+- **Go API:** with a context that can end, a panic in the writer or the
+  handler of a `decisionrecord` sink, or in a `Filter`'s warning handler,
+  reaches the caller as a `*decisionrecord.WritePanic` holding the value,
+  where 0.4.x panicked with the value itself. Code that recovers it and
+  compares the value (`==`, a type assertion) reads `WritePanic.Value`;
+  `errors.Is` and `errors.As` reach an error value through `Unwrap`. With a
+  context that cannot end, the panic is the value itself, as in 0.4.x.
+- **Go API:** `decisionrecord`: with a context that has already ended, the
+  sinks `NewJSONLines`, `NewLog` and their `Format` forms return an error
+  wrapping the context's error and write nothing, and so does
+  `Filter.Record` at `LevelAll` over one of them; at `LevelRefusals`,
+  `Filter.Record` over one of them drops the record, with a warning at
+  most. 0.4.x wrote the record. A `Filter` over a sink of another
+  implementation passes the context on, and the sink decides. A caller that records after its
+  request's context may have ended passes
+  `context.WithTimeout(context.WithoutCancel(ctx), d)`, a context the end of
+  the request does not end and that has a deadline of its own (see Changed).
+  The pipeline runtime's flush of the summary level now waits at most 10
+  seconds for the sink, with a context the shutdown signal does not end.
+- **Go API:** `schemaregistry.Service.Register` called directly in Go refuses
+  a schema body over 1 MiB with `ErrInvalidArgument` and stores nothing,
+  where 0.4.x took it; a caller keeps the body within 1 MiB. A client of the
+  network node was already bounded to 1 MiB for the whole request by the
+  transport (see Changed).
+- **Go API:** a resolver that returns the DID Document of another DID than the
+  one asked for is refused where 0.4.x used the document: `chainmanager`'s
+  subscribe and unsubscribe answer `Unavailable` and call no peer,
+  `vcresolver/batchresolver` derives no endpoint from it, and
+  `orgverify.Verify` and `Inspect` refuse it (see Fixed). A custom resolver
+  returns the document of the DID it was asked for. The resolvers of the
+  network node and the CLI already refused such a document.
+- **Go API:** `vc.ClassifyChain` with a nil credential returns an error that
+  is `vc.ErrChainEmpty`, where 0.4.x returned `ChainOrigin` for a chain of
+  that one nil credential (and panicked on a nil credential in a longer
+  chain).
+- **Schema:** an integer keyword of a JSON Schema (`minLength`, `maxLength`,
+  `minItems`, `maxItems`, `minProperties`, `maxProperties`, `minContains`,
+  `maxContains`) whose value is an integer above `math.MaxInt` is read as
+  `math.MaxInt`, under every draft that has the keyword (see Fixed). 0.4.x
+  read the low-order bits of such a number instead, so a schema with such a
+  keyword now refuses inputs a 0.4.x process accepted (or accepts inputs it
+  refused), and a 0.4.x process and this release can disagree on it: change
+  such a keyword to a value within `int`, on every process, before relying on
+  it.
+- **Wire:** a network error coded `Internal`, `Unknown` or `DataLoss`, a code
+  outside connect's own, or an error without a code, now carries a fixed text
+  with a reference (`server error (ref <16 hex digits>); the server's log has
+  the details`), not the error's own text. The code, details and metadata are
+  unchanged, and the node logs the error under the reference (see Changed). A
+  client that matched the text uses the code and the node's log reference.
+- **Go API:** `wireauth` moves from
+  `network/pkg/services/chainmanager/wireauth` to `network/pkg/wireauth`:
+  the RPCs of several services carry its proof, not the chain manager's
+  alone. Its identifiers move unchanged, and the `Verifier` interfaces of
+  the auditor, chain manager, payload resolver, payload store and tlog
+  handlers take its `Proof` and `Authorizer` from there.
+- **Go API:** `payloadresolver/client.Config` holds a map
+  (`UpstreamAudiences`), so it is no longer comparable, and neither is
+  `client.Resolver`.
+- **Go API:** `wireauth.Sign` is `Sign(signer, op, fields, Claims)`, the
+  view's signer DID, audience, nonce and issued-at in `wireauth.Claims`;
+  `wireauth.Proof` has `Audience` and `ViewVersion`;
+  `wireauth.VerifierConfig.Audience` is required, and
+  `AcceptedViewVersions` (default the current version; version 1 is
+  refused) is new; the new sentinels `wireauth.ErrWrongAudience` and
+  `wireauth.ErrViewVersion` map to `Unauthenticated`.
+  `wireauth.NonceStore.Use` takes the request's context and the nonce's
+  expiry: `Use(ctx, signerDID, nonce, expiresAt)`; a store takes no nonce
+  after its expiry (`ErrExpired`), so it may forget one after it. The
+  report, audit, mirror and payload-store clients' `Config` take `Audience`
+  (`StoreAudience` for the payload store), and require it: `New` accepts an
+  empty one, and then every call that signs a proof fails with
+  `wireauth.ErrMalformedProof` ("signerDID, audience, op, and nonce must be
+  non-empty") before anything is sent; the payload client's
+  `ResolvePayload` keeps its 0.4.0 form, and takes each upstream's audience
+  from `Config.UpstreamAudiences`, fetching from no endpoint without one
+  (`ErrUnknownUpstream`).
+  `chainmanager.PeerClient`'s methods, and `peerclient.Client`'s, take a
+  `chainmanager.Peer` (endpoint and audience) in place of the endpoint.
+  `evidence.Record` has `Audience`, and records the view version the proof
+  was verified under.
+- **Go API:** `wireauth`'s sentinel errors are constants of the new type
+  `wireauth.Error`, not variables, so no importer can reassign them. Their
+  messages are the same; compare an error with them by `errors.Is`.
+- **Go API:** `didregistry.ErrInvalidArgument` and
+  `didregistry.ErrUnauthorized` are constants of the new type
+  `didregistry.Error`, not variables of type `error`: no importer can
+  reassign them, and code that relied on them being variables of type
+  `error` no longer compiles (taking their address, comparing them with
+  `nil`, or giving a variable their type and then assigning another error
+  to it). Their messages are the same; compare an error with them by
+  `errors.Is`.
+- **Go API:** an implementation of `resolver.Resolver`, of the
+  `DIDResolver` that `wireauth`, `tlogservice`, `chainmanager`,
+  `vcresolver/batchresolver` or `tlogservice/logident` declares, or of
+  `didregistry/handler`'s `Resolver` and `Service`, must return a non-nil
+  document (or delegation) or a non-nil error, never both nil (see
+  Changed). One that answered with neither must return an error instead.
+- **Go API:** an implementation of `didregistry/store.DIDStore` must return
+  a non-nil value or a non-nil error from `Resolve` and `ResolveDelegation`,
+  never both nil (see Changed). One that answered with neither must return
+  an error instead, `store.ErrNotFound` for a miss. An implementation's
+  saves must also refuse a nil DID, document or delegation with an error and
+  store nothing, and its `ListPipelines` and `ListProcesses` a nil DID. A
+  caller that saved a Pipeline or Process with a nil delegation gets that
+  error from `yamlstore` now.
+- **Verification:** an `eddsa-rdfc-2022` `PipelinePassCredential` must hold
+  only the members `vc` reads, under their names and in their forms, and no two
+  of its node objects may carry the same id; one with any other member, or with
+  two node objects of one id, is refused.
+
+  Migration: a credential that does not fit is issued again by its issuer.
+  Rewriting its JSON into the closed form is no substitute: an
+  `eddsa-rdfc-2022` proof signs the RDF dataset, which several JSON forms
+  share, so a proof that still verifies does not show that the issuer
+  wrote the form. A re-issued credential has a new content address, so
+  links to the old one are made again.
+
+### Documentation
+
+- `docs/protocol/services.md` (en/ja): the matching rule reads entries only
+  from the subject's own document, and batch chain assembly's account says
+  an issuer with no endpoint is retried while its retry budget remains, then
+  dropped, and how the audit runner finalizes a chain that stops at the hole.
+- `vc`: `VerifyChainSigners` (its documentation and `vc/README.md`, en/ja)
+  says it verifies every signature in the chain whatever the links say and
+  has no bound on the chain's length: the caller bounds the chain, its length
+  and the time it allows, before it calls.
+- `docs/protocol/auth.md` (en/ja) says a verifier's clock stepped back while
+  the process runs reopens the acceptance window for nonces already swept, as
+  a restart does: the trusted-clock assumption holds for the whole life of
+  the process.
+- `provin.network.pipeline.vc-store-bearer` and `credential-origins`
+  (`reference.conf`, `docs/protocol/services.md`, en/ja): an `http` origin
+  receives the token in plaintext; name `https` origins except on a network
+  you trust (the quickstart's compose network uses `http`).
+- `docs/protocol/auth.md` records the L2 proof's design decisions D-w1 (the
+  view binds the signer DID), D-w10 (nonces per signer), D-w11 (the fields'
+  value grammar) and D-w12 (the view binds the audience), which the code
+  cites by name.
+- `docs/architecture/deployment.md` describes the wire proof's audience, the
+  optional keys, the one-process-per-registry constraint and the upgrade.
+- `vc`: `PipelinePassCredential.Hash` says it is the address of the JSON body
+  as received. Under `eddsa-rdfc-2022`, JSON forms that expand alike have
+  different addresses, so there it is not the signed credential's identity.
+- `vc`: `WireVariantID`, as `Hash`, is of the JSON: under `eddsa-rdfc-2022`
+  it is not the identity of the signed form. The `eddsa-rdfc-2022` closed
+  form holds the members dplaax's `PipelinePassCredential` JSON Schema
+  defines, and a member the schema adds is added to it.
+- `vc`: `IssuerKeys` and `IssuerVerifier` say that when a key's
+  authorization holds is the implementation's to establish:
+  `NewDIDDocumentIssuers` reads the documents as they are now and does not
+  check that a key was authorized when its proof was made. A caller that
+  needs that supplies its own.
+- `vc`: `ErrProofPolicy` and `ErrSignatureInvalid` are defined by what they
+  mean, and each condition `SignerAuthenticityResult.Err` lists keeps its
+  sentinel whatever order the checks run in. `VerifySignerAuthenticity` no
+  longer says that duplicate entries verify alike under `eddsa-rdfc-2022`: a
+  property that holds one value twice does not canonicalize.
+- The `Error` type of `vc`, `keybinding`, `did`, `delegation`,
+  `decisionrecord`, `canon`, `canon/urdna2015` and
+  `crypto/{ed25519,es256,rs256}`: an error is compared with a sentinel by
+  `errors.Is` alone; `errors.As` to `Error` and `==` are not promised.
+
 ## [0.4.0] - 2026-11-09
 
 This release fixes twelve security advisories and bounds what a node takes in
@@ -1455,7 +2309,8 @@ Initial internal release — pinned for internal (private) deployment and soak.
 - The quickstart pins the `provin.auth` policy-verifier / auth-provider images
   and `AUTH_REF` to `v0.1.0` (built from provin.auth's matching tag).
 
-[Unreleased]: https://github.com/provin-line/oss/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/provin-line/oss/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/provin-line/oss/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/provin-line/oss/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/provin-line/oss/releases/tag/v0.3.0
 [0.2.0]: https://github.com/provin-line/oss/releases/tag/v0.2.0

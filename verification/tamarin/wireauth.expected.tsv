@@ -1,0 +1,16 @@
+# build	lemma	result   (build = default or a -D flag; result = verified | falsified | unresolved; a lemma absent here is expected verified)
+ViewOmitsSigner	view_binding	falsified
+ViewOmitsOp	view_binding	falsified
+ViewOmitsOp	no_burn	falsified
+NoNonceStore	once_per_store	falsified
+RecordBeforeSignature	no_burn	falsified
+StoreKeyedByNonce	no_burn	falsified
+StoreKeyedByNonce	nonce_per_signer	falsified
+ViewOmitsAudience	accepted_only_for_audience	falsified
+AudienceFromWire	accepted_only_for_audience	falsified
+ViewOmitsAudience	mismatch_spends_no_nonce	falsified
+AudienceFromWire	mismatch_spends_no_nonce	falsified
+RecordBeforeSignature	mismatch_spends_no_nonce	falsified
+SignerNonceFromWire	nonce_names_signing	falsified
+SignerNonceFromWire	no_burn	falsified
+RecordBeforeAudience	mismatch_spends_no_nonce	falsified

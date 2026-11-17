@@ -2,7 +2,7 @@
 // Pipeline/Process issuance under owner-signed delegation, resolution,
 // status/revoke, listing, and append-only lifecycle-event reads.
 //
-// Message-shape principle (slice-4 D-d2/D-d3): DID Documents, delegation
+// Message-shape principle: DID Documents, delegation
 // credentials, outward-identity snapshots, and lifecycle events are carried as
 // opaque bytes holding their canonical (JCS) JSON — the proto does not re-model
 // them. Their canonical round-trip is normative (the document hash is recorded
@@ -109,9 +109,9 @@ type DIDServiceClient interface {
 	// authorized a Pipeline or Process DID. A verifier reconstructing the
 	// issuer->Owner authorization chain reads it here; the Owner *name* is
 	// derived by structurally parsing the issuer DID (no resolution), and this
-	// delegation supplies the cryptographic authorization (slice-4 D-d7).
+	// delegation supplies the cryptographic authorization.
 	ResolveDelegation(context.Context, *connect.Request[v1.ResolveDelegationRequest]) (*connect.Response[v1.ResolveDelegationResponse], error)
-	// UpdateStatus changes a DID's lifecycle status (slice-4 produces "revoked").
+	// UpdateStatus changes a DID's lifecycle status; it accepts only "revoked".
 	// The change is recorded as a revoke lifecycle event; the updated DID
 	// Document is returned.
 	UpdateStatus(context.Context, *connect.Request[v1.UpdateStatusRequest]) (*connect.Response[v1.UpdateStatusResponse], error)
@@ -291,9 +291,9 @@ type DIDServiceHandler interface {
 	// authorized a Pipeline or Process DID. A verifier reconstructing the
 	// issuer->Owner authorization chain reads it here; the Owner *name* is
 	// derived by structurally parsing the issuer DID (no resolution), and this
-	// delegation supplies the cryptographic authorization (slice-4 D-d7).
+	// delegation supplies the cryptographic authorization.
 	ResolveDelegation(context.Context, *connect.Request[v1.ResolveDelegationRequest]) (*connect.Response[v1.ResolveDelegationResponse], error)
-	// UpdateStatus changes a DID's lifecycle status (slice-4 produces "revoked").
+	// UpdateStatus changes a DID's lifecycle status; it accepts only "revoked".
 	// The change is recorded as a revoke lifecycle event; the updated DID
 	// Document is returned.
 	UpdateStatus(context.Context, *connect.Request[v1.UpdateStatusRequest]) (*connect.Response[v1.UpdateStatusResponse], error)

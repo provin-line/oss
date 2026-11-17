@@ -37,18 +37,21 @@ type fakePeer struct {
 	disconnErr       error
 	registered       int
 	disconnected     []string
+	targets          []string           // "op endpoint audience" of each call, in order
 	cancelOnRegister context.CancelFunc // if set, cancels the caller ctx mid-flight
 	onRegister       func()             // if set, runs after the remote side-effect commits (races a concurrent winner)
 }
 
-func (f *fakePeer) GetPublisherInfo(context.Context, string, string, string) (string, []string, error) {
+func (f *fakePeer) GetPublisherInfo(_ context.Context, peer Peer, _, _ string) (string, []string, error) {
+	f.targets = append(f.targets, "GetPublisherInfo "+peer.Endpoint+" "+peer.Audience)
 	if f.getErr != nil {
 		return "", nil, f.getErr
 	}
 	return f.publishType, f.modes, nil
 }
 
-func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMode string) (string, map[string]string, string, string, error) {
+func (f *fakePeer) RegisterSubscription(_ context.Context, peer Peer, _, _, requestedMode string) (string, map[string]string, string, string, error) {
+	f.targets = append(f.targets, "RegisterSubscription "+peer.Endpoint+" "+peer.Audience)
 	if f.registerErr != nil {
 		return "", nil, "", "", f.registerErr
 	}
@@ -83,7 +86,8 @@ func (f *fakePeer) RegisterSubscription(_ context.Context, _, _, _, requestedMod
 	return f.remoteID, connInfo, f.publishType, agreed, nil
 }
 
-func (f *fakePeer) Disconnect(ctx context.Context, _, remoteID string) error {
+func (f *fakePeer) Disconnect(ctx context.Context, peer Peer, remoteID string) error {
+	f.targets = append(f.targets, "Disconnect "+peer.Endpoint+" "+peer.Audience)
 	if err := ctx.Err(); err != nil {
 		return err // a real client respects ctx; compensation must use a fresh one
 	}
@@ -382,7 +386,7 @@ func TestSubscribe_InvalidSubscriberDID(t *testing.T) {
 
 // Unsubscribing one subscriber must NOT tear down the shared import while a
 // sibling subscriber-direction record on the same remote subject remains
-// (Codex P2 ref-count). Under D-4's mixed-mode invariant, Subscribe itself no
+// (ref-count). Under the mixed-mode invariant, Subscribe itself no
 // longer produces two subscriber-direction records for the SAME publisherDID
 // (ErrDuplicateSubscription rejects the second regardless of subscriberDID —
 // the local infra account has exactly one import target per publisherDID, so
@@ -429,7 +433,7 @@ func TestUnsubscribe_SiblingKeepsImport(t *testing.T) {
 
 // When the caller's context is canceled after the remote registration but before
 // persist, the compensating Disconnect must still reach the publisher — it runs
-// on a context detached from the caller's cancellation (Codex P2). The fake peer
+// on a context detached from the caller's cancellation. The fake peer
 // honors ctx, so without the detach the compensation would silently no-op.
 func TestSubscribe_CompensationSurvivesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -11,8 +11,8 @@
 // generated here at issuance (server-side mint); a caller may instead supply
 // its own LOCALLY-minted public keys (ExternalPublicKeys), in which case this
 // service never generates or holds a private key for that DID — matching the
-// tlog-custody trust model's "the registry has no loop key" for pipeline/
-// process signing keys, not just the owner's. Either way, the authority to
+// custody rule that the registry holds no loop key, for pipeline/process
+// signing keys, not just the owner's. Either way, the authority to
 // mint is an owner-signed delegation whose subject is structurally under the
 // owner on the did:dplaax plane — delegation verification is identical in
 // both modes.
@@ -34,28 +34,44 @@ import (
 	"github.com/provin-line/oss/delegation"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
 )
 
+// Error is the type of this package's sentinel errors. The sentinels are
+// constants, so no importer can reassign them. Compare an error with them by
+// errors.Is only: the service wraps them with detail.
+type Error string
+
+func (e Error) Error() string { return string(e) }
+
 // Sentinel errors. ErrNotFound / ErrExists / ErrConflict from the store package
 // surface unchanged; handlers map all of these to Connect codes with errors.Is.
-var (
+const (
 	// ErrInvalidArgument is a malformed request (bad DID, wrong shape, unknown
 	// status).
-	ErrInvalidArgument = errors.New("didregistry: invalid argument")
+	ErrInvalidArgument Error = "didregistry: invalid argument"
 	// ErrUnauthorized is a failed cryptographic check: a bad self-signed owner
-	// proof, a delegation that does not verify, or a cross-registry DID.
-	ErrUnauthorized = errors.New("didregistry: unauthorized")
+	// proof, a delegation VerifyFor refuses (but one whose owner's document
+	// could not be established now, which is ErrUnavailable), or a
+	// cross-registry DID.
+	ErrUnauthorized Error = "didregistry: unauthorized"
+	// ErrUnavailable is a check the request needs that could not be completed
+	// now: the owner's document, which a delegation is verified against, could
+	// not be established (delegation.ErrSignatureUnestablished). A later
+	// request may succeed.
+	ErrUnavailable Error = "didregistry: unavailable"
 )
 
 const (
 	eventRegister = "register"
 	eventRevoke   = "revoke"
-	// witnessSelfAsserted is the witness source until registry-side outward
-	// resolution (D-d4 part A) lands.
+	// witnessSelfAsserted is the witness source: the registry records the
+	// outward binding as submitted by the caller, without registry-side resolution.
 	witnessSelfAsserted = "self-asserted"
 	jwkType             = "JsonWebKey2020"
 )
@@ -89,7 +105,7 @@ func WithServiceEndpoints(eps []did.ServiceEndpoint) Option {
 
 // New returns a Service backed by st. registry is this registry's canonical
 // identity (the did:dplaax {registry} segment it owns); every write rejects a
-// DID whose registry segment differs (cross-registry replay defense, D-d8).
+// DID whose registry segment differs (cross-registry replay defense).
 func New(st store.DIDStore, keys keystore.KeyStore, keygen crypto.KeyGenerator, verifier crypto.Verifier, registry string, opts ...Option) *Service {
 	s := &Service{store: st, keys: keys, keygen: keygen, verifier: verifier, registry: registry, clock: time.Now}
 	for _, o := range opts {
@@ -189,7 +205,7 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 
 	if err := s.store.SaveOwner(owner, doc); err != nil {
 		if errors.Is(err, store.ErrExists) {
-			// Idempotent insert (D-d8): an exact re-submission is non-mutating
+			// Idempotent insert: an exact re-submission is non-mutating
 			// success; a different document for an existing owner is rejected.
 			existing, gerr := s.store.Resolve(owner)
 			if gerr != nil {
@@ -227,8 +243,8 @@ func (s *Service) RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwa
 // target DID (no keystore write). nil selects today's server-side mint,
 // unchanged. Delegation verification and every other authorization check are
 // identical in both modes; only key custody differs — this is the loop-side
-// minting path the tlog-custody trust model requires ("the registry has no
-// loop key") extended from the owner to pipeline/process keys.
+// minting path that the custody rule (the registry holds no loop key)
+// requires, extended from the owner to pipeline/process keys.
 type ExternalPublicKeys struct {
 	// AuthPublicKey is the raw Ed25519 public key for the #auth verification
 	// method (authentication relationship).
@@ -318,24 +334,23 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	switch kind {
 	case kindPipeline:
 		if !target.IsPipeline() {
-			return nil, nil, fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidArgument, targetDID)
+			return nil, nil, fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidArgument, netexcerpt.ValueText(targetDID))
 		}
 	case kindProcess:
 		if !target.IsProcess() {
-			return nil, nil, fmt.Errorf("%w: %q is not a process DID", ErrInvalidArgument, targetDID)
+			return nil, nil, fmt.Errorf("%w: %s is not a process DID", ErrInvalidArgument, netexcerpt.ValueText(targetDID))
 		}
 	}
 	if err := s.requireOwnRegistry(target); err != nil {
 		return nil, nil, err
 	}
-	// The delegation must authorize exactly this target — delegation.Verify only
-	// proves the subject is under the owner, so bind it to targetDID here.
-	if dlg.CredentialSubject.ID != targetDID {
-		return nil, nil, fmt.Errorf("%w: delegation subject %q does not authorize target %q", ErrUnauthorized, dlg.CredentialSubject.ID, targetDID)
-	}
-	// Verify the owner-signed delegation: the owner's document is resolved from
-	// this store, so an unregistered owner fails here.
-	if err := delegation.Verify(ctx, s.verifier, storeResolver{s.store}, dlg); err != nil {
+	// The owner-signed delegation must authorize exactly this target: its
+	// subject is targetDID, and the owner's document, resolved from this store,
+	// verifies it (an unregistered owner fails here).
+	if err := delegation.VerifyFor(ctx, s.verifier, storeResolver{s.store}, dlg, targetDID); err != nil {
+		if errors.Is(err, delegation.ErrSignatureUnestablished) {
+			return nil, nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
 		return nil, nil, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 
@@ -414,7 +429,9 @@ func (s *Service) issue(ctx context.Context, targetDID string, dlg *delegation.D
 	return doc, dlg, nil
 }
 
-// ResolveDID returns the DID Document for didStr.
+// ResolveDID returns the DID Document for didStr: a non-nil document or a
+// non-nil error, never both nil, as the store's Resolve returns it
+// (store.DIDStore).
 func (s *Service) ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -430,7 +447,8 @@ func (s *Service) ResolveDID(ctx context.Context, didStr string) (*did.DIDDocume
 }
 
 // ResolveDelegation returns the owner-signed delegation that authorized a
-// Pipeline/Process DID.
+// Pipeline/Process DID: a non-nil delegation or a non-nil error, never both
+// nil, as the store's ResolveDelegation returns it (store.DIDStore).
 func (s *Service) ResolveDelegation(ctx context.Context, didStr string) (*delegation.DelegationCredential, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -446,7 +464,7 @@ func (s *Service) ResolveDelegation(ctx context.Context, didStr string) (*delega
 }
 
 // UpdateStatus changes a DID's lifecycle status and records the transition.
-// Slice-4 accepts only "revoked". The updated document is returned.
+// It accepts only "revoked". The updated document is returned.
 func (s *Service) UpdateStatus(ctx context.Context, didStr, status string) (*did.DIDDocument, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -460,7 +478,7 @@ func (s *Service) UpdateStatus(ctx context.Context, didStr, status string) (*did
 	}
 	st := store.DIDStatus(status)
 	if st != store.StatusRevoked {
-		return nil, fmt.Errorf("%w: unsupported status %q (slice-4 accepts %q)", ErrInvalidArgument, status, store.StatusRevoked)
+		return nil, fmt.Errorf("%w: unsupported status %s (only %q is accepted)", ErrInvalidArgument, netexcerpt.ValueText(status), store.StatusRevoked)
 	}
 	// Idempotent: re-revoking an already-revoked DID is a non-mutating success
 	// and appends no second revoke event.
@@ -521,7 +539,7 @@ func (s *Service) ListProcesses(ctx context.Context, pipelineDID string) ([]stor
 		return nil, err
 	}
 	if !d.IsPipeline() {
-		return nil, fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidArgument, pipelineDID)
+		return nil, fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidArgument, netexcerpt.ValueText(pipelineDID))
 	}
 	return s.store.ListProcesses(d)
 }
@@ -599,29 +617,29 @@ func (s *Service) verifyDocProof(doc *did.DIDDocument) error {
 		return err
 	}
 	if proof.Type != "DataIntegrityProof" || proof.ProofPurpose != "assertionMethod" {
-		return fmt.Errorf("%w: proof type/purpose %q/%q not DataIntegrityProof/assertionMethod", ErrUnauthorized, proof.Type, proof.ProofPurpose)
+		return fmt.Errorf("%w: proof type/purpose %s/%s not DataIntegrityProof/assertionMethod", ErrUnauthorized, netexcerpt.ValueText(proof.Type), netexcerpt.ValueText(proof.ProofPurpose))
 	}
 	if proof.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
-		return fmt.Errorf("%w: unsupported cryptosuite %q", ErrUnauthorized, proof.Cryptosuite)
+		return fmt.Errorf("%w: unsupported cryptosuite %s", ErrUnauthorized, netexcerpt.ValueText(proof.Cryptosuite))
 	}
 	if _, err := time.Parse(time.RFC3339, proof.Created); err != nil {
-		return fmt.Errorf("%w: proof.created is not RFC3339: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: proof.created %s is not RFC3339: %s", ErrUnauthorized, netexcerpt.ValueText(proof.Created), netexcerpt.ErrorText(err))
 	}
 	vmDID, _, found := strings.Cut(proof.VerificationMethod, "#")
 	if !found || vmDID != doc.ID() {
-		return fmt.Errorf("%w: verificationMethod %q does not name the owner %q", ErrUnauthorized, proof.VerificationMethod, doc.ID())
+		return fmt.Errorf("%w: verificationMethod %s does not name the owner %s", ErrUnauthorized, netexcerpt.ValueText(proof.VerificationMethod), netexcerpt.ValueText(doc.ID()))
 	}
 	// Key and encoding from one resolution: the encoding selects the claim
 	// contract, and the contract selects the canonicalization.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %s", ErrUnauthorized, netexcerpt.ErrorText(err))
 	}
 	// Exact dispatch (signer.suite.exact-dispatch): a self-signed owner document
 	// whose proof shape matches no contract is unauthorized, not retried under
 	// the other canonicalizer.
 	if _, err := vc.VerifyProofWithContract(s.verifier, pub, encoding, proof, signing); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %s", ErrUnauthorized, netexcerpt.ErrorText(err))
 	}
 	return nil
 }
@@ -681,7 +699,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 	}
 	for _, vm := range doc.VerificationMethod() {
 		if _, err := did.AbsoluteKeyID(subject, vm.ID); err != nil {
-			return fmt.Errorf("%w: verification method id: %w", ErrInvalidArgument, err)
+			return fmt.Errorf("%w: verification method id: %w", ErrInvalidArgument, excerpt.OfError(err, netexcerpt.TextLimit))
 		}
 	}
 	for _, member := range relationshipMembers {
@@ -689,7 +707,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 		for i, ref := range refs {
 			if s, ok := ref.(string); ok {
 				if _, err := did.AbsoluteKeyID(subject, s); err != nil {
-					return fmt.Errorf("%w: %s entry %d: %w", ErrInvalidArgument, member, i, err)
+					return fmt.Errorf("%w: %s entry %d: %w", ErrInvalidArgument, member, i, excerpt.OfError(err, netexcerpt.TextLimit))
 				}
 			}
 		}
@@ -709,7 +727,7 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 				return fmt.Errorf("%w: %s entry %d is not a reference (an embedded method is not read here)", ErrInvalidArgument, rel, i)
 			}
 			if _, err := did.ExtractPublicKey(doc, s, rel); err != nil {
-				return fmt.Errorf("%w: %s %q: %w", ErrInvalidArgument, rel, s, err)
+				return fmt.Errorf("%w: %s %s: %w", ErrInvalidArgument, rel, netexcerpt.ValueText(s), excerpt.OfError(err, netexcerpt.TextLimit))
 			}
 		}
 	}
@@ -726,13 +744,13 @@ func validateDocumentKeys(doc *did.DIDDocument) error {
 		for _, rel := range keyRelationships {
 			if _, err := did.ExtractPublicKey(doc, vm.ID, rel); err != nil {
 				if errors.Is(err, did.ErrInvalidPublicKey) {
-					return fmt.Errorf("%w: verification method %q: %w", ErrInvalidArgument, vm.ID, err)
+					return fmt.Errorf("%w: verification method %s: %w", ErrInvalidArgument, netexcerpt.ValueText(vm.ID), excerpt.OfError(err, netexcerpt.TextLimit))
 				}
-				failed = append(failed, fmt.Sprintf("%s: %v", rel, err))
+				failed = append(failed, fmt.Sprintf("%s: %s", rel, netexcerpt.ErrorText(err)))
 			}
 		}
 		if len(failed) == len(keyRelationships) {
-			return fmt.Errorf("%w: verification method %q: no reader can extract its key (%s)", ErrInvalidArgument, vm.ID, strings.Join(failed, "; "))
+			return fmt.Errorf("%w: verification method %s: no reader can extract its key (%s)", ErrInvalidArgument, netexcerpt.ValueText(vm.ID), strings.Join(failed, "; "))
 		}
 	}
 	return nil
@@ -762,7 +780,7 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 	}
 	for k := range pm {
 		if !proofMembers[k] {
-			return nil, nil, fmt.Errorf("%w: proof carries unsigned member %q", ErrUnauthorized, k)
+			return nil, nil, fmt.Errorf("%w: proof carries unsigned member %s", ErrUnauthorized, netexcerpt.ValueText(k))
 		}
 	}
 	signing := make(map[string]any, len(body)-1)
@@ -795,7 +813,7 @@ func splitProof(body map[string]any) (*vc.DataIntegrityProof, map[string]any, er
 }
 
 // appendEvent stamps the witnessed-at clock, chains PrevEventHash to the current
-// tail, and appends. The hash chain is the service's responsibility (D-d6): on a
+// tail, and appends. The hash chain is the service's responsibility: on a
 // concurrent-append ErrConflict the tail moved, so it re-reads, recomputes the
 // chain, and retries.
 func (s *Service) appendEvent(d *dplaax.DID, ev store.LifecycleEvent) error {
@@ -837,7 +855,10 @@ func hashEvent(ev store.LifecycleEvent) (string, error) {
 }
 
 // storeResolver adapts a DIDStore to resolver.Resolver so delegation.Verify can
-// resolve the owner document from this registry's own store.
+// resolve the owner document from this registry's own store. It returns the
+// store's document or error as they are (a store miss also matches
+// resolver.ErrNotFound), so it returns a document or an error (the
+// resolver.Resolver contract) as store.DIDStore's Resolve does.
 type storeResolver struct {
 	st store.DIDStore
 }

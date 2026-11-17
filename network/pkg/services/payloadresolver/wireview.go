@@ -1,14 +1,20 @@
 package payloadresolver
 
-import "github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
+import (
+	"github.com/provin-line/oss/contentaddress"
+	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
+)
 
-// OpRetainPayload points at wirecontract.OpRetainPayload — moved into the
-// leaf wirecontract package (PR3b Task 2) so a client-only consumer need not
+// OpRetainPayload points at wirecontract.OpRetainPayload — defined in the
+// leaf wirecontract package so a client-only consumer need not
 // import this service root; this alias keeps existing call sites
 // (payloadresolver.OpRetainPayload, in the storehandler and elsewhere)
 // unchanged. See wirecontract.OpRetainPayload for the full doc.
 const OpRetainPayload = wirecontract.OpRetainPayload
 
-// RetainPayloadFields points at wirecontract.RetainPayloadFields — see
-// OpRetainPayload's alias doc.
-var RetainPayloadFields = wirecontract.RetainPayloadFields
+// RetainPayloadFields returns wirecontract.RetainPayloadFields of its
+// arguments — see OpRetainPayload's alias doc. It is a function, not a
+// variable, so no importer can change the fields it builds.
+func RetainPayloadFields(ownerDID string, declaredSize uint64, contentAddress contentaddress.Address) map[string]any {
+	return wirecontract.RetainPayloadFields(ownerDID, declaredSize, contentAddress)
+}

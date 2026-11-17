@@ -1,0 +1,12 @@
+{
+  "id": "did-030",
+  "rule": "did.dplaax.hierarchy",
+  "description": "pipeline is compared byte for byte, so a resource path of Pipeline:<id> is none of the three",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:Pipeline:p1"
+  },
+  "expect": {
+    "level": "none",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

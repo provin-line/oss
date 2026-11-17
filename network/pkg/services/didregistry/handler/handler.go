@@ -3,7 +3,7 @@
 // maps domain sentinel errors to Connect codes. It holds no business logic.
 //
 // DID Documents, delegations, and lifecycle events cross the wire as opaque
-// bytes carrying their canonical JSON (the proto does not re-model them, D-d2):
+// bytes carrying their canonical JSON (the proto does not re-model them):
 // documents and delegations marshal through their own JSON, and lifecycle events
 // marshal through the canonical map shared with the service's hash chain, so a
 // consumer can verify the chain from the bytes it receives.
@@ -33,7 +33,11 @@ type Service interface {
 	RegisterOwner(ctx context.Context, doc *did.DIDDocument, outwardSnapshot []byte) (*did.DIDDocument, error)
 	IssuePipeline(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
 	IssueProcess(ctx context.Context, targetDID string, dlg *delegation.DelegationCredential, ext *didregistry.ExternalPublicKeys) (*did.DIDDocument, *delegation.DelegationCredential, error)
+	// ResolveDID returns a non-nil document or a non-nil error, never both
+	// nil, as didregistry.Service's ResolveDID does.
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
+	// ResolveDelegation returns a non-nil delegation or a non-nil error,
+	// never both nil, as didregistry.Service's ResolveDelegation does.
 	ResolveDelegation(ctx context.Context, didStr string) (*delegation.DelegationCredential, error)
 	UpdateStatus(ctx context.Context, didStr, status string) (*did.DIDDocument, error)
 	ListPipelines(ctx context.Context, ownerDID string) ([]store.DIDSummary, error)
@@ -266,6 +270,9 @@ func mapError(err error) error {
 		return connect.NewError(connect.CodeAborted, err)
 	case errors.Is(err, didregistry.ErrUnauthorized):
 		return connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, didregistry.ErrUnavailable):
+		// A check could not be completed now; the caller may retry.
+		return connect.NewError(connect.CodeUnavailable, err)
 	case errors.Is(err, didregistry.ErrInvalidArgument):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, context.Canceled):

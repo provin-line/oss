@@ -6,8 +6,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 // TestMapError_WireauthDelegation proves mapError delegates wireauth

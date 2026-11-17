@@ -10,7 +10,7 @@ import (
 )
 
 // mkCP builds a test checkpoint. mirrorstore does not verify signatures
-// (that is the handler's job — D-T2 rules 1-3), so a fixed non-empty
+// (that is the handler's job), so a fixed non-empty
 // SignedBy/Signature is enough to satisfy the store's "actually signed"
 // structural check.
 func mkCP(origin string, size uint64, head string) *tlog.Checkpoint {

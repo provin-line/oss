@@ -51,6 +51,22 @@ func IsContentAddress(s string) bool {
 // signature verification — those belong to the confidence axes, and a nil
 // error therefore never means "the credential verifies".
 //
+// A credential whose proof names eddsa-rdfc-2022 must also be in the closed
+// form: it holds the members vc reads under their names and in their forms,
+// and no others. The credential holds only @context and type (arrays of
+// strings), id, issuer and validFrom (strings), and credentialSubject (an
+// object); the subject holds only id, pipelineId, processId,
+// transformationClaim, inputHash, outputHash, previousCredential,
+// source_root and source_root_canonical (strings), derived_from (an array of
+// strings) and schema (an object of the strings id, type and contentHash).
+// The source commitment's three members are all present or all absent, and
+// derived_from is strictly ascending. Any other member or form is refused.
+// The members allowed are the ones dplaax's PipelinePassCredential JSON
+// Schema defines, and the ids credential.field.id lets a credential carry: a
+// member that schema adds is added to this form too. The links
+// (ValidateChainLinks) and VerifySourceCommitment hold such a credential to
+// the same form. eddsa-jcs-2022 credentials are not affected.
+//
 // This is the single implementation of the wire-form verdict: the verifier's
 // data-integrity axis delegates to it as the resolution-free prerequisite it
 // evaluates before its refinements (the cross-credential binding in
@@ -59,6 +75,9 @@ func IsContentAddress(s string) bool {
 func (c *PipelinePassCredential) ValidateWireForm() error {
 	if c == nil {
 		return errors.New("vc: wire form: nil credential")
+	}
+	if err := checkRDFCClosedForm(c); err != nil {
+		return fmt.Errorf("vc: wire form: %w", err)
 	}
 	if c.Issuer() == "" {
 		return errors.New("vc: wire form: issuer is missing")

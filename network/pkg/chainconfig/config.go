@@ -70,7 +70,7 @@ type Config struct {
 	// NATS is populated when Transport == TransportNATS.
 	NATS NATSConfig
 	// EmitHealth configures the ReportEmitHealth publisher-scoped by-reference
-	// advertisement gate (Task 10 D4). Loaded unconditionally (it applies
+	// advertisement gate. Loaded unconditionally (it applies
 	// regardless of Transport): cmd/network's emithealth.Store and
 	// chainmanager.WithPublisherHealth read it.
 	EmitHealth EmitHealthConfig
@@ -103,10 +103,10 @@ type DIDCacheConfig struct {
 // EmitHealthConfig is the ReportEmitHealth TTL-store / advertisement-policy
 // knobs (provin.network.chain.emit-health).
 type EmitHealthConfig struct {
-	// TTL is how long a ReportEmitHealth report stays fresh before
-	// emithealth.Store.State reports it Expired — also the value echoed back
-	// as ReportEmitHealthResponse.ttl, so a reporting publisher knows when to
-	// re-report. Must be positive.
+	// TTL is how long a ReportEmitHealth report stays fresh, from when this
+	// node received it, before emithealth.Store.State reports it Expired —
+	// also the value echoed back as ReportEmitHealthResponse.ttl, so a
+	// reporting publisher knows when to re-report. Must be positive.
 	TTL time.Duration
 	// AdvertiseWithoutReports is whether by-reference is advertised for a
 	// publisher this node has NEVER received a report for
@@ -254,8 +254,8 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 	}
 	// resolver-base-url is optional in MEANING (empty -> didresolver default) but
 	// reference.conf always defines the key, so a read error here is a type
-	// mismatch (e.g. a number) — fail closed naming the key, not silently ignore it
-	// (convergent review: Claude + Codex). NOTE: a non-empty value maps EVERY
+	// mismatch (e.g. a number) — fail closed naming the key, not silently ignore it.
+	// NOTE: a non-empty value maps EVERY
 	// registry to this one base URL (the override ignores the registry argument),
 	// so it is a single-registry / dev-and-single-tenant seam, not a multi-registry
 	// mapping; multi-registry deployments leave it empty (default https://{registry}).
@@ -284,8 +284,8 @@ func loadNATS(cfg *hoconconfig.Config) (NATSConfig, error) {
 			// A key that could never come out of dplaax.Parse would silently
 			// miss at resolve time and fall back to external resolution — the
 			// opposite of the operator's intent. Fail boot instead.
-			if !dplaax.IsSafeSegment(reg) {
-				return n, fmt.Errorf("chain: config %s: %q is not a valid registry segment", keyRegistryBaseURLs, reg)
+			if err := dplaax.ValidateRegistry(reg); err != nil {
+				return n, fmt.Errorf("chain: config %s: %w", keyRegistryBaseURLs, err)
 			}
 			u, err := url.Parse(raw)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

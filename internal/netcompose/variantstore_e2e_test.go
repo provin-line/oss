@@ -18,14 +18,13 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// The end-to-end statement of what this slice bought, over real HTTP against
+// The end-to-end statement of what the variant store provides, over real HTTP against
 // the durable store: two signed forms of ONE body both survive, and each is
 // fetchable byte-for-byte.
 //
-// Before this, the second publish overwrote the first — so a valid proof could
-// be evicted by a later invalid one, and an invalid proof arriving first could
-// keep the valid one out. There was no way to ask for a specific one, because
-// only one existed.
+// A store that kept one form per body would let a valid proof be evicted by a
+// later invalid one, or an invalid proof arriving first keep the valid one
+// out, with no way to ask for a specific one.
 
 // variantE2E is an embedded VCResolverService over the FILE backend (the
 // substrate a node actually runs), reachable through the production client.
@@ -95,8 +94,8 @@ func TestE2E_TwoProofsOfOneBodyBothSurviveAndFetchExactly(t *testing.T) {
 		t.Fatal("two different proofs got one variant id")
 	}
 
-	// The first proof is still there, byte-for-byte, after the second landed.
-	// This is the eviction that used to happen.
+	// The first proof is still there, byte-for-byte, after the second landed:
+	// a second proof of the same body must not evict it.
 	for _, tc := range []struct {
 		name    string
 		cred    *vc.PipelinePassCredential

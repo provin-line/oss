@@ -22,6 +22,7 @@ import (
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/excerpt"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/vc"
@@ -110,96 +111,160 @@ func Build(signer crypto.Signer, ownerDID string, subject DelegationSubject) (*D
 	return cred, nil
 }
 
+// VerifyFor checks cred as authority for identity, the DID of the identity a
+// consumer acts for: cred's credentialSubject.id is identity, byte for byte,
+// and Verify accepts cred. A delegation is authority for the one identity it
+// names, not for another under the same Owner nor for a Process under a
+// delegated Pipeline (dplaax delegation.use.subject-bound). The identity is
+// compared first, so a delegation presented for another identity resolves
+// nothing; that refusal is ErrNotForIdentity, and any other is Verify's.
+func VerifyFor(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, cred *DelegationCredential, identity string) error {
+	if cred != nil && cred.CredentialSubject.ID != identity {
+		return fmt.Errorf("%w: it names %s, not %s", ErrNotForIdentity, excerpt.Quoted(cred.CredentialSubject.ID, 128), excerpt.Quoted(identity, 128))
+	}
+	return Verify(ctx, verifier, r, cred)
+}
+
 // Verify checks the delegation: delegatedBy == issuer, the issuer is an Owner
 // DID, the proof's verificationMethod names the issuer, the issuer's DID
 // Document resolves (with the registry-substitution defense), and the proof
-// verifies under the owner's assertion key over the signed body.
+// verifies under the owner's assertion key over the signed body. It does not
+// say for which identity the delegation is authority: a consumer acting for an
+// identity calls VerifyFor.
+//
+// Verify attaches to each error it returns exactly one of ErrMalformed,
+// ErrOwnerBinding, ErrProofPolicy, ErrScoped, ErrIssuerNotFound,
+// ErrSignatureInvalid and ErrSignatureUnestablished (errors.Is): the one for
+// the kind of check that failed. The error's text says which check that was.
+// A delegation that fails several checks is refused for one of them; which
+// one is not promised. ErrSignatureUnestablished is the one a caller may
+// retry: the resolver gave no definite answer about the issuer.
+//
+// An error another package returned to a check stays reachable (errors.Is,
+// errors.As): dplaax.ErrSyntax, a *time.ParseError, vc's error of the proof,
+// and the error of the resolver and of the signature verifier given, as they
+// return it. If such an error is a sentinel of this package under errors.Is
+// (it is one, wraps one, or its Is method matches one), errors.Is finds that
+// one too, beside the one Verify attaches.
 func Verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, cred *DelegationCredential) error {
+	if rf := verify(ctx, verifier, r, cred); rf != nil {
+		return rf
+	}
+	return nil
+}
+
+// verify is Verify's checks: the refusal of the first one cred fails, or nil.
+func verify(ctx context.Context, verifier crypto.Verifier, r resolver.Resolver, cred *DelegationCredential) *refusal {
 	if cred == nil {
-		return errors.New("delegation: nil credential")
+		return refuse(classMalformed, "delegation: nil credential", nil)
 	}
 	if cred.Proof == nil {
-		return errors.New("delegation: unsigned credential")
+		return refuse(classMalformed, "delegation: unsigned credential", nil)
 	}
 	// Proof-policy obligations (vc.VerifyProof checks none of these): the proof
 	// must be a DataIntegrityProof for assertionMethod, and the cryptosuite is
 	// constrained to the one delegation emits — no suite downgrade.
 	if cred.Proof.Type != proofType || cred.Proof.ProofPurpose != proofPurpose {
-		return fmt.Errorf("delegation: proof type/purpose %q/%q not %q/%q", cred.Proof.Type, cred.Proof.ProofPurpose, proofType, proofPurpose)
+		return refuse(classProofPolicy, fmt.Sprintf("delegation: proof type/purpose %s/%s not %q/%q", excerpt.Quoted(cred.Proof.Type, 128), excerpt.Quoted(cred.Proof.ProofPurpose, 128), proofType, proofPurpose), nil)
 	}
 	if cred.Proof.Cryptosuite != vc.CryptosuiteEdDSAJCS2022 {
-		return fmt.Errorf("delegation: unsupported cryptosuite %q (want %q)", cred.Proof.Cryptosuite, vc.CryptosuiteEdDSAJCS2022)
+		return refuse(classProofPolicy, fmt.Sprintf("delegation: unsupported cryptosuite %s (want %q)", excerpt.Quoted(cred.Proof.Cryptosuite, 128), vc.CryptosuiteEdDSAJCS2022), nil)
 	}
 	if _, err := time.Parse(time.RFC3339, cred.Proof.Created); err != nil {
-		return fmt.Errorf("delegation: proof.created is not RFC3339: %w", err)
+		return refuseWrapping(classProofPolicy, "delegation: proof.created "+excerpt.Quoted(cred.Proof.Created, 128)+" is not RFC3339", err)
 	}
 	// VC type must carry both the base and the profile token.
 	if !contains(cred.Type, "VerifiableCredential") || !contains(cred.Type, delegationType) {
-		return fmt.Errorf("delegation: type %v missing VerifiableCredential / %s", cred.Type, delegationType)
+		return refuse(classMalformed, fmt.Sprintf("delegation: type %s missing VerifiableCredential / %s", excerpt.Quoted(strings.Join(cred.Type, ", "), 128), delegationType), nil)
 	}
 	// provin does not use scope and does not sign it. A scope on inbound wire is
 	// rejected fail-closed: provin cannot verify it (it is outside the signed
 	// body) and must not pass on an unverified scope to a scope-aware consumer.
 	if cred.CredentialSubject.Scope != nil {
-		return fmt.Errorf("delegation: credentialSubject.scope is present (%d token(s)); the provin profile does not accept scoped delegations", len(cred.CredentialSubject.Scope))
+		return refuse(classScoped, fmt.Sprintf("delegation: credentialSubject.scope is present (%d token(s)); the provin profile does not accept scoped delegations", len(cred.CredentialSubject.Scope)), nil)
 	}
 	if cred.CredentialSubject.DelegatedBy != cred.Issuer {
-		return fmt.Errorf("delegation: delegatedBy %q != issuer %q", cred.CredentialSubject.DelegatedBy, cred.Issuer)
+		return refuse(classMalformed, fmt.Sprintf("delegation: delegatedBy %s != issuer %s", excerpt.Quoted(cred.CredentialSubject.DelegatedBy, 128), excerpt.Quoted(cred.Issuer, 128)), nil)
 	}
 	// Delegations are owner-signed: the issuer MUST be a deployment-valid Owner DID.
 	issuer, err := dplaax.Parse(cred.Issuer)
 	if err != nil {
-		return fmt.Errorf("delegation: issuer is not a did:dplaax identifier: %w", err)
+		return refuse(unparsedMember(cred.Issuer), fmt.Sprintf("delegation: issuer is not a did:dplaax identifier: %v", err), err)
 	}
 	if err := dplaax.ValidateDID(issuer); err != nil {
-		return fmt.Errorf("delegation: issuer: %w", err)
+		return refuse(classOwnerBinding, fmt.Sprintf("delegation: issuer: %v", err), err)
 	}
 	if err := dplaax.RequireOwner(issuer); err != nil {
-		return fmt.Errorf("delegation: %w", err)
+		return refuse(classOwnerBinding, fmt.Sprintf("delegation: %v", err), err)
 	}
 	// Authority scoping: the delegated subject MUST be a Pipeline or Process DID
 	// under the issuing owner — an owner cannot delegate authority over another
 	// owner's identities.
 	subj, err := dplaax.Parse(cred.CredentialSubject.ID)
 	if err != nil {
-		return fmt.Errorf("delegation: subject id is not a did:dplaax identifier: %w", err)
+		return refuse(unparsedMember(cred.CredentialSubject.ID), fmt.Sprintf("delegation: subject id is not a did:dplaax identifier: %v", err), err)
 	}
 	if !subj.IsPipeline() && !subj.IsProcess() {
-		return fmt.Errorf("delegation: subject %q is neither a pipeline nor a process DID", cred.CredentialSubject.ID)
+		return refuse(classOwnerBinding, fmt.Sprintf("delegation: subject %s is neither a pipeline nor a process DID", excerpt.Quoted(cred.CredentialSubject.ID, 128)), nil)
 	}
 	if subj.OwnerDID().String() != cred.Issuer {
-		return fmt.Errorf("delegation: subject %q is not under the issuing owner %q", cred.CredentialSubject.ID, cred.Issuer)
+		return refuse(classOwnerBinding, fmt.Sprintf("delegation: subject %s is not under the issuing owner %s", excerpt.Quoted(cred.CredentialSubject.ID, 128), excerpt.Quoted(cred.Issuer, 128)), nil)
 	}
 	// The verificationMethod MUST name the issuer.
 	vmDID, _, found := strings.Cut(cred.Proof.VerificationMethod, "#")
 	if !found || vmDID != cred.Issuer {
-		return fmt.Errorf("delegation: verificationMethod %q does not name the issuer %q", cred.Proof.VerificationMethod, cred.Issuer)
+		return refuse(classProofPolicy, fmt.Sprintf("delegation: verificationMethod %s does not name the issuer %s", excerpt.Quoted(cred.Proof.VerificationMethod, 128), excerpt.Quoted(cred.Issuer, 128)), nil)
 	}
 	// A proofValue that does not decode verifies under no key, so it is
 	// refused before the issuer is resolved.
 	if _, err := cred.Proof.ProofValueBytes(); err != nil {
-		return fmt.Errorf("delegation: %w", err)
+		return refuseWrapping(classProofPolicy, "delegation", err)
 	}
 	doc, err := r.Resolve(ctx, cred.Issuer)
 	if err != nil {
-		return fmt.Errorf("delegation: resolve issuer: %w", err)
+		// The text is taken once, before anything else is asked of err, so it
+		// is the resolver's own whatever err's other methods do.
+		text := excerpt.Wrap("delegation: resolve issuer", err, wrapLimit).Error()
+		// Only resolver.ErrNotFound says the issuer has no document; any other
+		// error says nothing definite about it.
+		c := classSignatureUnestablished
+		if errors.Is(err, resolver.ErrNotFound) {
+			c = classIssuerNotFound
+		}
+		return refuse(c, text, err)
+	}
+	if doc == nil {
+		return refuse(classSignatureUnestablished, "delegation: resolve issuer: no document and no error", nil)
 	}
 	if doc.ID() != cred.Issuer {
-		return fmt.Errorf("delegation: resolved document id %q != issuer %q (registry-substitution defense)", doc.ID(), cred.Issuer)
+		// Misconfiguration and attack are indistinguishable here: never
+		// honoured, and not an established negative either.
+		return refuse(classSignatureUnestablished, fmt.Sprintf("delegation: resolved document id %s != issuer %s (registry-substitution defense)", excerpt.Quoted(doc.ID(), 128), excerpt.Quoted(cred.Issuer, 128)), nil)
 	}
 	// Key and encoding from one resolution: the encoding selects the claim
 	// contract, and the contract selects the canonicalization.
 	pub, encoding, err := did.ExtractPublicKeyAndEncoding(doc, cred.Proof.VerificationMethod, did.RelationshipAssertionMethod)
 	if err != nil {
-		return fmt.Errorf("delegation: extract owner key: %w", err)
+		return refuseWrapping(classIssuerNotFound, "delegation: extract owner key", err)
 	}
 	// Exact dispatch (signer.suite.exact-dispatch): a delegation whose proof
 	// shape matches no contract fails here rather than being retried under the
 	// other canonicalizer to see which one accepts it.
 	if _, err := vc.VerifyProofWithContract(verifier, pub, encoding, cred.Proof, cred.signingBody()); err != nil {
-		return fmt.Errorf("delegation: %w", err)
+		return refuseWrapping(classSignatureInvalid, "delegation", err)
 	}
 	return nil
+}
+
+// unparsedMember is the class of an issuer or a subject id that does not
+// parse as a did:dplaax identifier: an empty one is missing, which the shape
+// refuses (dplaax delegation.shape); a present one names no identity the
+// binding accepts (delegation.binding).
+func unparsedMember(v string) class {
+	if v == "" {
+		return classMalformed
+	}
+	return classOwnerBinding
 }
 
 // signingBody renders the canonicalization input — the credential body without

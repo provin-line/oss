@@ -1,0 +1,9 @@
+{
+  "id": "did-005",
+  "rule": "did.dplaax.syntax",
+  "description": "A registry of exactly 253 octets is accepted",
+  "input": {
+    "did": "did:dplaax:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:org:acme"
+  },
+  "expect": "accept"
+}

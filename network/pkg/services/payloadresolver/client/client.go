@@ -5,21 +5,21 @@
 // both directions — mirrors vcresolver/client's "one type, both directions of
 // the same service" precedent. Both directions sign in-band with wireauth (as
 // a configured node identity); ResolvePayload streams the response and caps
-// the assembled size (dialing whichever serving boundary is passed per call,
-// since it fetches from arbitrary publishers), while Retain streams the
-// request to a FIXED endpoint (Config.StoreEndpoint — this node's own control
-// plane, unlike ResolvePayload's arbitrary per-call target).
+// the assembled size (dialing the serving boundary passed per call, among
+// the upstreams whose audiences Config.UpstreamAudiences gives), while Retain
+// streams the request to a FIXED endpoint (Config.StoreEndpoint — this node's
+// own control plane, unlike ResolvePayload's per-call target).
 //
 // It imports the generated client, connect, crypto, and the payloadresolver
 // service's wirecontract LEAF (for the RetainPayload op name + signed-view
 // builder shared with storehandler, so the two derivations cannot drift —
 // mirrors auditor/client importing auditor's wirecontract leaf for the same
-// reason; PR3b Task 2 moved these out of the payloadresolver service root so
+// reason; they live outside the payloadresolver service root so
 // this client never pulls in the root's store/handler domain logic) — never
 // the payloadresolver service root itself, and never pipeline/ (AGENTS.md
-// layer rule: network and pipeline interact only over the wire). The
-// compile-time assertion that *Resolver satisfies pipeline's PayloadResolver
-// seam lives in the consumer (cmd/pipeline's wiring.go), exactly as
+// layer rule: network and pipeline interact only over the wire). *Resolver
+// satisfies pipeline's PayloadResolver seam; the compile-time assertion
+// lives in the consumer (cmd/pipeline's wiring.go), exactly as
 // vcresolver/client keeps its chainwalk.CredentialResolver assertion there.
 package client
 
@@ -28,18 +28,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/payload/v1/payloadpbconnect"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/internal/origin"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/wirecontract"
 )
 
@@ -85,6 +88,11 @@ var (
 	// (Config.IdleTimeout) — the malicious-trickle / no-response defense. A
 	// liveness failure, distinguished for observability.
 	ErrFetchStalled = errors.New("payloadresolver/client: fetch stalled (idle budget exceeded)")
+	// ErrUnknownUpstream reports an upstream endpoint to which
+	// Config.UpstreamAudiences gives no audience: ResolvePayload fetches
+	// nothing from it and fails before anything is sent. It comes from the
+	// client's configuration, not from the endpoint.
+	ErrUnknownUpstream = errors.New("payloadresolver/client: no audience for this upstream")
 )
 
 // Config configures a Resolver. Signer/SignerDID/HTTPClient are required; the
@@ -97,8 +105,12 @@ type Config struct {
 	Signer    crypto.Signer
 	SignerDID string
 	// HTTPClient dials the serving boundary; supply an SSRF-guarded client, e.g.
-	// core.URLGuard.HTTPClient().
-	HTTPClient connect.HTTPClient
+	// core.URLGuard.HTTPClient(). It must not be nil. The store client, which
+	// carries Bearer, uses a copy of it that refuses every redirect, whether
+	// or not Bearer is set, so the bearer goes to StoreEndpoint's origin only,
+	// over a Transport that sends each request as it is, as net/http's does;
+	// fetches use it as given.
+	HTTPClient *http.Client
 	// MaxBytes caps the assembled payload (<=0 → DefaultMaxBytes).
 	MaxBytes int
 	// FetchTimeout bounds one whole fetch (<=0 → DefaultFetchTimeout).
@@ -112,6 +124,17 @@ type Config struct {
 	// construction (mirrors auditor/client.Config.BaseURL). Required for
 	// Retain; unused by ResolvePayload.
 	StoreEndpoint string
+	// StoreAudience is the audience of the node at StoreEndpoint (for a node
+	// that serves a DID, wireauth.AudienceForDID). Every Retain proof names it,
+	// and that node accepts only a proof for its own audience. A Retain with no
+	// StoreAudience fails before anything is sent (wireauth.ErrMalformedProof).
+	StoreAudience string
+	// UpstreamAudiences maps each upstream endpoint ResolvePayload may fetch
+	// from to the audience of the node there (wireauth.AudienceForDID of the
+	// DID it serves), which its proofs name. ResolvePayload fetches from no
+	// endpoint whose audience is not here, and fails before anything is sent.
+	// The client copies the map.
+	UpstreamAudiences map[string]string
 	// RetainChunkSize bounds one outbound Retain frame (<=0 →
 	// DefaultRetainChunkSize). Keep it at or under the server's configured
 	// max-retain-chunk-size, or every frame trips the server's per-chunk read
@@ -139,14 +162,17 @@ type Config struct {
 // retainClient's doc); Retain dials Config.StoreEndpoint via retainClient,
 // its OWN pre-built client instance.
 type Resolver struct {
-	signer          crypto.Signer
-	signerDID       string
-	httpClient      connect.HTTPClient
-	maxBytes        int
-	fetchTimeout    time.Duration
-	idleTimeout     time.Duration
-	storeEndpoint   string
-	retainChunkSize int
+	signer        crypto.Signer
+	signerDID     string
+	httpClient    connect.HTTPClient
+	maxBytes      int
+	fetchTimeout  time.Duration
+	idleTimeout   time.Duration
+	storeEndpoint string
+	storeAudience string
+	// upstreamAudiences is Config.UpstreamAudiences, copied.
+	upstreamAudiences map[string]string
+	retainChunkSize   int
 	// retainClient is Retain's OWN ConnectRPC client, built once in New and
 	// bound to storeEndpoint with the L1 bearer interceptor attached — NEVER
 	// httpClient re-wrapped, and never shared with ResolvePayload's per-call
@@ -187,23 +213,21 @@ func New(cfg Config) *Resolver {
 	if cfg.StoreEndpoint != "" {
 		// The store client carries the bearer, so it follows no redirect: the
 		// bearer goes to StoreEndpoint's origin only.
-		storeClient := cfg.HTTPClient
-		if c, ok := storeClient.(*http.Client); ok {
-			storeClient = origin.Confine(c)
-		}
-		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(storeClient, cfg.StoreEndpoint,
+		retainClient = payloadpbconnect.NewPayloadStoreServiceClient(origin.Confine(cfg.HTTPClient), cfg.StoreEndpoint,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer)))
 	}
 	return &Resolver{
-		signer:          cfg.Signer,
-		signerDID:       cfg.SignerDID,
-		httpClient:      cfg.HTTPClient,
-		maxBytes:        maxBytes,
-		fetchTimeout:    fetchTimeout,
-		idleTimeout:     idleTimeout,
-		storeEndpoint:   cfg.StoreEndpoint,
-		retainChunkSize: retainChunkSize,
-		retainClient:    retainClient,
+		signer:            cfg.Signer,
+		signerDID:         cfg.SignerDID,
+		httpClient:        cfg.HTTPClient,
+		maxBytes:          maxBytes,
+		fetchTimeout:      fetchTimeout,
+		idleTimeout:       idleTimeout,
+		storeEndpoint:     cfg.StoreEndpoint,
+		storeAudience:     cfg.StoreAudience,
+		upstreamAudiences: maps.Clone(cfg.UpstreamAudiences),
+		retainChunkSize:   retainChunkSize,
+		retainClient:      retainClient,
 	}
 }
 
@@ -255,18 +279,28 @@ func (i retainBearerInterceptor) WrapStreamingHandler(next connect.StreamingHand
 }
 
 // ResolvePayload fetches and assembles the payload bytes held at contentHash on
-// the serving boundary at upstreamEndpoint. It streams the response and aborts
-// if the assembled size exceeds the configured cap (before the overflowing
-// chunk is retained). A remote NotFound becomes ErrNotFound; any
+// the serving boundary at upstreamEndpoint. The proof names the audience
+// Config.UpstreamAudiences gives that endpoint, and that node accepts only a
+// proof for its own audience; from an endpoint with no audience there it
+// fetches nothing, failing with ErrUnknownUpstream before anything is sent. A
+// redirect the endpoint answers with is followed as Config.HTTPClient follows
+// it; the proof stays bound to the first endpoint's audience, so a
+// destination at another registry's node refuses it. It streams the response
+// and aborts if the assembled size exceeds the configured cap (before the
+// overflowing chunk is retained). A remote NotFound becomes ErrNotFound; any
 // other transport failure is returned as-is (a liveness failure the runtime
-// turns into a rejected/errored/dropped event). It never returns nil bytes with
-// a nil error.
+// turns into a rejected/errored/dropped event). It never returns nil bytes
+// with a nil error.
 //
 // The returned bytes carry NO trust — the caller's binding gate (sha256(payload)
 // == the credential's outputHash) is the sole integrity check, so this client
 // does not itself re-hash.
 func (r *Resolver) ResolvePayload(parent context.Context, upstreamEndpoint, contentHash string) ([]byte, error) {
-	ap, err := r.proof(opResolvePayload, map[string]any{"content_hash": contentHash})
+	audience := r.upstreamAudiences[upstreamEndpoint]
+	if audience == "" {
+		return nil, fmt.Errorf("%w %s, so nothing is fetched from it", ErrUnknownUpstream, netexcerpt.ValueText(upstreamEndpoint))
+	}
+	ap, err := r.proof(audience, opResolvePayload, map[string]any{"content_hash": contentHash})
 	if err != nil {
 		return nil, err
 	}
@@ -379,49 +413,49 @@ func (r *Resolver) mapFetchErr(ctx context.Context, err error) error {
 	}
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical second-precision
-// UTC RFC 3339 — the exact form the publisher's strict codec accepts). Shared
-// by ResolvePayload (op = opResolvePayload) and Retain (op =
-// wirecontract.OpRetainPayload).
-func (r *Resolver) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+// proof signs op over fields as the configured identity, in the proof's one
+// wire form (network/internal/authproof). Shared by ResolvePayload (op =
+// opResolvePayload) and Retain (op = wirecontract.OpRetainPayload), each for
+// the audience of the node it calls.
+func (r *Resolver) proof(audience, op string, fields map[string]any) (*chainpb.AuthProof, error) {
+	ap, err := authproof.Sign(r.signer, op, fields, r.signerDID, audience)
 	if err != nil {
-		return nil, fmt.Errorf("payloadresolver/client: nonce: %w", err)
+		return nil, fmt.Errorf("payloadresolver/client: %w", err)
 	}
-	p, err := wireauth.Sign(r.signer, r.signerDID, op, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("payloadresolver/client: sign %s: %w", op, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }
 
 // Retain streams rd's bytes to THIS node's own PayloadStoreService
-// (Config.StoreEndpoint) as ownerDID, declaring size bytes up front. It signs
-// the metadata frame (owner_did + declared_size) with wireauth via the SAME
-// op + field builder the storehandler verifies (wirecontract.OpRetainPayload
-// / RetainPayloadFields — the two derivations cannot drift), splits rd into
-// Config.RetainChunkSize frames, and returns the server-recomputed content
-// address.
+// (Config.StoreEndpoint) as ownerDID, declaring size bytes and their content
+// address addr up front. It signs the metadata frame (owner_did +
+// declared_size + content_address) with wireauth via the SAME op + field
+// builder the storehandler verifies (wirecontract.OpRetainPayload /
+// RetainPayloadFields — the two derivations cannot drift), splits rd into
+// Config.RetainChunkSize frames, and returns the content address the server
+// kept the bytes at, which is addr's spelling: a server answer naming any
+// other address is an error.
 //
-// size MUST equal the exact number of bytes rd yields: the server enforces
-// this as a commitment, not a hint — a short or long stream is rejected
-// (InvalidArgument / ResourceExhausted), never silently truncated or padded
-// (see storehandler). Any Connect error the server returns is returned as-is
+// size MUST equal the exact number of bytes rd yields, and addr MUST be their
+// address, known before Retain reads rd (the first frame carries it):
+// contentaddress.Of of the bytes, or the Address of a contentaddress.Hasher
+// they were written to as they were made. The server enforces both as a
+// commitment, not a hint — a short or long stream is rejected
+// (InvalidArgument / ResourceExhausted), never silently truncated or padded,
+// and bytes whose address is not addr are rejected (InvalidArgument) before
+// the store keeps them (see storehandler). A zero addr is refused before
+// anything is sent. Any Connect error the server returns is returned as-is
 // (no swallowing), mirroring auditor/client.RegisterEvidence: the caller sees
 // the real code (e.g. PermissionDenied for an owner_did that does not match
 // the signing identity, ResourceExhausted for a size beyond the server's
 // quota).
-func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string, size uint64) (string, error) {
+func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string, size uint64, addr contentaddress.Address) (string, error) {
 	if r.storeEndpoint == "" {
 		return "", fmt.Errorf("payloadresolver/client: Retain requires Config.StoreEndpoint")
 	}
-	ap, err := r.proof(wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size))
+	if addr.IsZero() {
+		return "", fmt.Errorf("payloadresolver/client: Retain requires the payload's content address")
+	}
+	ap, err := r.proof(r.storeAudience, wirecontract.OpRetainPayload, wirecontract.RetainPayloadFields(ownerDID, size, addr))
 	if err != nil {
 		return "", err
 	}
@@ -439,9 +473,10 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	stream := r.retainClient.RetainPayload(ctx)
 	if err := stream.Send(&payloadpb.RetainPayloadRequest{
 		Frame: &payloadpb.RetainPayloadRequest_Metadata{Metadata: &payloadpb.RetainPayloadMetadata{
-			OwnerDid:     ownerDID,
-			DeclaredSize: size,
-			AuthProof:    ap,
+			OwnerDid:       ownerDID,
+			DeclaredSize:   size,
+			AuthProof:      ap,
+			ContentAddress: addr.String(),
 		}},
 	}); err != nil {
 		// Per connect's ClientStreamForClient.Send doc: if the server already
@@ -483,7 +518,10 @@ func (r *Resolver) Retain(parent context.Context, rd io.Reader, ownerDID string,
 	if err != nil {
 		return "", err
 	}
-	return resp.Msg.GetContentAddress(), nil
+	if got := resp.Msg.GetContentAddress(); got != addr.String() {
+		return "", fmt.Errorf("payloadresolver/client: the store answered content address %q, not the declared %s", got, addr)
+	}
+	return addr.String(), nil
 }
 
 // mapRemoteErr maps a remote NotFound to ErrNotFound (a broken publisher

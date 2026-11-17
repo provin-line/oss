@@ -7,7 +7,7 @@ import (
 )
 
 // TestProdDeps_NoTlogserviceRootInClient guards the architectural promise
-// PR3b Task 2 sets up: tlogservice/client depends on the
+// that tlogservice/client depends on the
 // tlogservice/wirecontract LEAF for its shared op name, signed-view
 // builders, and record_payloads_framed codec, never the tlogservice SERVICE
 // ROOT (which carries mirrorstore, logident, and the rest of the

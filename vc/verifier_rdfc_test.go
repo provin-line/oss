@@ -11,11 +11,10 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// The regression both ForkW-1 reviewers converged on: wiring the exact
-// classifier into the Verifier rejected every eddsa-rdfc-2022 credential,
-// because the dispatch knew only the jcs contracts. No test caught it — every
-// rdfc test called VerifyProof directly and never drove the production
-// Verifier. This one does.
+// Wiring the exact classifier into the Verifier must not reject
+// eddsa-rdfc-2022 credentials: the dispatch has to know the rdfc contract as
+// well as the jcs contracts. Tests that call VerifyProof directly never drive
+// the production Verifier; this one does.
 func TestVerify_RDFCCredential_VerifiesWithItsOwnContract(t *testing.T) {
 	kp, err := (ed25519.Generator{}).Generate()
 	if err != nil {

@@ -1,0 +1,9 @@
+{
+  "id": "did-003",
+  "rule": "did.dplaax.syntax",
+  "description": "Segments may use dots, underscores and hyphens",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme_co-1.x"
+  },
+  "expect": "accept"
+}

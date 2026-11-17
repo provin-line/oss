@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"net/http/httptest"
+	"sync/atomic"
 
 	"connectrpc.com/connect"
 	"github.com/o3co/protobuf.interceptors/endpoint"
@@ -28,18 +29,21 @@ import (
 	auditclient "github.com/provin-line/oss/network/pkg/services/auditor/client"
 	"github.com/provin-line/oss/network/pkg/services/auditor/filestore"
 	"github.com/provin-line/oss/network/pkg/services/auditor/handler"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver"
 	"github.com/provin-line/oss/network/pkg/services/vcresolver/memstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/vc"
 )
+
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
 
 const nodeDID = "did:dplaax:poc.dplaax.dev:org:pipeline"
 
 func addr(hexDigit string) string { return "sha256:" + strings.Repeat(hexDigit, 64) }
 
 // variantAddr builds a well-formed but NEVER-ADMITTED wire variant id — the
-// grammar RegisterEvidence now requires (P1-A), for tests that need a
+// grammar RegisterEvidence requires (P1-A), for tests that need a
 // syntactically valid head without going through a real StoreVC (e.g. because
 // the request is rejected before admission is ever checked).
 func variantAddr(hexDigit string) string {
@@ -86,16 +90,17 @@ func signer(t *testing.T, subject string) (crypto.Signer, []byte) {
 	return ks, kp.PublicKey
 }
 
-// countingHTTPClient wraps a connect.HTTPClient and counts Do calls — the
-// harness for proving a client-side rejection never reaches the network.
-type countingHTTPClient struct {
-	inner connect.HTTPClient
+// countingTransport wraps an http.RoundTripper and counts the requests it
+// carries — the harness for proving a client-side rejection never reaches the
+// network.
+type countingTransport struct {
+	inner http.RoundTripper
 	calls int
 }
 
-func (c *countingHTTPClient) Do(req *http.Request) (*http.Response, error) {
+func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.calls++
-	return c.inner.Do(req)
+	return c.inner.RoundTrip(req)
 }
 
 // harness wires a real AuditService — a real EvidenceService over a REAL
@@ -113,7 +118,8 @@ type harness struct {
 	vcSvc      *vcresolver.Service
 	client     *auditclient.Client
 	url        string
-	httpc      *countingHTTPClient
+	httpc      *http.Client
+	transport  *countingTransport
 	// signer is the crypto.Signer bound to nodeDID via the harness's DID
 	// resolver — populated by newL1Harness so its callers can build their own
 	// auditclient.Client (with a Bearer under test) that still signs a
@@ -129,6 +135,7 @@ func newHarness(t *testing.T) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous window
 		// keep the proof inside the acceptance boundary without a fixed clock.
 		Epoch:  time.Now().Add(-time.Hour),
@@ -167,15 +174,17 @@ func newHarness(t *testing.T) *harness {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	httpc := &countingHTTPClient{inner: srv.Client()}
+	transport := &countingTransport{inner: srv.Client().Transport}
+	httpc := &http.Client{Transport: transport}
 	return &harness{
 		receipts:   receipts,
 		receiptDir: receiptDir,
 		queue:      queue,
 		vcSvc:      vcSvc,
-		client:     auditclient.New(auditclient.Config{Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
+		client:     auditclient.New(auditclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: nodeDID, BaseURL: srv.URL, HTTPClient: httpc}),
 		url:        srv.URL,
 		httpc:      httpc,
+		transport:  transport,
 		signer:     sgn,
 	}
 }
@@ -228,7 +237,7 @@ func TestRegisterEvidence_RoundTrip(t *testing.T) {
 	if err := h.client.RegisterEvidence(context.Background(), stored.WireVariantID, consumed); err != nil {
 		t.Fatalf("RegisterEvidence: %v", err)
 	}
-	if h.httpc.calls == 0 {
+	if h.transport.calls == 0 {
 		t.Error("expected the RPC to reach the network")
 	}
 
@@ -277,7 +286,7 @@ func TestRegisterEvidence_BareBodyAddress_InvalidArgument(t *testing.T) {
 }
 
 // TestRegisterEvidence_UnknownVariant_FailedPrecondition proves the
-// arbitrary-hash amplification guard (D1) still holds under the new grammar:
+// arbitrary-hash amplification guard holds for wire variant ids:
 // a well-formed wire variant id this node never admitted (no StoreVC call
 // preceded it) is FailedPrecondition, never silently registered.
 func TestRegisterEvidence_UnknownVariant_FailedPrecondition(t *testing.T) {
@@ -297,7 +306,7 @@ func TestRegisterEvidence_UnknownVariant_FailedPrecondition(t *testing.T) {
 func TestRegisterEvidence_MismatchedKey_Unauthenticated(t *testing.T) {
 	h := newHarness(t)
 	wrongSigner, _ := signer(t, nodeDID) // a DIFFERENT keypair than the one bound to nodeDID above
-	bad := auditclient.New(auditclient.Config{Signer: wrongSigner, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc})
+	bad := auditclient.New(auditclient.Config{Audience: nodeAudience, Signer: wrongSigner, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc})
 
 	head := variantAddr("d")
 	err := bad.RegisterEvidence(context.Background(), head, []string{addr("e")})
@@ -319,20 +328,20 @@ func TestRegisterEvidence_MalformedConsumedSet_ClientSideRejection(t *testing.T)
 	if err == nil {
 		t.Fatal("RegisterEvidence with an empty consumed set: want error, got nil")
 	}
-	if h.httpc.calls != 0 {
-		t.Errorf("HTTP calls = %d, want 0 (malformed set must be rejected before any network call)", h.httpc.calls)
+	if h.transport.calls != 0 {
+		t.Errorf("HTTP calls = %d, want 0 (malformed set must be rejected before any network call)", h.transport.calls)
 	}
 
 	err = h.client.RegisterEvidence(context.Background(), variantAddr("a"), []string{"not-a-content-address"})
 	if err == nil {
 		t.Fatal("RegisterEvidence with a malformed member: want error, got nil")
 	}
-	if h.httpc.calls != 0 {
-		t.Errorf("HTTP calls = %d, want 0 (malformed member must be rejected before any network call)", h.httpc.calls)
+	if h.transport.calls != 0 {
+		t.Errorf("HTTP calls = %d, want 0 (malformed member must be rejected before any network call)", h.transport.calls)
 	}
 }
 
-// --- P1-C: RegisterEvidence is mounted behind L1 authz IN ADDITION to the L2
+// --- RegisterEvidence is mounted behind L1 authz IN ADDITION to the L2
 // wireauth proof newHarness above exercises. newHarness deliberately mounts NO
 // L1 interceptor (it isolates the wireauth layer); these tests add it back —
 // a real deployment's actual mounting (see internal/netcompose.BuildHandler's
@@ -355,6 +364,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 		Resolver: res,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		Epoch:    time.Now().Add(-time.Hour),
 		Window:   wireauth.AcceptanceWindow{MaxPast: time.Hour, MaxFuture: time.Minute},
 	})
@@ -379,14 +389,16 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	httpc := &countingHTTPClient{inner: srv.Client()}
+	transport := &countingTransport{inner: srv.Client().Transport}
+	httpc := &http.Client{Transport: transport}
 	return &harness{
-		receipts: receipts,
-		queue:    queue,
-		client:   nil, // callers build their own client with the Bearer config under test
-		url:      srv.URL,
-		httpc:    httpc,
-		signer:   sgn,
+		receipts:  receipts,
+		queue:     queue,
+		client:    nil, // callers build their own client with the Bearer config under test
+		url:       srv.URL,
+		httpc:     httpc,
+		transport: transport,
+		signer:    sgn,
 	}
 }
 
@@ -396,7 +408,7 @@ func newL1Harness(t *testing.T, rules []endpoint.StaticRule) *harness {
 // so this fails unless the client actually sets the Authorization header.
 func TestRegisterEvidence_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc, Bearer: "test-l1-token",
 	})
 	if err := client.RegisterEvidence(context.Background(), variantAddr("a"), []string{addr("b")}); err != nil {
@@ -411,7 +423,7 @@ func TestRegisterEvidence_BearerPresented_L1Passes(t *testing.T) {
 // as any other Connect error from this client does.
 func TestRegisterEvidence_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc,
 	})
 	err := client.RegisterEvidence(context.Background(), variantAddr("a"), []string{addr("b")})
@@ -439,7 +451,7 @@ func TestRegisterAuditHead_RoundTrip(t *testing.T) {
 	if err := h.client.RegisterAuditHead(context.Background(), stored.WireVariantID); err != nil {
 		t.Fatalf("RegisterAuditHead: %v", err)
 	}
-	if h.httpc.calls == 0 {
+	if h.transport.calls == 0 {
 		t.Error("expected the RPC to reach the network")
 	}
 
@@ -457,7 +469,7 @@ func TestRegisterAuditHead_RoundTrip(t *testing.T) {
 }
 
 // TestRegisterAuditHead_UnknownVariant_FailedPrecondition mirrors
-// RegisterEvidence's own: the arbitrary-hash amplification guard (D1) still
+// RegisterEvidence's own: the arbitrary-hash amplification guard still
 // holds — a well-formed wire variant id this node never admitted is
 // FailedPrecondition, never silently registered.
 func TestRegisterAuditHead_UnknownVariant_FailedPrecondition(t *testing.T) {
@@ -474,7 +486,7 @@ func TestRegisterAuditHead_UnknownVariant_FailedPrecondition(t *testing.T) {
 // per Client (New), not per call.
 func TestRegisterAuditHead_BearerPresented_L1Passes(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc, Bearer: "test-l1-token",
 	})
 	if err := client.RegisterAuditHead(context.Background(), variantAddr("a")); err != nil {
@@ -488,11 +500,59 @@ func TestRegisterAuditHead_BearerPresented_L1Passes(t *testing.T) {
 // unmangled.
 func TestRegisterAuditHead_NoBearer_L1RejectionPassesThrough(t *testing.T) {
 	h := newL1Harness(t, []endpoint.StaticRule{{Resource: "audit", Action: "register"}})
-	client := auditclient.New(auditclient.Config{
+	client := auditclient.New(auditclient.Config{Audience: nodeAudience,
 		Signer: h.signer, SignerDID: nodeDID, BaseURL: h.url, HTTPClient: h.httpc,
 	})
 	err := client.RegisterAuditHead(context.Background(), variantAddr("a"))
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("no bearer: code = %v, want Unauthenticated (the L1 gate's bearer-presence rejection)", connect.CodeOf(err))
 	}
+}
+
+// With a bearer, the client follows no redirect, whatever *http.Client it is
+// given: the bearer goes to BaseURL's origin only.
+func TestBearer_ShownToNoServerTheEndpointRedirectsTo(t *testing.T) {
+	url, counts := redirectingServer(t)
+	sgn, _ := signer(t, nodeDID)
+	c := auditclient.New(auditclient.Config{Audience: nodeAudience, Signer: sgn, SignerDID: nodeDID, BaseURL: url, HTTPClient: &http.Client{}, Bearer: "node-token"})
+	if err := c.RegisterAuditHead(context.Background(), variantAddr("a")); err == nil {
+		t.Error("a redirected call succeeded")
+	}
+	if counts.hits.Load() == 0 || !counts.bearerShown.Load() {
+		t.Fatalf("the endpoint answered %d requests, bearer shown %v; want the call to reach it with the bearer", counts.hits.Load(), counts.bearerShown.Load())
+	}
+	if n := counts.followed.Load(); n != 0 {
+		t.Errorf("the client followed the redirect: the server it points to answered %d requests", n)
+	}
+}
+
+// redirectCounts is what redirectingServer saw: the requests its endpoint
+// answered, whether one carried a bearer, and the requests that reached the
+// server it redirects to.
+type redirectCounts struct {
+	hits        atomic.Int32
+	bearerShown atomic.Bool
+	followed    atomic.Int32
+}
+
+// redirectingServer answers every request with a redirect to a second server
+// on the same host, over HTTP/1.1, where net/http carries an Authorization
+// header on to the same host.
+func redirectingServer(t *testing.T) (string, *redirectCounts) {
+	t.Helper()
+	counts := &redirectCounts{}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.followed.Add(1)
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			counts.bearerShown.Store(true)
+		}
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+	return redirector.URL, counts
 }

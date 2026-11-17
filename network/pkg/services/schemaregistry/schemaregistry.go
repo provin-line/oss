@@ -27,8 +27,15 @@ import (
 	"github.com/provin-line/oss/schema"
 )
 
-// formatJSONSchema is the only schema_format this slice admits.
+// formatJSONSchema is the only schema_format the registry admits.
 const formatJSONSchema = "JsonSchema"
+
+// maxSchemaBodyBytes bounds a schema body Register admits. A node bounds the
+// whole request, body and the rest, to 1 MiB in its transport
+// (internal/netcompose.maxDocumentRequestBytes), so a body a node passes on
+// is within it; this bound holds for a caller that uses the Service directly
+// as well.
+const maxSchemaBodyBytes = 1 << 20
 
 // Sentinel errors. ErrNotFound / ErrExists from the store package surface
 // unchanged; handlers map all of these to Connect codes with errors.Is.
@@ -61,7 +68,8 @@ func New(st store.SchemaStore, opts ...Option) *Service {
 	return s
 }
 
-// Register admits a schema and returns its version. Byte-identical content
+// Register admits a schema and returns its version. The body is at most 1 MiB:
+// a longer one is ErrInvalidArgument before it is read. Byte-identical content
 // (format, body, prerelease) registered again within the same UTC day is
 // idempotent: it returns the existing version rather than erroring. If that
 // existing version was since deprecated, the returned record carries
@@ -83,8 +91,12 @@ func (s *Service) Register(ctx context.Context, name, format string, body []byte
 	if format != formatJSONSchema {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedFormat, format)
 	}
-	// D2: the body must be a well-formed, self-contained JsonSchema, so the
-	// registry never holds a schema a downstream validator would reject.
+	if len(body) > maxSchemaBodyBytes {
+		return nil, fmt.Errorf("%w: schema body is %d bytes, beyond the bound of %d", ErrInvalidArgument, len(body), maxSchemaBodyBytes)
+	}
+	// The body must be a well-formed, self-contained JsonSchema, so the
+	// registry never holds a schema a downstream validator with the same
+	// PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH (schema's README) would reject.
 	if err := schema.ValidateJSONSchema(body); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}

@@ -1,0 +1,9 @@
+{
+  "id": "did-015",
+  "rule": "did.dplaax.syntax",
+  "description": "A string with a percent-encoded octet is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:%41cme"
+  },
+  "expect": "reject"
+}

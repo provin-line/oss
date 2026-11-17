@@ -93,7 +93,7 @@ type Fold interface {
 // aggregateFirstDropSigner is the narrow consumer-side signer capability the
 // aggregate runtime exercises (only the aggregate FirstDrop path). Depending on
 // this rather than the wider provenance.SourceSigner keeps SignFirstDrop off the
-// aggregate's surface (interface segregation; slice-17k D-17k-3). *vcdid.Signer
+// aggregate's surface (interface segregation). *vcdid.Signer
 // and the publishing decorator both satisfy it. payload is the aggregate output
 // bytes; a non-nil payload is defensively checked against outputHash (see the
 // provenance package doc). The aggregate runtime passes the real output bytes.
@@ -102,13 +102,13 @@ type aggregateFirstDropSigner interface {
 }
 
 // EmissionRegistrar makes an emitted aggregate credential durable and auditable BEFORE it is
-// broadcast (slice-17o D-17o-3/4): the composition-root impl persists the credential to the
+// broadcast: the composition-root impl persists the credential to the
 // node's local store (so the audit runner can resolve the head), records the consumed-source
 // content addresses as the audit receipt, enqueues the head, and (if a remote VC store is
 // configured) publishes it there — all fail-closed and ordered, so the credential is never
-// broadcast without a local audit trail. Optional: nil leaves the runtime broadcast-only
-// (the pre-17o behavior). Consumer-defined here (pointing inward) — the concrete impl lives
-// in the composition root, honoring the network/↔pipeline/ layer rule (D-17o-8).
+// broadcast without a local audit trail. Optional: nil leaves the runtime broadcast-only.
+// Consumer-defined here (pointing inward) — the concrete impl lives
+// in the composition root, honoring the network/↔pipeline/ layer rule.
 //
 // Its errors keep the rule for a part's errors in package contract's doc.
 type EmissionRegistrar interface {
@@ -145,7 +145,7 @@ type Config struct {
 	Emission tlog.Log
 	Fold     Fold
 	// SelfAudit registers each emitted aggregate head for consumed-set self-audit before it
-	// is broadcast (slice-17o). Optional: nil leaves the runtime broadcast-only.
+	// is broadcast. Optional: nil leaves the runtime broadcast-only.
 	SelfAudit EmissionRegistrar
 	// PayloadRetainer, when non-nil, durably retains each emitted aggregate head's
 	// payload before publishing so a by-reference subscriber can dereference it
@@ -483,7 +483,7 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 		return false
 	}
 
-	// Hash the issued credential BEFORE publishing (slice-17o): the head content address is
+	// Hash the issued credential BEFORE publishing: the head content address is
 	// the observer ref AND the self-audit receipt/queue key, so a hash failure must abort the
 	// emit (it is an internal invariant violation, and we never broadcast an un-referenceable
 	// credential).
@@ -494,8 +494,8 @@ func (p *Process) foldOnce(ctx context.Context) bool {
 		return false
 	}
 
-	// Register the emission for consumed-set self-audit BEFORE broadcasting (slice-17o
-	// D-17o-3): local store + receipt + enqueue (+ optional remote publish), fail-closed. A
+	// Register the emission for consumed-set self-audit BEFORE broadcasting: local store +
+	// receipt + enqueue (+ optional remote publish), fail-closed. A
 	// failure aborts the emit — the credential is never broadcast without a local audit trail
 	// (the StoreIngressVC precedent). The consumed set is the pooled inputs' content
 	// addresses, captured from the exact set that computed SourceRoot.

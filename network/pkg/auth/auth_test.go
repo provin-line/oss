@@ -2,11 +2,16 @@ package auth_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -155,11 +160,14 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, nil)
-	good, _ := jwt.Signed(sig).Claims(jwt.Claims{
+	accessToken := (&jose.SignerOptions{}).WithType("at+jwt")
+	claims := jwt.Claims{
 		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
 		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-	}).Serialize()
+		IssuedAt: jwt.NewNumericDate(time.Now()),
+	}
+	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, accessToken)
+	good, _ := jwt.Signed(sig).Claims(claims).Serialize()
 
 	if err := v.Verify(interceptors.WithBearerToken(context.Background(), good), "dids", "read"); err != nil {
 		t.Fatalf("verified token denied: %v", err)
@@ -168,11 +176,8 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 		t.Fatalf("agent hits = %d, want 1", agentHits.Load())
 	}
 	// Same claims, signed with a different key: the signature cannot verify.
-	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, nil)
-	forged, _ := jwt.Signed(otherSig).Claims(jwt.Claims{
-		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
-		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-	}).Serialize()
+	otherSig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("ffffffffffffffffffffffffffffffff")}, accessToken)
+	forged, _ := jwt.Signed(otherSig).Claims(claims).Serialize()
 	if forged == good {
 		t.Fatal("forged token equals the valid one")
 	}
@@ -183,6 +188,201 @@ func TestNewVerifier_CedarVerifiesBearerBeforeAskingAgent(t *testing.T) {
 	}
 	if agentHits.Load() != 1 {
 		t.Errorf("agent was asked about an unverified token (hits = %d)", agentHits.Load())
+	}
+}
+
+// cedarJWKSVerifier builds a cedar Verifier whose key set is at jwksURL, and
+// counts the agent's requests.
+func cedarJWKSVerifier(t *testing.T, jwksURL string) (auth.Verifier, *atomic.Int32) {
+	t.Helper()
+	agentHits := new(atomic.Int32)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agentHits.Add(1)
+		_, _ = w.Write([]byte(`{"decision":"Allow","diagnostics":{"reason":[],"errors":[]}}`))
+	}))
+	t.Cleanup(agent.Close)
+	cfg := cedarCfg(agent.URL)
+	cfg.JWT.Secret, cfg.JWT.JWKSURL = "", jwksURL
+	v, err := auth.NewVerifier(&auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v, agentHits
+}
+
+// esAccessToken is an ES256 access token for the cedarCfg issuer and audience,
+// under key id k1.
+func esAccessToken(t *testing.T) string {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("at+jwt").WithHeader("kid", "k1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jwt.Signed(sig).Claims(jwt.Claims{
+		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
+		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		IssuedAt: jwt.NewNumericDate(time.Now()),
+	}).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// A cedar node that cannot fetch the issuer's key set has not judged the
+// token: Verify reports the backend unavailable, not the caller
+// unauthenticated, and the agent is not asked.
+func TestNewVerifier_CedarKeySetItCannotFetchIsUnavailable(t *testing.T) {
+	gone := httptest.NewTLSServer(http.NotFoundHandler())
+	gone.Close()
+	v, agentHits := cedarJWKSVerifier(t, gone.URL+"/jwks")
+	err := v.Verify(interceptors.WithBearerToken(context.Background(), esAccessToken(t)), "dids", "read")
+	var unauth *interceptors.UnauthenticatedError
+	if !errors.Is(err, interceptors.ErrBackendUnavailable) || errors.As(err, &unauth) {
+		t.Errorf("err = %v, want one wrapping ErrBackendUnavailable and no UnauthenticatedError", err)
+	}
+	if agentHits.Load() != 0 {
+		t.Errorf("agent hits = %d, want 0", agentHits.Load())
+	}
+}
+
+// A caller whose own context ends while the node waits for the issuer's key
+// set is not refused as unauthenticated: the error carries the context's end,
+// which the interceptors report as Canceled or DeadlineExceeded.
+func TestNewVerifier_CedarCallerContextEndingWhileFetchingIsNotUnauthenticated(t *testing.T) {
+	for name, c := range map[string]struct {
+		ctx    func() (context.Context, context.CancelFunc)
+		cancel bool // cancel once the fetch has connected
+		want   error
+	}{
+		"canceled": {func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true, context.Canceled},
+		"past its deadline": {func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 100*time.Millisecond)
+		}, false, context.DeadlineExceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// A key set endpoint that accepts the connection and never answers.
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted := make(chan struct{}, 1)
+			var (
+				mu    sync.Mutex
+				conns []net.Conn
+			)
+			go func() {
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					mu.Lock()
+					conns = append(conns, conn)
+					mu.Unlock()
+					select {
+					case accepted <- struct{}{}:
+					default:
+					}
+				}
+			}()
+			t.Cleanup(func() {
+				_ = ln.Close()
+				mu.Lock()
+				defer mu.Unlock()
+				for _, conn := range conns {
+					_ = conn.Close()
+				}
+			})
+			v, agentHits := cedarJWKSVerifier(t, "https://"+ln.Addr().String()+"/jwks")
+			tok := esAccessToken(t)
+			ctx, cancel := c.ctx()
+			defer cancel()
+			errc := make(chan error, 1)
+			go func() { errc <- v.Verify(interceptors.WithBearerToken(ctx, tok), "dids", "read") }()
+			if c.cancel {
+				<-accepted
+				cancel()
+			}
+			err = <-errc
+			var unauth *interceptors.UnauthenticatedError
+			if errors.As(err, &unauth) || !errors.Is(err, interceptors.ErrBackendUnavailable) || !errors.Is(err, c.want) {
+				t.Errorf("err = %v, want one wrapping ErrBackendUnavailable and %v, and no UnauthenticatedError", err, c.want)
+			}
+			if agentHits.Load() != 0 {
+				t.Errorf("agent hits = %d, want 0", agentHits.Load())
+			}
+		})
+	}
+}
+
+// A PDP answer in which one object names a key twice has no single reading:
+// it is a malformed answer, neither an allow nor a deny, and not an outage.
+func TestNewVerifier_RefusesAnAnswerThatRepeatsAKey(t *testing.T) {
+	accessToken := (&jose.SignerOptions{}).WithType("at+jwt")
+	sig, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(testSecret)}, accessToken)
+	good, _ := jwt.Signed(sig).Claims(jwt.Claims{
+		Issuer: "https://issuer.example", Audience: jwt.Audience{"provin-network"},
+		Subject: "did:dplaax:alice", Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		IssuedAt: jwt.NewNumericDate(time.Now()),
+	}).Serialize()
+	pdp := func(answer string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(answer))
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	backends := map[string]struct {
+		cfg      func(url string) *auth.AuthConfig
+		allow    string // a whole allow
+		repeated string // the same allow with one key named twice
+	}{
+		"o3co": {
+			func(url string) *auth.AuthConfig {
+				return &auth.AuthConfig{Backend: auth.BackendO3co, PolicyVerifierURL: url}
+			},
+			`{"resource":"dids","action":"read","decision":"allow","reason":{"groups":[]}}`,
+			`{"resource":"dids","action":"read","decision":"allow","decision":"allow","reason":{"groups":[]}}`,
+		},
+		"opa": {
+			func(url string) *auth.AuthConfig {
+				return &auth.AuthConfig{Backend: auth.BackendOPA, OPA: auth.OPAConfig{BaseURL: url, PolicyPath: "provin/authz"}}
+			},
+			`{"result":true}`,
+			`{"result":true,"result":true}`,
+		},
+		"cedar": {
+			func(url string) *auth.AuthConfig {
+				return &auth.AuthConfig{Backend: auth.BackendCedar, Cedar: cedarCfg(url)}
+			},
+			`{"decision":"Allow","diagnostics":{"reason":[],"errors":[]}}`,
+			`{"decision":"Allow","decision":"Allow","diagnostics":{"reason":[],"errors":[]}}`,
+		},
+	}
+	verify := func(name, answer string) error {
+		v, err := auth.NewVerifier(backends[name].cfg(pdp(answer)))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return v.Verify(interceptors.WithBearerToken(context.Background(), good), "dids", "read")
+	}
+	for name, b := range backends {
+		if err := verify(name, b.allow); err != nil {
+			t.Fatalf("%s: the allow without a repeated key: %v", name, err)
+		}
+		err := verify(name, b.repeated)
+		var (
+			denied *interceptors.DeniedError
+			unauth *interceptors.UnauthenticatedError
+		)
+		if err == nil || errors.As(err, &denied) || errors.As(err, &unauth) || errors.Is(err, interceptors.ErrBackendUnavailable) {
+			t.Errorf("%s: err = %v, want a malformed answer (no allow, deny, refusal of the token or outage)", name, err)
+		}
 	}
 }
 

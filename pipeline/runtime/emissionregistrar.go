@@ -8,7 +8,7 @@ import (
 	"github.com/provin-line/oss/vc"
 )
 
-// ReceiptWriter records the emit-time consumed-set receipt for an aggregate head (slice-17o):
+// ReceiptWriter records the emit-time consumed-set receipt for an aggregate head:
 // head content address → the consumed source content addresses, plus the registrant DID
 // recorded alongside them (an audit-trail fact — see auditor.ReceiptStore.Put's doc).
 // cmd/pipeline owns this local interface (capability, not concrete); a wire
@@ -20,7 +20,7 @@ type ReceiptWriter interface {
 	Put(headHash string, registrantDID string, consumedHashes []string) error
 }
 
-// emissionRegistrar is the composition-root aggregate.EmissionRegistrar (slice-17o D-17o-3/4):
+// emissionRegistrar is the composition-root aggregate.EmissionRegistrar:
 // it commits an emitted aggregate credential to the node's audit substrate — the LOCAL store
 // (so the audit runner resolves the head), the consumed-set receipt, the audit queue — and
 // then, if a remote VC store is configured, publishes it there. Ordering is load-bearing:
@@ -56,10 +56,10 @@ func (r *emissionRegistrar) RegisterEmission(ctx context.Context, cred *vc.Pipel
 	// An aggregate FirstDrop has no predecessor → no upstream hint, assembly depth 0. StoreVC
 	// returns the server-recomputed StoredHead; its BodyAddress is the authoritative head hash
 	// used as both the receipt key and the audit-queue key (so all three agree). Keying the
-	// RECEIPT and QUEUE on the admitted variant instead is P0-1 slices B/C: it is the verdict
+	// RECEIPT and QUEUE on the admitted variant instead is P0-1: it is the verdict
 	// that has to name the exact bytes evaluated (invariants 6 and 12), and neither the receipt
-	// store nor the audit queue can carry that yet — the WireVariantID travels through
-	// r.audit.Add(head) regardless (task-3 seam widening), for a future wire adapter to use.
+	// store nor the in-process audit queue carries that — the WireVariantID travels through
+	// r.audit.Add(head) regardless, and the wire registrar sends it.
 	head, err := r.local.StoreVC(ctx, b, "", 0)
 	if err != nil {
 		return fmt.Errorf("emissionRegistrar: local store emitted head: %w", err)

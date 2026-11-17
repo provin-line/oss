@@ -354,8 +354,7 @@ func TestProvision_Idempotent_StillMintsServiceOverlay(t *testing.T) {
 
 // The node's DirPublisher republishes the account claims JWT as 0600 (owned by
 // the node's uid) at its first grant; the reuse path must widen the shared
-// resolver dir and JWT back so every other reader survives the next up cycle
-// (Codex review P1).
+// resolver dir and JWT back so every other reader survives the next up cycle.
 func TestProvision_Idempotent_RestoresSharedPermissions(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir)

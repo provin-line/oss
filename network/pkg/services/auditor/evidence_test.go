@@ -75,7 +75,7 @@ func admittedMap(m map[string]string) func(context.Context, string) (string, boo
 func admitNone(context.Context, string) (string, bool, error) { return "", false, nil }
 
 // TestEvidenceService_UnknownHead_NotAdmitted proves the arbitrary-hash
-// amplification guard (D1): a head that has not been admitted into the local
+// amplification guard: a head that has not been admitted into the local
 // VC store is rejected before either store is touched.
 func TestEvidenceService_UnknownHead_NotAdmitted(t *testing.T) {
 	receipts := &evidenceFakeReceipts{}
@@ -95,7 +95,7 @@ func TestEvidenceService_UnknownHead_NotAdmitted(t *testing.T) {
 }
 
 // TestEvidenceService_KnownHead_ReceiptWrittenAndQueued_OrderObservable proves
-// the composite-write ordering (D1): the receipt is durably recorded BEFORE
+// the composite-write ordering: the receipt is durably recorded BEFORE
 // the head is enqueued for audit, never the reverse — a crash between the two
 // must never leave a queued head with no receipt. It also proves the P1-A
 // keying fix: receipts.Put and queue.Add are keyed by the RESOLVED BODY
@@ -198,9 +198,8 @@ func TestEvidenceService_InvalidHeadFormat_InvalidArgument(t *testing.T) {
 }
 
 // TestEvidenceService_BareBodyAddress_InvalidArgument is the P1-A regression
-// check: a bare sha256:<hex> CONTENT ADDRESS — the grammar Register used to
-// (wrongly) require, and the grammar every real caller's body address is
-// shaped like — must be rejected. A registering caller only ever holds a WIRE
+// check: a bare sha256:<hex> CONTENT ADDRESS — the grammar every real
+// caller's body address is shaped like — must be rejected. A registering caller only ever holds a WIRE
 // VARIANT id (StoreVCResult.WireVariantID); admitting a body address here
 // would silently accept the wrong identity class.
 func TestEvidenceService_BareBodyAddress_InvalidArgument(t *testing.T) {
@@ -344,7 +343,7 @@ func TestEvidenceService_RegisterHead_InvalidHeadFormat_InvalidArgument(t *testi
 }
 
 // TestEvidenceService_RegisterHead_UnknownHead_NotAdmitted proves the
-// arbitrary-hash amplification guard (D1) holds for RegisterHead too: a head
+// arbitrary-hash amplification guard holds for RegisterHead too: a head
 // not admitted into the local VC store is rejected before the queue is
 // touched.
 func TestEvidenceService_RegisterHead_UnknownHead_NotAdmitted(t *testing.T) {

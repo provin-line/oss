@@ -154,7 +154,7 @@ func TestSinkReceiptRegistrar_IssueReceipt(t *testing.T) {
 	if audit.added[0].BodyAddress != "sha256:receipthead" {
 		t.Errorf("audit head = %+v, want BodyAddress %q", audit.added[0], "sha256:receipthead")
 	}
-	// task-3: the wire variant id travels through the seam untouched, not just the body address.
+	// The wire variant id travels through the seam untouched, not just the body address.
 	if audit.added[0].WireVariantID != "wire:v1:jcs-rfc8785:sha256:receipthead" {
 		t.Errorf("audit head WireVariantID = %q, want %q", audit.added[0].WireVariantID, "wire:v1:jcs-rfc8785:sha256:receipthead")
 	}

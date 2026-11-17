@@ -35,13 +35,12 @@ type journalEntry struct {
 // payload ), with the genesis record chaining from the EMPTY STRING (see
 // tlog/tlog.go's Record.Hash doc). tlog/filelog and tlog/memlog each carry
 // their own unexported copy of this exact formula; mirrorstore needs an
-// independent copy for the same import-boundary reason, but EXPORTS it —
-// Task 5's MirrorLogSegment handler recomputes the identical chain head
-// with this function for D-T2 acceptance rule 1 ("the registry recomputes
-// the hash chain from its stored tail through the segment and REQUIRES the
-// recomputed head to equal checkpoint.head"), so the accept-time check and
-// this store's own defense-in-depth re-check can never silently disagree
-// about the formula.
+// independent copy for the same import-boundary reason, and EXPORTS it:
+// segment acceptance (AppendSegment) recomputes the hash chain with it from the
+// stored tail through the segment and REQUIRES the recomputed head to equal
+// checkpoint.head, and the journal's defense-in-depth re-check uses it too, so
+// the two can never silently disagree about the formula; a caller outside the
+// package (the handler's tests) computes the same head.
 func ChainHash(prev string, payload []byte) string {
 	h := sha256.New()
 	h.Write([]byte(prev))
@@ -116,7 +115,7 @@ func replayJournal(path string) (records []*tlog.Record, offsets []int64, torn b
 // the file once after the whole batch — the same fsync-before-return
 // discipline as tlog/filelog.go's Append, batched because a call here is
 // one MirrorLogSegment request's worth of records (already bounded by
-// D-T2's max-batch-records/max-batch-bytes caps), not one record at a
+// the max-batch-records/max-batch-bytes caps), not one record at a
 // time. Returns the new records on success.
 func appendJournal(dir string, startIndex uint64, prevHash string, payloads [][]byte) ([]*tlog.Record, error) {
 	path := filepath.Join(dir, recordsFile)

@@ -457,18 +457,16 @@ func TestValueOf_IsOneOnlyForValuesJsonGoldFindsEqual(t *testing.T) {
 
 // The walk takes time in the values it counts, not in the length of the IRIs
 // they name: it reads a node's or a graph's @id, and a property, once where
-// the document writes it, not at every value added to it, so an IRI 16 times as long
-// takes about as long (at most 4 times; reading it at every value would take
-// about 16).
+// the document writes it, not at every value added to it, so an IRI 16 times
+// as long takes about as long (at most 4 times; reading it at every value
+// would take about 16). The two lengths are timed in turn, the best of each
+// kept, so a change in the machine's load falls on both; a ratio past the
+// bound three times over fails.
 func TestNodeMapWork_TakesTimeInTheValuesNotInTheIRIs(t *testing.T) {
 	timeOf := func(doc []any) time.Duration {
-		best := time.Hour
-		for range 3 {
-			start := time.Now()
-			newNodeMapWork().walk(doc)
-			best = min(best, time.Since(start))
-		}
-		return best
+		start := time.Now()
+		newNodeMapWork().walk(doc)
+		return time.Since(start)
 	}
 	inGraph := func(n, length int) []any {
 		return []any{map[string]any{
@@ -497,8 +495,20 @@ func TestNodeMapWork_TakesTimeInTheValuesNotInTheIRIs(t *testing.T) {
 		"nodes in a graph of a long IRI":                      inGraph,
 		"many values of a long predicate":                     longPredicate,
 	} {
-		short, long := timeOf(shape(4000, 25_000)), timeOf(shape(4000, 400_000))
-		if ratio := float64(long) / float64(max(short, time.Microsecond)); ratio > 4 {
+		shortDoc, longDoc := shape(4000, 25_000), shape(4000, 400_000)
+		var ratio float64
+		var short, long time.Duration
+		for range 3 {
+			short, long = time.Hour, time.Hour
+			for range 3 {
+				short = min(short, timeOf(shortDoc))
+				long = min(long, timeOf(longDoc))
+			}
+			if ratio = float64(long) / float64(max(short, time.Microsecond)); ratio <= 4 {
+				break
+			}
+		}
+		if ratio > 4 {
 			t.Errorf("%s: an IRI 16 times as long took %.1f times as long (%v, %v)", name, ratio, short, long)
 		}
 	}

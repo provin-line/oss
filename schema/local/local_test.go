@@ -185,7 +185,7 @@ func TestValidate_RefusesAPayloadNumberBeyondTheBounds(t *testing.T) {
 }
 
 // A schema number beyond the bounds is refused when the schema is added,
-// also one the library cannot read and dropped from the schema.
+// before the library reads it, also one the library cannot read.
 func TestAdd_RefusesASchemaNumberBeyondTheBounds(t *testing.T) {
 	for _, n := range []string{"1e999999", "1e1000001", "1e-1000001"} {
 		if err := local.New().Add("schema:big", []byte(`{"type":"number","maximum":`+n+`}`)); err == nil {

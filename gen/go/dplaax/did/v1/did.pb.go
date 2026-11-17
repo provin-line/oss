@@ -2,7 +2,7 @@
 // Pipeline/Process issuance under owner-signed delegation, resolution,
 // status/revoke, listing, and append-only lifecycle-event reads.
 //
-// Message-shape principle (slice-4 D-d2/D-d3): DID Documents, delegation
+// Message-shape principle: DID Documents, delegation
 // credentials, outward-identity snapshots, and lifecycle events are carried as
 // opaque bytes holding their canonical (JCS) JSON — the proto does not re-model
 // them. Their canonical round-trip is normative (the document hash is recorded
@@ -621,7 +621,7 @@ func (x *ResolveDelegationResponse) GetDelegation() []byte {
 type UpdateStatusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Did   string                 `protobuf:"bytes,1,opt,name=did,proto3" json:"did,omitempty"`
-	// status is the target lifecycle status; slice-4 accepts "revoked".
+	// status is the target lifecycle status; only "revoked" is accepted.
 	Status        string `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

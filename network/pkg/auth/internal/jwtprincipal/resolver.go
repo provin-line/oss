@@ -4,12 +4,17 @@
 // verified here before the agent is asked.
 //
 // A token is accepted only when it is a compact JWS in its one spelling, its
+// typ names an access token (at+jwt or application/at+jwt, RFC 9068), its
 // signature verifies against the configured key, its claims read under
-// canon.StrictDecoder's rules, it carries an expiry that has not passed, it is
-// not used before its not-before time, its issuer equals the configured
-// issuer, its audience contains the configured audience, and it has a
-// subject. The principal is that subject. Everything else is refused; there
-// is no partial acceptance.
+// canon.StrictDecoder's rules, it carries an expiry that has not passed and an
+// issued-at time that is not ahead of now, it is not used before its
+// not-before time (these three within the leeway), its issuer equals the
+// configured issuer, its audience contains the configured audience, and it
+// has a subject. The principal is that subject. Everything else is refused;
+// there is no partial acceptance. With a key set URL, a token the node cannot
+// judge now, because the latest fetch of the set failed and the set held does
+// not settle it, is not accepted either: that error wraps
+// interceptors.ErrBackendUnavailable.
 package jwtprincipal
 
 import (
@@ -20,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -30,7 +36,7 @@ import (
 
 const (
 	// leeway is the clock skew tolerated between the token issuer and this
-	// node when checking exp and nbf.
+	// node when checking exp, nbf and iat.
 	leeway = 30 * time.Second
 
 	// minSecretBytes is the shortest accepted HS256 key after decoding
@@ -46,8 +52,9 @@ const (
 )
 
 // Resolver authenticates a bearer token and names its principal. An error means
-// the token is refused; the error text is for logs and never reaches the RPC
-// caller.
+// the token is refused, except one that wraps interceptors.ErrBackendUnavailable:
+// the resolver could not judge the token now. Neither allows anything. The error
+// text is for logs and never reaches the RPC caller.
 type Resolver interface {
 	Principal(ctx context.Context, token string) (string, error)
 }
@@ -230,6 +237,24 @@ func base64URLValue(c byte) int {
 	return -1
 }
 
+// accessTokenType reports whether h names an access token: a typ of at+jwt or
+// application/at+jwt (RFC 9068), compared without regard to ASCII case as a
+// media type is. A typ with a byte outside ASCII is none of them, whatever it
+// lowers to.
+func accessTokenType(h jose.Header) bool {
+	typ, ok := h.ExtraHeaders[jose.HeaderType].(string)
+	if !ok {
+		return false
+	}
+	for i := 0; i < len(typ); i++ {
+		if typ[i] >= 0x80 {
+			return false
+		}
+	}
+	typ = strings.ToLower(typ)
+	return typ == "at+jwt" || typ == "application/at+jwt"
+}
+
 // Principal returns the subject of token once its form, signature and claims
 // check out. The claims are read under canon.StrictDecoder's rules as well:
 // no duplicate keys, valid Unicode, and no two keys of one object that differ
@@ -247,6 +272,9 @@ func (v *verifier) Principal(ctx context.Context, token string) (string, error) 
 	if len(tok.Headers) != 1 {
 		return "", errors.New("token must carry exactly one signature")
 	}
+	if !accessTokenType(tok.Headers[0]) {
+		return "", errors.New("token is not an access token: its typ must be at+jwt")
+	}
 	key, err := v.keys.key(ctx, tok.Headers[0])
 	if err != nil {
 		return "", err
@@ -261,6 +289,9 @@ func (v *verifier) Principal(ctx context.Context, token string) (string, error) 
 	}
 	if claims.Expiry == nil {
 		return "", errors.New("token has no exp claim")
+	}
+	if claims.IssuedAt == nil {
+		return "", errors.New("token has no iat claim")
 	}
 	err = claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      v.issuer,

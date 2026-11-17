@@ -1,0 +1,12 @@
+{
+  "id": "did-028",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID whose resource path continues past a Process's is none of the three",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:x:key:k1"
+  },
+  "expect": {
+    "level": "none",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

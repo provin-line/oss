@@ -22,7 +22,9 @@ Five endorsement states, carried on the wire as `endorsement_level` (renamed fro
 the predecessor's `level`): `EndorsementVerified / EndorsementUnreachable /
 EndorsementMissing / EndorsementInvalid / EndorsementNA`. DNS reachability failures
 map to Unreachable; absent records to Missing; conflicting or mismatched records to
-Invalid.
+Invalid. A DID Document that cannot be fetched (an error, or no document), or that
+is the document of a DID other than the Owner it was asked for, maps to
+Unreachable (`doc_fetch_failed`).
 
 Endorsement is one axis of a three-axis orthogonal trust model — independent of the
 DID method trust tier and of the VC confidence state.

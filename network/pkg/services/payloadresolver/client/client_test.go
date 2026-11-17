@@ -17,6 +17,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/crypto/ed25519"
 	payloadpb "github.com/provin-line/oss/gen/go/dplaax/payload/v1"
@@ -24,6 +25,12 @@ import (
 	"github.com/provin-line/oss/keystore"
 	ksfilestore "github.com/provin-line/oss/keystore/filestore"
 	"github.com/provin-line/oss/network/pkg/services/payloadresolver/client"
+)
+
+// upstreamAudience and storeAudience are the audiences the tests sign for.
+const (
+	upstreamAudience = "upstream.example"
+	storeAudience    = "node.example"
 )
 
 const clientDID = "did:dplaax:poc.dplaax.dev:org:consumer"
@@ -34,13 +41,17 @@ const clientDID = "did:dplaax:poc.dplaax.dev:org:consumer"
 // e2e). gotAuth captures whatever Authorization header the request arrived
 // with (empty if none), for the anti-leak test below.
 type fakeServer struct {
-	frames  [][]byte
-	err     error
-	gotAuth string
+	frames      [][]byte
+	err         error
+	gotAuth     string
+	gotAudience string
+	calls       int
 }
 
 func (f *fakeServer) ResolvePayload(_ context.Context, req *connect.Request[payloadpb.ResolvePayloadRequest], stream *connect.ServerStream[payloadpb.ResolvePayloadResponse]) error {
 	f.gotAuth = req.Header().Get("Authorization")
+	f.gotAudience = req.Msg.GetAuthProof().GetAudience()
+	f.calls++
 	if f.err != nil {
 		return f.err
 	}
@@ -68,7 +79,10 @@ func newClient(t *testing.T, srv *fakeServer, maxBytes int) (*client.Resolver, s
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	return client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpSrv.Client(), MaxBytes: maxBytes}), httpSrv.URL
+	return client.New(client.Config{
+		Signer: ks, SignerDID: clientDID, HTTPClient: httpSrv.Client(), MaxBytes: maxBytes,
+		UpstreamAudiences: map[string]string{httpSrv.URL: upstreamAudience},
+	}), httpSrv.URL
 }
 
 // newClientCfg is newClient with an explicit Config (short fetch/idle budgets for
@@ -92,6 +106,9 @@ func newClientCfg(t *testing.T, srv payloadpbconnect.PayloadServiceHandler, cfg 
 	cfg.Signer = ks
 	cfg.SignerDID = clientDID
 	cfg.HTTPClient = httpSrv.Client()
+	if cfg.UpstreamAudiences == nil {
+		cfg.UpstreamAudiences = map[string]string{httpSrv.URL: upstreamAudience}
+	}
 	return client.New(cfg), httpSrv.URL
 }
 
@@ -169,7 +186,7 @@ func TestResolvePayload_AcceptsNoCompression(t *testing.T) {
 	}))
 	httpSrv := httptest.NewServer(mux)
 	t.Cleanup(httpSrv.Close)
-	c, _ := newClient(t, &fakeServer{}, 0)
+	c, _ := newClientCfg(t, &fakeServer{}, client.Config{UpstreamAudiences: map[string]string{httpSrv.URL: upstreamAudience}})
 	if _, err := c.ResolvePayload(context.Background(), httpSrv.URL, "sha256:"+
 		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"); err != nil {
 		t.Fatalf("ResolvePayload: %v", err)
@@ -190,7 +207,7 @@ func TestResolvePayload_NotFound(t *testing.T) {
 	}
 }
 
-// TestResolvePayload_NeverPresentsBearer is the P1-C anti-leak proof: even
+// TestResolvePayload_NeverPresentsBearer is the anti-leak proof: even
 // when Config.Bearer is set (for Retain, whose target is THIS node's own
 // fixed StoreEndpoint), ResolvePayload — which dials whichever endpoint a
 // caller passes, an arbitrary and potentially untrusted publisher — must
@@ -214,7 +231,7 @@ func TestResolvePayload_NeverPresentsBearer(t *testing.T) {
 	}
 }
 
-// --- F10: per-fetch total + idle deadlines (independent of caller ctx) ---
+// --- per-fetch total + idle deadlines (independent of caller ctx) ---
 
 const fetchTestHash = "sha256:" +
 	"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -382,7 +399,7 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL})
+	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL, StoreAudience: storeAudience})
 
 	// The metadata frame's owner_did is padded well past the default HTTP/2
 	// stream flow-control window (64KiB): the interceptor never reads the
@@ -390,7 +407,7 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	// forced to block on flow control until the stream is torn down — making
 	// it observe the server's RST deterministically instead of racing it.
 	hugeOwnerDID := clientDID + "?pad=" + string(bytes.Repeat([]byte("x"), 4<<20))
-	_, err = c.Retain(context.Background(), bytes.NewReader(nil), hugeOwnerDID, 0)
+	_, err = c.Retain(context.Background(), bytes.NewReader(nil), hugeOwnerDID, 0, contentaddress.Of(nil))
 	if err == nil {
 		t.Fatal("early rejection: want error, got nil")
 	}
@@ -403,22 +420,25 @@ func TestRetain_EarlyRejection_ReturnsRealCode(t *testing.T) {
 	}
 }
 
-// The store client carries the bearer, so it follows no redirect: a store that
-// redirects does not pass the bearer on.
-func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
-	var sawBearer atomic.Bool
+// The store client carries the bearer, so it follows no redirect: over
+// HTTP/1.1, where net/http carries an Authorization header on to the same
+// host, the server the store redirects to gets no request.
+func TestRetain_FollowsNoRedirectOverHTTP11(t *testing.T) {
+	var hits, followed atomic.Int32
+	var bearerShown atomic.Bool
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			sawBearer.Store(true)
-		}
+		followed.Add(1)
 		http.Error(w, "no", http.StatusNotFound)
 	}))
 	t.Cleanup(other.Close)
-	mux := http.NewServeMux()
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			bearerShown.Store(true)
+		}
 		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
 	}))
-	httpSrv, httpc := newH2CServer(t, mux)
+	t.Cleanup(store.Close)
 
 	ks := ksfilestore.New(t.TempDir())
 	kp, err := (ed25519.Generator{}).Generate()
@@ -428,11 +448,14 @@ func TestRetain_ShowsTheBearerToNoServerTheStoreRedirectsTo(t *testing.T) {
 	if err := ks.SaveKeyPair(clientDID, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: httpc, StoreEndpoint: httpSrv.URL, Bearer: "node-token"})
-	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7); err == nil {
+	c := client.New(client.Config{Signer: ks, SignerDID: clientDID, HTTPClient: &http.Client{}, StoreEndpoint: store.URL, StoreAudience: storeAudience, Bearer: "node-token"})
+	if _, err := c.Retain(context.Background(), bytes.NewReader([]byte("payload")), clientDID, 7, contentaddress.Of([]byte("payload"))); err == nil {
 		t.Error("a redirected retain succeeded")
 	}
-	if sawBearer.Load() {
-		t.Error("the server the store redirected to saw the bearer")
+	if hits.Load() == 0 || !bearerShown.Load() {
+		t.Fatalf("the store answered %d requests, bearer shown %v; want the retain to reach it with the bearer", hits.Load(), bearerShown.Load())
+	}
+	if n := followed.Load(); n != 0 {
+		t.Errorf("the store client followed the redirect: the server it points to answered %d requests", n)
 	}
 }

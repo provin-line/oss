@@ -15,7 +15,7 @@ v=dplaax1; did=<full owner DID>; key=sha256:<64 lowercase hex>
 
 ## 判定結果
 
-5 つの endorsement 状態。wire field 名は `endorsement_level`（旧称 `level` から rename）: `EndorsementVerified / EndorsementUnreachable / EndorsementMissing / EndorsementInvalid / EndorsementNA`。DNS 到達不能は Unreachable、レコード不在は Missing、矛盾・不一致は Invalid にマップされる。
+5 つの endorsement 状態。wire field 名は `endorsement_level`（旧称 `level` から rename）: `EndorsementVerified / EndorsementUnreachable / EndorsementMissing / EndorsementInvalid / EndorsementNA`。DNS 到達不能は Unreachable、レコード不在は Missing、矛盾・不一致は Invalid にマップされる。DID Document を取得できない場合（error、または文書が無い）と、求めた Owner とは別の DID の文書が返った場合は、Unreachable（`doc_fetch_failed`）にマップされる。
 
 Endorsement は三軸直交の信頼モデルの 1 軸であり、DID method の trust tier とも VC の confidence state とも独立。
 

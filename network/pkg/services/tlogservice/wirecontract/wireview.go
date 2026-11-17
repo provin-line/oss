@@ -1,11 +1,11 @@
 // Package wirecontract holds the tlogservice mirror surface's wire-level
 // contract: the wireauth op name and signed-view field builders every
-// MirrorLogSegment client and handler must derive IDENTICALLY (D-T2: every
+// MirrorLogSegment client and handler must derive IDENTICALLY (every
 // mirror-write RPC carries an L2-style wireauth proof signed by the log's
 // writer identity), plus the record_payloads_framed wire codec
 // (segmentframe.go) and the sentinels it shares with the rest of tlogservice.
 //
-// It is a LEAF (PR3b Task 2): it imports only stdlib — never the tlogservice
+// It is a LEAF: it imports only stdlib — never the tlogservice
 // service root, never gen/ — so a consumer that needs only the wire contract
 // (tlogservice/client today; a future cmd/pipeline binary tomorrow) can
 // depend on it without dragging in the service root's mirrorstore/logident
@@ -23,7 +23,7 @@ import (
 
 // OpMirrorLogSegment is the wireauth op name for the MirrorLogSegment RPC —
 // it MUST match exactly between the shipper's signed view and the handler's
-// verification view (D-T2: every mirror-write RPC carries an L2-style
+// verification view (every mirror-write RPC carries an L2-style
 // wireauth proof signed by the log's writer identity). Namespaced with the
 // full RPC identity (mirrors auditor's OpRegisterEvidence rationale):
 // MirrorLogSegment is reached through the L1-authorized TlogService mux, so
@@ -32,7 +32,7 @@ import (
 const OpMirrorLogSegment = "dplaax.tlog.v1.TlogService/MirrorLogSegment"
 
 // MirrorLogSegmentFields builds the exact wireauth signed-view fields for
-// one MirrorLogSegment call (spec D-T2): log_id and checkpoint_head
+// one MirrorLogSegment call: log_id and checkpoint_head
 // verbatim, from_index as a decimal string (the value grammar wireauth's
 // view accepts — see wireauth.validateFieldValue), and segmentDigest (see
 // SegmentDigest). Both the tlogservice/handler package (verifying) and the
@@ -47,7 +47,7 @@ func MirrorLogSegmentFields(logID string, fromIndex uint64, checkpointHead, segm
 	}
 }
 
-// SegmentDigest computes the D-T2 signed-view field that binds a
+// SegmentDigest computes the signed-view field that binds a
 // MirrorLogSegment segment's payload LIST into the wireauth proof (defense
 // in depth alongside the checkpoint-head chain recompute, which commits the
 // payloads transitively but only after the store's own tail): sha256 over

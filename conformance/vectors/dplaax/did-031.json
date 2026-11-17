@@ -1,0 +1,12 @@
+{
+  "id": "did-031",
+  "rule": "did.dplaax.hierarchy",
+  "description": "The level is read by position: a DID whose account type is pipeline and that has no resource path is an Owner",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:pipeline:p1"
+  },
+  "expect": {
+    "level": "owner",
+    "owner": "did:dplaax:poc.dplaax.dev:pipeline:p1"
+  }
+}

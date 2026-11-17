@@ -1,7 +1,7 @@
 package client_test
 
-// TestShipper_EndToEnd is task-6's "ideally one integration test against
-// the real client+handler" (brief): a real tlogship.Shipper (pipeline/,
+// TestShipper_EndToEnd is one integration test against the real
+// client+handler: a real tlogship.Shipper (pipeline/,
 // under test here from the network SIDE — see
 // network/pkg/services/payloadresolver/handler/byref_dataplane_e2e_test.go
 // for the established precedent of an external `_test` package crossing
@@ -37,7 +37,7 @@ func (noopSigner) Sign(string, string, []byte) ([]byte, error) { return []byte("
 // (same signer identity) but pointed at a port nothing listens on, for
 // proving a shipper never blocks when the registry is unreachable.
 func newDownClient(_ *testing.T, _ *harness) *client.Client {
-	return client.New(client.Config{
+	return client.New(client.Config{Audience: nodeAudience,
 		Signer: noopSigner{}, SignerDID: clientProcessA1,
 		BaseURL: "http://127.0.0.1:1", HTTPClient: http.DefaultClient,
 	})

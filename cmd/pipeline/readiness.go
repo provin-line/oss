@@ -1,19 +1,17 @@
 package main
 
-// /readyz is a deliberately small, HONEST readiness surface (task brief:
-// "a cheap probe to the registry base URL; keep it honest and simple") — NOT
-// a port of internal/netcompose's readiness.go (this binary must not import
-// netcompose): no per-check pluggable registry, just the dependencies this
-// binary actually has: the shared NATS connection every loop rides, the one
-// registry base URL every wire Dep (VC store, audit, schema, payload) is
-// pointed at, and — as of the branch review's P2 Codex fix, ADDED, not
-// ported — the external PDP, but ONLY when relevant: this binary still
-// mounts no PDP-gated ConnectRPC services of its own, but a push-ingress
-// route IS PDP-guarded (push.go's pushRoutes calls verifier.Verify), so
-// pdpCheck (below, main.go's buildHandler) is added exactly when at least
-// one loop mounts a push route AND the configured backend is external —
-// never unconditionally the way cmd/network adds it (it
-// always mounts PDP-gated RPC surfaces, so it is always relevant there).
+// /readyz is a deliberately small, HONEST readiness surface — NOT a port of
+// internal/netcompose's readiness.go (this binary must not import netcompose):
+// no per-check pluggable registry, just the dependencies this binary actually
+// has: the shared NATS connection every loop rides, the one registry base URL
+// every wire Dep (VC store, audit, schema, payload) is pointed at, and the
+// external PDP, but ONLY when relevant: this binary mounts no PDP-gated
+// ConnectRPC services of its own, but a push-ingress route IS PDP-guarded
+// (push.go's pushRoutes calls verifier.Verify), so pdpCheck (below, main.go's
+// buildHandler) is added exactly when at least one loop mounts a push route
+// AND the configured backend is external — never unconditionally the way
+// cmd/network adds it (it always mounts PDP-gated RPC surfaces, so it is
+// always relevant there).
 //
 // A tiny TTL cache still guards against turning an unauthenticated /readyz
 // flood into an outbound registry-probe amplifier (the same concern

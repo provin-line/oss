@@ -8,7 +8,7 @@ import (
 )
 
 // A realistic dotted-registry DID (poc.dplaax.dev), as used throughout the
-// e2e capstones — the case D-2's prefix scheme exists to keep collision-free.
+// end-to-end tests — the case the byref. prefix scheme exists to keep collision-free.
 const dottedPipelineDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:pipe"
 
 func TestSubjectForMode_Inline(t *testing.T) {

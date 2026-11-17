@@ -57,7 +57,7 @@ func TestPipeline_BootRejectsZeroLoops(t *testing.T) {
 		AccSeed:    accSeedFile,
 		TrustSeed:  trustSeedFile,
 		ResolveDir: filepath.Join(dir, "resolver"),
-		NodeDID:    "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:    "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		// PipelineLoops / VCStoreEndpoint / VCStoreBearer intentionally left
 		// empty — the zero-loop guard must fire before either the transport
 		// guard or the vc-store guard even considers them.
@@ -77,10 +77,9 @@ func TestPipeline_BootRejectsZeroLoops(t *testing.T) {
 }
 
 // A configured loop on a non-NATS transport is a boot error: the loop has
-// nothing to dial (pipelineRuntimeConfigFrom's own transport guard,
-// originally ported verbatim from cmd/standalone's runtimeConfigFrom, now
-// retired). transport = "noop"
-// needs no NATS fields at all, so this config is deliberately minimal.
+// nothing to dial (pipelineRuntimeConfigFrom's own transport guard).
+// transport = "noop" needs no NATS fields at all, so this config is
+// deliberately minimal.
 func TestPipeline_BootRejectsNonNATSTransportWithLoops(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boot reject builds a binary")
@@ -137,7 +136,7 @@ func TestPipeline_BootRejectsMissingVCStoreEndpointAndBearer(t *testing.T) {
 		AccSeed:       accSeedFile,
 		TrustSeed:     trustSeedFile,
 		ResolveDir:    filepath.Join(dir, "resolver"),
-		NodeDID:       "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:       "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops: validSourceLoopConf,
 		// VCStoreEndpoint / VCStoreBearer intentionally left empty.
 	})
@@ -177,7 +176,7 @@ func TestPipeline_BootRejectsMalformedDecisionRecord(t *testing.T) {
 		AccSeed:       accSeedFile,
 		TrustSeed:     trustSeedFile,
 		ResolveDir:    filepath.Join(dir, "resolver"),
-		NodeDID:       "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:       "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops: validSourceLoopConf,
 		Extra:         "\nprovin.decision-record.level = \"everything\"\n",
 	})
@@ -194,7 +193,7 @@ func TestPipeline_BootRejectsMalformedDecisionRecord(t *testing.T) {
 	}
 }
 
-// F8: allow-private-networks=true requires a scoped registry-resolution map
+// allow-private-networks=true requires a scoped registry-resolution map
 // (registry-base-urls or resolver-base-url) — an unmapped (attacker-supplied)
 // registry must not fall back to the open https://{registry} resolution and
 // reach private address space. Mirrors internal/netcompose's own
@@ -222,12 +221,12 @@ func TestPipeline_BootRejectsPrivateNetworksWithoutScopedResolution(t *testing.T
 		AccSeed:              accSeedFile,
 		TrustSeed:            trustSeedFile,
 		ResolveDir:           filepath.Join(dir, "resolver"),
-		NodeDID:              "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:              "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops:        validSourceLoopConf,
 		VCStoreEndpoint:      "https://127.0.0.1:1/",
 		VCStoreBearer:        "test-bearer",
 		AllowPrivateNetworks: true,
-		// ResolverBaseURL/RegistryBaseURLs both left unset — the F8 hole.
+		// ResolverBaseURL/RegistryBaseURLs both left unset.
 	})
 
 	out, err := runPipelineBinary(t, bin, dir, confPath)
@@ -236,15 +235,15 @@ func TestPipeline_BootRejectsPrivateNetworksWithoutScopedResolution(t *testing.T
 	}
 	const want = "allow-private-networks=true requires configured registry resolution"
 	if !strings.Contains(out, want) {
-		t.Errorf("boot failure does not name the F8 guard (want %q):\n%s", want, out)
+		t.Errorf("boot failure does not name the private-network guard (want %q):\n%s", want, out)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "data")); statErr == nil {
-		t.Errorf("data dir was created despite the F8 guard rejecting boot")
+		t.Errorf("data dir was created despite the private-network guard rejecting boot")
 	}
 }
 
-// TestPipeline_BootRejectsMissingPayloadRetainKey proves the D9 boot
-// preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
+// TestPipeline_BootRejectsMissingPayloadRetainKey proves the payload-retain
+// boot preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
 // wiring.go): TWO producing loops with DIFFERENT output subjects — src1
 // (provisioned) and src2 (deliberately NOT provisioned) — must reject boot
 // naming SPECIFICALLY the loop and output subject missing its key, proving
@@ -275,7 +274,7 @@ func TestPipeline_BootRejectsMissingPayloadRetainKey(t *testing.T) {
 		AccSeed:         accSeedFile,
 		TrustSeed:       trustSeedFile,
 		ResolveDir:      filepath.Join(dir, "resolver"),
-		NodeDID:         "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node",
+		NodeDID:         "did:dplaax:reg:org:acme:pipeline:p1:process:node",
 		PipelineLoops:   twoProducingLoopsConf,
 		VCStoreEndpoint: "https://127.0.0.1:1/",
 		VCStoreBearer:   "test-bearer",
@@ -296,11 +295,11 @@ func TestPipeline_BootRejectsMissingPayloadRetainKey(t *testing.T) {
 }
 
 // TestPipeline_BootRejectsMissingNodeIdentityKey proves boot guard 6
-// (preflightWireOnlySignerKeys, wiring.go): the D9 payload-retain preflight
+// (preflightWireOnlySignerKeys, wiring.go): the payload-retain preflight
 // (guard 5) only ever checks each PRODUCING loop's OWN output subject — it
 // says nothing about nodeDID, the identity wireAuditRegistrar.Add signs
 // RegisterAuditHead as (and PayloadResolver's ResolvePayload identity) — a
-// gap that previously surfaced only at the FIRST consuming loop's ingress
+// gap that would otherwise surface only at the FIRST consuming loop's ingress
 // consume, well after boot. This provisions the source loop's own
 // output-subject key (guard 5) AND its emission log's checkpoint-signer key
 // (the issuer DID, guard 6's OTHER half), but DELIBERATELY withholds
@@ -329,7 +328,7 @@ func TestPipeline_BootRejectsMissingNodeIdentityKey(t *testing.T) {
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
 	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
 
-	const nodeDID = "did:dplaax:poc.dplaax.dev:org:acme:pipeline:p1:process:node"
+	const nodeDID = "did:dplaax:reg:org:acme:pipeline:p1:process:node"
 	confPath := writeBootConfigFile(t, dir, bootConfig{
 		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", freePort(t)),
 		DataDir:         dataDir,
@@ -356,8 +355,53 @@ func TestPipeline_BootRejectsMissingNodeIdentityKey(t *testing.T) {
 	}
 }
 
+// A pipeline whose own-node signers are DIDs of two registries — here the
+// node DID's and the source loop's — without node-registry does not start:
+// it decides one audience for its node at start, and the refusal names both
+// registries and node-registry. The decision precedes the data plane's
+// build, so no broker is needed.
+func TestPipeline_BootRejectsOwnNodeSignersOfTwoRegistries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boot reject builds a binary")
+	}
+	bin := buildPipelineBinary(t)
+	dir := t.TempDir()
+	accSeedFile, trustSeedFile := writeNKeySeedFiles(t)
+	dataDir := filepath.Join(dir, "data")
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe")
+	provisionPayloadRetainKey(t, dataDir, "did:dplaax:reg:org:acme:pipeline:pipe:process:src")
+
+	const nodeDID = "did:dplaax:other.example:org:acme:pipeline:p1:process:node"
+	provisionPayloadRetainKey(t, dataDir, nodeDID)
+	confPath := writeBootConfigFile(t, dir, bootConfig{
+		ListenAddr:      fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		DataDir:         dataDir,
+		AllowLoopback:   true,
+		Transport:       "nats",
+		NATSURL:         "nats://127.0.0.1:1",
+		AccSeed:         accSeedFile,
+		TrustSeed:       trustSeedFile,
+		ResolveDir:      filepath.Join(dir, "resolver"),
+		NodeDID:         nodeDID,
+		PipelineLoops:   validSourceLoopConf,
+		VCStoreEndpoint: "http://127.0.0.1:1",
+		VCStoreBearer:   "test-bearer",
+	})
+
+	out, err := runPipelineBinary(t, bin, dir, confPath)
+	if err == nil {
+		t.Fatalf("pipeline booted with own-node signers of two registries; want a non-zero exit\noutput:\n%s", out)
+	}
+	for _, want := range []string{"node-registry", `"other.example"`, `"reg"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("boot failure does not name %s:\n%s", want, out)
+		}
+	}
+}
+
 // twoProducingLoopsConf declares TWO source loops with DIFFERENT output
-// subjects (pipe1, pipe2) — the exact topology the D9 gap broke: a node
+// subjects (pipe1, pipe2) — the exact topology the payload-retain preflight
+// covers: a node
 // running more than one producing loop, each needing its OWN payload-retain
 // signing key.
 const twoProducingLoopsConf = `
@@ -507,8 +551,8 @@ provin.network.chain {
 // provisionPayloadRetainKey writes a #auth key for subjectDID directly into
 // dataDir/keys — the SAME directory main.go's own filestore.New(filepath.
 // Join(coreCfg.DataDir, "keys")) opens — so a boot-reject/smoke test can
-// satisfy (or deliberately withhold, for the negative case) the D9 boot
-// preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
+// satisfy (or deliberately withhold, for the negative case) the payload-retain
+// boot preflight (main.go's Boot guard 5, preflightPayloadRetainKeys in
 // wiring.go) for a producing loop's OWN output subject BEFORE the real
 // binary ever starts. Shared by TestPipeline_BootRejectsMissingPayloadRetainKey
 // (this file) and TestPipeline_ActualBoot (bootsmoke_test.go).
@@ -550,8 +594,7 @@ func buildPipelineBinary(t *testing.T) string {
 }
 
 // writeSelfSignedCert generates an ed25519 self-signed cert for 127.0.0.1 and
-// writes cert.pem / key.pem to a temp dir, returning their paths. Ported from
-// cmd/network/bootreject_test.go.
+// writes cert.pem / key.pem to a temp dir, returning their paths.
 func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 	pub, priv, err := stded25519.GenerateKey(rand.Reader)
@@ -590,8 +633,7 @@ func writeSelfSignedCert(t *testing.T) (certPath, keyPath string) {
 }
 
 // writeNKeySeedFiles writes the account and trust-root seeds to files: the
-// config surface takes PATHS, never inline key material. Ported from
-// cmd/network/bootreject_test.go.
+// config surface takes PATHS, never inline key material.
 func writeNKeySeedFiles(t *testing.T) (accountSeedFile, trustRootSeedFile string) {
 	t.Helper()
 	acc, err := nkeys.CreateAccount()
@@ -622,8 +664,7 @@ func writeNKeySeedFiles(t *testing.T) (accountSeedFile, trustRootSeedFile string
 	return accountSeedFile, trustRootSeedFile
 }
 
-// freePort returns an OS-assigned free TCP port. Ported from
-// cmd/network/bootreject_test.go.
+// freePort returns an OS-assigned free TCP port.
 func freePort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

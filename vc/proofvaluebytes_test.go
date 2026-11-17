@@ -84,9 +84,9 @@ func TestSignerAuthenticity_CryptosuiteWithoutAContractFailsBeforeTheKeyLookup(t
 // verifyWithLookupsThatCannotAnswer runs signer authenticity with an issuer
 // verifier whose key lookup fails transiently and a lifecycle registry that
 // answers Active, and returns the verdict with both, to count their lookups.
-func verifyWithLookupsThatCannotAnswer(t *testing.T, cred *vc.Credential) (vc.ConfidenceState, *stageIssuers, *countingLifecycle) {
+func verifyWithLookupsThatCannotAnswer(t *testing.T, cred *vc.Credential) (vc.ConfidenceState, *tableIssuers, *countingLifecycle) {
 	t.Helper()
-	s := &stageIssuers{keyErr: errors.New("registry unreachable")}
+	s := &tableIssuers{keyErr: errors.New("registry unreachable")}
 	l := &countingLifecycle{}
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s), vc.WithLifecycleRegistry(l))
 	res, err := v.VerifySignerAuthenticity(context.Background(), cred)

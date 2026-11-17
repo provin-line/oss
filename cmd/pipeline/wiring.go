@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 
+	"github.com/provin-line/oss/contentaddress"
 	"github.com/provin-line/oss/crypto"
 	"github.com/provin-line/oss/gen/go/dplaax/vc/v1/vcpbconnect"
 	"github.com/provin-line/oss/internal/origin"
@@ -34,11 +36,7 @@ import (
 
 // ─────────────────────────────────────────────────────────────────────────
 // Config mapping: chainconfig.Config + pipelineconfig.Config -> pipeline/
-// runtime.Config. This was originally a DELIBERATE duplicate of
-// cmd/standalone's runtimewiring.go:runtimeConfigFrom (and its per-role
-// mapping helpers), kept in lockstep by inspection because that function
-// lived in package main of a DIFFERENT binary and so could not be imported.
-// cmd/standalone is retired (PR3c); this mapping is now the only copy.
+// runtime.Config. This mapping lives only in this binary.
 // ─────────────────────────────────────────────────────────────────────────
 
 // pipelineRuntimeConfigFrom maps this binary's own loaded config trees into
@@ -182,13 +180,13 @@ func loopConfigFrom(lc pipelineconfig.LoopConfig) pipelineruntime.LoopConfig {
 // NewDIDResolution — reconstructed directly from the packages it composes
 // (network/pkg/core, network/pkg/chainconfig, network/pkg/didresolver)
 // rather than imported, because netcompose itself is off-limits to this
-// binary (a later depsguard test, PR3b Task 8, pins that on the production
+// binary (depsguard_test.go pins that on the production
 // import graph). Keep this in lockstep with netcompose's copy by inspection.
 // ─────────────────────────────────────────────────────────────────────────
 
 // newDIDResolution builds the SSRF guard and cross-registry DID resolver
 // this binary's sink/chained/aggregate loops verify upstream credentials
-// through. Mirrors internal/netcompose.NewDIDResolution's F8 posture
+// through. Mirrors internal/netcompose.NewDIDResolution's private-network posture
 // exactly: allow-private-networks=true requires a scoped resolution map
 // (registry-base-urls or resolver-base-url), or an attacker-supplied
 // registry could reach private address space via the open
@@ -237,7 +235,7 @@ func newDIDResolution(coreCfg *core.CoreConfig, chainCfg *chainconfig.Config) (*
 }
 
 // registryBaseURL mirrors internal/netcompose.registryBaseURL exactly (see
-// its doc for the F8 rationale).
+// its doc for the rationale).
 func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry string) (string, error) {
 	return func(registry string) (string, error) {
 		if base, ok := urls[registry]; ok {
@@ -258,7 +256,7 @@ func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry s
 // the "all services mount on one node" assumption main's boot guard
 // enforces (vc-store-endpoint + vc-store-bearer required whenever any loop
 // is configured): a future multi-registry deployment that splits these
-// across nodes is out of scope for PR3b (see the task brief).
+// across nodes is out of scope.
 // ─────────────────────────────────────────────────────────────────────────
 
 // wireRegistrarTimeout bounds a network call made from the AuditRegistrar
@@ -266,8 +264,8 @@ func registryBaseURL(urls map[string]string, closeUnmapped bool) func(registry s
 // (AuditRegistrar.Add, ReceiptWriter.Put) that were designed for a LOCAL,
 // in-process implementation (the file-backed audit queue / receipt store)
 // and so carry NO context.Context of their own — a real, load-bearing
-// architectural gap for a WIRE implementation, flagged in this task's
-// report rather than papered over silently. Chosen generously: every RPC
+// architectural gap for a WIRE implementation, stated here rather than
+// papered over silently. Chosen generously: every RPC
 // these adapters make (RegisterAuditHead, RegisterEvidence, and the
 // ResolveVC lookup ReceiptWriter needs) is small and fixed-shape, against
 // this node's own configured registry.
@@ -294,8 +292,8 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // newVCStoreClient builds the shared vcresolver/client.Resolver every
 // CredentialPublisher/IngressStorer/ReceiptWriter adapter below wraps,
-// bounding a resolved/stored credential's read size the same way the
-// retired cmd/standalone's credentialPublisherFrom did (D-17g-13).
+// bounding a resolved/stored credential's read size to
+// pipeCfg.MaxCredentialSize.
 func newVCStoreClient(pipeCfg *pipelineconfig.Config, httpClient connect.HTTPClient) *vcresolverclient.Resolver {
 	return newVCResolverClientAt(pipeCfg, httpClient, pipeCfg.VCStoreEndpoint)
 }
@@ -357,6 +355,7 @@ var (
 	_ pipelineruntime.CredentialPublisher = vcStoreAdapter{}
 	_ pipelineruntime.IngressStorer       = vcStoreAdapter{}
 	_ contract.PayloadResolver            = wireRetryingPayloadResolver{}
+	_ contract.PayloadResolver            = (*payloadclient.Resolver)(nil)
 )
 
 // StoreCredential implements pipeline/runtime.CredentialPublisher.
@@ -406,15 +405,16 @@ func (a vcStoreAdapter) StoreVC(ctx context.Context, credential []byte, upstream
 type auditClientFactory struct {
 	signer     crypto.Signer
 	baseURL    string
+	audience   string
 	bearer     string
-	httpClient connect.HTTPClient
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	clients map[string]*auditorclient.Client
 }
 
-func newAuditClientFactory(signer crypto.Signer, baseURL, bearer string, httpClient connect.HTTPClient) *auditClientFactory {
-	return &auditClientFactory{signer: signer, baseURL: baseURL, bearer: bearer, httpClient: httpClient, clients: map[string]*auditorclient.Client{}}
+func newAuditClientFactory(signer crypto.Signer, baseURL, audience, bearer string, httpClient *http.Client) *auditClientFactory {
+	return &auditClientFactory{signer: signer, baseURL: baseURL, audience: audience, bearer: bearer, httpClient: httpClient, clients: map[string]*auditorclient.Client{}}
 }
 
 // For returns the cached client signing as signerDID, building and caching
@@ -429,6 +429,7 @@ func (f *auditClientFactory) For(signerDID string) *auditorclient.Client {
 		Signer:     f.signer,
 		SignerDID:  signerDID,
 		BaseURL:    f.baseURL,
+		Audience:   f.audience,
 		HTTPClient: f.httpClient,
 		Bearer:     f.bearer,
 	})
@@ -502,7 +503,7 @@ func (a wireAuditRegistrar) Add(head pipelineruntime.StoredHead) error {
 // low-frequency, per-window-tick event, not per-credential-ingest) for a
 // stateless, race-free adapter.
 //
-// NOTE (branch review, minor): pipeline/runtime's emissionRegistrar.
+// NOTE: pipeline/runtime's emissionRegistrar.
 // RegisterEmission calls this Put (RegisterEvidence, over the wire) and then
 // deps.AuditQueue.Add (wireAuditRegistrar, RegisterAuditHead, ALSO over the
 // wire) for the SAME emitted head — both RPCs enqueue that head into the
@@ -577,7 +578,7 @@ func (g wireSchemaGetter) Get(ctx context.Context, name, version string) (*pipel
 // transport/transient failure) passes through unwrapped, which the verifier
 // maps to indeterminate rather than failed. This is a small, independent
 // bridge — NOT netcompose.SchemaBridge reused (this binary must not import
-// internal/netcompose; see the task brief) — kept in lockstep with it by
+// internal/netcompose) — kept in lockstep with it by
 // inspection, pinned by wiring_test.go's mirrored test cases.
 type wireSchemaBridge struct {
 	client *schemaclient.Client
@@ -600,7 +601,7 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 
 // payloadClientFactory builds and caches one payloadclient.Resolver per
 // signer identity (DID) — mirrors auditClientFactory/mirrorClientFactory/
-// reportClientFactory exactly. This is the D9 fix: PayloadStoreService's
+// reportClientFactory exactly. PayloadStoreService's
 // RetainPayload enforces owner_did == the wireauth-proven signer
 // (storehandler's errOwnerMismatch — "the proven DID is authoritative over
 // the claimed owner_did", and that package's own retain_e2e_test.go docs the
@@ -611,11 +612,9 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 // across every loop under a single node identity: a shared client can
 // satisfy AT MOST one producing loop's retain calls, and every OTHER
 // loop's retain then fails PermissionDenied — which (per dataplane.go's
-// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits,
-// D-6) aborts that loop's ENTIRE emission, not merely its by-reference
-// side-channel. This is the production gap PR3b Task 9's separated e2e
-// discovered (see the report's "Blocker discovered" section, now fixed
-// here).
+// payloadWiring — PayloadStore wired ⇒ every producing loop dual-emits)
+// aborts that loop's ENTIRE emission, not merely its by-reference
+// side-channel.
 //
 // The RESOLVE side (ResolvePayload, Deps.PayloadResolver) is NOT
 // owner-bound: the querying actor IS the signer (nil authorizer — see
@@ -625,11 +624,15 @@ func (r wireSchemaBridge) ResolveSchema(ctx context.Context, ref vc.SchemaRef) (
 // client signing as the node identity (For(nodeDID)), sharing this SAME
 // cache rather than needing a second factory.
 type payloadClientFactory struct {
-	signer          crypto.Signer
-	storeEndpoint   string
-	bearer          string
-	httpClient      connect.HTTPClient
-	retainChunkSize int
+	signer        crypto.Signer
+	storeEndpoint string
+	// upstreamAudiences maps each by-reference upstream endpoint to the
+	// audience its fetches name (upstreamAudiences); every client gets it.
+	upstreamAudiences map[string]string
+	audience          string
+	bearer            string
+	httpClient        *http.Client
+	retainChunkSize   int
 
 	mu      sync.Mutex
 	clients map[string]*payloadclient.Resolver
@@ -649,11 +652,10 @@ type payloadClientFactory struct {
 const retainFrameOverhead = 64
 
 // retainChunkSizeFor derives payloadClientFactory's outbound Retain chunk
-// size from pipeCfg.MaxRetainChunkSize (P2 Codex fix, branch review: the
-// payload client previously always used payloadclient.DefaultRetainChunkSize
-// — 256 KiB — regardless of config, so a registry configured with a SMALLER
-// max-retain-chunk-size rejected every frame at its connect.WithReadMaxBytes
-// mount, aborting emission via dataplane.go's payloadWiring, D-6).
+// size from pipeCfg.MaxRetainChunkSize so a registry configured with a
+// SMALLER max-retain-chunk-size than payloadclient.DefaultRetainChunkSize
+// (256 KiB) does not reject every frame at its connect.WithReadMaxBytes
+// mount, which would abort emission via dataplane.go's payloadWiring.
 // Subtracts retainFrameOverhead so the actual over-the-wire message (chunk
 // bytes + protobuf/Connect framing) never exceeds the server's configured
 // cap, floored at 1 so a pathologically tiny configured cap still produces a
@@ -676,14 +678,16 @@ func retainChunkSizeFor(maxRetainChunkSize int) int {
 	return size
 }
 
-func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, bearer string, httpClient connect.HTTPClient, maxRetainChunkSize int) *payloadClientFactory {
+func newPayloadClientFactory(signer crypto.Signer, storeEndpoint, audience, bearer string, httpClient *http.Client, maxRetainChunkSize int, upstreamAudiences map[string]string) *payloadClientFactory {
 	return &payloadClientFactory{
-		signer:          signer,
-		storeEndpoint:   storeEndpoint,
-		bearer:          bearer,
-		httpClient:      httpClient,
-		retainChunkSize: retainChunkSizeFor(maxRetainChunkSize),
-		clients:         map[string]*payloadclient.Resolver{},
+		signer:            signer,
+		storeEndpoint:     storeEndpoint,
+		upstreamAudiences: upstreamAudiences,
+		audience:          audience,
+		bearer:            bearer,
+		httpClient:        httpClient,
+		retainChunkSize:   retainChunkSizeFor(maxRetainChunkSize),
+		clients:           map[string]*payloadclient.Resolver{},
 	}
 }
 
@@ -696,12 +700,14 @@ func (f *payloadClientFactory) For(signerDID string) *payloadclient.Resolver {
 		return c
 	}
 	c := payloadclient.New(payloadclient.Config{
-		Signer:          f.signer,
-		SignerDID:       signerDID,
-		HTTPClient:      f.httpClient,
-		StoreEndpoint:   f.storeEndpoint,
-		Bearer:          f.bearer,
-		RetainChunkSize: f.retainChunkSize,
+		Signer:            f.signer,
+		SignerDID:         signerDID,
+		HTTPClient:        f.httpClient,
+		StoreEndpoint:     f.storeEndpoint,
+		StoreAudience:     f.audience,
+		UpstreamAudiences: f.upstreamAudiences,
+		Bearer:            f.bearer,
+		RetainChunkSize:   f.retainChunkSize,
 	})
 	f.clients[signerDID] = c
 	return c
@@ -712,7 +718,7 @@ func (f *payloadClientFactory) For(signerDID string) *payloadclient.Resolver {
 // pipeline/runtime.PayloadRetainStore's whole-buffer Store(ctx, payload
 // []byte, ownerDID string) shape — the producer half of by-reference
 // delivery. Store selects factory.For(ownerDID) so each retain call signs AS
-// the owning producing loop (D9 — see payloadClientFactory's doc), and
+// the owning producing loop (see payloadClientFactory's doc), and
 // streams to Config.StoreEndpoint (pipeCfg.VCStoreEndpoint, the same ONE
 // registry base URL every other wire Dep uses).
 type wirePayloadStore struct {
@@ -731,20 +737,20 @@ type wirePayloadStore struct {
 // (payloadresolver/client.Resolver.proof) — never a resent cached proof.
 func (s wirePayloadStore) Store(ctx context.Context, payload []byte, ownerDID string) (string, error) {
 	client := s.factory.For(ownerDID)
+	addr := contentaddress.Of(payload)
 	var contentAddress string
 	err := retryOnUnavailable(ctx, defaultWireRetryBudget, defaultWireBackoff(), func(ctx context.Context) error {
 		var attemptErr error
-		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)))
+		contentAddress, attemptErr = client.Retain(ctx, bytes.NewReader(payload), ownerDID, uint64(len(payload)), addr)
 		return attemptErr
 	})
 	return contentAddress, err
 }
 
 // wireRetryingPayloadResolver wraps a *payloadclient.Resolver's ResolvePayload
-// with the same bounded, re-signing retry (Task 3, wireauth-boot-epoch-
-// retryable spec): a signed READ races cmd/network's boot window exactly
-// like RetainPayload does (spec's recovery matrix — ResolvePayload is an
-// idempotent read), and dropping a boot-window-racing resolve aborts the
+// with the same bounded, re-signing retry: a signed READ races cmd/network's
+// boot window exactly like RetainPayload does (ResolvePayload is an idempotent
+// read), and dropping a boot-window-racing resolve aborts the
 // consuming event just like a denied retain aborts an emission. Each retry
 // re-invokes ResolvePayload, which signs a fresh wireauth proof internally on
 // every call — never a resent cached proof.
@@ -770,12 +776,12 @@ func (r wireRetryingPayloadResolver) ResolvePayload(ctx context.Context, upstrea
 // producing loop's OWN output subject for PayloadStore/retain — see
 // payloadClientFactory's doc — and each aggregate/loop issuer ReceiptWriter
 // signs as) must have its #auth key provisioned there; main's boot preflight
-// (D9, preflightPayloadRetainKeys) checks the producing-loop case fails
+// (preflightPayloadRetainKeys) checks the producing-loop case fails
 // closed at boot rather than at first emit. nodeDID is chainCfg.NATS.NodeDID,
 // guaranteed non-empty by the time this runs (main's guards require the nats
 // transport whenever any loop is configured, and chainconfig.
 // LoadChainConfig requires node-did non-empty on that transport).
-func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID string) pipelineruntime.Deps {
+func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *core.URLGuard, didResolver resolver.Resolver, nodeDID, ownAudience string, upstream map[string]string) pipelineruntime.Deps {
 	// The clients built over httpClient present vc-store-bearer to a
 	// destination the operator configured, so none follows a redirect: the
 	// bearer goes to that destination's origin only.
@@ -784,7 +790,7 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 	vcClient := newVCStoreClient(pipeCfg, httpClient)
 	store := vcStoreAdapter{client: vcClient}
 
-	factory := newAuditClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, httpClient)
+	factory := newAuditClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, httpClient)
 
 	schemaCli := schemaclient.New(schemaclient.Config{
 		BaseURL:    pipeCfg.VCStoreEndpoint,
@@ -794,7 +800,7 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 
 	// The payload client confines its own bearer-carrying store client; its
 	// tokenless fetches from a publisher follow redirects as before.
-	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize)
+	payloadFactory := newPayloadClientFactory(keyStore, pipeCfg.VCStoreEndpoint, ownAudience, pipeCfg.VCStoreBearer, guard.HTTPClient(), pipeCfg.MaxRetainChunkSize, upstream)
 
 	return pipelineruntime.Deps{
 		Resolver:      didResolver,
@@ -827,12 +833,12 @@ func buildDeps(pipeCfg *pipelineconfig.Config, keyStore crypto.Signer, guard *co
 var preflightProbeData = []byte("cmd/pipeline: D9 payload-retain key preflight probe")
 
 // preflightPayloadRetainKeys verifies keyStore already holds a #auth signing
-// key for EVERY producing loop's own output subject (D9) — the identity
+// key for EVERY producing loop's own output subject — the identity
 // wirePayloadStore's payloadClientFactory (this file, above) signs each
 // retain call as. Without this, a misprovisioned deployment would only
 // discover the gap at first emit, as a RetainPayload PermissionDenied that
 // aborts the whole emission (dataplane.go's payloadWiring — PayloadStore
-// wired ⇒ every producing loop dual-emits, D-6); checking here at boot turns
+// wired ⇒ every producing loop dual-emits); checking here at boot turns
 // that into an immediate, named failure instead.
 //
 // It probes via Sign (the only read keystore.KeyStore's contract exposes),
@@ -854,9 +860,9 @@ func preflightPayloadRetainKeys(keyStore crypto.Signer, loops []pipelineconfig.L
 	return nil
 }
 
-// preflightWireOnlySignerKeys extends the D9 boot preflight (above) to the
+// preflightWireOnlySignerKeys extends the boot preflight above to the
 // OTHER two wire-only signing identities this binary needs before it ever
-// runs a loop (branch review, Important finding):
+// runs a loop:
 //
 //  1. nodeDID — the identity wireAuditRegistrar.Add signs RegisterAuditHead
 //     as (buildDeps: AuditQueue: wireAuditRegistrar{client: factory.
@@ -866,7 +872,7 @@ func preflightPayloadRetainKeys(keyStore crypto.Signer, loops []pipelineconfig.L
 //     call) or the first by-reference resolve — well after boot.
 //  2. every DURABLE custody log's checkpoint-signer identity (custodyLogs —
 //     dp.CustodyLogs(), the SAME issuer/receipt-issuer DID the mirror
-//     shipper signs MirrorLogSegment as, tlog-custody spec D-T3). filelog's
+//     shipper signs MirrorLogSegment as). filelog's
 //     own arming does NOT probe the key at boot: WithCheckpointSigner
 //     (tlog/filelog/filelog.go) only STORES the CheckpointSigner value on
 //     the Log struct — it calls Sign nowhere in filelog.New — so a missing

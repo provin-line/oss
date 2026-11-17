@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/internal/netexcerpt"
 )
 
 // ErrInvalidProcessDID is returned by AncestorPipeline when processDID does
@@ -15,7 +16,7 @@ import (
 var ErrInvalidProcessDID = errors.New("logident: invalid process DID")
 
 // PipelineAncestry answers "which pipeline DID issued this process DID" —
-// the check an emission log's writer binding needs (D-T3: the checkpoint
+// the check an emission log's writer binding needs (the checkpoint
 // signer is a process DID, but the log id names the pipeline; verifying the
 // signer belongs to that pipeline requires walking from process to
 // pipeline). Defined here as an interface, consumed by the writer-binding
@@ -32,6 +33,9 @@ type PipelineAncestry interface {
 // satisfies it (see didregistry/handler/resolution.go's identically-shaped
 // Resolver for the established precedent of declaring this narrow interface
 // locally rather than importing the concrete service type).
+//
+// ResolveDID returns a non-nil document or a non-nil error, never both nil,
+// as didregistry.Service's ResolveDID does.
 type DIDResolver interface {
 	ResolveDID(ctx context.Context, didStr string) (*did.DIDDocument, error)
 }
@@ -70,7 +74,7 @@ func (a *DIDRegistryAncestry) AncestorPipeline(ctx context.Context, processDID s
 	}
 	controller := doc.Controller()
 	if _, err := parsePipelineDID(controller); err != nil {
-		return "", fmt.Errorf("%w: process %q controller %q: %v", ErrInvalidProcessDID, processDID, controller, err)
+		return "", fmt.Errorf("%w: process %s controller %s: %v", ErrInvalidProcessDID, netexcerpt.ValueText(processDID), netexcerpt.ValueText(controller), err)
 	}
 	return controller, nil
 }

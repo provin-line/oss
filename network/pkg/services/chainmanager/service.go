@@ -8,6 +8,7 @@ import (
 
 	"github.com/provin-line/oss/allowlist"
 	"github.com/provin-line/oss/did/dplaax"
+	"github.com/provin-line/oss/internal/netexcerpt"
 	"github.com/provin-line/oss/network/pkg/core"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/emithealth"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra"
@@ -106,7 +107,7 @@ func WithPayloadServing() Option {
 // advertised only while fn returns true (in addition to WithPayloadServing).
 // The composition root derives fn from the producing loops' stripped-publish
 // health, so a node whose by-reference emission is failing stops advertising a
-// mode it can no longer honestly serve (export-seam D-5 degradation). Omitting
+// mode it can no longer honestly serve (export-seam degradation). Omitting
 // this option leaves advertising governed solely by WithPayloadServing.
 func WithByReferenceHealth(fn func() bool) Option {
 	return func(s *Service) { s.byRefHealthy = fn }
@@ -171,19 +172,18 @@ func New(subs store.SubscriptionStore, allows store.AllowListStore, opts ...Opti
 func requirePipelineDID(didStr string) error {
 	d, err := dplaax.Parse(didStr)
 	if err != nil {
-		return fmt.Errorf("%w: %q: %v", ErrInvalidPipelineDID, didStr, err)
+		return fmt.Errorf("%w: %s: %v", ErrInvalidPipelineDID, netexcerpt.ValueText(didStr), err)
 	}
 	if !d.IsPipeline() {
-		return fmt.Errorf("%w: %q is not a pipeline DID", ErrInvalidPipelineDID, didStr)
+		return fmt.Errorf("%w: %s is not a pipeline DID", ErrInvalidPipelineDID, netexcerpt.ValueText(didStr))
 	}
 	return nil
 }
 
 // ListSubscriptions returns the operator's own subscriptions — the
-// subscriber-direction records ("what am I subscribed to"; slice-12 D-s6 option
-// a). Publisher-direction records (who subscribed to a local pipeline) are a
-// separate concern and excluded. An empty result yields an empty slice, not an
-// error.
+// subscriber-direction records ("what am I subscribed to"). Publisher-direction
+// records (who subscribed to a local pipeline) are a separate concern and
+// excluded. An empty result yields an empty slice, not an error.
 func (s *Service) ListSubscriptions(ctx context.Context) ([]*store.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

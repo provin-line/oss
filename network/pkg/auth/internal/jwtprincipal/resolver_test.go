@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+	interceptors "github.com/o3co/protobuf.interceptors"
 )
 
 const (
@@ -29,7 +32,7 @@ var testSecret = []byte("0123456789abcdef0123456789abcdef")
 
 func hsToken(t *testing.T, secret []byte, claims jwt.Claims) string {
 	t.Helper()
-	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: secret}, (&jose.SignerOptions{}).WithType("JWT"))
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: secret}, (&jose.SignerOptions{}).WithType("at+jwt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +81,8 @@ func TestHS256_Rejects(t *testing.T) {
 		"wrong secret":   hsToken(t, []byte("ffffffffffffffffffffffffffffffff"), validClaims(now)),
 		"expired":        mut(func(c *jwt.Claims) { c.Expiry = jwt.NewNumericDate(now.Add(-time.Hour)) }),
 		"no exp":         mut(func(c *jwt.Claims) { c.Expiry = nil }),
+		"no iat":         mut(func(c *jwt.Claims) { c.IssuedAt = nil }),
+		"iat ahead":      mut(func(c *jwt.Claims) { c.IssuedAt = jwt.NewNumericDate(now.Add(time.Hour)) }),
 		"not yet valid":  mut(func(c *jwt.Claims) { c.NotBefore = jwt.NewNumericDate(now.Add(time.Hour)) }),
 		"wrong issuer":   mut(func(c *jwt.Claims) { c.Issuer = "https://evil.example" }),
 		"wrong audience": mut(func(c *jwt.Claims) { c.Audience = jwt.Audience{"other"} }),
@@ -95,6 +100,48 @@ func TestHS256_Rejects(t *testing.T) {
 	}
 }
 
+// A token is accepted only as an access token: its typ header is at+jwt, in
+// either spelling RFC 9068 gives (at+jwt or application/at+jwt) and in any
+// case, a media type being case-insensitive. Any other typ, or none, is
+// refused.
+func TestPrincipal_RequiresTheAccessTokenType(t *testing.T) {
+	now := time.Now()
+	r := newHS(t, now)
+	signed := func(opts *jose.SignerOptions) string {
+		t.Helper()
+		sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: testSecret}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := jwt.Signed(sig).Claims(validClaims(now)).Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, typ := range []string{"at+jwt", "application/at+jwt", "AT+JWT", "Application/At+Jwt"} {
+		if _, err := r.Principal(context.Background(), signed((&jose.SignerOptions{}).WithType(jose.ContentType(typ)))); err != nil {
+			t.Errorf("typ %q: refused: %v", typ, err)
+		}
+	}
+	refused := map[string]*jose.SignerOptions{
+		"no typ":              {},
+		"typ JWT":             (&jose.SignerOptions{}).WithType("JWT"),
+		"typ jwt":             (&jose.SignerOptions{}).WithType("jwt"),
+		"typ application/jwt": (&jose.SignerOptions{}).WithType("application/jwt"),
+		"typ empty":           (&jose.SignerOptions{}).WithType(""),
+		"typ with parameters": (&jose.SignerOptions{}).WithType("at+jwt; v=1"),
+		"typ another +jwt":    (&jose.SignerOptions{}).WithType("dpop+jwt"),
+		"typ not ASCII":       (&jose.SignerOptions{}).WithType("appl\u0130cation/at+jwt"),
+		"typ not a string":    (&jose.SignerOptions{}).WithHeader(jose.HeaderType, 1),
+	}
+	for name, opts := range refused {
+		if got, err := r.Principal(context.Background(), signed(opts)); err == nil {
+			t.Errorf("%s: accepted, principal %q", name, got)
+		}
+	}
+}
+
 func TestHS256_Leeway(t *testing.T) {
 	now := time.Now()
 	r := newHS(t, now)
@@ -106,6 +153,11 @@ func TestHS256_Leeway(t *testing.T) {
 	c.Expiry = jwt.NewNumericDate(now.Add(-2 * leeway))
 	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err == nil {
 		t.Error("token expired beyond leeway accepted")
+	}
+	c = validClaims(now)
+	c.IssuedAt = jwt.NewNumericDate(now.Add(leeway / 2))
+	if _, err := r.Principal(context.Background(), hsToken(t, testSecret, c)); err != nil {
+		t.Errorf("token issued ahead within leeway rejected: %v", err)
 	}
 }
 
@@ -171,11 +223,12 @@ func TestNew_RejectsBadConfig(t *testing.T) {
 
 type jwksServer struct {
 	*httptest.Server
-	hits atomic.Int32
-	keys atomic.Value // []jose.JSONWebKey
-	fail atomic.Bool
-	raw  atomic.Pointer[string]        // when set, /jwks answers with this body
-	gate atomic.Pointer[chan struct{}] // when set, /jwks blocks until it is closed
+	hits   atomic.Int32
+	keys   atomic.Value // []jose.JSONWebKey
+	fail   atomic.Bool
+	status atomic.Int32                  // when set, every path answers with this status
+	raw    atomic.Pointer[string]        // when set, /jwks answers with this body
+	gate   atomic.Pointer[chan struct{}] // when set, /jwks blocks until it is closed
 }
 
 func newJWKSServer(t *testing.T, keys ...jose.JSONWebKey) *jwksServer {
@@ -192,6 +245,10 @@ func newJWKSServer(t *testing.T, keys ...jose.JSONWebKey) *jwksServer {
 		}
 		if s.fail.Load() {
 			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		if code := s.status.Load(); code != 0 {
+			http.Error(w, http.StatusText(int(code)), int(code))
 			return
 		}
 		switch r.URL.Path {
@@ -224,7 +281,7 @@ func ecKey(t *testing.T, kid string) (*ecdsa.PrivateKey, jose.JSONWebKey) {
 
 func esToken(t *testing.T, k *ecdsa.PrivateKey, kid string, c jwt.Claims) string {
 	t.Helper()
-	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", kid))
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("at+jwt").WithHeader("kid", kid))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +310,29 @@ func newClock() *clock {
 	c := &clock{}
 	c.now.Store(time.Now())
 	return c
+}
+
+// A token that is not an access token is refused before its key is looked
+// up: it never makes the node fetch the issuer's key set.
+func TestJWKS_ATokenOfAnotherTypeFetchesNoKeys(t *testing.T) {
+	k, jwk := ecKey(t, "k1")
+	srv := newJWKSServer(t, jwk)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	sig, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: k}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "k1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jwt.Signed(sig).Claims(validClaims(clk.Now())).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Principal(context.Background(), tok); err == nil {
+		t.Fatalf("accepted, principal %q", got)
+	}
+	if n := srv.hits.Load(); n != 0 {
+		t.Errorf("JWKS fetched %d times for a token of another type, want 0", n)
+	}
 }
 
 func TestJWKS_VerifiesAndCaches(t *testing.T) {
@@ -422,22 +502,33 @@ func TestJWKS_GraceKeepsKnownKidsWhileRefetchFails(t *testing.T) {
 	claims := validClaims(clk.Now())
 	tok1, tok2 := esToken(t, k1, "k1", claims), esToken(t, k2, "k2", claims)
 
-	// Expired set, refetch failing: a known kid still verifies, an unknown one does not.
+	// Expired set, refetch failing: a known kid still verifies; an unknown one
+	// does not, and since the set could not be refetched it is unavailable, not
+	// refused.
 	if _, err := r.Principal(ctx, tok1); err != nil {
 		t.Errorf("known kid refused during grace: %v", err)
 	}
-	if _, err := r.Principal(ctx, tok2); err == nil {
-		t.Error("unknown kid accepted from a stale set")
+	if _, err := r.Principal(ctx, tok2); !wrapsUnavailable(err) {
+		t.Errorf("unknown kid from a stale set: err = %v, want unavailable", err)
 	}
 	// The same holds while the refetch is rate-limited.
 	if _, err := r.Principal(ctx, tok1); err != nil {
 		t.Errorf("known kid refused while rate-limited: %v", err)
 	}
-	// Past the grace bound nothing verifies.
+	if _, err := r.Principal(ctx, tok2); !wrapsUnavailable(err) {
+		t.Errorf("unknown kid from a stale set while rate-limited: err = %v, want unavailable", err)
+	}
+	// Past the grace bound nothing verifies, whether a refetch was tried or
+	// rate-limited, and the key set is unavailable.
 	clk.Advance(jwksGrace)
 	claims = validClaims(clk.Now())
-	if _, err := r.Principal(ctx, esToken(t, k1, "k1", claims)); err == nil {
-		t.Error("stale set used beyond the grace period")
+	for _, what := range []string{"refetch failing", "refetch rate-limited"} {
+		if _, err := r.Principal(ctx, esToken(t, k1, "k1", claims)); !wrapsUnavailable(err) {
+			t.Errorf("stale set beyond the grace period, %s: err = %v, want unavailable", what, err)
+		}
+		if srv.hits.Load() != 3 {
+			t.Errorf("%s: hits = %d, want 3", what, srv.hits.Load())
+		}
 	}
 	// Recovery: a successful fetch restores service.
 	srv.fail.Store(false)
@@ -502,6 +593,219 @@ func TestJWKS_SetWithoutKeysMemberIsAFailedFetch(t *testing.T) {
 		if srv.hits.Load() != 2 {
 			t.Errorf("%s: hits = %d, want 2 (failed attempt rate-limits the next)", body, srv.hits.Load())
 		}
+	}
+}
+
+// wrapsUnavailable reports whether err says the key set could not be had, rather
+// than that the token was refused.
+func wrapsUnavailable(err error) bool { return errors.Is(err, interceptors.ErrBackendUnavailable) }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A fetch that yields no key set leaves the token unjudged, whatever the
+// reason: the endpoint unreachable or past the fetch's own timeout, an answer
+// with any status but 200, or a body that is not a key set. The error wraps
+// interceptors.ErrBackendUnavailable, and the fetch's own timeout does not read
+// as the caller's deadline.
+func TestJWKS_AFetchThatYieldsNoKeySetIsUnavailable(t *testing.T) {
+	type setup func(t *testing.T, srv *jwksServer, clk *clock) Resolver
+	at := func(path string) setup {
+		return func(t *testing.T, srv *jwksServer, clk *clock) Resolver { return newJWKSResolver(t, srv, path, clk) }
+	}
+	body := func(b string) setup {
+		return func(t *testing.T, srv *jwksServer, clk *clock) Resolver {
+			srv.raw.Store(&b)
+			return newJWKSResolver(t, srv, "/jwks", clk)
+		}
+	}
+	cases := map[string]setup{
+		"a redirect":            at("/redirect"),
+		"larger than the bound": at("/huge"),
+		"not JSON":              body(`not json`),
+		"no keys member":        body(`{}`),
+		"keys not an array":     body(`{"keys":{}}`),
+		"unreachable": func(t *testing.T, srv *jwksServer, clk *clock) Resolver {
+			gone := httptest.NewTLSServer(http.NotFoundHandler())
+			gone.Close()
+			r, err := newResolver(Config{Issuer: testIssuer, Audience: testAudience, JWKSURL: gone.URL + "/jwks"}, srv.Client(), clk.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		},
+		"past the fetch's own timeout": func(t *testing.T, srv *jwksServer, clk *clock) Resolver {
+			// What net/http reports when the fetch's deadline passes.
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, context.DeadlineExceeded
+			})}
+			r, err := newResolver(Config{Issuer: testIssuer, Audience: testAudience, JWKSURL: srv.URL + "/jwks"}, client, clk.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		},
+	}
+	for _, code := range []int{
+		http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+		http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+	} {
+		cases[fmt.Sprintf("status %d", code)] = func(t *testing.T, srv *jwksServer, clk *clock) Resolver {
+			srv.status.Store(int32(code))
+			return newJWKSResolver(t, srv, "/jwks", clk)
+		}
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			k, jwk := ecKey(t, "k1")
+			srv := newJWKSServer(t, jwk)
+			clk := newClock()
+			r := mk(t, srv, clk)
+			tok := esToken(t, k, "k1", validClaims(clk.Now()))
+			// The failed fetch, then the same while the next fetch is rate-limited.
+			for _, what := range []string{"fetch failed", "refetch rate-limited"} {
+				_, err := r.Principal(context.Background(), tok)
+				if !wrapsUnavailable(err) {
+					t.Errorf("%s: err = %v, want one wrapping ErrBackendUnavailable", what, err)
+				}
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					t.Errorf("%s: err = %v reads as the caller's context ending", what, err)
+				}
+			}
+		})
+	}
+}
+
+// A caller whose context ends while it waits for a fetch has not had its token
+// judged: the error wraps interceptors.ErrBackendUnavailable and the context's
+// error, so what the caller is told is that its own context ended. The fetch
+// goes on for the others (TestJWKS_CancelledCallerDoesNotPoisonCacheOrLimiter).
+func TestJWKS_CallerContextEndingWhileWaitingIsUnavailable(t *testing.T) {
+	for name, c := range map[string]struct {
+		ctx    func() (context.Context, context.CancelFunc)
+		cancel bool // cancel once the fetch has reached the endpoint
+		want   error
+	}{
+		"canceled": {func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, true, context.Canceled},
+		"past its deadline": {func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 50*time.Millisecond)
+		}, false, context.DeadlineExceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k, jwk := ecKey(t, "k1")
+			srv := newJWKSServer(t, jwk)
+			gate := make(chan struct{})
+			srv.gate.Store(&gate)
+			defer close(gate)
+			clk := newClock()
+			r := newJWKSResolver(t, srv, "/jwks", clk)
+			tok := esToken(t, k, "k1", validClaims(clk.Now()))
+			ctx, cancel := c.ctx()
+			defer cancel()
+			errc := make(chan error, 1)
+			go func() { _, err := r.Principal(ctx, tok); errc <- err }()
+			if c.cancel {
+				for srv.hits.Load() == 0 {
+					time.Sleep(time.Millisecond)
+				}
+				cancel()
+			}
+			if err := <-errc; !wrapsUnavailable(err) || !errors.Is(err, c.want) {
+				t.Errorf("err = %v, want one wrapping ErrBackendUnavailable and %v", err, c.want)
+			}
+		})
+	}
+}
+
+// An unknown kid is a refusal of the token only when the latest fetch
+// succeeded, so the set in hand is the issuer's current one. After a failed
+// fetch it may name a key the node has not been able to see, so it is
+// unavailable, also while the next fetch waits out jwksMinRefetch. A key id
+// the set holds still verifies.
+func TestJWKS_UnknownKidIsUnavailableOnlyAfterAFailedFetch(t *testing.T) {
+	k1, jwk1 := ecKey(t, "k1")
+	k2, _ := ecKey(t, "k2")
+	srv := newJWKSServer(t, jwk1)
+	clk := newClock()
+	r := newJWKSResolver(t, srv, "/jwks", clk)
+	ctx := context.Background()
+	principal := func(k *ecdsa.PrivateKey, kid string) error {
+		_, err := r.Principal(ctx, esToken(t, k, kid, validClaims(clk.Now())))
+		return err
+	}
+	refused := func(step string, err error) {
+		t.Helper()
+		if err == nil || wrapsUnavailable(err) {
+			t.Errorf("%s: err = %v, want a refusal of the token", step, err)
+		}
+	}
+	isUnavailable := func(step string, err error) {
+		t.Helper()
+		if !wrapsUnavailable(err) {
+			t.Errorf("%s: err = %v, want unavailable", step, err)
+		}
+	}
+	hits := func(step string, want int32) {
+		t.Helper()
+		if got := srv.hits.Load(); got != want {
+			t.Errorf("%s: hits = %d, want %d", step, got, want)
+		}
+	}
+
+	if err := principal(k1, "k1"); err != nil {
+		t.Fatal(err)
+	}
+	refused("unknown kid, rate-limited after a successful fetch", principal(k2, "k2"))
+	hits("after a successful fetch", 1)
+
+	clk.Advance(jwksMinRefetch + time.Second)
+	srv.status.Store(http.StatusNotFound)
+	isUnavailable("unknown kid, the fetch failed", principal(k2, "k2"))
+	isUnavailable("unknown kid, rate-limited after a failed fetch", principal(k2, "k2"))
+	if err := principal(k1, "k1"); err != nil {
+		t.Errorf("known kid refused after a failed fetch: %v", err)
+	}
+	hits("after a failed fetch", 2)
+
+	clk.Advance(jwksMinRefetch + time.Second)
+	srv.status.Store(0)
+	refused("unknown kid, the fetch succeeded", principal(k2, "k2"))
+	refused("unknown kid, rate-limited after the fetch succeeded again", principal(k2, "k2"))
+	hits("after the fetch succeeded again", 3)
+}
+
+// A fetch that succeeds replaces the set, also with one that holds no key the
+// node can use: the issuer has withdrawn its keys, and no grace keeps the old
+// ones. A token under a key id of the old set is then refused, not
+// unavailable.
+func TestJWKS_ASuccessfulFetchOfNoUsableKeyReplacesTheSet(t *testing.T) {
+	for name, body := range map[string]string{
+		"no keys":       `{"keys":[]}`,
+		"no usable key": `{"keys":[{"kty":"EC","crv":"secp256k1","kid":"k1","x":"AA","y":"AA"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			k1, jwk1 := ecKey(t, "k1")
+			srv := newJWKSServer(t, jwk1)
+			clk := newClock()
+			r := newJWKSResolver(t, srv, "/jwks", clk)
+			ctx := context.Background()
+			if _, err := r.Principal(ctx, esToken(t, k1, "k1", validClaims(clk.Now()))); err != nil {
+				t.Fatal(err)
+			}
+			srv.raw.Store(&body)
+			clk.Advance(jwksTTL + time.Second)
+			for _, what := range []string{"the fetch", "rate-limited after it"} {
+				_, err := r.Principal(ctx, esToken(t, k1, "k1", validClaims(clk.Now())))
+				if err == nil || wrapsUnavailable(err) {
+					t.Errorf("%s: err = %v, want a refusal of the token", what, err)
+				}
+			}
+			if srv.hits.Load() != 2 {
+				t.Errorf("hits = %d, want 2", srv.hits.Load())
+			}
+		})
 	}
 }
 

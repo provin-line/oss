@@ -1,6 +1,6 @@
 package netcompose
 
-// The /metrics bridge (P1-2): the ONLY place OpenTelemetry (and its
+// The /metrics bridge: the ONLY place OpenTelemetry (and its
 // Prometheus exporter) enters the module. Library packages stay
 // dependency-free and expose poll accessors (transport.Emitter counters,
 // verifycount snapshots, auditor.Runner.VerdictCounts); this composition-root
@@ -52,7 +52,7 @@ type VerifyCounts interface {
 }
 
 // LoopMetrics is one loop's metrics wiring for the composition root's
-// /metrics bridge (P1-2): Name becomes the series' `loop` attribute, Role
+// /metrics bridge: Name becomes the series' `loop` attribute, Role
 // records which capability set the wiring followed (test/bookkeeping only —
 // not a series attribute), and the non-nil accessors decide which metric
 // families the loop participates in (nil = the loop does not have that

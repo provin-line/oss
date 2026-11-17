@@ -1,16 +1,18 @@
 # resolver — DID Document 解決
 > 日本語版 — English: [README.md](README.md)
 
-`Resolver` インターフェース（`Resolve(did string) (*did.DIDDocument, error)`）とその実装群。
+`Resolver` インターフェース（`Resolve(ctx, did string) (*did.DIDDocument, error)`）とその実装群。`Resolve` は nil でない文書か nil でない error のどちらかを返し、どちらも nil にはしない。
 
 ## 実装
 
-| パス | 動作 |
-|---|---|
-| `local/` | インメモリストア。テストおよびフィクスチャ用 |
-| `cache/` | 任意の `Resolver` に被せる TTL・バイト有界のキャッシュデコレータ |
-| `grpc/` | レジストリの DIDService への ConnectRPC 呼び出し |
-| `multi/` | ホームレジストリ優先、追加レジストリへのフォールバックあり |
+| パス | 状態 | 動作 |
+| --- | --- | --- |
+| `local/` | 実装済み | インメモリストア。テストおよびフィクスチャ用 |
+| `cache/` | 実装済み | TTL・バイト有界のキャッシュデコレータ（`Resolver`） |
+| `grpc/` | 計画中 | レジストリの DIDService への ConnectRPC 呼び出し |
+| `multi/` | 計画中 | ホームレジストリ優先、追加レジストリへのフォールバック |
+
+`local/` と `cache/` は現時点でこのモジュールに存在する。`grpc/` と `multi/` の行と、以下の規約における両者の記述は、意図された契約を述べたものである。
 
 ## 規約
 

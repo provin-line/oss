@@ -12,9 +12,9 @@ import (
 
 // The chain control plane is split across two services with opposite
 // authorization models, and that split is a wire-visible contract frozen the
-// moment chain.proto is written (slice-9 Phase A), before any handler exists.
+// moment chain.proto is written, before any handler exists.
 // These guards assert the split in BOTH directions so neither half can silently
-// drift into the other (slice-9 D-c1):
+// drift into the other:
 //
 //   - ChainService (operator, L1 JWT): every RPC carries the o3co.authz.v1.policy
 //     option. A missing option silently disables the authorization check.

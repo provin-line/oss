@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
@@ -34,6 +34,9 @@ func TestCode(t *testing.T) {
 		{"key resolution", wireauth.ErrKeyResolution, connect.CodeUnauthenticated, true},
 		{"signature invalid", wireauth.ErrSignatureInvalid, connect.CodeUnauthenticated, true},
 		{"replay", wireauth.ErrReplay, connect.CodeUnauthenticated, true},
+		{"wrong audience", wireauth.ErrWrongAudience, connect.CodeUnauthenticated, true},
+		{"view version", wireauth.ErrViewVersion, connect.CodeUnauthenticated, true},
+		{"wrapped wrong audience", fmt.Errorf("%w: x", wireauth.ErrWrongAudience), connect.CodeUnauthenticated, true},
 		// Wrapped sentinel: errors.Is must still classify it.
 		{"wrapped before epoch", fmt.Errorf("chainmanager: verify: %w", wireauth.ErrBeforeEpoch), connect.CodeUnavailable, true},
 		// Not a wireauth sentinel at all.

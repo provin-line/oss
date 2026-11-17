@@ -22,7 +22,7 @@
 // with a stale snapshot — keep external serialization per account.
 //
 // This package deliberately lives OUTSIDE infra/nats: it needs the nats.go
-// client, which infra/nats's production graph forbids (D-n7) — this is the
+// client, which infra/nats's production graph forbids — this is the
 // one place cmd/network's production graph picks up that dependency
 // (cmd/pipeline needs it independently, for its own data-plane transport).
 // The nats-server stays out (see the deps guard).

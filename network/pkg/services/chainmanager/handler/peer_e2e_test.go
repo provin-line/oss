@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,12 +17,13 @@ import (
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/keystore"
 	"github.com/provin-line/oss/keystore/filestore"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/handler"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/infra/noop"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store/memstore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 )
 
 const (
@@ -83,15 +85,15 @@ func e2eNonce(t *testing.T) string {
 // serializing issued_at as the canonical RFC 3339 UTC second-precision string.
 func authProof(t *testing.T, signer crypto.Signer, signerDID, op string, fields map[string]any, nonce string) *chainpb.AuthProof {
 	t.Helper()
-	p, err := wireauth.Sign(signer, signerDID, op, fields, nonce, e2eAt())
+	p, err := wireauth.Sign(signer, op, fields, wireauth.Claims{SignerDID: signerDID, Audience: e2eAudience, Nonce: nonce, IssuedAt: e2eAt()})
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID, Nonce: p.Nonce,
-		IssuedAt: p.IssuedAt.UTC().Format(time.RFC3339), Signature: p.Signature,
-	}
+	return authproof.Encode(p)
 }
+
+// e2eAudience is the audience of the peer server's verifier.
+const e2eAudience = "node.example"
 
 // e2eSetup stands up the peer server over httptest with a real wireauth verifier
 // (clock 1s after e2eAt so a proof issued at e2eAt is just inside the past
@@ -106,7 +108,7 @@ func e2eSetup(t *testing.T) (chainpbconnect.ChainPeerServiceClient, crypto.Signe
 		e2eStranger: e2eAuthDoc(e2eStranger, strangerPub),
 	}
 	v, err := wireauth.NewVerifier(wireauth.VerifierConfig{
-		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(),
+		Resolver: resolver, Crypto: ed25519.Verifier{}, Nonces: wireauth.NewMemoryNonceStore(wireauth.WithNonceClock(e2eAt)), Audience: e2eAudience,
 		Clock: func() time.Time { return e2eAt().Add(time.Second) }, Epoch: e2eAt().Add(-time.Hour),
 	})
 	if err != nil {
@@ -123,8 +125,8 @@ func e2eSetup(t *testing.T) (chainpbconnect.ChainPeerServiceClient, crypto.Signe
 	return chainpbconnect.NewChainPeerServiceClient(srv.Client(), srv.URL), subSigner, strangerSigner
 }
 
-// The full subscriber-initiated round-trip with a real signature proves the D-p4
-// view contract (handler reconstructs exactly what the subscriber signed) end to
+// The full subscriber-initiated round-trip with a real signature proves the signed-view
+// contract (handler reconstructs exactly what the subscriber signed) end to
 // end over the mux.
 func TestPeerE2E_HappyPath(t *testing.T) {
 	ctx := context.Background()
@@ -158,6 +160,26 @@ func TestPeerE2E_HappyPath(t *testing.T) {
 		SubscriptionId: rs.Msg.GetSubscriptionId(),
 	})); err != nil {
 		t.Fatalf("Disconnect: %v (code %v)", err, connect.CodeOf(err))
+	}
+}
+
+// A peer that sends no audience (one built before the view named it) is
+// refused as Unauthenticated, and the refusal spends no nonce: the same proof
+// with its audience goes through afterwards.
+func TestPeerRequestWithoutAudienceIsUnauthenticated(t *testing.T) {
+	ctx := context.Background()
+	client, sub, _ := e2eSetup(t)
+	ap := authProof(t, sub, e2eSub, "GetPublisherInfo", map[string]any{"publisher_did": e2ePub}, e2eNonce(t))
+	unbound := &chainpb.AuthProof{SignerDid: ap.SignerDid, Nonce: ap.Nonce, IssuedAt: ap.IssuedAt, Signature: ap.Signature, ViewVersion: ap.ViewVersion}
+	_, err := client.GetPublisherInfo(ctx, connect.NewRequest(&chainpb.GetPublisherInfoRequest{AuthProof: unbound, PublisherDid: e2ePub}))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("no audience: code %v (%v), want Unauthenticated", connect.CodeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "names no audience") {
+		t.Errorf("no audience: the error does not say so: %v", err)
+	}
+	if _, err := client.GetPublisherInfo(ctx, connect.NewRequest(&chainpb.GetPublisherInfoRequest{AuthProof: ap, PublisherDid: e2ePub})); err != nil {
+		t.Fatalf("the same proof with its audience, after the refusal: %v", err)
 	}
 }
 

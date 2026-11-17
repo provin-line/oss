@@ -120,8 +120,7 @@ func TestLoad_Source_StillRequiresIngressSubject(t *testing.T) {
 	}
 }
 
-// An aggregate's fold-output schema-ref: the deferred follow-up from the
-// schema-validation slice — same optional "<name>@<version>" short-form the
+// An aggregate's fold-output schema-ref: the same optional "<name>@<version>" short-form the
 // source/chained producing sides carry, resolved at boot and stamped into the
 // emitted FirstDrop's credentialSubject.schema by the signer.
 func TestLoad_AggregateSchemaRef(t *testing.T) {

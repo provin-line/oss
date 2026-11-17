@@ -170,35 +170,35 @@ func TestApply(t *testing.T) {
 			input:   `not-json`,
 			wantErr: true,
 		},
-		// Finding #1: $count returns Go int — must be truthy when non-zero.
+		// $count returns Go int — must be truthy when non-zero.
 		{
 			name:     "$count(items) on non-empty array → Pass=true (int-typed result)",
 			exprs:    []string{"$count(items)"},
 			input:    `{"items":[1,2,3]}`,
 			wantPass: true,
 		},
-		// Finding #1: $length returns Go int — must be truthy when non-zero.
+		// $length returns Go int — must be truthy when non-zero.
 		{
 			name:     "$length(name) on non-empty string → Pass=true (int-typed result)",
 			exprs:    []string{"$length(name)"},
 			input:    `{"name":"abc"}`,
 			wantPass: true,
 		},
-		// Finding #2: duplicate-key input must be rejected as an error.
+		// Duplicate-key input must be rejected as an error.
 		{
 			name:    "duplicate-key JSON input → Apply returns error",
 			exprs:   []string{"payload.value > 10"},
 			input:   `{"payload":{"value":0,"value":20}}`,
 			wantErr: true,
 		},
-		// Finding #2: trailing-data input must be rejected as an error.
+		// Trailing-data input must be rejected as an error.
 		{
 			name:    "trailing-data JSON input → Apply returns error",
 			exprs:   []string{"a"},
 			input:   `{"a":1} {"b":2}`,
 			wantErr: true,
 		},
-		// Finding #3: numeric comparison after strict decode (json.Number normalization).
+		// Numeric comparison after strict decode (json.Number normalization).
 		{
 			name:     "payload.value > 10 with value=20 after strict decode → Pass=true",
 			exprs:    []string{"payload.value > 10"},
@@ -316,7 +316,7 @@ func TestApplyConcurrency(t *testing.T) {
 				return
 			}
 			if !result.Pass {
-				// Finding #5 fix: send a real error, not nil, when Pass is unexpected.
+				// Send a real error, not nil, when Pass is unexpected.
 				errs <- fmt.Errorf("Apply returned Pass=false, want true")
 				return
 			}

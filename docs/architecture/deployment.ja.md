@@ -15,9 +15,9 @@ provin ノードのデプロイ形態と、**load-bearing な**（間違える�
 
 `cmd/network` はコントロールプレーンのみを動かす — データプレーンは無く、設定に pipeline loop が 1 つでも宣言されていれば起動を拒否する。
 
-`cmd/pipeline` はそのコントロールプレーンに対応するデータプレーン側であり、separated topology のもう半分にあたる: STL（短命・都度実行）バイナリで、自前の in-process registry を一切持たず、`cmd/network` の逆向きの guard を持つ — pipeline loop がゼロの設定では起動を拒否する（その場合は `cmd/network` を使う）。設定は HOCON で、`CONFIG_FILE` 環境変数が指す単一の必須ファイルから読み込む（`hoconconfig.LoadFile`）。これは `cmd/network` の `./config/application.conf` + `CONFIG_OVERLAY` という重ね合わせとは異なる規約で、都度実行バイナリには working directory 由来の default が無いためであり、そのファイル内の相対 `include` はファイル自身のディレクトリを基準に解決される。`cmd/pipeline` は `pipeline/runtime`（network-agnostic なデータプレーン）を、設定した 1 つの `cmd/network` registry に対する WIRE client 群だけで構成する（`provin.network.pipeline.vc-store-endpoint` が全依存の base URL を兼ねる）: `VCResolverService.StoreVC`、`AuditService.RegisterAuditHead` / `RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`、`SchemaService.GetSchema`。各 wire 呼び出しは、pipeline-local な keystore（`DataDir/keys` — registry 側では決して保持しない、registry は loop key を一切持たない）に保持された特定の LOCAL identity として署名される: audit-head 登録はノード自身の subscriber identity、evidence/receipt は各 loop の設定済み issuer、そして by-reference payload の retain は — ノードが複数の producing loop を走らせ得るため — **owning loop ごと**の output-subject identity。これは `PayloadStoreService.RetainPayload` が `owner_did == wireauth で証明された signer` を強制するためで、単一の共有ノード identity で署名するクライアントでは、たかだか 1 つの loop の retain しか満たせず、他の loop の emission は全て失敗する。`cmd/pipeline` と `cmd/network` は互いに import しない（AGENTS.md レイヤールール 2）— 両者は wire 越しにのみやり取りする。
+`cmd/pipeline` はそのコントロールプレーンに対応するデータプレーン側であり、separated topology のもう半分にあたる: STL（短命・都度実行）バイナリで、自前の in-process registry を一切持たず、`cmd/network` の逆向きの guard を持つ — pipeline loop がゼロの設定では起動を拒否する（その場合は `cmd/network` を使う）。設定は HOCON で、`CONFIG_FILE` 環境変数が指す単一の必須ファイルから読み込む（`hoconconfig.LoadFile`）。これは `cmd/network` の `./config/application.conf` + `CONFIG_OVERLAY` という重ね合わせとは異なる規約で、都度実行バイナリには working directory 由来の default が無いためであり、そのファイル内の相対 `include` はファイル自身のディレクトリを基準に解決される。`cmd/pipeline` は `pipeline/runtime`（network-agnostic なデータプレーン）を、設定した 1 つの `cmd/network` registry に対する WIRE client 群だけで構成する（`provin.network.pipeline.vc-store-endpoint` が全依存の base URL を兼ねる）: `VCResolverService.StoreVC`、`AuditService.RegisterAuditHead` / `RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`、`SchemaService.GetSchema`。各 wire 呼び出しは、pipeline-local な keystore（`DataDir/keys` — registry 側では決して保持しない、registry は loop key を一切持たない）に保持された特定の LOCAL identity として署名される: audit-head 登録はノード自身の subscriber identity、evidence/receipt は各 loop の設定済み issuer、そして by-reference payload の retain は — ノードが複数の producing loop を走らせ得るため — **owning loop ごと**の output-subject identity。これは `PayloadStoreService.RetainPayload` が `owner_did == wireauth で証明された signer` を強制するためで、単一の共有ノード identity で署名するクライアントでは、たかだか 1 つの loop の retain しか満たせず、他の loop の emission は全て失敗する。`RetainPayload` は、受け取った bytes が proof の名指す content address を持つときだけ payload を残す。`cmd/pipeline` と `cmd/network` は互いに import しない（AGENTS.md レイヤールール 2）— 両者は wire 越しにのみやり取りする。
 
-evidence の書き込みは通常の wire RPC として実装されている（`AuditService.RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`）。したがって `cmd/pipeline` は、他の client と同じ経路でこれらに到達でき、control-plane バイナリへの in-process ブリッジは不要である。relationship-evidence log（`tlog`）とアーカイバル sink の reject log は in-process のまま残る: 各 pipeline process は自分の永続的な署名済み log をローカルに保持し、background の shipper が `MirrorLogSegment`（L1 + in-band wireauth。`GetMirrorState` は plain な L1 read）経由で checkpoint-aligned な segment を registry へミラーする。registry はその検証済み prefix を custody・提供するだけで、決して再署名しない。**shipper は今や `cmd/pipeline` に乗っている**: そのバイナリは自分が開く永続 custody log すべて — emission・sink-receipt・sink-reject の各 log — を、それぞれの log 自身の checkpoint-signer identity として署名しながら ship する。shutdown は固定順序で進む（tlog-custody spec D8）: まずデータプレーンの loop が drain し、その後 各 shipper に FRESH context（すでに cancel された shutdown シグナルの context ではない）上での最終 flush 試行を 1 回だけ与えてから、下層の log ファイルを close する。この drain が budget 内に完了しなくても shutdown 失敗にはならない — ミラーされていない tail はローカル log 上に永続したまま残り、次回起動時の shipper が registry 自身の acked cursor（ローカルにキャッシュしたものでは決してない）から再開して ship する。まだミラーされていない terminal tail は flush interval の間 registry 側から見えず、ローカルボリュームを失った process は古い log の identity を引き継げず、代わりに新しい identity へ切り替わる。reject log も emission log と同じく custody のためにミラーされるが、従来どおり TlogService の読み取りでは決して served されない。v0 は `filelog` バックの log のみをミラーし、ミラー済みの log を rotation することは決してない。
+evidence の書き込みは通常の wire RPC として実装されている（`AuditService.RegisterEvidence`、`PayloadStoreService.RetainPayload`、`ChainService.ReportEmitHealth`）。したがって `cmd/pipeline` は、他の client と同じ経路でこれらに到達でき、control-plane バイナリへの in-process ブリッジは不要である。relationship-evidence log（`tlog`）とアーカイバル sink の reject log は in-process のまま残る: 各 pipeline process は自分の永続的な署名済み log をローカルに保持し、background の shipper が `MirrorLogSegment`（L1 + in-band wireauth。`GetMirrorState` は plain な L1 read）経由で checkpoint-aligned な segment を registry へミラーする。registry はその検証済み prefix を custody・提供するだけで、決して再署名しない。**shipper は今や `cmd/pipeline` に乗っている**: そのバイナリは自分が開く永続 custody log すべて — emission・sink-receipt・sink-reject の各 log — を、それぞれの log 自身の checkpoint-signer identity として署名しながら ship する。shutdown は固定順序で進む: まずデータプレーンの loop が drain し、その後 各 shipper に FRESH context（すでに cancel された shutdown シグナルの context ではない）上での最終 flush 試行を 1 回だけ与えてから、下層の log ファイルを close する。この drain が budget 内に完了しなくても shutdown 失敗にはならない — ミラーされていない tail はローカル log 上に永続したまま残り、次回起動時の shipper が registry 自身の acked cursor（ローカルにキャッシュしたものでは決してない）から再開して ship する。まだミラーされていない terminal tail は flush interval の間 registry 側から見えず、ローカルボリュームを失った process は古い log の identity を引き継げず、代わりに新しい identity へ切り替わる。reject log も emission log と同じく custody のためにミラーされるが、従来どおり TlogService の読み取りでは決して served されない。v0 は `filelog` バックの log のみをミラーし、ミラー済みの log を rotation することは決してない。
 
 ## Load-bearing な設定
 
@@ -45,12 +45,51 @@ NATS operator mode は account の接続時（または JWT 失効時）に acco
 
 push が無い時の症状: `chain subscribe` は成功する（コントロールプレーンの record は書かれる）のにイベントが流れない — broker は grant されていない subject を黙って落とす。何もエラーにならない。負系 capstone テストがまさにこの挙動を**セキュリティ**姿勢として pin しているからこそ、運用側にはこの注意書きが要る。
 
+### 3. `PROVIN_SCHEMA_REGEXP_MAX_GROUP_DEPTH`（すべての process で同じに）
+
+schema の正規表現（`pattern`、`patternProperties` の名前、format `"regex"` で確かめる値）の group の入れ子は 8 段まで。この環境変数で 1 から 32 の別の限りにできる（`schema/README.ja.md`）。`cmd/network` と `cmd/pipeline` は始まるときに 1 度だけ読み、受け付けない値ならそこで止まる。値の違う process は、同じ schema について食い違いうる: network node が登録する schema を pipeline が断る、またはその逆。どこでも設定しないか、すべての network node と pipeline で同じ値にする。既定のままにし、問い合わせに応じるときだけ変える: この限りは schema の compile と payload の確かめの最悪の時間を左右する。
+
+## wire 証明の audience
+
+L2 の wire 証明はどれも **audience**（送り先の node の registry ID）を名指す（[auth.ja.md § L2](../protocol/auth.ja.md)、D-w12）。node は、自分の `provin.network.registry.id` と完全に一致する proof だけを受理する。node にこのための設定は他に要らない。
+
+pipeline は、各宛先の audience を設定に既にある DID から得る:
+
+| 宛先 | audience | 上書き（任意） |
+| --- | --- | --- |
+| 自 node（`vc-store-endpoint`） | そこへ送る proof のすべてに 1 つ、起動時に決める: その proof の署名に使う DID のすべてに共通の registry segment | `provin.network.pipeline.node-registry` |
+| by-reference の上流（loop の `upstream-endpoint`） | loop の `ingress-subject`、または aggregate の ingress の `subject` の registry segment | その `upstream-endpoint` の隣の `upstream-registry` |
+| publisher の `#chain-manager` | publisher の DID の registry segment | — |
+
+上書きは、その endpoint の node が別の registry のものであるときだけ置く。audience が違うと fail closed になる: node はその呼び出しを `Unauthenticated` で断り、期待した audience を文に含める。1 つの `upstream-endpoint` に 2 つの registry が出ると boot error。pipeline の自 node への署名者（node の DID、producing loop ごとの `output-subject` と issuer、sink ごとの receipt の issuer）が `node-registry` なしで 2 つの registry にまたがっても boot error（node が受ける audience は 1 つ）。
+
+endpoint とその audience の組は設定が決める: wire 証明は、endpoint の node が audience の名指す node であることを示さない。2 つが食い違うと、endpoint の node はその呼び出しを断るが、名指された node が proof の新しいうち（受理の窓、既定 60 秒）は受理する proof を受け取っている。そのため、別の registry の node を指す `vc-store-endpoint` を `node-registry` なしで置くと、その node の運用者に自分の node で通る proof を渡すことになる。上流の node ではない `upstream-endpoint` も、上流について同じことをする。各 endpoint は組にした registry の node に向けるか、上書きを置く。
+
+ここから 2 つの制約が出る:
+
+- **registry の `#chain-manager` endpoint は、その registry の node が受ける。** registry の DID document は、`#chain-manager` の service を `provin.network.registry.id` がその registry である node に向ける。
+- **1 つの registry の L2 の面は、1 つの network process が受ける。** nonce store は process ごとなので、同じ registry ID の 2 つの process はそれぞれ proof を 1 回ずつ受理しうる。network node の active-active の replica は動かさない。
+
+### view version 2 への更新
+
+audience で署名する view が変わり（`v` = 2）、node は他の version を受理しない。互いに話す全ての network node と pipeline を、1 つの窓で更新する。窓の間、更新済みと未更新の process の間の呼び出しは断られる: 更新済みの node は view version を持たない proof を `Unauthenticated`（"view version 0"）で断り、未更新の node は version 2 の proof を署名で断る。ただし更新済みの node は、未更新の pipeline の `RetainPayload` を、最初の frame に content address が無いので `InvalidArgument` で断る。窓の間は subscription が確立せず、by-reference の取得に失敗した event は、取得の失敗と同じく rejected / errored / dropped になる。そのため、窓の前に by-reference の消費を止めるか、それらの event を失うことを受け入れる。更新前に書かれた relationship evidence（view version 1）は読めるまま。
+
 ## Health エンドポイント
 
 - `GET /healthz` — **liveness**、static。失敗 = 「再起動せよ」。
 - `GET /readyz` — **readiness**、依存関係認識: evidence store、broker 接続（データプレーン稼働時）、外部 PDP 到達性（構成時）。失敗 = 「新しい仕事を回すな」。check エラーの詳細は server log のみで、公開 body は check ごとの pass/fail だけを返す。
 
 スーパーバイザはこれに合わせて配線する（例: Kubernetes の `livenessProbe` → `/healthz`、`readinessProbe` → `/readyz`）。
+
+## server の error
+
+node の中で失敗し、`Internal`・`Unknown`・`DataLoss` として答える RPC は、その code と固定の文で呼び手に届く。node の code が自分の code を付けずに返す error も、connect が与える code（取り消しや切れた接続なら `Canceled`、期限なら `DeadlineExceeded`）と固定の文で届く:
+
+```text
+server error (ref 3f9c2a7e1b4d5c60); the server's log has the details
+```
+
+node は、その ref の下に level `ERROR`（`Canceled` と `DeadlineExceeded` は、呼び手自身によることが多いので `WARN`）で、error の元の文（1,024 bytes 以内の頭と長さ）、文が隠す原因（あれば）、RPC の procedure・code・node から見える address（TLS 終端の proxy の後ろでは proxy の address）を log に書く。connect の定める範囲の外の code も同じく答える。呼び手が ref を伝えれば、運用者はその記録を引ける。error の文は data directory の中の store の path など node 自身の状態を含みうるので、呼び手には届けない。ほかの code は文をそのまま返す。呼び手が送ったものや直すべきこと、`Unavailable` なら呼び直してよいことを言うからである。
 
 ## TLS 終端
 

@@ -35,7 +35,7 @@ func hex64(c byte) string { return strings.Repeat(string(c), 64) }
 
 // TestVariantSubtreeIsInvisibleToTheOldLayout is the rollback plan, asserted.
 //
-// The pre-slice reader opened exactly "<bodyhex>.json" and skipped directories
+// A reader of the legacy layout opened exactly "<bodyhex>.json" and skipped directories
 // when listing. Both must stay true of what this backend writes, or rolling
 // back to that binary would meet a layout it cannot read — the one moment
 // nobody can ship a fix.
@@ -545,7 +545,8 @@ func mustBackend(t *testing.T, dir string) *filestore.Backend {
 	return b
 }
 
-// TestAVanishedVariantSubtreeIsNotAnAbsentVariant is Codex's third finding.
+// TestAVanishedVariantSubtreeIsNotAnAbsentVariant pins that a missing variant
+// subtree is reported as an error.
 //
 // The root can survive while the variant subtree is removed or unmounted. The
 // root check passes, the variant file is ENOENT, and every variant this store

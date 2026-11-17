@@ -1,0 +1,37 @@
+{
+  "id": "keybinding-015",
+  "rule": "keybinding.status-list.content-hash",
+  "description": "A revocation list's content hash is the SHA-256 of its RFC 8785 form without the proof, with encodedList replaced by the digest of the expanded bits",
+  "input": {
+    "credential": {
+      "@context": [
+        "https://www.w3.org/ns/credentials/v2"
+      ],
+      "type": [
+        "VerifiableCredential",
+        "BitstringStatusListCredential"
+      ],
+      "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list",
+      "issuer": "did:dplaax:poc.dplaax.dev:org:acme",
+      "validFrom": "2026-11-06T00:59:00Z",
+      "validUntil": "2026-11-06T01:59:00Z",
+      "credentialSubject": {
+        "id": "did:dplaax:poc.dplaax.dev:org:acme#key-binding-status-list-list",
+        "type": "BitstringStatusList",
+        "statusPurpose": "revocation",
+        "encodedList": "uH4sIAAAAAAAA_-zAMQEAAAgCMG1A_7TE4NlyAAAAAAAAAAAAAAAAAAAAwNg3AAD__-xSDbMAQAAA"
+      },
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-jcs-2022",
+        "created": "2026-11-06T00:59:00Z",
+        "verificationMethod": "did:dplaax:poc.dplaax.dev:org:acme#issuer",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z5fixture0value0not0a0real0signature0fixture0value0not0real00"
+      }
+    }
+  },
+  "expect": {
+    "contentHash": "sha256:307e09a2f744b24c49cb1c369bd97bc08550f98b7aee3397d5df9791fc6fa592"
+  }
+}

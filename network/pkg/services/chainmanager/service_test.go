@@ -33,7 +33,7 @@ func TestService_ListSubscriptions_Empty(t *testing.T) {
 }
 
 // ListSubscriptions returns the operator's subscriber-direction records only
-// ("what am I subscribed to" — slice-12 D-s6 option a); publisher-direction
+// ("what am I subscribed to"); publisher-direction
 // records (who subscribed to me) are excluded.
 func TestService_ListSubscriptions_Returns(t *testing.T) {
 	subStore := memstore.NewSubscriptionStore()

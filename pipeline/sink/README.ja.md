@@ -20,6 +20,8 @@ Sink kind は deploy されたプロセスの config 駆動の属性であり、
 
 **Issuer allow-list（ローカル。「相互」ではない）。** `sink.allow-issuers` は、消費した credential の issuer DID をセグメント対応 glob パターンと照合する（`allowlist`、default-distrust）。production / archival は非空リストが必須（空リストは全拒否 — boot 時に検出）。これは consumer 側の半分であり、publisher 側の半分は chainmanager の subscription allow-list。それぞれが独立したローカル config で、spec が定義する federation 層のネゴシエート済みリストはまだ存在しない（gap-backlog）。以前の「相互 allow-list MUST」という文言は、プロトコルが定義していない機構を過大に主張していた。
 
+**Receipt。** receipt を発行する sink（`sink.receipt.issuer`、production は MAY / archival は MUST）は、消費したイベントごとに `provin:sink-receipt` credential に署名する — 消費した credential に対して chain-preserving で、`inputHash == outputHash`（何も変換しない）。ローカルを先に登録し（VC ストア → tlog → audit queue）、その後にのみ任意でリモートへ publish する。したがって receipt はローカルの監査証跡なしに外部から見えることはない。relying party は ResolveVC / ListAuditStatuses / bundle export で到達する。
+
 ## 参照実装：console/（observation-only）
 
 出力サブジェクトをサブスクライブし、受信した各 VC を検証（署名 / DID 解決 / スキーマの各軸）して、イベントごとに1つの NDJSON レコードを stdout に書き出す — 開発・検査ツールとして機能する。ベンダーシンク（EDC、ウェアハウスなど）は `pipeline/contract` を実装した拡張リポジトリに置く。
@@ -53,4 +55,4 @@ NDJSON recordは`evidenceView`と`delivery`を含む。後者はpayload digest�
 
 `jsonl`出力は各行を`fsync`なしでOSに渡し（`file/`と同じ扱い）、無制限に増える（copytruncateまたは再起動でrotate）。mode 0600の`O_CREATE`は既存fileのmodeを変えない。起動時にfileが行の途中で終わっていれば、先に改行を書く。
 
-現在のselection policyは`projected-chain@1`である。各predecessor body addressについてlocal registryまたは明示された直近upstream registryが返すsigned variantを解決し、complete selectionを一度検証して全`(BodyAddress, WireVariantID)`をmanifestへ固定する。全wire variantの列挙、bounded-DAG、global-minimum selectionは実装していない。
+現在のselection policyは`projected-chain@1`である。各predecessor body addressについてlocal registryまたは明示的に宣言されたupstream registryが返すprojected signed variantを解決し、complete selectionを一度検証して全`(BodyAddress, WireVariantID)`をmanifestへ固定する。全wire variantの列挙、bounded-DAG、global-minimum selectionは実装していない。

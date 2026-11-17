@@ -15,6 +15,9 @@ const Name = "urdna2015"
 
 // Error is the type of the errors this package reports by value. Canonicalize
 // wraps them; match them with errors.Is.
+//
+// Compare an error with a sentinel by errors.Is alone: that an error is an
+// Error under errors.As, or equal to a sentinel under ==, is not promised.
 type Error string
 
 func (e Error) Error() string { return string(e) }

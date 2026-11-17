@@ -1,0 +1,9 @@
+{
+  "id": "did-016",
+  "rule": "did.dplaax.syntax",
+  "description": "A DID URL with a fragment is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme#key-1"
+  },
+  "expect": "reject"
+}

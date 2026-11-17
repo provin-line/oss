@@ -76,7 +76,7 @@ func TestSubscriptionStore_List(t *testing.T) {
 }
 
 // A caller must not be able to mutate stored state through the map it handed to
-// Save, nor through a map returned by Get/List (defensive copies — Codex Medium).
+// Save, nor through a map returned by Get/List (defensive copies).
 func TestSubscriptionStore_DefensiveCopy(t *testing.T) {
 	s := NewSubscriptionStore()
 	in := sampleSub()

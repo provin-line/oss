@@ -19,8 +19,10 @@ import (
 	"github.com/provin-line/oss/did"
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager/wirecontract"
 	"github.com/provin-line/oss/network/pkg/wireautherr"
 )
 
@@ -35,7 +37,7 @@ type Service interface {
 // AllowListReader is the read half of the allow-list capability. It is wired
 // separately from Service (via WithAllowListReader) so adding allow-list read
 // does not widen the exported Service interface — external Service
-// implementations keep compiling (D-s9, mirroring WithSubscriber).
+// implementations keep compiling (mirroring WithSubscriber).
 // *chainmanager.Service satisfies it.
 type AllowListReader interface {
 	GetAllowList(ctx context.Context, pipelineDID string) ([]store.AllowRule, error)
@@ -44,9 +46,13 @@ type AllowListReader interface {
 // EmitHealthReporter is the consumer-side view of the emit-health store the
 // handler depends on (defined here, not in the emithealth package, to keep
 // the dependency pointing inward — mirrors Service/AllowListReader above).
-// *emithealth.Store satisfies it structurally.
+// *emithealth.Store satisfies it structurally. madeAt is when the report was
+// made: the issued_at of the request's verified proof, on the publisher's
+// clock, to the second, and within the verifier's window of the node's clock;
+// two reports may share one. receivedAt is when the handler, having verified
+// the request, records it, on the node's clock.
 type EmitHealthReporter interface {
-	Report(publisherDID string, healthy bool, now time.Time)
+	Report(publisherDID string, healthy bool, madeAt, receivedAt time.Time)
 }
 
 // OperatorHandler adapts a Service to the generated ChainServiceHandler. It
@@ -73,7 +79,7 @@ var _ chainpbconnect.ChainServiceHandler = (*OperatorHandler)(nil)
 type OperatorOption func(*OperatorHandler)
 
 // WithSubscriber enables the connection-flow RPCs (Subscribe / Unsubscribe) by
-// supplying the subscriber-side service. Kept separate from Service (D-s9) so the
+// supplying the subscriber-side service. Kept separate from Service so the
 // exported Service interface is not widened — external fakes implementing Service
 // keep compiling.
 func WithSubscriber(sub SubscriberService) OperatorOption {
@@ -148,17 +154,19 @@ var errPublisherMismatch = errors.New("chainmanager: signer is not the claimed p
 // ReportEmitHealth verifies the caller's in-band wireauth proof (L1 +
 // wireauth, per ReportEmitHealthRequest's own doc), rejects a publisher_did
 // that does not equal the proven signer DID (PermissionDenied — a caller may
-// only report health for itself), then records the report and returns the
-// server's configured TTL.
+// only report health for itself), then records the report as made at the
+// proof's issued_at and received now, and returns the server's configured
+// TTL, whether or not the reporter keeps the report (an *emithealth.Store
+// keeps, per publisher, the report made latest, fresh from its receipt).
 func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Request[chainpb.ReportEmitHealthRequest]) (*connect.Response[chainpb.ReportEmitHealthResponse], error) {
 	if h.emitHealth == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chainmanager: ReportEmitHealth not wired (WithEmitHealth)"))
 	}
-	proof, err := decodeProof(req.Msg.GetAuthProof())
+	proof, err := authproof.Decode(req.Msg.GetAuthProof())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	fields := chainmanager.ReportEmitHealthFields(req.Msg.GetPublisherDid(), req.Msg.GetHealthy())
+	fields := wirecontract.ReportEmitHealthFields(req.Msg.GetPublisherDid(), req.Msg.GetHealthy())
 	// Signer-to-actor binding: the proven signer must be the claimed publisher.
 	bind := func(signerDID string, _ *did.DIDDocument, f map[string]any) error {
 		if f["publisher_did"] != signerDID {
@@ -169,7 +177,7 @@ func (h *OperatorHandler) ReportEmitHealth(ctx context.Context, req *connect.Req
 	if err := h.emitHealthVerifier.Verify(ctx, chainmanager.OpReportEmitHealth, fields, proof, bind); err != nil {
 		return nil, mapError(err)
 	}
-	h.emitHealth.Report(req.Msg.GetPublisherDid(), req.Msg.GetHealthy(), time.Now())
+	h.emitHealth.Report(req.Msg.GetPublisherDid(), req.Msg.GetHealthy(), proof.IssuedAt, time.Now())
 	return connect.NewResponse(&chainpb.ReportEmitHealthResponse{Ttl: durationpb.New(h.emitHealthTTL)}), nil
 }
 
@@ -217,7 +225,7 @@ func mapError(err error) error {
 	switch {
 	// Malformed request (ReportEmitHealth's issued_at codec). Wireauth's own
 	// structural sentinels are handled by the wireautherr delegation below.
-	case errors.Is(err, errMalformedIssuedAt):
+	case errors.Is(err, authproof.ErrMalformedIssuedAt):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, allowlist.ErrInvalidPattern):
 		return connect.NewError(connect.CodeInvalidArgument, err)
@@ -230,7 +238,7 @@ func mapError(err error) error {
 	case errors.Is(err, chainmanager.ErrPayloadModeUnsupported):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, chainmanager.ErrDuplicateSubscription):
-		// D-4 mixed-mode invariant, subscriber-side (authoritative): a
+		// Mixed-mode invariant, subscriber-side (authoritative): a
 		// subscription to this publisher already exists — a create-conflict.
 		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, chainmanager.ErrNoChainManagerEndpoint):
@@ -238,7 +246,7 @@ func mapError(err error) error {
 	case errors.Is(err, chainmanager.ErrSubscriberUnconfigured):
 		return connect.NewError(connect.CodeInternal, err)
 	case errors.Is(err, chainmanager.ErrRemotePeer):
-		// Pass the remote ConnectRPC code through when present (D-s8): a remote
+		// Pass the remote ConnectRPC code through when present: a remote
 		// PermissionDenied/InvalidArgument/etc. is preserved in the error chain
 		// (%w), so the operator gets the right recoverability signal; an opaque
 		// failure (e.g. a resolver error) maps to Unavailable.

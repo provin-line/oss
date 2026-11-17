@@ -1,0 +1,9 @@
+{
+  "id": "did-008",
+  "rule": "did.dplaax.syntax",
+  "description": "A string of two segments after the method is not a did:dplaax DID",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org"
+  },
+  "expect": "reject"
+}

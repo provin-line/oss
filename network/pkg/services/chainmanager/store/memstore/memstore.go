@@ -6,7 +6,7 @@
 // with — Subscription.ConnectionInfo and the []AllowRule slices — so a caller
 // can never mutate stored state outside the mutex by holding onto a reference it
 // passed in or got back. This is the isolation the yamlstore gets for free by
-// round-tripping through disk (slice-9 Codex Medium).
+// round-tripping through disk.
 package memstore
 
 import (

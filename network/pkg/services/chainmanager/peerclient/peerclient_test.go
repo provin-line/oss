@@ -13,18 +13,23 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/chain/v1/chainpbconnect"
 	"github.com/provin-line/oss/network/pkg/core"
+	"github.com/provin-line/oss/network/pkg/services/chainmanager"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/peerclient"
 	"github.com/provin-line/oss/network/pkg/services/chainmanager/store"
 )
 
 const (
+	// peerAudience is the registry ID of the publisher node the tests call.
+	peerAudience = "pub.example"
+
 	subDID = "did:dplaax:reg:org:sub"
 	pubDID = "did:dplaax:reg:org:acme:pipeline:p1"
 )
 
 // fakeSigner returns a fixed signature; the byte-equality of the signed view is
-// proven end-to-end against the real verifier in Phase E, not here. This phase
-// pins the CLIENT's request/proof construction.
+// proven end-to-end against the real verifier in chainmanager/handler's e2e
+// tests (which use this client), not here. This test pins the CLIENT's
+// request/proof construction.
 type fakeSigner struct{}
 
 func (fakeSigner) Sign(_, _ string, _ []byte) ([]byte, error) { return []byte("test-sig"), nil }
@@ -83,6 +88,9 @@ func assertProof(t *testing.T, ap *chainpb.AuthProof) {
 	if ap.GetSignerDid() != subDID {
 		t.Errorf("signer_did = %q, want %q", ap.GetSignerDid(), subDID)
 	}
+	if ap.GetAudience() != peerAudience {
+		t.Errorf("audience = %q, want %q", ap.GetAudience(), peerAudience)
+	}
 	if ap.GetNonce() == "" {
 		t.Error("empty nonce")
 	}
@@ -100,7 +108,7 @@ func assertProof(t *testing.T, ap *chainpb.AuthProof) {
 
 func TestClient_GetPublisherInfo(t *testing.T) {
 	cli, cap, url := setup(t)
-	pt, modes, err := cli.GetPublisherInfo(context.Background(), url, subDID, pubDID)
+	pt, modes, err := cli.GetPublisherInfo(context.Background(), chainmanager.Peer{Endpoint: url, Audience: peerAudience}, subDID, pubDID)
 	if err != nil {
 		t.Fatalf("GetPublisherInfo: %v", err)
 	}
@@ -115,7 +123,7 @@ func TestClient_GetPublisherInfo(t *testing.T) {
 
 func TestClient_RegisterSubscription(t *testing.T) {
 	cli, cap, url := setup(t)
-	remoteID, connInfo, pt, agreed, err := cli.RegisterSubscription(context.Background(), url, subDID, pubDID, "inline")
+	remoteID, connInfo, pt, agreed, err := cli.RegisterSubscription(context.Background(), chainmanager.Peer{Endpoint: url, Audience: peerAudience}, subDID, pubDID, "inline")
 	if err != nil {
 		t.Fatalf("RegisterSubscription: %v", err)
 	}
@@ -133,7 +141,7 @@ func TestClient_RegisterSubscription(t *testing.T) {
 // signed bytes from the request.
 func TestClient_RegisterSubscription_EmptyModeVerbatim(t *testing.T) {
 	cli, cap, url := setup(t)
-	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), url, subDID, pubDID, ""); err != nil {
+	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), chainmanager.Peer{Endpoint: url, Audience: peerAudience}, subDID, pubDID, ""); err != nil {
 		t.Fatalf("RegisterSubscription: %v", err)
 	}
 	if cap.rs.GetPayloadDelivery() != "" {
@@ -143,7 +151,7 @@ func TestClient_RegisterSubscription_EmptyModeVerbatim(t *testing.T) {
 
 func TestClient_Disconnect(t *testing.T) {
 	cli, cap, url := setup(t)
-	if err := cli.Disconnect(context.Background(), url, "remote-9"); err != nil {
+	if err := cli.Disconnect(context.Background(), chainmanager.Peer{Endpoint: url, Audience: peerAudience}, "remote-9"); err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
 	if cap.dc.GetSubscriptionId() != "remote-9" {
@@ -153,11 +161,11 @@ func TestClient_Disconnect(t *testing.T) {
 }
 
 // A remote NotFound is surfaced as store.ErrNotFound so the domain's idempotent
-// teardown (D-s5) can treat it as already-disconnected.
+// teardown can treat it as already-disconnected.
 func TestClient_Disconnect_RemoteNotFound(t *testing.T) {
 	cli, cap, url := setup(t)
 	cap.disconnectCode = connect.CodeNotFound
-	err := cli.Disconnect(context.Background(), url, "gone")
+	err := cli.Disconnect(context.Background(), chainmanager.Peer{Endpoint: url, Audience: peerAudience}, "gone")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("err = %v, want store.ErrNotFound", err)
 	}
@@ -188,10 +196,10 @@ func TestClient_RefusesAnOversizedResponse(t *testing.T) {
 	t.Cleanup(srv.Close)
 	cli := peerclient.New(fakeSigner{}, subDID, core.NewURLGuard(core.WithAllowLoopback(true)).HTTPClient())
 
-	if _, _, err := cli.GetPublisherInfo(context.Background(), srv.URL, subDID, pubDID); connect.CodeOf(err) != connect.CodeResourceExhausted {
+	if _, _, err := cli.GetPublisherInfo(context.Background(), chainmanager.Peer{Endpoint: srv.URL, Audience: peerAudience}, subDID, pubDID); connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Errorf("GetPublisherInfo: err = %v, want resource_exhausted", err)
 	}
-	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), srv.URL, subDID, pubDID, ""); connect.CodeOf(err) != connect.CodeResourceExhausted {
+	if _, _, _, _, err := cli.RegisterSubscription(context.Background(), chainmanager.Peer{Endpoint: srv.URL, Audience: peerAudience}, subDID, pubDID, ""); connect.CodeOf(err) != connect.CodeResourceExhausted {
 		t.Errorf("RegisterSubscription: err = %v, want resource_exhausted", err)
 	}
 }

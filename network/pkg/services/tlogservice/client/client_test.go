@@ -1,7 +1,7 @@
 package client_test
 
 // Round-trip tests for tlogservice/client against the REAL production
-// stack (task-6 brief): a real didregistry.Service issuing real
+// stack: a real didregistry.Service issuing real
 // pipeline/process DIDs, a real wireauth.Verifier, a real
 // mirrorstore.Store, and the real handler.Handler — served over httptest,
 // exercised only through client.Client. Modeled on
@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +29,6 @@ import (
 	"github.com/provin-line/oss/did"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
 	"github.com/provin-line/oss/keystore"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
 	"github.com/provin-line/oss/network/pkg/services/didregistry"
 	"github.com/provin-line/oss/network/pkg/services/didregistry/store/yamlstore"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice"
@@ -36,6 +36,7 @@ import (
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/handler"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/logident"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/mirrorstore"
+	"github.com/provin-line/oss/network/pkg/wireauth"
 	"github.com/provin-line/oss/tlog"
 	"github.com/provin-line/oss/tlog/filelog"
 	"github.com/provin-line/oss/vc"
@@ -143,7 +144,11 @@ type harness struct {
 	log    tlog.Log
 	client *client.Client
 	url    string
+	signer crypto.Signer
 }
+
+// nodeAudience is the audience of the harness's verifier.
+const nodeAudience = "node.example"
 
 func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 	t.Helper()
@@ -173,6 +178,7 @@ func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 		Resolver: resolver,
 		Crypto:   ed25519.Verifier{},
 		Nonces:   wireauth.NewMemoryNonceStore(),
+		Audience: nodeAudience,
 		// The real client signs with time.Now(); a past epoch + generous
 		// window keep the proof inside the acceptance boundary (mirrors
 		// auditor/client_test.go's own real-clock harness).
@@ -214,10 +220,11 @@ func newHarness(t *testing.T, maxRecords, maxBytes int) *harness {
 
 	return &harness{
 		log: log,
-		client: client.New(client.Config{
+		client: client.New(client.Config{Audience: nodeAudience,
 			Signer: ks, SignerDID: clientProcessA1, BaseURL: srv.URL, HTTPClient: srv.Client(),
 		}),
-		url: srv.URL,
+		url:    srv.URL,
+		signer: ks,
 	}
 }
 
@@ -249,8 +256,8 @@ func recPayloads(n int) [][]byte {
 
 // TestMirrorLogSegment_RoundTrip proves the client's signed view is exactly
 // what the real handler verifies end-to-end: two successive
-// checkpoint-aligned segments land through the wireauth verifier, D-T3
-// identity binding, and the real mirror store, with GetMirrorState
+// checkpoint-aligned segments land through the wireauth verifier, identity
+// binding, and the real mirror store, with GetMirrorState
 // reflecting the growing durable size.
 func TestMirrorLogSegment_RoundTrip(t *testing.T) {
 	h := newHarness(t, 256, 4<<20)
@@ -347,7 +354,7 @@ func TestMirrorLogSegment_WrongSigner_Unauthenticated(t *testing.T) {
 	if err := unknownSigner.SaveKeyPair(clientProcessA1, map[keystore.KeyID]*crypto.KeyPair{keystore.KeyIDAuth: kp}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	bad := client.New(client.Config{Signer: unknownSigner, SignerDID: clientProcessA1, BaseURL: h.url, HTTPClient: http.DefaultClient})
+	bad := client.New(client.Config{Audience: nodeAudience, Signer: unknownSigner, SignerDID: clientProcessA1, BaseURL: h.url, HTTPClient: http.DefaultClient})
 	_, err = bad.MirrorLogSegment(ctx, clientPipeline, 0, seg, cp)
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("wrong signer key: code = %v, want Unauthenticated (err=%v)", connect.CodeOf(err), err)
@@ -356,7 +363,7 @@ func TestMirrorLogSegment_WrongSigner_Unauthenticated(t *testing.T) {
 
 // TestMirrorLogSegment_NilCheckpoint_RejectedClientSide proves a nil
 // checkpoint is rejected before any signing or network call — a
-// MirrorLogSegment call always carries one (D-T2 rule 1).
+// MirrorLogSegment call always carries one.
 func TestMirrorLogSegment_NilCheckpoint_RejectedClientSide(t *testing.T) {
 	h := newHarness(t, 256, 4<<20)
 	_, err := h.client.MirrorLogSegment(context.Background(), clientPipeline, 0, recPayloads(1), nil)
@@ -377,4 +384,51 @@ func TestGetMirrorState_BeforeAnySegment_Zero(t *testing.T) {
 	if state != 0 {
 		t.Fatalf("acked_size before any segment = %d, want 0", state)
 	}
+}
+
+// With a bearer, the client follows no redirect, whatever *http.Client it is
+// given: the bearer goes to BaseURL's origin only.
+func TestBearer_ShownToNoServerTheEndpointRedirectsTo(t *testing.T) {
+	url, counts := redirectingServer(t)
+	c := client.New(client.Config{Audience: nodeAudience, Signer: newFixtureKeyStore(), SignerDID: clientProcessA1, BaseURL: url, HTTPClient: &http.Client{}, Bearer: "node-token"})
+	if _, err := c.GetMirrorState(context.Background(), clientPipeline); err == nil {
+		t.Error("a redirected call succeeded")
+	}
+	if counts.hits.Load() == 0 || !counts.bearerShown.Load() {
+		t.Fatalf("the endpoint answered %d requests, bearer shown %v; want the call to reach it with the bearer", counts.hits.Load(), counts.bearerShown.Load())
+	}
+	if n := counts.followed.Load(); n != 0 {
+		t.Errorf("the client followed the redirect: the server it points to answered %d requests", n)
+	}
+}
+
+// redirectCounts is what redirectingServer saw: the requests its endpoint
+// answered, whether one carried a bearer, and the requests that reached the
+// server it redirects to.
+type redirectCounts struct {
+	hits        atomic.Int32
+	bearerShown atomic.Bool
+	followed    atomic.Int32
+}
+
+// redirectingServer answers every request with a redirect to a second server
+// on the same host, over HTTP/1.1, where net/http carries an Authorization
+// header on to the same host.
+func redirectingServer(t *testing.T) (string, *redirectCounts) {
+	t.Helper()
+	counts := &redirectCounts{}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.followed.Add(1)
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	t.Cleanup(other.Close)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.hits.Add(1)
+		if r.Header.Get("Authorization") == "Bearer node-token" {
+			counts.bearerShown.Store(true)
+		}
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+	return redirector.URL, counts
 }

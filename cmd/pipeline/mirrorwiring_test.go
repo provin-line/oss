@@ -21,7 +21,7 @@ import (
 // ─────────────────────────────────────────────────────────────────────────
 
 func TestMirrorClientFactory_CachesPerDID(t *testing.T) {
-	f := newMirrorClientFactory(nil, "http://example.invalid", "", http.DefaultClient)
+	f := newMirrorClientFactory(nil, "http://example.invalid", "", "", http.DefaultClient)
 	a1 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
 	a2 := f.For("did:dplaax:reg:org:acme:pipeline:a:process:p1")
 	if a1 != a2 {
@@ -35,7 +35,7 @@ func TestMirrorClientFactory_CachesPerDID(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────────────
 // buildShippers — one shipper per custody log entry, wired to a MirrorClient
-// requested under that entry's OWN checkpoint-signer DID (D-T3). Uses a real
+// requested under that entry's OWN checkpoint-signer DID. Uses a real
 // filelog.Log (a fake log would not exercise the CheckpointAt-backed capless
 // batching tlogship depends on, mirroring tlogship's own test rationale) and
 // a spy mirrorClientFor recording which DID each shipper was built with.

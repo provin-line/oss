@@ -3,6 +3,7 @@ package conformance_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/appraisal"
@@ -47,22 +48,38 @@ func runEvidenceView(t *testing.T, v dplaaxVector) {
 	}
 }
 
+// claimsCoverageRefusals ties each claims-coverage reject vector to the
+// sentinel of the refusal its rule names (claims.coverage.three-value: a
+// scope's coverage and truth state disagree), so a vector refused with
+// another error fails.
+var claimsCoverageRefusals = map[string]refusalTie{
+	"claims-coverage-002": {err: appraisal.ErrInvalidVector},
+	"claims-coverage-004": {err: appraisal.ErrInvalidVector},
+}
+
 func runClaimsCoverage(t *testing.T, v dplaaxVector) {
 	switch vecNum(t, v.ID) {
 	case 1, 2, 4:
+		// The view decodes in every vector: a refusal is ValidateShape's.
 		var input struct {
 			Credential appraisal.View `json:"credential"`
 		}
 		if err := json.Unmarshal(v.Input, &input); err != nil {
-			if vecNum(t, v.ID) == 1 {
-				t.Fatalf("decode accept vector: %v", err)
-			}
-			return
+			t.Fatalf("decode the view: %v", err)
 		}
 		err := input.Credential.ValidateShape()
 		want := expectString(t, v)
 		if (err == nil) != (want == "accept") {
 			t.Errorf("ValidateShape error=%v want %s", err, want)
+		}
+		if want == "reject" {
+			tie, ok := claimsCoverageRefusals[v.ID]
+			if !ok {
+				t.Fatalf("no refusal tied to %s in claimsCoverageRefusals", v.ID)
+			}
+			if !tie.holds(err) {
+				t.Errorf("ValidateShape refused %s with %v, want %s", v.ID, err, tie)
+			}
 		}
 	case 3:
 		profile, vector := decisionInput(t, v)
@@ -106,4 +123,27 @@ func decisionInput(t *testing.T, v dplaaxVector) (appraisal.Profile, []appraisal
 	}
 	mustParse(t, v.Input, &input)
 	return appraisal.Profile{ID: input.DecisionProfileID, RequiredScopes: input.RequiredScopes}, input.Vector
+}
+
+// claimsCoverageRefusals ties exactly the claims-coverage vectors the
+// manifest lists as reject (a vector whose expect is not a string names a
+// decision, not a refusal).
+func TestClaimsCoverageRefusalsTieEveryRejectVector(t *testing.T) {
+	listed := map[string]bool{}
+	for _, id := range manifestIDs(t) {
+		if !strings.HasPrefix(id, "claims-coverage-") {
+			continue
+		}
+		listed[id] = true
+		var want string
+		_ = json.Unmarshal(loadDplaax(t, id).Expect, &want)
+		if _, tied := claimsCoverageRefusals[id]; tied != (want == "reject") {
+			t.Errorf("%s expects %q, tied in claimsCoverageRefusals: %t", id, want, tied)
+		}
+	}
+	for id := range claimsCoverageRefusals {
+		if !listed[id] {
+			t.Errorf("claimsCoverageRefusals ties %s, which the manifest does not list", id)
+		}
+	}
 }

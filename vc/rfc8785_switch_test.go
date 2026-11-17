@@ -8,11 +8,12 @@ import (
 	"github.com/provin-line/oss/canon/jcs"
 )
 
-// The stored-address paths (body hash, wire form, source-root leaves) canonicalize
-// under RFC 8785, so the id they already advertise — jcs-rfc8785 — names what they
-// actually do. Before this switch, source_root_canonical said "jcs-rfc8785" while
-// the leaves were hashed with the int64-verbatim deviation: the same-name-different-
-// bytes hazard P0-4 called Critical, latent only because real bodies carry no numbers.
+// The stored-address paths (body hash, wire form, source-root leaves)
+// canonicalize under RFC 8785, so the id they advertise — jcs-rfc8785 — names
+// what they actually do. A source_root_canonical saying "jcs-rfc8785" while
+// the leaves were hashed with the int64-verbatim deviation would be the
+// same-name-different-bytes hazard P0-4 called Critical, latent only because
+// real bodies carry no numbers.
 
 func TestSourceRootCanonicalIDMatchesTheCanonicalizer(t *testing.T) {
 	if SourceRootCanonicalJCS != jcs.NameRFC8785 {

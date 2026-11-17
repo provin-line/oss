@@ -1,5 +1,5 @@
 // Package client is the production network client for TlogService's mirror
-// surface (spec D-T2/D-T6): it ships checkpoint-aligned segments of a local
+// surface: it ships checkpoint-aligned segments of a local
 // tlog.Log to the registry via MirrorLogSegment, and reads the registry's
 // durable resume cursor via GetMirrorState.
 //
@@ -12,7 +12,7 @@
 //
 // It imports only the generated client, connect, crypto, and the
 // tlogservice service's wirecontract LEAF (op name + signed-view builders +
-// the record_payloads_framed codec; PR3b Task 2 moved these out of the
+// the record_payloads_framed codec; they live outside the
 // tlogservice service root so this client never pulls in the root's
 // mirrorstore/logident domain logic) — never the tlogservice service root
 // itself, and never pipeline/ (AGENTS.md layer rule: network and pipeline
@@ -22,6 +22,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -31,7 +32,8 @@ import (
 	chainpb "github.com/provin-line/oss/gen/go/dplaax/chain/v1"
 	tlogpb "github.com/provin-line/oss/gen/go/dplaax/tlog/v1"
 	"github.com/provin-line/oss/gen/go/dplaax/tlog/v1/tlogpbconnect"
-	"github.com/provin-line/oss/network/pkg/services/chainmanager/wireauth"
+	"github.com/provin-line/oss/internal/origin"
+	"github.com/provin-line/oss/network/internal/authproof"
 	"github.com/provin-line/oss/network/pkg/services/tlogservice/wirecontract"
 	"github.com/provin-line/oss/tlog"
 )
@@ -40,21 +42,32 @@ import (
 // all required.
 type Config struct {
 	// Signer signs each MirrorLogSegment call's wireauth proof as SignerDID
-	// — the log's OWN writer identity (D-T3: the checkpoint's SignedBy base
+	// — the log's OWN writer identity (the checkpoint's SignedBy base
 	// must equal this proven signer_did). GetMirrorState needs no proof (it
 	// rides the L1 interceptor only, same posture as ListLogRecords), so
 	// Signer/SignerDID are unused for that call.
 	Signer crypto.Signer
 	// SignerDID is the identity MirrorLogSegment proves — the log's writer,
 	// not a separate "who is asking" actor (the handler threads the proven
-	// signer_did straight through to D-T3 enforcement; see
+	// signer_did straight through to identity enforcement; see
 	// tlogservice.MirrorSegmentInput.CallerDID).
 	SignerDID string
 	// BaseURL is the registry's ConnectRPC endpoint.
 	BaseURL string
+	// Audience is the audience of the node at BaseURL (for a node that serves a
+	// DID, wireauth.AudienceForDID). Every proof this client signs names it,
+	// and that node accepts only a proof for its own audience. A call with no
+	// Audience fails before anything is sent (wireauth.ErrMalformedProof).
+	Audience string
 	// HTTPClient dials BaseURL; supply an SSRF-guarded client for a
 	// non-local endpoint.
-	HTTPClient connect.HTTPClient
+	// It must not be nil. With Bearer set, New uses a copy of it that refuses
+	// every redirect, so the bearer goes to BaseURL's origin only; without
+	// Bearer, New uses it as given. That holds over a Transport that sends
+	// each request as it is, as net/http's does; one that follows redirects
+	// itself, such as a Transport that wraps another http.Client, is outside
+	// it.
+	HTTPClient *http.Client
 	// Bearer, if non-empty, is presented as the Authorization: Bearer header
 	// on every call — the L1 PDP gate MirrorLogSegment/GetMirrorState mount
 	// behind, IN ADDITION to MirrorLogSegment's own L2 wireauth proof. Empty
@@ -71,15 +84,21 @@ type Config struct {
 type Client struct {
 	signer    crypto.Signer
 	signerDID string
+	audience  string
 	svc       tlogpbconnect.TlogServiceClient
 }
 
 // New returns a Client from cfg.
 func New(cfg Config) *Client {
+	httpClient := cfg.HTTPClient
+	if cfg.Bearer != "" {
+		httpClient = origin.Confine(httpClient)
+	}
 	return &Client{
 		signer:    cfg.Signer,
 		signerDID: cfg.SignerDID,
-		svc: tlogpbconnect.NewTlogServiceClient(cfg.HTTPClient, cfg.BaseURL,
+		audience:  cfg.Audience,
+		svc: tlogpbconnect.NewTlogServiceClient(httpClient, cfg.BaseURL,
 			connect.WithInterceptors(bearerInterceptor(cfg.Bearer))),
 	}
 }
@@ -104,7 +123,8 @@ func bearerInterceptor(token string) connect.Interceptor {
 
 // MirrorLogSegment ships one checkpoint-aligned segment [fromIndex,
 // fromIndex+len(payloads)) to the registry: cp is the local log's signed
-// checkpoint covering EXACTLY this segment's end (D-T2 acceptance rule 1;
+// checkpoint covering EXACTLY this segment's end (the registry recomputes
+// the chain head from the segment and compares it with the checkpoint head;
 // callers — the tlogship shipper — obtain it from the live tlog.Log's own
 // Checkpoint(), never synthesized here). It:
 //
@@ -117,11 +137,11 @@ func bearerInterceptor(token string) connect.Interceptor {
 //  3. Returns any Connect error as-is (no swallowing) — the caller sees the
 //     real Connect code (e.g. FailedPrecondition for a gap/overlap/
 //     chain-head mismatch, ResourceExhausted for a cap violation,
-//     PermissionDenied for a D-T3 identity failure).
+//     PermissionDenied for an identity failure).
 //
 // A nil cp is rejected client-side before any signing or network call — a
-// MirrorLogSegment call always carries a checkpoint (D-T2 rule 1 requires
-// one), so a nil value here is a caller bug, not a wire condition.
+// MirrorLogSegment call always carries a checkpoint (the registry's chain-to-head
+// check requires one), so a nil value here is a caller bug, not a wire condition.
 func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex uint64, payloads [][]byte, cp *tlog.Checkpoint) (uint64, error) {
 	if cp == nil {
 		return 0, fmt.Errorf("tlogservice/client: MirrorLogSegment: nil checkpoint")
@@ -146,7 +166,7 @@ func (c *Client) MirrorLogSegment(ctx context.Context, logID string, fromIndex u
 }
 
 // GetMirrorState reads the registry's durable mirror size for logID — the
-// shipper's resume cursor (D-T2 rule 6). No wireauth proof: it rides the L1
+// shipper's resume cursor. No wireauth proof: it rides the L1
 // interceptor only, matching the RPC's read-only posture (see
 // tlogservice.Service.MirrorState's own doc).
 func (c *Client) GetMirrorState(ctx context.Context, logID string) (uint64, error) {
@@ -157,25 +177,14 @@ func (c *Client) GetMirrorState(ctx context.Context, logID string) (uint64, erro
 	return resp.Msg.GetAckedSize(), nil
 }
 
-// proof signs op over fields as the configured identity and converts the
-// wireauth.Proof to the wire AuthProof (issued_at as canonical
-// second-precision UTC RFC 3339 — the exact form the handler's strict codec
-// accepts).
+// proof signs op over fields as the configured identity, in the proof's one
+// wire form (network/internal/authproof).
 func (c *Client) proof(op string, fields map[string]any) (*chainpb.AuthProof, error) {
-	nonce, err := wireauth.NewNonce()
+	ap, err := authproof.Sign(c.signer, op, fields, c.signerDID, c.audience)
 	if err != nil {
-		return nil, fmt.Errorf("tlogservice/client: nonce: %w", err)
+		return nil, fmt.Errorf("tlogservice/client: %w", err)
 	}
-	p, err := wireauth.Sign(c.signer, c.signerDID, op, fields, nonce, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("tlogservice/client: sign %s: %w", op, err)
-	}
-	return &chainpb.AuthProof{
-		SignerDid: p.SignerDID,
-		Nonce:     p.Nonce,
-		IssuedAt:  p.IssuedAt.UTC().Format(time.RFC3339),
-		Signature: p.Signature,
-	}, nil
+	return ap, nil
 }
 
 // checkpointToWire converts a tlog.Checkpoint to the

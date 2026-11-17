@@ -1,0 +1,12 @@
+{
+  "id": "did-029",
+  "rule": "did.dplaax.hierarchy",
+  "description": "A DID whose resource path names process before pipeline is none of the three",
+  "input": {
+    "did": "did:dplaax:poc.dplaax.dev:org:acme:process:x:pipeline:p1"
+  },
+  "expect": {
+    "level": "none",
+    "owner": "did:dplaax:poc.dplaax.dev:org:acme"
+  }
+}

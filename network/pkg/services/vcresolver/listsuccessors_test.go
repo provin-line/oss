@@ -179,7 +179,7 @@ func TestListSuccessors_BuildHardErrorsOnDamage(t *testing.T) {
 // A stored credential whose previousCredential is a string but NOT a content
 // address is store damage: indexing it under the invalid key would make it
 // invisible (ListSuccessors rejects malformed query hashes) — the build must
-// fail loudly instead (Codex P2).
+// fail loudly instead.
 func TestListSuccessors_BuildRejectsMalformedLink(t *testing.T) {
 	ctx := context.Background()
 	inner := vcresolver.NewVariantStore(memstore.NewBackend())

@@ -25,6 +25,10 @@
 # (GITHUB_TOKEN may not create pull requests) and what makes e2e.yml actually
 # run on it. Reading the harness diff before merging is the part that wanted a
 # human in the first place.
+#
+# The bump is cut from develop and proposed into it, and the pin it compares is
+# develop's (BASE below). The crosscheck ran against this repository's default
+# branch; e2e.yml on the bump pull request runs the pair against develop.
 name: e2e-pin-bump
 
 on:
@@ -68,6 +72,10 @@ jobs:
       HARNESS: provin-line/e2e
       CROSSCHECK: oss-crosscheck.yml
       BRANCH: chore/bump-e2e-pin
+      # The integration branch: the bump is cut from its tip and proposed
+      # into it. branch-guard.yml refuses a pull request into main from any
+      # branch but develop, hotfix/* and release/*.
+      BASE: develop
       ISSUE_TITLE: 'pins.env: E2E_REF is behind provin-line/e2e'
       ISSUE_LABEL: pin-bump
       BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
@@ -137,7 +145,10 @@ jobs:
         env:
           TARGET: ${{ steps.evidence.outputs.target }}
         run: |
-          current=$(sed -n 's/^E2E_REF=//p' pins.env | head -1)
+          set -o pipefail
+          # The pin the integration branch holds, the tip the bump is cut
+          # from — not the default branch's, which only takes releases.
+          current=$(git show "origin/$BASE:pins.env" | sed -n 's/^E2E_REF=//p' | head -1)
           # The value reaches a compare URL here and e2e.yml feeds its twin
           # into a checkout ref — assert it is a commit id everywhere it is
           # consumed, not just where it is written.
@@ -224,11 +235,11 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email "$BOT_EMAIL"
-          # Always from the default branch's tip as checked out by this run —
+          # Always from the integration branch's tip as this run fetched it —
           # never from a dispatch ref's history. The DRY_RUN guard makes a
           # non-default dispatch inert anyway; this is the second lock on the
           # same door.
-          git checkout --quiet -B "$BRANCH" "$GITHUB_SHA"
+          git checkout --quiet -B "$BRANCH" "origin/$BASE"
           # Not `sed -i`: that spelling is GNU-only, and the difference does
           # not surface until someone runs this logic somewhere other than the
           # hosted Ubuntu runner — where it silently rewrites nothing and the
@@ -288,13 +299,13 @@ jobs:
           pr_body=$(printf '%s\n\n%s\n' \
             "Proven green by [oss-crosscheck]($EVIDENCE), which ran both runtimes against this harness revision." \
             "Read [what changed in the harness]($compare) before merging.")
-          quick_pull="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...${BRANCH}?quick_pull=1"
+          quick_pull="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/${BASE}...${BRANCH}?quick_pull=1"
           quick_pull="${quick_pull}&title=$(printf '%s' "$pr_title" | jq -sRr @uri)"
           quick_pull="${quick_pull}&body=$(printf '%s' "$pr_body" | jq -sRr @uri)"
 
           {
             cat <<HEAD
-          \`pins.env\` names a harness revision older than one proven green against this product. Until it moves, \`e2e.yml\` keeps gating this repository with the older harness — greenly, and without saying so.
+          \`pins.env\` on \`${BASE}\` names a harness revision older than one proven green against this product. Until it moves, \`e2e.yml\` keeps gating this repository with the older harness — greenly, and without saying so.
 
           | | |
           |---|---|
@@ -329,7 +340,7 @@ jobs:
 
           Read the harness diff before merging — that reading is why this is not merged automatically.
 
-          <sub>Filed and refreshed by \`e2e-pin-bump.yml\`. It closes itself once \`pins.env\` catches up.</sub>
+          <sub>Filed and refreshed by \`e2e-pin-bump.yml\`. It closes itself once \`pins.env\` on \`${BASE}\` catches up.</sub>
           FOOT
           } > "$RUNNER_TEMP/issue-body.md"
 

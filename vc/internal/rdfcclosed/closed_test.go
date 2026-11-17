@@ -210,6 +210,15 @@ func TestRDFC_RefusedUntilRegistered(t *testing.T) {
 	if sa.State != vc.ConfidenceFailed || down.calls != 0 {
 		t.Errorf("vc.Verifier before registering, the resolver down: signer authenticity %v after %d lookups, want failed after none", sa.State, down.calls)
 	}
+	if !errors.Is(sa.Err, vc.ErrCryptosuiteNotRegistered) || !strings.Contains(sa.Err.Error(), "vc.RegisterEdDSARDFC2022") {
+		t.Errorf("vc.Verifier before registering: Err = %v, want vc.ErrCryptosuiteNotRegistered naming vc.RegisterEdDSARDFC2022", sa.Err)
+	}
+	// Failed, Err is exactly one of the signer-authenticity sentinels.
+	for _, other := range []error{vc.ErrUnsigned, vc.ErrProofPolicy, vc.ErrIssuerNotFound, vc.ErrSignatureInvalid} {
+		if errors.Is(sa.Err, other) {
+			t.Errorf("vc.Verifier before registering: Err = %v also matches %v, want only vc.ErrCryptosuiteNotRegistered", sa.Err, other)
+		}
+	}
 
 	// Registered from several goroutines while proofs are verified: one
 	// registration, and no race (go test -race).

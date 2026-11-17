@@ -60,7 +60,7 @@ func TestSinkRejectLog_RecordReject(t *testing.T) {
 // (RejectLogDir == ""): RecordReject still appends durably (memlog is
 // hash-chained in-memory), but memlog holds no signing key, so Checkpoint
 // still fails ErrUnsignedLog — the reject log's signed-identity arming
-// (D-T3) only ever applies to the durable filelog path, never this seam.
+// only ever applies to the durable filelog path, never this seam.
 func TestSinkRejectLog_MemlogFallbackUnsigned(t *testing.T) {
 	rl := &sinkRejectLog{log: memlog.New()}
 

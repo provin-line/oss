@@ -4,16 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/provin-line/oss/did"
+	"github.com/provin-line/oss/resolver"
 	"github.com/provin-line/oss/resolver/local"
 	"github.com/provin-line/oss/vc"
 )
 
-// stageIssuers establishes issuers from a table, as a product that registers
-// its stages elsewhere would, with no DID documents at all.
-type stageIssuers struct {
+// tableIssuers establishes issuers from a table, as a product that registers
+// its issuers elsewhere would, with no DID documents at all.
+type tableIssuers struct {
 	keys      map[string][]byte // verificationMethod → Ed25519 key
 	owners    map[string]string // issuer → Owner
 	keyErr    error
@@ -23,7 +25,7 @@ type stageIssuers struct {
 	answer    *vc.IssuerKey // when set, returned as is
 }
 
-func (s *stageIssuers) IssuerKey(_ context.Context, cred *vc.Credential) (vc.IssuerKey, error) {
+func (s *tableIssuers) IssuerKey(_ context.Context, cred *vc.Credential) (vc.IssuerKey, error) {
 	s.keyCalls++
 	if s.keyErr != nil {
 		return vc.IssuerKey{}, s.keyErr
@@ -34,29 +36,29 @@ func (s *stageIssuers) IssuerKey(_ context.Context, cred *vc.Credential) (vc.Iss
 	vm := cred.Proof().VerificationMethod
 	pub, ok := s.keys[vm]
 	if !ok {
-		return vc.IssuerKey{}, fmt.Errorf("no stage key %q: %w", vm, vc.ErrIssuerNotFound)
+		return vc.IssuerKey{}, fmt.Errorf("no key %q: %w", vm, vc.ErrIssuerNotFound)
 	}
 	return vc.IssuerKey{ID: vm, PublicKey: pub, Encoding: did.EncodingMultikey}, nil
 }
 
-func (s *stageIssuers) Owner(_ context.Context, issuer string) (string, error) {
+func (s *tableIssuers) Owner(_ context.Context, issuer string) (string, error) {
 	s.ownerSeen = append(s.ownerSeen, issuer)
 	if s.ownerErr != nil {
 		return "", s.ownerErr
 	}
 	o, ok := s.owners[issuer]
 	if !ok {
-		return "", fmt.Errorf("no stage %q: %w", issuer, vc.ErrIssuerNotFound)
+		return "", fmt.Errorf("no issuer %q: %w", issuer, vc.ErrIssuerNotFound)
 	}
 	return o, nil
 }
 
-// stageChain is buildChainFixture's chain, verified through stageIssuers
+// tableChain is buildChainFixture's chain, verified through tableIssuers
 // against an empty resolver: no process or owner document exists anywhere.
-func stageChain(t *testing.T, originIssuer, childIssuer string) (origin, child *vc.PipelinePassCredential, s *stageIssuers) {
+func tableChain(t *testing.T, originIssuer, childIssuer string) (origin, child *vc.PipelinePassCredential, s *tableIssuers) {
 	t.Helper()
 	origin, child, r := buildChainFixture(t, originIssuer, childIssuer)
-	s = &stageIssuers{keys: map[string][]byte{}, owners: map[string]string{}}
+	s = &tableIssuers{keys: map[string][]byte{}, owners: map[string]string{}}
 	for _, issuer := range []string{originIssuer, childIssuer} {
 		doc, err := r.Resolve(context.Background(), issuer)
 		if err != nil {
@@ -73,7 +75,7 @@ func stageChain(t *testing.T, originIssuer, childIssuer string) (origin, child *
 }
 
 func TestIssuerVerifier_VerifiesAChainWithoutDIDDocuments(t *testing.T) {
-	origin, child, s := stageChain(t, procAOrigin, procBSameOrg)
+	origin, child, s := tableChain(t, procAOrigin, procBSameOrg)
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
 	res, err := v.VerifyChain(context.Background(), []*vc.PipelinePassCredential{origin, child})
 	if err != nil {
@@ -94,9 +96,9 @@ func TestIssuerVerifier_VerifiesAChainWithoutDIDDocuments(t *testing.T) {
 }
 
 // The Owner the verifier returns must be the Owner the issuer's DID names: a
-// verifier cannot attribute a stage to another organization.
+// verifier cannot attribute an issuer to another organization.
 func TestIssuerVerifier_OwnerMustBeTheIssuersOwner(t *testing.T) {
-	origin, child, s := stageChain(t, procAOrigin, procBSameOrg)
+	origin, child, s := tableChain(t, procAOrigin, procBSameOrg)
 	s.owners[procBSameOrg] = ownerOf(t, procBOtherOrg)
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
 
@@ -119,7 +121,7 @@ func TestIssuerVerifier_OwnerMustBeTheIssuersOwner(t *testing.T) {
 }
 
 func TestIssuerVerifier_AttributeAndClassifyThroughTheVerifier(t *testing.T) {
-	origin, child, s := stageChain(t, procAOrigin, procBOtherOrg)
+	origin, child, s := tableChain(t, procAOrigin, procBOtherOrg)
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
 	owner, err := v.AttributeOwner(context.Background(), procBOtherOrg)
 	if err != nil || owner != ownerOf(t, procBOtherOrg) {
@@ -146,7 +148,7 @@ func TestIssuerVerifier_ErrorTaxonomy(t *testing.T) {
 		{"owner transient", nil, transient, vc.ConfidenceVerified, vc.ConfidenceIndeterminate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			origin, _, s := stageChain(t, procAOrigin, procBSameOrg)
+			origin, _, s := tableChain(t, procAOrigin, procBSameOrg)
 			s.keyErr, s.ownerErr = tc.keyErr, tc.ownErr
 			res, err := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s)).Verify(context.Background(), origin)
 			if err != nil {
@@ -162,7 +164,7 @@ func TestIssuerVerifier_ErrorTaxonomy(t *testing.T) {
 // The proof policy runs before the verifier is asked for a key: a proof whose
 // verificationMethod does not name the issuer fails without consulting it.
 func TestIssuerVerifier_ProofPolicyComesFirst(t *testing.T) {
-	origin, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	origin, _, s := tableChain(t, procAOrigin, procBSameOrg)
 	forged := reUnmarshal(t, origin, func(m map[string]any) {
 		m["proof"].(map[string]any)["verificationMethod"] = procBSameOrg + "#signing"
 	})
@@ -180,7 +182,7 @@ func TestIssuerVerifier_ProofPolicyComesFirst(t *testing.T) {
 
 // A key the verifier returns that did not make the proof fails it.
 func TestIssuerVerifier_WrongKeyFails(t *testing.T) {
-	origin, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	origin, _, s := tableChain(t, procAOrigin, procBSameOrg)
 	s.keys[procAOrigin+"#signing"] = s.keys[procBSameOrg+"#signing"]
 	res, err := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s)).Verify(context.Background(), origin)
 	if err != nil {
@@ -194,7 +196,7 @@ func TestIssuerVerifier_WrongKeyFails(t *testing.T) {
 // The type-agnostic entry point takes its key from the same verifier.
 func TestIssuerVerifier_SignerAuthenticityOfAnyCredential(t *testing.T) {
 	cred, pub := exampleCredential(t, issuerDID, nil)
-	s := &stageIssuers{keys: map[string][]byte{vmID: pub}}
+	s := &tableIssuers{keys: map[string][]byte{vmID: pub}}
 	res, err := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s)).VerifySignerAuthenticity(context.Background(), cred)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +246,7 @@ func signedPubOf(t *testing.T, r *local.Resolver, issuer string) []byte {
 // a method the issuer does not have fails, through the default and through a
 // replaced verifier, and a key returned under another id is not used.
 func TestIssuerVerifier_TheKeyIsTheOneTheProofNames(t *testing.T) {
-	origin, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	origin, _, s := tableChain(t, procAOrigin, procBSameOrg)
 	_, _, r := buildChainFixture(t, procAOrigin, procBSameOrg)
 	renamed := reUnmarshal(t, origin, func(m map[string]any) {
 		m["proof"].(map[string]any)["verificationMethod"] = procAOrigin + "#registry"
@@ -282,13 +284,23 @@ func TestIssuerVerifier_TheKeyIsTheOneTheProofNames(t *testing.T) {
 // The Owner is not asked for an issuer that is not a Process DID: the
 // Verifier refuses it first.
 func TestIssuerVerifier_OwnerOfANonProcessIssuerIsNotAsked(t *testing.T) {
-	_, _, s := stageChain(t, procAOrigin, procBSameOrg)
+	_, _, s := tableChain(t, procAOrigin, procBSameOrg)
 	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
 	if _, err := v.AttributeOwner(context.Background(), ownerDID); !errors.Is(err, vc.ErrIssuerNotFound) {
 		t.Errorf("AttributeOwner(owner DID) = %v, want ErrIssuerNotFound", err)
 	}
 	if len(s.ownerSeen) != 0 {
 		t.Errorf("Owner was asked for %v", s.ownerSeen)
+	}
+}
+
+// An issuer that does not parse is refused with the reason Parse gives.
+func TestIssuerVerifier_AnUnparsableIssuerNamesWhyItDoesNotParse(t *testing.T) {
+	_, _, s := tableChain(t, procAOrigin, procBSameOrg)
+	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
+	_, err := v.AttributeOwner(context.Background(), "did:dplaax:home.example:org:o/1:pipeline:p1:process:s1")
+	if !errors.Is(err, vc.ErrIssuerNotFound) || !strings.Contains(err.Error(), "violates the safe-segment rule") {
+		t.Errorf("AttributeOwner(an unsafe segment) = %v, want ErrIssuerNotFound with the reason Parse gives", err)
 	}
 }
 
@@ -301,5 +313,66 @@ func TestWithIssuerVerifier_NilKeepsTheDefault(t *testing.T) {
 	}
 	if res.Overall != vc.ConfidenceVerified {
 		t.Errorf("Overall = %v, want Verified", res.Overall)
+	}
+}
+
+// An issuer refused for its form is named within a bound, however long it is,
+// by the Owner's readers: AttributeOwner and ClassifyChain.
+func TestIssuerRefusedForItsFormIsNamedWithinABound(t *testing.T) {
+	pipeline := "did:dplaax:home.example:org:" + strings.Repeat("x", 64<<10) + ":pipeline:p1"
+	_, _, s := tableChain(t, procAOrigin, procBSameOrg)
+	v := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s))
+	_, unparsableErr := v.AttributeOwner(context.Background(), pipeline+"!")
+	_, notProcessErr := v.AttributeOwner(context.Background(), pipeline)
+	longOrigin, longChild, _ := buildChainFixture(t, pipeline, pipeline+"x")
+	_, classifyErr := v.ClassifyChain(context.Background(), []*vc.PipelinePassCredential{longOrigin, longChild})
+	for name, c := range map[string]struct {
+		err   error
+		named string
+	}{
+		"AttributeOwner of an unparsable issuer": {unparsableErr, pipeline + "!"},
+		"AttributeOwner of a Pipeline":           {notProcessErr, pipeline},
+		"ClassifyChain of a Pipeline's chain":    {classifyErr, pipeline},
+	} {
+		if !errors.Is(c.err, vc.ErrIssuerNotFound) || len(c.err.Error()) > 500 || !strings.Contains(c.err.Error(), fmt.Sprintf("(%d bytes)", len(c.named))) {
+			t.Errorf("%s: %.200v (%d bytes), want ErrIssuerNotFound naming the issuer's head and its length %d", name, c.err, len(fmt.Sprint(c.err)), len(c.named))
+		}
+	}
+}
+
+// The default issuer verifier names an issuer within a bound, however long it
+// is, to a caller that asks it directly; and the Owner check names the issuer
+// and both Owners within a bound.
+func TestIssuerVerifier_NamesWithinABound(t *testing.T) {
+	long := "did:dplaax:home.example:org:" + strings.Repeat("x", 64<<10) + ":pipeline:p1:process:s1"
+	other := "did:dplaax:home.example:org:" + strings.Repeat("y", 64<<10) + ":pipeline:p1:process:s1"
+	ctx := context.Background()
+	signed := func(t *testing.T) (*vc.Credential, []byte) {
+		return exampleCredential(t, long, func(m map[string]any) {
+			m["proof"].(map[string]any)["verificationMethod"] = long + "#signing"
+		})
+	}
+	cred, pub := signed(t)
+	unsigned, _ := exampleCredential(t, long, func(m map[string]any) { delete(m, "proof") })
+	for name, c := range map[string]struct {
+		r    resolver.Resolver
+		cred *vc.Credential
+	}{
+		"unsigned":                            {local.New(), unsigned},
+		"no document":                         {local.New(), cred},
+		"a resolver that cannot answer":       {erroringResolver{errors.New("registry down")}, cred},
+		"the document of another DID":         {substitutingResolver{didDoc(other, "", other+"#signing", pub)}, cred},
+		"no key under the verificationMethod": {substitutingResolver{didDoc(long, "", long+"#other", pub)}, cred},
+	} {
+		_, err := vc.NewDIDDocumentIssuers(c.r).IssuerKey(ctx, c.cred)
+		if err == nil || len(err.Error()) > 1024 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(long))) {
+			t.Errorf("IssuerKey, %s: %.300v (%d bytes), want an error naming the issuer's head and length", name, err, len(errText(err)))
+		}
+	}
+
+	s := &tableIssuers{keys: map[string][]byte{}, owners: map[string]string{long: other}}
+	_, err := vc.NewVerifier(local.New(), ed25519Verifier(), vc.WithIssuerVerifier(s)).AttributeOwner(ctx, long)
+	if err == nil || !errors.Is(err, vc.ErrIssuerNotFound) || len(err.Error()) > 1024 || !strings.Contains(err.Error(), fmt.Sprintf("(%d bytes)", len(other))) {
+		t.Errorf("AttributeOwner, another Owner: %.300v (%d bytes), want ErrIssuerNotFound naming the Owner's head and length", err, len(errText(err)))
 	}
 }
